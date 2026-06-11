@@ -28,6 +28,7 @@ import { PublishTargetPage } from "@/pages/PublishTargetPage";
 import { PublishProgressPage } from "@/pages/PublishProgressPage";
 import { StoreDailyPage } from "@/pages/StoreDailyPage";
 import { ProductionPage } from "@/pages/ProductionPage";
+import { DesignListPage } from "@/pages/DesignListPage";
 import { PlaceholderPage } from "@/pages/PlaceholderPage";
 import { getMe } from "@/features/auth/api";
 
@@ -112,10 +113,10 @@ function AppRoutes() {
         <Route path="/bloggers" element={<BloggerListPage />} />
         <Route path="/promotions" element={<PromotionListPage />} />
         {/* 设计制版 */}
-        <Route path="/designs" element={<PlaceholderPage title="设计管理" />} />
-        <Route path="/patterns" element={<PlaceholderPage title="制版管理" />} />
-        <Route path="/crafts" element={<PlaceholderPage title="工艺管理" />} />
-        <Route path="/pricing" element={<PlaceholderPage title="核价管理" />} />
+        <Route path="/designs" element={<DesignListPage title="设计管理" />} />
+        <Route path="/patterns" element={<DesignListPage title="制版管理" statuses={["制版中"]} />} />
+        <Route path="/crafts" element={<DesignListPage title="工艺管理" statuses={["工艺录入"]} />} />
+        <Route path="/pricing" element={<DesignListPage title="核价管理" statuses={["待补全", "待核价"]} />} />
         {/* 数据管理 */}
         <Route
           path="/skus"
