@@ -158,24 +158,46 @@ export function PromotionListPage() {
 
   const columns: ColumnsType<Promotion> = [
     { title: "内部编码", dataIndex: "internal_code", width: 150 },
-    { title: "款号", dataIndex: "style_code_snapshot", width: 110 },
-    { title: "平台", dataIndex: "platform", width: 80 },
+    { title: "货号", dataIndex: "style_code_snapshot", width: 110 },
+    { title: "品名", dataIndex: "style_short_name_snapshot", width: 130, render: (v) => v || "—" },
+    { title: "合作平台", dataIndex: "platform", width: 90 },
+    { title: "合作日期", dataIndex: "cooperation_date", width: 110 },
     {
-      title: "合作日期",
-      dataIndex: "cooperation_date",
+      title: "预定发布日期",
+      dataIndex: "scheduled_publish_date",
       width: 120,
+      render: (v) => v || "—",
     },
     {
       title: "报价",
       dataIndex: "quote_amount",
-      width: 100,
+      width: 90,
       render: (v: string | null) => (v == null ? "—" : `¥${v}`),
     },
     {
-      title: "发布状态",
+      title: "是否催发",
+      dataIndex: "urge_status",
+      width: 100,
+      render: (v: string | null) =>
+        v ? (
+          <Tag color={v === "超时" || v === "重要催发" ? "red" : v === "催发" ? "orange" : "default"}>
+            {v}
+          </Tag>
+        ) : (
+          "—"
+        ),
+    },
+    {
+      title: "是否发布",
       dataIndex: "publish_status",
       width: 100,
       render: (v: string) => <Tag color={statusColor[v]}>{v}</Tag>,
+    },
+    {
+      title: "点赞量",
+      dataIndex: "like_count",
+      width: 90,
+      render: (v: number | null) => (v == null ? "—" : v),
     },
     {
       title: "结算状态",
@@ -186,6 +208,7 @@ export function PromotionListPage() {
     {
       title: "操作",
       width: 110,
+      fixed: "right",
       render: (_, record) => {
         const items = [
           {
@@ -273,7 +296,7 @@ export function PromotionListPage() {
         loading={isLoading}
         columns={columns}
         dataSource={data?.items ?? []}
-        scroll={{ x: 900 }}
+        scroll={{ x: 1300 }}
         pagination={{
           current: data?.page ?? 1,
           pageSize: data?.page_size ?? 10,

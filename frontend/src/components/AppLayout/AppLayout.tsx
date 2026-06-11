@@ -2,9 +2,13 @@ import { Avatar, Dropdown, Layout, Menu, Space, Typography } from "antd";
 import type { MenuProps } from "antd";
 import {
   AppstoreOutlined,
+  BarChartOutlined,
   DashboardOutlined,
+  DollarOutlined,
+  HighlightOutlined,
   LogoutOutlined,
   NotificationOutlined,
+  SettingOutlined,
   SkinOutlined,
   TagsOutlined,
   TeamOutlined,
@@ -39,10 +43,26 @@ export function AppLayout() {
       label: <Link to="/">概览</Link>,
     },
     {
+      key: "design",
+      icon: <HighlightOutlined />,
+      label: "设计制版",
+      children: [
+        { key: "/designs", label: <Link to="/designs">设计管理</Link> },
+        { key: "/patterns", label: <Link to="/patterns">制版管理</Link> },
+        { key: "/crafts", label: <Link to="/crafts">工艺管理</Link> },
+        { key: "/pricing", label: <Link to="/pricing">核价管理</Link> },
+      ],
+    },
+    {
       key: "data",
       icon: <AppstoreOutlined />,
       label: "数据管理",
       children: [
+        {
+          key: "/skus",
+          icon: <AppstoreOutlined />,
+          label: <Link to="/skus">商品成本表</Link>,
+        },
         {
           key: "/styles",
           icon: <SkinOutlined />,
@@ -58,6 +78,8 @@ export function AppLayout() {
           icon: <TeamOutlined />,
           label: <Link to="/bloggers">博主库</Link>,
         },
+        { key: "/qianniu", label: <Link to="/qianniu">千牛数据</Link> },
+        { key: "/ad-data", label: <Link to="/ad-data">单品站内推广</Link> },
       ],
     },
     {
@@ -65,11 +87,50 @@ export function AppLayout() {
       icon: <NotificationOutlined />,
       label: "推广管理",
       children: [
+        { key: "/promotions", label: <Link to="/promotions">站外推广</Link> },
         {
-          key: "/promotions",
-          icon: <NotificationOutlined />,
-          label: <Link to="/promotions">站外推广</Link>,
+          key: "/work-progress",
+          label: <Link to="/work-progress">工作进度表</Link>,
         },
+        {
+          key: "/publish-target",
+          label: <Link to="/publish-target">爆款约篇数量</Link>,
+        },
+        {
+          key: "/publish-progress",
+          label: <Link to="/publish-progress">发文进度表</Link>,
+        },
+      ],
+    },
+    {
+      key: "finance",
+      icon: <DollarOutlined />,
+      label: "财务管理",
+      children: [
+        { key: "/settlements", label: <Link to="/settlements">财务结款</Link> },
+        { key: "/tao-orders", label: <Link to="/tao-orders">拍单</Link> },
+        { key: "/brush-orders", label: <Link to="/brush-orders">刷单</Link> },
+        { key: "/balance", label: <Link to="/balance">余额核对</Link> },
+      ],
+    },
+    {
+      key: "report",
+      icon: <BarChartOutlined />,
+      label: "报表与分析",
+      children: [
+        { key: "/store-daily", label: <Link to="/store-daily">店铺数据</Link> },
+        { key: "/production", label: <Link to="/production">投产报表</Link> },
+        { key: "/bi", label: <Link to="/bi">BI看板</Link> },
+      ],
+    },
+    {
+      key: "system",
+      icon: <SettingOutlined />,
+      label: "系统管理",
+      children: [
+        { key: "/users", label: <Link to="/users">用户管理</Link> },
+        { key: "/imports", label: <Link to="/imports">数据导入</Link> },
+        { key: "/settings", label: <Link to="/settings">系统设置</Link> },
       ],
     },
   ];
@@ -112,7 +173,7 @@ export function AppLayout() {
           theme="dark"
           mode="inline"
           selectedKeys={[location.pathname]}
-          defaultOpenKeys={["data", "promotion"]}
+          defaultOpenKeys={["design", "data", "promotion", "finance", "report", "system"]}
           items={menuItems}
         />
       </Sider>

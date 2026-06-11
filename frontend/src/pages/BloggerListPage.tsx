@@ -84,23 +84,30 @@ export function BloggerListPage() {
   }
 
   const columns: ColumnsType<Blogger> = [
-    { title: "小红书ID", dataIndex: "xiaohongshu_id", width: 140 },
-    { title: "昵称", dataIndex: "nickname" },
+    { title: "小红书昵称", dataIndex: "nickname", width: 140 },
+    { title: "小红书ID", dataIndex: "xiaohongshu_id", width: 130 },
     { title: "平台", dataIndex: "platform", width: 80 },
+    { title: "微信号", dataIndex: "wechat", width: 110, render: (v) => v || "—" },
     {
-      title: "类型",
-      dataIndex: "blogger_type",
-      width: 80,
-      render: (v) => v || "—",
+      title: "报价",
+      dataIndex: "quote",
+      width: 100,
+      render: (v: string | null) => (v == null ? "—" : `¥${v}`),
     },
     {
-      title: "粉丝数",
+      title: "粉丝量",
       dataIndex: "follower_count",
       width: 100,
       render: (v: number | null) => (v == null ? "—" : v.toLocaleString()),
     },
     {
-      title: "疑似刷量",
+      title: "博主类型",
+      dataIndex: "blogger_type",
+      width: 90,
+      render: (v) => v || "—",
+    },
+    {
+      title: "是否假号",
       dataIndex: "is_suspected_fake",
       width: 90,
       render: (v: boolean) => (v ? <Tag color="red">疑似</Tag> : "—"),
