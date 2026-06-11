@@ -172,3 +172,52 @@ export interface AttachmentResponse {
   created_at: string;
   updated_at: string;
 }
+
+// ---------------------------------------------------------------------------
+// 拍单 / 刷单（order_adjustment）+ 余额核对（balance_record）— U16
+// ---------------------------------------------------------------------------
+
+export interface OrderAdjustment {
+  id: string;
+  order_type: string; // 拍单 / 刷单
+  order_date: string | null;
+  order_no: string | null;
+  style_id: string | null;
+  sku_id: string | null;
+  blogger_identifier: string | null;
+  amount: string;
+  exclude_from_roi: boolean;
+  status: string;
+  promotion_id: string | null;
+  remark: string | null;
+  duplicate: boolean;
+}
+
+export interface BrushingCreate {
+  order_date?: string | null;
+  order_no?: string | null;
+  style_id?: string | null;
+  sku_id?: string | null;
+  blogger_identifier?: string | null;
+  amount_expr: string;
+  remark?: string | null;
+}
+
+export interface BalanceRecord {
+  id: string;
+  record_date: string;
+  record_type: string;
+  income: string | null;
+  expense: string | null;
+  balance_after: string;
+  remark: string | null;
+}
+
+export interface BalanceRecordCreate {
+  record_date: string;
+  record_type: string;
+  income?: string | null;
+  expense?: string | null;
+  expected_balance?: string | null;
+  remark?: string | null;
+}

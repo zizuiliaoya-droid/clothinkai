@@ -20,6 +20,9 @@ import { StyleListPage } from "@/pages/StyleListPage";
 import { BloggerListPage } from "@/pages/BloggerListPage";
 import { PromotionListPage } from "@/pages/PromotionListPage";
 import { CostTablePage } from "@/pages/CostTablePage";
+import { SettlementListPage } from "@/pages/SettlementListPage";
+import { OrderAdjustmentPage } from "@/pages/OrderAdjustmentPage";
+import { BalancePage } from "@/pages/BalancePage";
 import { PlaceholderPage } from "@/pages/PlaceholderPage";
 import { getMe } from "@/features/auth/api";
 
@@ -120,10 +123,10 @@ function AppRoutes() {
         <Route path="/publish-target" element={<PlaceholderPage title="爆款约篇数量" />} />
         <Route path="/publish-progress" element={<PlaceholderPage title="发文进度表" />} />
         {/* 财务管理 */}
-        <Route path="/settlements" element={<PlaceholderPage title="财务结款" columns={["月份", "日期", "大类", "项目", "款式编码", "款式", "金额", "寄/送", "博主名", "付款金额", "付款日期", "衣服成本", "总成本", "付款图片", "备注"]} />} />
-        <Route path="/tao-orders" element={<PlaceholderPage title="拍单" columns={["销售类型", "拍单日期", "订单号", "博主ID/微信ID", "款式", "款号", "金额", "付款金额", "付款日期"]} />} />
-        <Route path="/brush-orders" element={<PlaceholderPage title="刷单" />} />
-        <Route path="/balance" element={<PlaceholderPage title="余额核对" columns={["日期", "充值收入", "推广支出", "刷/拍单支出", "余额", "余额截图", "备注"]} />} />
+        <Route path="/settlements" element={<SettlementListPage />} />
+        <Route path="/tao-orders" element={<OrderAdjustmentPage orderType="拍单" />} />
+        <Route path="/brush-orders" element={<OrderAdjustmentPage orderType="刷单" />} />
+        <Route path="/balance" element={<BalancePage />} />
         {/* 报表与分析 */}
         <Route path="/store-daily" element={<PlaceholderPage title="店铺数据" />} />
         <Route path="/production" element={<PlaceholderPage title="投产报表" />} />

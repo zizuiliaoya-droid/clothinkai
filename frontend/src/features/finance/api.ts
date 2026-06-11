@@ -141,3 +141,43 @@ export async function putFileToR2(
     throw new Error(`R2 直传失败: ${resp.status}`);
   }
 }
+
+// ---------------------------------------------------------------------------
+// 拍单 / 刷单 / 余额（U16）
+// ---------------------------------------------------------------------------
+
+import type {
+  BalanceRecord,
+  BrushingCreate,
+  OrderAdjustment,
+} from "./types";
+
+export async function listOrderAdjustments(params: {
+  order_type?: string;
+  limit?: number;
+  offset?: number;
+} = {}): Promise<OrderAdjustment[]> {
+  const resp = await apiClient.get<OrderAdjustment[]>(
+    "/api/finance/order-adjustments",
+    { params }
+  );
+  return resp.data;
+}
+
+export async function createBrushing(
+  payload: BrushingCreate
+): Promise<unknown> {
+  const resp = await apiClient.post("/api/finance/order-adjustments/brushing", payload);
+  return resp.data;
+}
+
+export async function listBalanceRecords(params: {
+  date_from?: string;
+  date_to?: string;
+} = {}): Promise<BalanceRecord[]> {
+  const resp = await apiClient.get<BalanceRecord[]>(
+    "/api/finance/balance-records",
+    { params }
+  );
+  return resp.data;
+}
