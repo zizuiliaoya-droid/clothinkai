@@ -6,6 +6,8 @@ import type {
   BrandCreate,
   BrandListResponse,
   BrandUpdate,
+  CostTableFilters,
+  CostTablePage,
   MatchResponse,
   Sku,
   SkuCreate,
@@ -16,6 +18,19 @@ import type {
   StylePage,
   StyleUpdate,
 } from "./types";
+
+// ---------------------------------------------------------------------------
+// 商品成本表
+// ---------------------------------------------------------------------------
+
+export async function listCostTable(
+  filters: CostTableFilters = {}
+): Promise<CostTablePage> {
+  const resp = await apiClient.get<CostTablePage>("/api/skus/", {
+    params: filters,
+  });
+  return resp.data;
+}
 
 // ---------------------------------------------------------------------------
 // Style

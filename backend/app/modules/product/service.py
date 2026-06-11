@@ -53,6 +53,8 @@ from app.modules.product.repository import (
     SkuRepository,
 )
 from app.modules.product.schemas import (
+    CostTablePage,
+    CostTableRow,
     MatchCandidate,
     MatchResponse,
     SkuCreate,
@@ -407,6 +409,49 @@ class SkuService:
         )
         await self._session.commit()
         return await self._to_response(sku, user)
+
+    async def list_cost_table(
+        self,
+        *,
+        keyword: str | None,
+        brand_id: UUID | None,
+        include_inactive: bool,
+        page: int,
+        page_size: int,
+        user: User,
+    ) -> "CostTablePage":
+        """商品成本表（SKU 级，join 款式+品牌）。"""
+        rows, total = await self._skus.list_cost_table(
+            keyword=keyword,
+            brand_id=brand_id,
+            include_inactive=include_inactive,
+            page=page,
+            page_size=page_size,
+        )
+        items = [
+            CostTableRow(
+                sku_id=r.sku_id,
+                style_id=r.style_id,
+                image_key=r.main_image_key,
+                style_code=r.style_code,
+                sku_code=r.sku_code,
+                style_name=r.style_name,
+                short_name=r.short_name,
+                color_size=f"{r.color} {r.size}".strip(),
+                color=r.color,
+                size=r.size,
+                base_price=r.base_price,
+                cost_price=r.cost_price,
+                purchase_price=r.purchase_price,
+                tag_price=r.tag_price,
+                brand_name=r.brand_name,
+                is_active=r.is_active,
+            )
+            for r in rows
+        ]
+        return CostTablePage(
+            items=items, total=total, page=page, page_size=page_size
+        )
 
     async def update_sku(
         self, sku_id: UUID, payload: SkuUpdate, user: User

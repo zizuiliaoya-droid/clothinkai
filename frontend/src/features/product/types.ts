@@ -194,3 +194,41 @@ export interface BrandListResponse {
   page: number;
   page_size: number;
 }
+
+// ---------------------------------------------------------------------------
+// 商品成本表（SKU 级 join 款式+品牌）— 对齐 final.xlsx 13 列
+// ---------------------------------------------------------------------------
+
+export interface CostTableRow {
+  sku_id: string;
+  style_id: string;
+  image_key: string | null;
+  style_code: string;
+  sku_code: string;
+  style_name: string;
+  short_name: string | null;
+  color_size: string;
+  color: string;
+  size: string;
+  base_price: string | null;
+  cost_price: string | null;
+  purchase_price: string | null;
+  tag_price: string | null;
+  brand_name: string | null;
+  is_active: boolean;
+}
+
+export interface CostTablePage {
+  items: CostTableRow[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface CostTableFilters {
+  page?: number;
+  page_size?: number;
+  keyword?: string;
+  brand_id?: string;
+  include_inactive?: boolean;
+}

@@ -36,6 +36,7 @@ from app.modules.product.deps import (
 )
 from app.modules.product.repository import StyleListFilters
 from app.modules.product.schemas import (
+    CostTablePage,
     MatchResponse,
     SkuCreate,
     SkuResponse,
@@ -203,6 +204,31 @@ async def restore_style(
 # ---------------------------------------------------------------------------
 # Sku
 # ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/skus/",
+    response_model=CostTablePage,
+    dependencies=[require_permission("product", "read")],
+)
+async def list_cost_table(
+    user: CurrentActiveUser,
+    service: SkuServiceDep,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=200),
+    keyword: str | None = Query(default=None, max_length=64),
+    brand_id: UUID | None = Query(default=None),
+    include_inactive: bool = Query(default=False),
+) -> CostTablePage:
+    """商品成本表（SKU 级，join 款式+品牌）— 对齐 final.xlsx 13 列。"""
+    return await service.list_cost_table(
+        keyword=keyword,
+        brand_id=brand_id,
+        include_inactive=include_inactive,
+        page=page,
+        page_size=page_size,
+        user=user,
+    )
 
 
 @router.post(

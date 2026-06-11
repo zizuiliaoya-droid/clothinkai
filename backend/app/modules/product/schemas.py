@@ -61,7 +61,7 @@ def _strip_or_none(v: str | None) -> str | None:
 
 
 class StyleBase(BaseModel):
-    model_config = ConfigDict(strict=True, str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True)
 
     style_name: str = Field(min_length=1, max_length=255)
     short_name: str | None = Field(default=None, max_length=64)
@@ -93,7 +93,7 @@ class StyleCreate(StyleBase):
 class StyleUpdate(BaseModel):
     """部分更新；style_code 可改但需通过唯一性校验。"""
 
-    model_config = ConfigDict(strict=True, str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True)
 
     style_code: str | None = Field(
         default=None, min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_\-]+$"
@@ -143,7 +143,7 @@ class StyleResponse(BaseModel):
 
 
 class SkuBase(BaseModel):
-    model_config = ConfigDict(strict=True, str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True)
 
     color: str = Field(min_length=1, max_length=64)
     size: str = Field(min_length=1, max_length=32)
@@ -163,7 +163,7 @@ class SkuCreate(SkuBase):
 class SkuUpdate(BaseModel):
     """部分更新。"""
 
-    model_config = ConfigDict(strict=True, str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True)
 
     sku_code: str | None = Field(
         default=None, min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_\-]+$"
@@ -250,3 +250,40 @@ __all__ = [
     "StyleResponse",
     "StyleUpdate",
 ]
+
+
+# ---------------------------------------------------------------------------
+# 商品成本表（SKU 级，join Style + Brand）— 对齐 final.xlsx 13 列
+# ---------------------------------------------------------------------------
+
+
+class CostTableRow(BaseModel):
+    """商品成本表行。列严格对齐 final.xlsx「商品成本表」Sheet。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    sku_id: UUID
+    style_id: UUID
+    image_key: str | None = None
+    style_code: str
+    sku_code: str
+    style_name: str
+    short_name: str | None = None
+    color_size: str
+    color: str
+    size: str
+    base_price: Decimal | None = None
+    cost_price: Decimal | None = None
+    purchase_price: Decimal | None = None
+    tag_price: Decimal | None = None
+    brand_name: str | None = None
+    is_active: bool
+
+
+class CostTablePage(BaseModel):
+    model_config = ConfigDict()
+
+    items: list[CostTableRow]
+    total: int
+    page: int
+    page_size: int

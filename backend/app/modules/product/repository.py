@@ -246,6 +246,68 @@ class SkuRepository:
             stmt = stmt.where(Sku.is_active.is_(True))
         return (await self._session.execute(stmt)).scalars().all()
 
+    async def list_cost_table(
+        self,
+        *,
+        keyword: str | None = None,
+        brand_id: UUID | None = None,
+        include_inactive: bool = False,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> tuple[list[Any], int]:
+        """商品成本表（SKU 级，join Style + Brand）。
+
+        返回 (rows, total)，row 为带 style/brand 字段的命名元组。
+        """
+        base = (
+            select(
+                Sku.id.label("sku_id"),
+                Sku.sku_code,
+                Sku.color,
+                Sku.size,
+                Sku.base_price,
+                Sku.cost_price,
+                Sku.purchase_price,
+                Sku.tag_price,
+                Sku.is_active,
+                Style.id.label("style_id"),
+                Style.style_code,
+                Style.style_name,
+                Style.short_name,
+                Style.main_image_key,
+                Brand.brand_name,
+            )
+            .select_from(Sku)
+            .join(Style, Style.id == Sku.style_id)
+            .outerjoin(Brand, Brand.id == Style.brand_id)
+            .where(Sku.is_deleted.is_(False), Style.is_deleted.is_(False))
+        )
+        if not include_inactive:
+            base = base.where(Sku.is_active.is_(True))
+        if keyword:
+            pattern = f"%{keyword}%"
+            base = base.where(
+                or_(
+                    Sku.sku_code.ilike(pattern),
+                    Style.style_code.ilike(pattern),
+                    Style.style_name.ilike(pattern),
+                    Style.short_name.ilike(pattern),
+                )
+            )
+        if brand_id is not None:
+            base = base.where(Style.brand_id == brand_id)
+
+        total_stmt = select(func.count()).select_from(base.subquery())
+        total = int((await self._session.execute(total_stmt)).scalar_one())
+
+        stmt = (
+            base.order_by(Style.style_code.asc(), Sku.sku_code.asc())
+            .limit(page_size)
+            .offset((page - 1) * page_size)
+        )
+        rows = (await self._session.execute(stmt)).all()
+        return list(rows), total
+
     async def count_by_style(
         self,
         style_id: UUID,

@@ -19,6 +19,7 @@ import { BrandListPage } from "@/pages/BrandListPage";
 import { StyleListPage } from "@/pages/StyleListPage";
 import { BloggerListPage } from "@/pages/BloggerListPage";
 import { PromotionListPage } from "@/pages/PromotionListPage";
+import { CostTablePage } from "@/pages/CostTablePage";
 import { PlaceholderPage } from "@/pages/PlaceholderPage";
 import { getMe } from "@/features/auth/api";
 
@@ -110,12 +111,7 @@ function AppRoutes() {
         {/* 数据管理 */}
         <Route
           path="/skus"
-          element={
-            <PlaceholderPage
-              title="商品成本表"
-              columns={["图片", "款式编码", "商品编码", "商品名称", "商品简称", "颜色及规格", "颜色", "规格", "基本售价", "成本价", "采购价", "市场|吊牌价", "品牌"]}
-            />
-          }
+          element={<CostTablePage />}
         />
         <Route path="/qianniu" element={<PlaceholderPage title="千牛数据" />} />
         <Route path="/ad-data" element={<PlaceholderPage title="单品站内推广数据" />} />
