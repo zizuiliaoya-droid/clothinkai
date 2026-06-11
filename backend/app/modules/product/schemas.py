@@ -39,6 +39,14 @@ _PriceField = Annotated[
     Field(ge=Decimal("0"), max_digits=10, decimal_places=2),
 ]
 
+# 枚举字段：模型整体 strict=True，但 JSON 客户端传的是枚举「值」字符串
+# （如 "连衣裙"），strict 模式不会自动转成枚举实例，故对枚举字段单独放开 strict。
+_CategoryField = Annotated[Category, Field(strict=False)]
+_SeasonField = Annotated[Season, Field(strict=False)]
+_GenderField = Annotated[Gender, Field(strict=False)]
+_DesignStatusField = Annotated[DesignStatus, Field(strict=False)]
+_SourcingTypeField = Annotated[SourcingType, Field(strict=False)]
+
 
 def _strip_or_none(v: str | None) -> str | None:
     if v is None:
@@ -58,15 +66,15 @@ class StyleBase(BaseModel):
     style_name: str = Field(min_length=1, max_length=255)
     short_name: str | None = Field(default=None, max_length=64)
     brand_id: UUID | None = None
-    category: Category
-    season: Season | None = None
-    gender: Gender | None = None
+    category: _CategoryField
+    season: _SeasonField | None = None
+    gender: _GenderField | None = None
     tags: list[str] = Field(default_factory=list, max_length=20)
     tag_color: list[str] = Field(default_factory=list, max_length=20)
     main_image_key: str | None = Field(default=None, max_length=512)
     remark: str | None = None
     owner_id: UUID | None = None
-    design_status: DesignStatus = DesignStatus.BULK
+    design_status: _DesignStatusField = DesignStatus.BULK
 
 
 class StyleCreate(StyleBase):
@@ -93,15 +101,15 @@ class StyleUpdate(BaseModel):
     style_name: str | None = Field(default=None, min_length=1, max_length=255)
     short_name: str | None = Field(default=None, max_length=64)
     brand_id: UUID | None = None
-    category: Category | None = None
-    season: Season | None = None
-    gender: Gender | None = None
+    category: _CategoryField | None = None
+    season: _SeasonField | None = None
+    gender: _GenderField | None = None
     tags: list[str] | None = Field(default=None, max_length=20)
     tag_color: list[str] | None = Field(default=None, max_length=20)
     main_image_key: str | None = Field(default=None, max_length=512)
     remark: str | None = None
     owner_id: UUID | None = None
-    design_status: DesignStatus | None = None
+    design_status: _DesignStatusField | None = None
     is_active: bool | None = None
 
 
@@ -142,7 +150,7 @@ class SkuBase(BaseModel):
     cost_price: _PriceField | None = None
     purchase_price: _PriceField | None = None
     base_price: _PriceField | None = None
-    sourcing_type: SourcingType = SourcingType.SELF_PRODUCED
+    sourcing_type: _SourcingTypeField = SourcingType.SELF_PRODUCED
 
 
 class SkuCreate(SkuBase):
@@ -165,7 +173,7 @@ class SkuUpdate(BaseModel):
     cost_price: _PriceField | None = None
     purchase_price: _PriceField | None = None
     base_price: _PriceField | None = None
-    sourcing_type: SourcingType | None = None
+    sourcing_type: _SourcingTypeField | None = None
     is_active: bool | None = None
 
 

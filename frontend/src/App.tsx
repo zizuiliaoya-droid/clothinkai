@@ -15,6 +15,8 @@ import { AppLayout } from "@/components/AppLayout/AppLayout";
 import { LoginPage } from "@/pages/LoginPage";
 import { HomePage } from "@/pages/HomePage";
 import { ChangePasswordPage } from "@/pages/ChangePasswordPage";
+import { BrandListPage } from "@/pages/BrandListPage";
+import { StyleListPage } from "@/pages/StyleListPage";
 import { getMe } from "@/features/auth/api";
 
 // 受保护路由：未登录跳 /login；must_change 跳 /change-password
@@ -93,6 +95,8 @@ function AppRoutes() {
         }
       >
         <Route path="/" element={<HomePage />} />
+        <Route path="/styles" element={<StyleListPage />} />
+        <Route path="/brands" element={<BrandListPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

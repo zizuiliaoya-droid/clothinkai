@@ -1,8 +1,11 @@
 import { Avatar, Dropdown, Layout, Menu, Space, Typography } from "antd";
 import type { MenuProps } from "antd";
 import {
+  AppstoreOutlined,
   DashboardOutlined,
   LogoutOutlined,
+  SkinOutlined,
+  TagsOutlined,
   UserOutlined,
 } from "@ant-design/icons";
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
@@ -32,6 +35,23 @@ export function AppLayout() {
       key: "/",
       icon: <DashboardOutlined />,
       label: <Link to="/">概览</Link>,
+    },
+    {
+      key: "product",
+      icon: <AppstoreOutlined />,
+      label: "商品管理",
+      children: [
+        {
+          key: "/styles",
+          icon: <SkinOutlined />,
+          label: <Link to="/styles">款式管理</Link>,
+        },
+        {
+          key: "/brands",
+          icon: <TagsOutlined />,
+          label: <Link to="/brands">品牌管理</Link>,
+        },
+      ],
     },
   ];
 
@@ -73,6 +93,7 @@ export function AppLayout() {
           theme="dark"
           mode="inline"
           selectedKeys={[location.pathname]}
+          defaultOpenKeys={["product"]}
           items={menuItems}
         />
       </Sider>

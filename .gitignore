@@ -69,3 +69,7 @@ coverage/
 
 # Sentry
 .sentryclirc
+
+# Playwright MCP 本地测试产物
+.playwright-mcp/
+local-dashboard.png

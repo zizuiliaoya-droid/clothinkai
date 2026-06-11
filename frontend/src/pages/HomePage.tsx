@@ -30,8 +30,7 @@ export function HomePage() {
         type="secondary"
         style={{ marginTop: 16, fontSize: 13 }}
       >
-        当前为 U01 单元（认证 + 多租户基础）。后续业务模块（设计制版、推广、财务、报表等）将在
-        V1 / V2 / P3 阶段陆续上线。
+        商品管理（款式 / 品牌）已上线。设计制版、推广、财务、报表等模块正在陆续接入。
       </Typography.Paragraph>
     </div>
   );
