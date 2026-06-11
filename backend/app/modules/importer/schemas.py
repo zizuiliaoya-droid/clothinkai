@@ -43,7 +43,7 @@ class ImportBatchPage(BaseModel):
 class ImportBatchListFilters(BaseModel):
     """列表过滤入参（query string 解析后构造）。"""
 
-    model_config = ConfigDict(strict=True, str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True)
 
     source: str | None = Field(default=None, max_length=32)
     status: str | None = Field(default=None, max_length=16)
@@ -79,7 +79,7 @@ class ImportJobResponse(BaseModel):
 class FieldMappingColumn(BaseModel):
     """单列映射配置。"""
 
-    model_config = ConfigDict(strict=True, str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True)
 
     source_col: str = Field(min_length=1, max_length=128)
     target_field: str = Field(min_length=1, max_length=64)
@@ -91,7 +91,7 @@ class FieldMappingColumn(BaseModel):
 class FieldMappingCreate(BaseModel):
     """新建字段映射版本（EP07-S09）。"""
 
-    model_config = ConfigDict(strict=True, str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True)
 
     source: str = Field(min_length=1, max_length=32)
     columns: list[FieldMappingColumn] = Field(min_length=1)

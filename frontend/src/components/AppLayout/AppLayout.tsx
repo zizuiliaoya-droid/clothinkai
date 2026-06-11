@@ -4,8 +4,10 @@ import {
   AppstoreOutlined,
   DashboardOutlined,
   LogoutOutlined,
+  NotificationOutlined,
   SkinOutlined,
   TagsOutlined,
+  TeamOutlined,
   UserOutlined,
 } from "@ant-design/icons";
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
@@ -37,9 +39,9 @@ export function AppLayout() {
       label: <Link to="/">概览</Link>,
     },
     {
-      key: "product",
+      key: "data",
       icon: <AppstoreOutlined />,
-      label: "商品管理",
+      label: "数据管理",
       children: [
         {
           key: "/styles",
@@ -50,6 +52,23 @@ export function AppLayout() {
           key: "/brands",
           icon: <TagsOutlined />,
           label: <Link to="/brands">品牌管理</Link>,
+        },
+        {
+          key: "/bloggers",
+          icon: <TeamOutlined />,
+          label: <Link to="/bloggers">博主库</Link>,
+        },
+      ],
+    },
+    {
+      key: "promotion",
+      icon: <NotificationOutlined />,
+      label: "推广管理",
+      children: [
+        {
+          key: "/promotions",
+          icon: <NotificationOutlined />,
+          label: <Link to="/promotions">站外推广</Link>,
         },
       ],
     },
@@ -93,7 +112,7 @@ export function AppLayout() {
           theme="dark"
           mode="inline"
           selectedKeys={[location.pathname]}
-          defaultOpenKeys={["product"]}
+          defaultOpenKeys={["data", "promotion"]}
           items={menuItems}
         />
       </Sider>

@@ -31,7 +31,7 @@ def _validate_tag_items(v: list[str] | None) -> list[str] | None:
 
 
 class BloggerBase(BaseModel):
-    model_config = ConfigDict(strict=True, str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True)
 
     nickname: str = Field(min_length=1, max_length=128)
     platform: Platform = Platform.XIAOHONGSHU
@@ -63,7 +63,7 @@ class BloggerCreate(BloggerBase):
 class BloggerUpdate(BaseModel):
     """部分更新（PATCH 语义）。"""
 
-    model_config = ConfigDict(strict=True, str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True)
 
     xiaohongshu_id: str | None = Field(
         default=None, min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_\-]+$"

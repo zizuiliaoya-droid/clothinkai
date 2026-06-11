@@ -51,7 +51,7 @@ _PositiveAmountField = Annotated[
 class SettlementReviewRequest(BaseModel):
     """审核入参（approve / reject）。"""
 
-    model_config = ConfigDict(strict=True, str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True)
 
     action: ReviewAction
     review_reason: str | None = Field(default=None, max_length=2000)
@@ -66,7 +66,7 @@ class SettlementReviewRequest(BaseModel):
 class SettlementPaymentAmountRequest(BaseModel):
     """fill_payment 入参（PR 主管确认付款金额）。"""
 
-    model_config = ConfigDict(strict=True)
+    model_config = ConfigDict()
 
     payment_amount: _PositiveAmountField
 
@@ -74,7 +74,7 @@ class SettlementPaymentAmountRequest(BaseModel):
 class SettlementPaymentProofRequest(BaseModel):
     """mark_paid 入参（财务上传付款截图）。"""
 
-    model_config = ConfigDict(strict=True)
+    model_config = ConfigDict()
 
     payment_date: date
     payment_proof_attachment_id: UUID
@@ -89,7 +89,7 @@ class SettlementPaymentProofRequest(BaseModel):
 class SettlementResubmitRequest(BaseModel):
     """resubmit 入参（已驳回 → 待核查）。"""
 
-    model_config = ConfigDict(strict=True, str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True)
 
     remark: str | None = Field(default=None, max_length=2000)
 
@@ -102,7 +102,7 @@ class SettlementResubmitRequest(BaseModel):
 class SettlementExtraItemCreateRequest(BaseModel):
     """增加结算项（运费 / 赞奖 / 其他）。"""
 
-    model_config = ConfigDict(strict=True, str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True)
 
     item_type: ExtraItemType
     amount: _PositiveAmountField
@@ -192,7 +192,7 @@ class SettlementPage(BaseModel):
 class SettlementListFilters(BaseModel):
     """列表过滤入参（query string 解析后构造）。"""
 
-    model_config = ConfigDict(strict=True, str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True)
 
     keyword: str | None = Field(default=None, max_length=64)
     settlement_status: SettlementStatus | None = None
@@ -221,7 +221,7 @@ class SettlementListFilters(BaseModel):
 class AmountBucket(BaseModel):
     """汇总响应公共结构：count + total_amount。"""
 
-    model_config = ConfigDict(strict=True)
+    model_config = ConfigDict()
 
     count: int = Field(ge=0)
     total_amount: Decimal
@@ -230,7 +230,7 @@ class AmountBucket(BaseModel):
 class DailySummaryAsOfBuckets(BaseModel):
     """as_of 口径的 5 个 bucket（按 settlement_status 分组）。"""
 
-    model_config = ConfigDict(strict=True)
+    model_config = ConfigDict()
 
     pending_review: AmountBucket
     pending_payment: AmountBucket
@@ -242,7 +242,7 @@ class DailySummaryAsOfBuckets(BaseModel):
 class DailySummaryAsOfResponse(BaseModel):
     """口径 B：截至当日各状态快照（FB7）。"""
 
-    model_config = ConfigDict(strict=True)
+    model_config = ConfigDict()
 
     kind: str = "as_of"
     date: date
@@ -253,7 +253,7 @@ class DailySummaryAsOfResponse(BaseModel):
 class DailySummaryActivityBuckets(BaseModel):
     """activity 口径的 4 个 bucket（按当天动作分组）。"""
 
-    model_config = ConfigDict(strict=True)
+    model_config = ConfigDict()
 
     newly_created: AmountBucket
     newly_approved: AmountBucket
@@ -264,7 +264,7 @@ class DailySummaryActivityBuckets(BaseModel):
 class DailySummaryActivityResponse(BaseModel):
     """口径 A：当天发生的动作（FB7 含 audit_log JOIN）。"""
 
-    model_config = ConfigDict(strict=True)
+    model_config = ConfigDict()
 
     kind: str = "activity"
     date: date

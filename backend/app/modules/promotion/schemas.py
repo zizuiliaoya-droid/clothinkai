@@ -51,7 +51,7 @@ _QuoteField = Annotated[
 class PromotionBase(BaseModel):
     """共享字段（创建 + 编辑）。"""
 
-    model_config = ConfigDict(strict=True, str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True)
 
     style_id: UUID
     sku_id: UUID | None = None
@@ -77,7 +77,7 @@ class PromotionUpdate(BaseModel):
     禁止修改：style_id / blogger_id / cooperation_date / 三个状态字段（走专门接口）。
     """
 
-    model_config = ConfigDict(strict=True, str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True)
 
     sku_id: UUID | None = None
     platform: str | None = Field(default=None, min_length=1, max_length=16)
@@ -97,7 +97,7 @@ class PromotionUpdate(BaseModel):
 class PromotionPublishRequest(BaseModel):
     """publish 入参（BR-U04-20）。"""
 
-    model_config = ConfigDict(strict=True, str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True)
 
     publish_url: str = Field(min_length=1, max_length=512)
     actual_publish_date: date
@@ -113,7 +113,7 @@ class PromotionPublishRequest(BaseModel):
 class PromotionCancelRequest(BaseModel):
     """cancel 入参（BR-U04-20）。"""
 
-    model_config = ConfigDict(strict=True, str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True)
 
     cancel_reason: str = Field(min_length=1, max_length=2000)
 
@@ -121,7 +121,7 @@ class PromotionCancelRequest(BaseModel):
 class PromotionMarkAbnormalRequest(BaseModel):
     """mark_abnormal 入参。"""
 
-    model_config = ConfigDict(strict=True, str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True)
 
     remark: str = Field(min_length=1, max_length=2000)
 
@@ -129,7 +129,7 @@ class PromotionMarkAbnormalRequest(BaseModel):
 class PromotionRecallStartRequest(BaseModel):
     """start_recall 入参（BR-U04-21）。"""
 
-    model_config = ConfigDict(strict=True, str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True)
 
     recall_reason: str | None = Field(default=None, max_length=2000)
 
@@ -137,7 +137,7 @@ class PromotionRecallStartRequest(BaseModel):
 class PromotionRecallResultRequest(BaseModel):
     """recall_success / recall_failure 入参。"""
 
-    model_config = ConfigDict(strict=True, str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True)
 
     remark: str | None = Field(default=None, max_length=2000)
 
@@ -145,7 +145,7 @@ class PromotionRecallResultRequest(BaseModel):
 class PromotionReviewRequest(BaseModel):
     """审核入参（BR-U04-22 + EP05-S13）。"""
 
-    model_config = ConfigDict(strict=True, str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True)
 
     action: ReviewAction
     review_reason: str | None = Field(default=None, max_length=2000)
@@ -160,7 +160,7 @@ class PromotionReviewRequest(BaseModel):
 class PromotionUpdateLikeRequest(BaseModel):
     """采集 Worker 调用：更新 like_count（U13 内部 API）。"""
 
-    model_config = ConfigDict(strict=True)
+    model_config = ConfigDict()
 
     like_count: int = Field(ge=0)
 
@@ -261,7 +261,7 @@ class PromotionPage(BaseModel):
 class PromotionListFilters(BaseModel):
     """列表过滤入参（query string 解析后构造）。"""
 
-    model_config = ConfigDict(strict=True, str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True)
 
     keyword: str | None = Field(default=None, max_length=64)
     publish_status: PublishStatus | None = None

@@ -17,6 +17,8 @@ import { HomePage } from "@/pages/HomePage";
 import { ChangePasswordPage } from "@/pages/ChangePasswordPage";
 import { BrandListPage } from "@/pages/BrandListPage";
 import { StyleListPage } from "@/pages/StyleListPage";
+import { BloggerListPage } from "@/pages/BloggerListPage";
+import { PromotionListPage } from "@/pages/PromotionListPage";
 import { getMe } from "@/features/auth/api";
 
 // 受保护路由：未登录跳 /login；must_change 跳 /change-password
@@ -97,6 +99,8 @@ function AppRoutes() {
         <Route path="/" element={<HomePage />} />
         <Route path="/styles" element={<StyleListPage />} />
         <Route path="/brands" element={<BrandListPage />} />
+        <Route path="/bloggers" element={<BloggerListPage />} />
+        <Route path="/promotions" element={<PromotionListPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

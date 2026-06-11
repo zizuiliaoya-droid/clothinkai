@@ -192,6 +192,26 @@ async def get_bypass_session() -> AsyncIterator[AsyncSession]:
 # ---------------------------------------------------------------------------
 
 
+@event.listens_for(Session, "after_begin")
+def _apply_tenant_guc(session: Session, _transaction: Any, connection: Any) -> None:
+    """每个事务开始时重设 RLS GUC（含 commit 后惰性新开的事务）。
+
+    根因修复：``set_config(..., is_local=true)`` 是事务级的，service 在 ``commit()``
+    之后继续查询（如 ``_to_response`` 加载字段权限）会进入新事务，此时
+    ``app.tenant_id`` 已丢失，RLS 策略 ``current_setting('app.tenant_id', true)::uuid``
+    对空串 ``''::uuid`` 转换报错。此处保证每个事务都带租户上下文。
+    """
+    if bypass_rls_ctx.get():
+        connection.exec_driver_sql("SET LOCAL app.bypass_rls = 'on'")
+        return
+    tid = tenant_id_ctx.get()
+    if tid is not None:
+        # tid 为 UUID 实例，str 化后为标准 UUID 文本，无注入风险
+        connection.exec_driver_sql(
+            f"SELECT set_config('app.tenant_id', '{tid}', true)"
+        )
+
+
 @event.listens_for(Session, "do_orm_execute")
 def _enforce_tenant_filter(orm_execute_state: Any) -> None:
     """查询时自动注入 WHERE tenant_id = :ctx。
