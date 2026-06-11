@@ -23,6 +23,11 @@ import { CostTablePage } from "@/pages/CostTablePage";
 import { SettlementListPage } from "@/pages/SettlementListPage";
 import { OrderAdjustmentPage } from "@/pages/OrderAdjustmentPage";
 import { BalancePage } from "@/pages/BalancePage";
+import { WorkProgressPage } from "@/pages/WorkProgressPage";
+import { PublishTargetPage } from "@/pages/PublishTargetPage";
+import { PublishProgressPage } from "@/pages/PublishProgressPage";
+import { StoreDailyPage } from "@/pages/StoreDailyPage";
+import { ProductionPage } from "@/pages/ProductionPage";
 import { PlaceholderPage } from "@/pages/PlaceholderPage";
 import { getMe } from "@/features/auth/api";
 
@@ -119,17 +124,17 @@ function AppRoutes() {
         <Route path="/qianniu" element={<PlaceholderPage title="千牛数据" />} />
         <Route path="/ad-data" element={<PlaceholderPage title="单品站内推广数据" />} />
         {/* 推广管理 */}
-        <Route path="/work-progress" element={<PlaceholderPage title="工作进度表" columns={["负责PR", "约篇件数", "档期内", "催发", "重要催发", "超时", "已发布", "信息完整度", "已取消", "应召回", "召回成功", "召回完成率", "超时率", "月度完成率", "爆文数", "爆文率", "点赞数", "成本(含衣服)", "CPL(元/赞)"]} />} />
-        <Route path="/publish-target" element={<PlaceholderPage title="爆款约篇数量" />} />
-        <Route path="/publish-progress" element={<PlaceholderPage title="发文进度表" />} />
+        <Route path="/work-progress" element={<WorkProgressPage />} />
+        <Route path="/publish-target" element={<PublishTargetPage />} />
+        <Route path="/publish-progress" element={<PublishProgressPage />} />
         {/* 财务管理 */}
         <Route path="/settlements" element={<SettlementListPage />} />
         <Route path="/tao-orders" element={<OrderAdjustmentPage orderType="拍单" />} />
         <Route path="/brush-orders" element={<OrderAdjustmentPage orderType="刷单" />} />
         <Route path="/balance" element={<BalancePage />} />
         {/* 报表与分析 */}
-        <Route path="/store-daily" element={<PlaceholderPage title="店铺数据" />} />
-        <Route path="/production" element={<PlaceholderPage title="投产报表" />} />
+        <Route path="/store-daily" element={<StoreDailyPage />} />
+        <Route path="/production" element={<ProductionPage />} />
         <Route path="/bi" element={<PlaceholderPage title="BI看板" />} />
         {/* 系统管理 */}
         <Route path="/users" element={<PlaceholderPage title="用户管理" />} />
