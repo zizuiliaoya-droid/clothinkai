@@ -1,0 +1,71 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+ENV/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+dist/
+build/
+
+# Node
+node_modules/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+.npm
+.yarn-integrity
+
+# Vite / React
+frontend/dist/
+frontend/.vite/
+
+# Environment
+.env
+.env.local
+.env.*.local
+backend/.env
+frontend/.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Pycharm
+.idea/
+
+# Docker
+docker-compose.override.yml
+
+# Backup / temp
+*.bak
+*.tmp
+/tmp/
+/.tmp/
+backend/backups/
+
+# Alembic local
+backend/alembic/versions/__pycache__/
+
+# Coverage
+coverage/
+.coverage.*
+
+# Sentry
+.sentryclirc

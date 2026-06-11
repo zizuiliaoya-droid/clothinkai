@@ -1,0 +1,53 @@
+# =============================================================================
+# Clothing ERP Backend — Python Dependencies
+# Pinned versions per U01 NFR Requirements (tech-stack-decisions.md)
+# =============================================================================
+
+# Web 框架
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+pydantic==2.9.2
+pydantic-settings==2.5.2
+email-validator==2.2.0
+
+# 认证 & 加密
+PyJWT==2.9.0
+passlib[bcrypt]==1.7.4
+bcrypt==4.2.0
+cryptography==43.0.1
+
+# 数据库
+sqlalchemy[asyncio]==2.0.36
+asyncpg==0.29.0
+psycopg2-binary==2.9.9
+alembic==1.13.3
+
+# Redis & 缓存
+redis==5.1.0
+
+# 任务队列
+celery==5.4.0
+
+# 限流
+slowapi==0.1.9
+limits==3.13.0
+
+# Cloudflare R2 (S3 兼容)
+boto3==1.35.27
+
+# 日志 & 监控
+structlog==24.4.0
+python-json-logger==2.0.7
+prometheus-fastapi-instrumentator==7.0.0
+sentry-sdk[fastapi,sqlalchemy,celery]==2.14.0
+
+# HTTP 客户端
+httpx==0.27.2
+
+# 工具
+python-dotenv==1.0.1
+tenacity==9.0.0
+python-multipart==0.0.12
+
+# 导入框架（U06a：XLSX 解析，read_only + data_only）
+openpyxl==3.1.5

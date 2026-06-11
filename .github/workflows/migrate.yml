@@ -1,0 +1,53 @@
+name: Migrate Database (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        type: choice
+        description: "Target environment"
+        options:
+          - staging
+          - production
+        required: true
+
+jobs:
+  alembic-migrate:
+    name: Alembic upgrade head (${{ github.event.inputs.environment }})
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install minimal dependencies
+        working-directory: backend
+        run: |
+          pip install -r requirements.txt
+
+      - name: Run Alembic upgrade
+        working-directory: backend
+        env:
+          # 通过 GitHub Environment secrets 注入
+          DATABASE_URL_BYPASS: ${{ secrets.DATABASE_URL_BYPASS }}
+          DATABASE_URL_APP: ${{ secrets.DATABASE_URL_APP }}
+          DATABASE_URL_SYNC: ${{ secrets.DATABASE_URL_SYNC }}
+          REDIS_URL_CACHE: redis://placeholder
+          REDIS_URL_CELERY_BROKER: redis://placeholder
+          REDIS_URL_CELERY_BACKEND: redis://placeholder
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          CREDENTIAL_MASTER_KEY: ${{ secrets.CREDENTIAL_MASTER_KEY }}
+        run: |
+          alembic upgrade head
+
+      - name: Summary
+        run: |
+          echo "Migration succeeded for ${{ github.event.inputs.environment }}"
+          echo "Now you can deploy the application."

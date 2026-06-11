@@ -1,0 +1,173 @@
+name: CI
+
+on:
+  push:
+    branches: [main, staging]
+  pull_request:
+    branches: [main, staging]
+
+jobs:
+  backend-lint-and-test:
+    name: Backend (lint + test)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: clothing_erp_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: [5432:5432]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports: [6379:6379]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: backend/requirements-dev.txt
+
+      - name: Install dependencies
+        working-directory: backend
+        run: |
+          pip install -r requirements-dev.txt
+
+      - name: Ruff lint
+        working-directory: backend
+        run: ruff check .
+
+      - name: Ruff format check
+        working-directory: backend
+        run: ruff format --check .
+
+      - name: Mypy type check
+        working-directory: backend
+        run: mypy app
+
+      - name: Pytest
+        working-directory: backend
+        env:
+          ENVIRONMENT: development
+          DATABASE_URL_APP: postgresql+asyncpg://postgres:postgres@localhost:5432/clothing_erp_test
+          DATABASE_URL_BYPASS: postgresql+asyncpg://postgres:postgres@localhost:5432/clothing_erp_test
+          DATABASE_URL_SYNC: postgresql://postgres:postgres@localhost:5432/clothing_erp_test
+          TEST_DATABASE_URL_BYPASS: postgresql+asyncpg://postgres:postgres@localhost:5432/clothing_erp_test
+          REDIS_URL_CACHE: redis://localhost:6379/0
+          REDIS_URL_CELERY_BROKER: redis://localhost:6379/1
+          REDIS_URL_CELERY_BACKEND: redis://localhost:6379/2
+          JWT_SECRET: ci-test-secret-not-for-production-1234567890abcdef
+          CREDENTIAL_MASTER_KEY: Y2lfdGVzdF9wbGFjZWhvbGRlcl9rZXlfMzJfYnl0ZXNfZm9yX3Rlc3Q=
+          CORS_ALLOWED_ORIGINS: http://localhost:5173
+        run: |
+          # 创建 schema（CI 不跑 RLS 测试，仅 schema + bypass 测试）
+          # performance 标记的测试是 staging 级性能基准（依赖真实数据规模与硬件），
+          # CI 默认跳过；功能正确性由 unit/integration/api 覆盖。
+          alembic upgrade head
+          pytest -v --cov=app --cov-report=term-missing --cov-fail-under=70 -m "not rls and not performance"
+
+  validate-event-listeners:
+    name: Validate Event Listeners (U04+U05 / FB1+FB5)
+    runs-on: ubuntu-latest
+    needs: backend-lint-and-test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify U05 finance listener registration in main.py (强一致正向)
+        run: |
+          # FB1：U04 部署后 SettlementRequested 必须有 listener（强一致，缺失则 review approve 失败）
+          if ! grep -rn "from app.modules.finance.listeners import register" backend/app/main.py; then
+            echo "::error::U05 finance.listeners not wired in main.py."
+            echo "::error::U04+U05 必须同批部署，否则 review approve 将抛 MissingRequiredHandlerError"
+            exit 1
+          fi
+          echo "OK: U05 finance listener registration present"
+
+      - name: Verify U04 promotion reverse listener registration (通知类反向)
+        run: |
+          # FB5：U05 mark_paid 发 SettlementPaid 反向事件；U04 端 listener 同步 promotion.settlement_status
+          # 通知类（required_handler=False）— 缺失不阻塞，仅 warning
+          if ! grep -rn "from app.modules.promotion.listeners import" backend/app/main.py; then
+            echo "::warning::U04 promotion.listeners (SettlementPaid 反向) not wired in main.py."
+            echo "::warning::通知类事件可丢（required_handler=False），但建议补齐以保证 promotion.settlement_status 同步。"
+          else
+            echo "OK: U04 promotion reverse listener registration present"
+          fi
+
+
+  validate-import-framework:
+    name: Validate Import Framework (U06a / NF-4)
+    runs-on: ubuntu-latest
+    needs: backend-lint-and-test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify import_tasks in Celery autodiscover (NF-4)
+        run: |
+          # NF-4：run_import_batch.delay 依赖 celery autodiscover 包含 app.tasks.import_tasks，
+          # 否则 worker 找不到任务（upload 后批次永久卡 processing）。不阻塞框架但必须存在。
+          if ! grep -rn "app.tasks.import_tasks" backend/app/core/celery_app.py; then
+            echo "::error::app.tasks.import_tasks not in celery autodiscover (NF-4)."
+            echo "::error::run_import_batch.delay 将无法被 worker 发现，导入批次会卡在 processing。"
+            exit 1
+          fi
+          echo "OK: import_tasks present in celery autodiscover"
+
+      - name: Verify worker Adapter registration signal (NF-4)
+        run: |
+          # NF-4：worker_process_init 信号注册 Adapter（HTTP 进程注册 worker 看不到）
+          if ! grep -rn "worker_process_init" backend/app/tasks/import_tasks.py; then
+            echo "::error::worker_process_init signal handler missing in import_tasks.py (NF-4)."
+            exit 1
+          fi
+          echo "OK: worker_process_init Adapter registration present"
+
+      - name: Verify register_import_adapters wired in main.py
+        run: |
+          if ! grep -rn "register_import_adapters" backend/app/main.py; then
+            echo "::error::register_import_adapters not wired in main.py lifespan."
+            exit 1
+          fi
+          echo "OK: register_import_adapters present in main.py"
+
+
+  frontend-lint-and-test:
+    name: Frontend (lint + build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Type check
+        working-directory: frontend
+        run: npm run type-check
+
+      - name: Build
+        working-directory: frontend
+        env:
+          VITE_API_BASE_URL: https://api.clothinkai.com
+        run: npm run build

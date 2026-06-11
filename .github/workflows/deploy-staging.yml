@@ -1,0 +1,106 @@
+name: Deploy Staging (auto via Zeabur)
+
+# Zeabur 的 GitHub 集成监听 staging 分支自动 redeploy。本 workflow 用于提醒
+# + 触发部署后冒烟测试（U04 FB10：U04+U05 部署一致性约束）。
+
+on:
+  push:
+    branches: [staging]
+
+jobs:
+  notify:
+    name: Notify staging deployment
+    runs-on: ubuntu-latest
+    steps:
+      - name: Show deployment status
+        run: |
+          echo "::notice::staging 已更新；Zeabur 将自动 redeploy。"
+          echo "::warning::如本次包含 schema 变更，请确保 migrate.yml(environment=staging) 已先执行。"
+
+  e2e-smoke-after-deploy:
+    name: E2E smoke test (U04 + U05 J4 旅程)
+    runs-on: ubuntu-latest
+    needs: notify
+    # 等待 Zeabur 部署完成（轮询 /health）
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Wait for staging deploy
+        run: |
+          for i in {1..30}; do
+            if curl -fsS https://api-staging.clothinkai.com/health 2>/dev/null; then
+              echo "::notice::Staging is healthy"
+              break
+            fi
+            sleep 10
+          done
+
+      - name: Install jq + curl
+        run: sudo apt-get install -y jq curl
+
+      - name: Run J4 review approve smoke test (FB1 强一致端到端)
+        env:
+          API_BASE: https://api-staging.clothinkai.com
+          SMOKE_USERNAME: smoke_test_pr_manager
+          SMOKE_PASSWORD: ${{ secrets.STAGING_SMOKE_PR_MANAGER_PASSWORD }}
+        run: |
+          set -e
+
+          # 1. 登录
+          TOKEN=$(curl -sSf -X POST "$API_BASE/api/auth/login" \
+            -H "Content-Type: application/json" \
+            -d "{\"username\":\"$SMOKE_USERNAME\",\"password\":\"$SMOKE_PASSWORD\"}" \
+            | jq -r .access_token)
+
+          if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
+            echo "::error::登录失败"
+            exit 1
+          fi
+
+          # 2. 取一个 dummy promotion（009_seed_smoke_test_data.py 预置，仅 staging）
+          PROMOTION_ID=$(curl -sSf -H "Authorization: Bearer $TOKEN" \
+            "$API_BASE/api/promotions/?publish_status=已发布&settlement_status=待核查&page_size=1" \
+            | jq -r '.items[0].id')
+
+          if [ -z "$PROMOTION_ID" ] || [ "$PROMOTION_ID" = "null" ]; then
+            echo "::error::没有可用的 dummy promotion；请重新种子化 staging 测试数据"
+            exit 1
+          fi
+          echo "::notice::Using promotion_id=$PROMOTION_ID"
+
+          # 3. U04 review approve → 触发 SettlementRequested → U05 创建 settlement
+          curl -sSf -X POST "$API_BASE/api/promotions/$PROMOTION_ID/review" \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"action":"approve"}'
+          echo "::notice::U04 review approve 成功"
+
+          # 4. 验证 U05 端 settlement 已创建（FB1 强一致核心断言）
+          SETTLEMENT_ID=$(curl -sSf -H "Authorization: Bearer $TOKEN" \
+            "$API_BASE/api/settlements/?promotion_id=$PROMOTION_ID&page_size=1" \
+            | jq -r '.items[0].id')
+
+          if [ -z "$SETTLEMENT_ID" ] || [ "$SETTLEMENT_ID" = "null" ]; then
+            echo "::error::FB1 强一致失败：U04 review approve 未创建 U05 settlement"
+            exit 1
+          fi
+          echo "::notice::U05 settlement created: $SETTLEMENT_ID"
+
+          # 5. 验证 settlement_status='待核查'（FB1 状态口径核心断言）
+          STATUS=$(curl -sSf -H "Authorization: Bearer $TOKEN" \
+            "$API_BASE/api/settlements/$SETTLEMENT_ID" \
+            | jq -r .settlement_status)
+
+          if [ "$STATUS" != "待核查" ]; then
+            echo "::error::FB1 状态口径错误：起点应为'待核查'，实际为'$STATUS'"
+            exit 1
+          fi
+          echo "::notice::settlement_status='待核查' 验证通过"
+
+          # 6. cleanup：reject 推回避免污染 smoke 数据池
+          curl -sSf -X PUT "$API_BASE/api/settlements/$SETTLEMENT_ID/review" \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"action":"reject","review_reason":"smoke test cleanup"}'
+
+          echo "::notice::Smoke test PASSED ✓"

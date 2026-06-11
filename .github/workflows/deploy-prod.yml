@@ -1,0 +1,35 @@
+name: Deploy Production (auto via Zeabur)
+
+# 实际部署由 Zeabur 的 GitHub 集成自动触发：每次 push main → 自动 redeploy 4 个服务
+# 本 workflow 用于：
+# 1) 提醒用户：合并到 main 前需先跑 migrate.yml workflow
+# 2) 创建 GitHub Release 作为审计留痕
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  notify:
+    name: Notify deployment
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show deployment status
+        run: |
+          echo "::notice::main 已更新；Zeabur 将自动 redeploy frontend/backend/celery-worker/celery-beat。"
+          echo "::warning::如本次包含 schema 变更，请确保 migrate.yml workflow 已先执行。"
+
+  release-tag:
+    name: Create release tag
+    runs-on: ubuntu-latest
+    if: startsWith(github.event.head_commit.message, 'release:')
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Create tag
+        run: |
+          TAG_NAME=$(echo "${{ github.event.head_commit.message }}" | sed 's/^release: *//')
+          git tag "$TAG_NAME"
+          git push origin "$TAG_NAME"

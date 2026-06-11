@@ -1,0 +1,105 @@
+[project]
+name = "clothing-erp-backend"
+version = "0.1.0"
+description = "Clothing ERP backend (FastAPI + SQLAlchemy 2.0 async)"
+requires-python = ">=3.12"
+
+# ============================================================================
+# Ruff
+# ============================================================================
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+exclude = ["alembic/versions"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "C4",   # flake8-comprehensions
+    "UP",   # pyupgrade
+    "N",    # pep8-naming
+    "S",    # flake8-bandit (security)
+    "ASYNC",
+    "RUF",  # ruff-specific
+]
+ignore = [
+    "E501",  # line length handled by formatter
+    "B008",  # function call in default argument (FastAPI Depends pattern)
+    "S101",  # assert allowed in tests
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S", "N802"]
+"alembic/**" = ["E402", "F401"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+# ============================================================================
+# Mypy
+# ============================================================================
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+exclude = ["alembic/versions/", "tests/"]
+
+[[tool.mypy.overrides]]
+module = ["passlib.*", "boto3.*", "botocore.*", "celery.*", "slowapi.*"]
+ignore_missing_imports = true
+
+# ============================================================================
+# Pytest
+# ============================================================================
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "--strict-markers",
+    "--tb=short",
+    "-ra",
+]
+markers = [
+    "unit: 单元测试",
+    "integration: 集成测试（需 PostgreSQL）",
+    "api: API 端点测试",
+    "rls: RLS 策略测试",
+    "tenant: 多租户隔离测试",
+    "performance: 性能测试（CI 默认跳过）",
+]
+
+# ============================================================================
+# Coverage
+# ============================================================================
+[tool.coverage.run]
+branch = true
+source = ["app"]
+omit = [
+    "app/main.py",
+    "app/core/celery_app.py",
+    "app/tasks/*",
+    "alembic/*",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+fail_under = 70
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+]
