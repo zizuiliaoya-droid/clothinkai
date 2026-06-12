@@ -5,6 +5,7 @@ source=wanxiangtai → ad_daily。同 qianniu 模式（反查 + 未匹配 issue 
 
 from __future__ import annotations
 
+import json
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import TYPE_CHECKING, Any
@@ -22,12 +23,12 @@ if TYPE_CHECKING:
 
 _PLATFORM = "万相台"
 _DEFAULT_COLUMNS = [
-    {"source_col": "商品ID", "target_field": "platform_id", "type": "str"},
+    {"source_col": "主体ID", "target_field": "platform_id", "type": "str"},
     {"source_col": "日期", "target_field": "date", "type": "date"},
     {"source_col": "花费", "target_field": "cost", "type": "decimal"},
-    {"source_col": "曝光", "target_field": "impressions", "type": "int"},
-    {"source_col": "点击", "target_field": "clicks", "type": "int"},
-    {"source_col": "成交额", "target_field": "gmv", "type": "decimal"},
+    {"source_col": "展现量", "target_field": "impressions", "type": "int"},
+    {"source_col": "点击量", "target_field": "clicks", "type": "int"},
+    {"source_col": "总成交金额", "target_field": "gmv", "type": "decimal"},
 ]
 
 
@@ -86,6 +87,12 @@ class WanxiangtaiImportAdapter:
                 parsed[tgt] = _to_date(raw)
             else:
                 parsed[tgt] = str(raw).strip() if raw not in (None, "") else None
+        # 保留整行原始列到 extra（对齐 final.xlsx 站内推广 72 列）
+        parsed["extra"] = {
+            str(k): (str(v).strip() if v is not None else None)
+            for k, v in row.items()
+            if str(k).strip()
+        }
         return parsed
 
     def validate(self, parsed: dict[str, Any]) -> list[str]:
@@ -120,12 +127,12 @@ class WanxiangtaiImportAdapter:
         await session.execute(
             text(
                 "INSERT INTO ad_daily (id, tenant_id, platform_product_id, "
-                "platform_id_snapshot, date, cost, impressions, clicks, gmv, "
+                "platform_id_snapshot, date, cost, impressions, clicks, gmv, extra, "
                 "created_at, updated_at) "
-                "VALUES (:id, :t, :ppid, :pid, :d, :cost, :imp, :clk, :gmv, NOW(), NOW()) "
+                "VALUES (:id, :t, :ppid, :pid, :d, :cost, :imp, :clk, :gmv, CAST(:extra AS JSONB), NOW(), NOW()) "
                 "ON CONFLICT (tenant_id, platform_id_snapshot, date) DO UPDATE SET "
                 "cost=EXCLUDED.cost, impressions=EXCLUDED.impressions, "
-                "clicks=EXCLUDED.clicks, gmv=EXCLUDED.gmv, "
+                "clicks=EXCLUDED.clicks, gmv=EXCLUDED.gmv, extra=EXCLUDED.extra, "
                 "platform_product_id=EXCLUDED.platform_product_id, updated_at=NOW()"
             ),
             {
@@ -138,6 +145,7 @@ class WanxiangtaiImportAdapter:
                 "imp": parsed.get("impressions"),
                 "clk": parsed.get("clicks"),
                 "gmv": parsed.get("gmv"),
+                "extra": json.dumps(parsed.get("extra") or {}, ensure_ascii=False),
             },
         )
         return uuid4(), True

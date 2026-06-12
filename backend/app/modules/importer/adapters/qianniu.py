@@ -8,6 +8,7 @@ source=qianniu → qianniu_daily。
 
 from __future__ import annotations
 
+import json
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import TYPE_CHECKING, Any
@@ -26,10 +27,10 @@ if TYPE_CHECKING:
 _PLATFORM = "千牛"
 _DEFAULT_COLUMNS = [
     {"source_col": "商品ID", "target_field": "platform_id", "type": "str"},
-    {"source_col": "日期", "target_field": "date", "type": "date"},
-    {"source_col": "访客数", "target_field": "visitors", "type": "int"},
+    {"source_col": "统计日期", "target_field": "date", "type": "date"},
+    {"source_col": "商品访客数", "target_field": "visitors", "type": "int"},
     {"source_col": "支付金额", "target_field": "pay_amount", "type": "decimal"},
-    {"source_col": "支付订单数", "target_field": "pay_orders", "type": "int"},
+    {"source_col": "支付件数", "target_field": "pay_orders", "type": "int"},
 ]
 
 
@@ -88,6 +89,12 @@ class QianniuImportAdapter:
                 parsed[tgt] = _to_date(raw)
             else:
                 parsed[tgt] = str(raw).strip() if raw not in (None, "") else None
+        # 保留整行原始列到 extra（对齐 final.xlsx 千牛 38 列；typed 字段供聚合用）
+        parsed["extra"] = {
+            str(k): (str(v).strip() if v is not None else None)
+            for k, v in row.items()
+            if str(k).strip()
+        }
         return parsed
 
     def validate(self, parsed: dict[str, Any]) -> list[str]:
@@ -122,12 +129,12 @@ class QianniuImportAdapter:
         await session.execute(
             text(
                 "INSERT INTO qianniu_daily (id, tenant_id, platform_product_id, "
-                "platform_id_snapshot, date, visitors, pay_amount, pay_orders, "
+                "platform_id_snapshot, date, visitors, pay_amount, pay_orders, extra, "
                 "created_at, updated_at) "
-                "VALUES (:id, :t, :ppid, :pid, :d, :v, :amt, :ord, NOW(), NOW()) "
+                "VALUES (:id, :t, :ppid, :pid, :d, :v, :amt, :ord, CAST(:extra AS JSONB), NOW(), NOW()) "
                 "ON CONFLICT (tenant_id, platform_id_snapshot, date) DO UPDATE SET "
                 "visitors=EXCLUDED.visitors, pay_amount=EXCLUDED.pay_amount, "
-                "pay_orders=EXCLUDED.pay_orders, "
+                "pay_orders=EXCLUDED.pay_orders, extra=EXCLUDED.extra, "
                 "platform_product_id=EXCLUDED.platform_product_id, updated_at=NOW()"
             ),
             {
@@ -139,6 +146,7 @@ class QianniuImportAdapter:
                 "v": parsed.get("visitors"),
                 "amt": parsed.get("pay_amount"),
                 "ord": parsed.get("pay_orders"),
+                "extra": json.dumps(parsed.get("extra") or {}, ensure_ascii=False),
             },
         )
         return uuid4(), True
