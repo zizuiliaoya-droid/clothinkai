@@ -30,6 +30,7 @@ export interface Blogger {
   is_suspected_fake: boolean;
   is_active: boolean;
   is_deleted: boolean;
+  crawler_metrics?: Record<string, unknown>;
   created_at: string;
   updated_at: string;
 }

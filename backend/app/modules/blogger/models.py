@@ -64,6 +64,10 @@ class Blogger(TenantScopedModel):
     )
     # U11：受众画像（U13 采集 Worker 写入，U11 仅读展示 read_like_ratio）
     audience_profile: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # 灰豚爬虫指标（对齐 final.xlsx 博主库 41 列：3/7/14篇互动、粉丝画像、涨跌等）
+    crawler_metrics: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
     is_active: Mapped[bool] = mapped_column(
         nullable=False, server_default=text("true")
     )

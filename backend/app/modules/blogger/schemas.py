@@ -82,6 +82,7 @@ class BloggerUpdate(BaseModel):
     remark: str | None = None
     is_suspected_fake: bool | None = None
     is_active: bool | None = None
+    crawler_metrics: dict | None = None
 
     @field_validator("category_tags", "quality_tags")
     @classmethod
@@ -119,6 +120,8 @@ class BloggerResponse(BaseModel):
     # U11：受众画像（U13 写入）+ 读时衍生点赞/阅读比
     audience_profile: dict | None = None
     read_like_ratio: Decimal | None = None
+    # 灰豚爬虫指标（对齐 final.xlsx 博主库 41 列）
+    crawler_metrics: dict = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
 

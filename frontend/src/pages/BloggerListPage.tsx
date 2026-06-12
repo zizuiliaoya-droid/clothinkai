@@ -34,6 +34,19 @@ const PLATFORMS = ["小红书", "抖音", "快手", "B站"];
 const TYPES = ["素人", "KOC", "KOL", "明星"];
 const GENDER_TARGETS = ["女性", "男性", "中性"];
 
+// 灰豚爬虫/指标列（对齐 final.xlsx 博主库），从 crawler_metrics 按列名读取
+const CRAWLER_FIELDS = [
+  "3篇阅读量", "3篇点赞数", "3篇收藏数", "3篇评论数",
+  "7篇阅读量", "7篇点赞数", "7篇收藏数", "7篇评论数",
+  "14篇阅读量", "14篇点赞数", "14篇收藏数", "14篇评论数",
+  "阅读点赞比", "收藏赞比", "近期数据涨的博主",
+  "活跃粉丝数", "阅读粉丝数", "粉丝画像", "粉丝占比", "主要年龄",
+  "粉丝赞藏比", "笔记数", "爆文率",
+  "3天平均阅读", "7天平均阅读", "14天平均阅读",
+  "3天平均点赞", "7天平均点赞", "14天平均点赞",
+  "3天阅读涨跌", "7天阅读涨跌", "3天点赞涨跌", "7天点赞涨跌",
+];
+
 export function BloggerListPage() {
   const qc = useQueryClient();
   const [filters, setFilters] = useState<BloggerListFilters>({
@@ -112,16 +125,27 @@ export function BloggerListPage() {
       width: 90,
       render: (v: boolean) => (v ? <Tag color="red">疑似</Tag> : "—"),
     },
+    ...CRAWLER_FIELDS.map((f) => ({
+      title: f,
+      key: `cm_${f}`,
+      width: 110,
+      render: (_: unknown, r: Blogger) => {
+        const v = (r.crawler_metrics ?? {})[f];
+        return v == null || v === "" ? "—" : String(v);
+      },
+    })),
     {
       title: "状态",
       dataIndex: "is_active",
       width: 80,
+      fixed: "right" as const,
       render: (v: boolean) =>
         v ? <Tag color="green">启用</Tag> : <Tag color="red">停用</Tag>,
     },
     {
       title: "操作",
       width: 140,
+      fixed: "right" as const,
       render: (_, record) => (
         <Space>
           <Button type="link" size="small" onClick={() => openEdit(record)}>
@@ -182,6 +206,7 @@ export function BloggerListPage() {
         loading={isLoading}
         columns={columns}
         dataSource={data?.items ?? []}
+        scroll={{ x: 2600 }}
         pagination={{
           current: data?.page ?? 1,
           pageSize: data?.page_size ?? 10,

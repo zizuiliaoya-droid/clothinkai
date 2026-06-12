@@ -506,6 +506,7 @@ class BloggerService:
             read_like_ratio=self._tags.compute_read_like_ratio(
                 blogger.audience_profile
             ),
+            crawler_metrics=dict(blogger.crawler_metrics or {}),
             created_at=blogger.created_at,
             updated_at=blogger.updated_at,
         )
