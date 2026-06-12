@@ -173,6 +173,11 @@ class SettlementResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
+    # 反范式展示字段（list 时 join 填充，对齐 final.xlsx 结款表）
+    style_code: str | None = None
+    style_name: str | None = None
+    blogger_nickname: str | None = None
+
     # 子表关联
     extra_items: list[SettlementExtraItemResponse] = Field(default_factory=list)
 

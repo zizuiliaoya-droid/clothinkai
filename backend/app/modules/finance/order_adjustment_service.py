@@ -116,9 +116,47 @@ class OrderAdjustmentService:
     async def list(
         self, *, order_type: str | None = None, limit: int = 50, offset: int = 0
     ):
-        return await self._repo.list(
+        rows = await self._repo.list(
             order_type=order_type, limit=limit, offset=offset
         )
+        # 反范式富化：批量取款式编码/名称（对齐 final.xlsx 拍单/刷单的「款式/款号」）
+        from sqlalchemy import select as _select
+
+        from app.modules.product.models import Style
+
+        style_ids = {r.style_id for r in rows if getattr(r, "style_id", None)}
+        style_map: dict = {}
+        if style_ids:
+            srows = (
+                await self._session.execute(
+                    _select(Style.id, Style.style_code, Style.style_name).where(
+                        Style.id.in_(style_ids)
+                    )
+                )
+            ).all()
+            style_map = {s.id: (s.style_code, s.style_name) for s in srows}
+        result = []
+        for r in rows:
+            sc = style_map.get(getattr(r, "style_id", None))
+            result.append(
+                {
+                    "id": r.id,
+                    "order_type": r.order_type,
+                    "order_date": r.order_date,
+                    "order_no": r.order_no,
+                    "style_id": r.style_id,
+                    "sku_id": r.sku_id,
+                    "style_code": sc[0] if sc else None,
+                    "style_name": sc[1] if sc else None,
+                    "blogger_identifier": r.blogger_identifier,
+                    "amount": r.amount,
+                    "exclude_from_roi": r.exclude_from_roi,
+                    "status": r.status,
+                    "promotion_id": r.promotion_id,
+                    "remark": r.remark,
+                }
+            )
+        return result
 
 
 __all__ = ["OrderAdjustmentService", "parse_amount_expr"]

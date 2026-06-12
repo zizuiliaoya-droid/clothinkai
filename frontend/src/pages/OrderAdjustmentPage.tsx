@@ -24,8 +24,8 @@ export function OrderAdjustmentPage({ orderType }: Props) {
     { title: orderType === "拍单" ? "拍单日期" : "日期", dataIndex: "order_date", width: 120, render: (v) => v || "—" },
     { title: "订单号", dataIndex: "order_no", width: 160, render: (v) => v || "—" },
     { title: "博主ID/微信ID", dataIndex: "blogger_identifier", width: 140, render: (v) => v || "—" },
-    { title: "款式", width: 120, render: () => "—" },
-    { title: "款号", width: 120, render: () => "—" },
+    { title: "款式", dataIndex: "style_name", width: 140, render: (v) => v || "—" },
+    { title: "款号", dataIndex: "style_code", width: 120, render: (v) => v || "—" },
     {
       title: "金额",
       dataIndex: "amount",

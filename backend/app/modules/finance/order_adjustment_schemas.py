@@ -28,6 +28,8 @@ class OrderAdjustmentResponse(BaseModel):
     order_no: str | None = None
     style_id: UUID | None = None
     sku_id: UUID | None = None
+    style_code: str | None = None
+    style_name: str | None = None
     blogger_identifier: str | None = None
     amount: Decimal
     exclude_from_roi: bool

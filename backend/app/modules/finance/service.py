@@ -518,15 +518,57 @@ class SettlementService:
             current_user_id=user.id,
         )
 
+        responses = [
+            await self._to_response(s, user, include_extra_items=False)
+            for s in items
+        ]
+
+        # 反范式富化：批量取款式编码/名称 + 博主昵称（对齐 final.xlsx 结款表）
+        await self._enrich_display_fields(items, responses)
+
         return SettlementPage(
-            items=[
-                await self._to_response(s, user, include_extra_items=False)
-                for s in items
-            ],
+            items=responses,
             total=total,
             page=page,
             page_size=page_size,
         )
+
+    async def _enrich_display_fields(
+        self, items: Any, responses: list[SettlementResponse]
+    ) -> None:
+        """批量 join 款式（style_code/style_name）+ 博主（nickname）填充展示列。"""
+        from sqlalchemy import select as _select
+
+        from app.modules.blogger.models import Blogger
+        from app.modules.product.models import Style
+
+        style_ids = {s.style_id for s in items if s.style_id}
+        blogger_ids = {s.blogger_id for s in items if s.blogger_id}
+        style_map: dict[Any, Any] = {}
+        blogger_map: dict[Any, str] = {}
+        if style_ids:
+            rows = (
+                await self._session.execute(
+                    _select(Style.id, Style.style_code, Style.style_name).where(
+                        Style.id.in_(style_ids)
+                    )
+                )
+            ).all()
+            style_map = {r.id: (r.style_code, r.style_name) for r in rows}
+        if blogger_ids:
+            rows = (
+                await self._session.execute(
+                    _select(Blogger.id, Blogger.nickname).where(
+                        Blogger.id.in_(blogger_ids)
+                    )
+                )
+            ).all()
+            blogger_map = {r.id: r.nickname for r in rows}
+        for s, resp in zip(items, responses):
+            sc = style_map.get(s.style_id)
+            if sc:
+                resp.style_code, resp.style_name = sc
+            resp.blogger_nickname = blogger_map.get(s.blogger_id)
 
     # ============================================================
     # 双口径汇总（FB7 + FB8）

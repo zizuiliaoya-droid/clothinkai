@@ -53,6 +53,10 @@ export interface Settlement {
   // 通用
   created_at: string;
   updated_at: string;
+  // 反范式展示字段（list join 填充）
+  style_code: string | null;
+  style_name: string | null;
+  blogger_nickname: string | null;
   // 子表
   extra_items: SettlementExtraItem[];
 }
@@ -184,6 +188,8 @@ export interface OrderAdjustment {
   order_no: string | null;
   style_id: string | null;
   sku_id: string | null;
+  style_code: string | null;
+  style_name: string | null;
   blogger_identifier: string | null;
   amount: string;
   exclude_from_roi: boolean;

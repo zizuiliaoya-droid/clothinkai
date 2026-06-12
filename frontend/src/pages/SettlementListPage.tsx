@@ -54,6 +54,9 @@ export function SettlementListPage() {
     },
     { title: "大类", width: 90, render: () => "站外推广" },
     { title: "项目", width: 80, render: () => "佣金" },
+    { title: "款式编码", dataIndex: "style_code", width: 120, render: (v) => v || "—" },
+    { title: "款式", dataIndex: "style_name", width: 140, render: (v) => v || "—" },
+    { title: "博主名", dataIndex: "blogger_nickname", width: 120, render: (v) => v || "—" },
     { title: "结算单号", dataIndex: "settlement_no", width: 150 },
     { title: "金额", dataIndex: "amount", width: 100, render: money },
     { title: "付款金额", dataIndex: "payment_amount", width: 110, render: money },
@@ -111,7 +114,7 @@ export function SettlementListPage() {
         loading={isLoading}
         columns={columns}
         dataSource={data?.items ?? []}
-        scroll={{ x: 1200 }}
+        scroll={{ x: 1500 }}
         pagination={{
           current: data?.page ?? 1,
           pageSize: data?.page_size ?? 20,
