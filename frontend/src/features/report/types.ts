@@ -101,6 +101,7 @@ export interface ProductionRow {
   add_cart_cost: string | null;
   net_roi: string | null;
   unit_deal_cost: string | null;
+  extra?: Record<string, unknown>;
 }
 
 export interface ProductionReport {

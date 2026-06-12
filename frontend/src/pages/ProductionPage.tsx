@@ -26,7 +26,7 @@ export function ProductionPage() {
   });
 
   // 列对齐 final.xlsx「投产报表」核心派生指标
-  const columns: ColumnsType<ProductionRow> = [
+  const baseColumns: ColumnsType<ProductionRow> = [
     { title: "款号", dataIndex: "style_code", width: 120, fixed: "left" },
     { title: "款名", dataIndex: "style_name", width: 150 },
     { title: "支付金额", dataIndex: "pay_amount", width: 110, render: money },
@@ -41,6 +41,25 @@ export function ProductionPage() {
     { title: "净投产比", dataIndex: "net_roi", width: 100, render: (v) => (v == null ? "—" : v) },
     { title: "推广单件成交成本", dataIndex: "unit_deal_cost", width: 150, render: money },
   ];
+
+  // 动态展开千牛/站内导入按款式汇总的其余指标（对齐 final.xlsx 投产报表全列）
+  const extraKeys = Array.from(
+    new Set(
+      (data?.items ?? []).flatMap((r) => Object.keys(r.extra ?? {})),
+    ),
+  );
+  const extraColumns: ColumnsType<ProductionRow> = extraKeys.map((k) => ({
+    title: k,
+    key: `extra_${k}`,
+    width: 130,
+    render: (_: unknown, row: ProductionRow) => {
+      const v = (row.extra ?? {})[k];
+      return v == null || v === "" ? "—" : String(v);
+    },
+  }));
+
+  const columns = [...baseColumns, ...extraColumns];
+  const scrollX = 1500 + extraColumns.length * 130;
 
   return (
     <Card
@@ -67,7 +86,7 @@ export function ProductionPage() {
         loading={isLoading}
         columns={columns}
         dataSource={data?.items ?? []}
-        scroll={{ x: 1500 }}
+        scroll={{ x: scrollX }}
         pagination={false}
       />
     </Card>

@@ -172,10 +172,16 @@ class ProductionRepository:
             FROM style s
             LEFT JOIN platform_product pp ON pp.style_id = s.id
             LEFT JOIN qianniu_daily q
-              ON q.platform_product_id = pp.id AND q.date BETWEEN :date_from AND :date_to
+              ON (q.platform_product_id = pp.id
+                  OR q.platform_id_snapshot = pp.platform_id)
+              AND q.tenant_id = s.tenant_id
+              AND q.date BETWEEN :date_from AND :date_to
             LEFT JOIN (
               SELECT pp2.style_id, SUM(a.cost) AS ad_spend FROM ad_daily a
-              JOIN platform_product pp2 ON pp2.id = a.platform_product_id
+              JOIN platform_product pp2
+                ON (pp2.id = a.platform_product_id
+                    OR pp2.platform_id = a.platform_id_snapshot)
+                AND pp2.tenant_id = a.tenant_id
               WHERE a.date BETWEEN :date_from AND :date_to
               GROUP BY pp2.style_id
             ) ad ON ad.style_id = s.id
@@ -190,6 +196,46 @@ class ProductionRepository:
                 OR COALESCE(MAX(promo.promo_cost), 0) > 0
                 OR COALESCE(MAX(ad.ad_spend), 0) > 0
             ORDER BY pay_amount DESC
+            """
+        )
+        return list(
+            (
+                await self._s.execute(
+                    sql,
+                    {"tenant_id": tenant_id, "date_from": date_from, "date_to": date_to},
+                )
+            ).mappings().all()
+        )
+
+    async def fetch_extra_by_style(
+        self, *, tenant_id: UUID, date_from: date, date_to: date
+    ) -> list[Mapping[str, Any]]:
+        """拉取千牛/站内导入明细的 (style_id, extra) 用于按款式汇总 JSONB 数值列。
+
+        通过 platform_product.platform_id = *_daily.platform_id_snapshot 归集到款式，
+        兼容导入数据 platform_product_id 为 NULL 的场景。
+        """
+        sql = text(
+            """
+            SELECT pp.style_id AS style_id, q.extra AS extra, 'qianniu' AS src
+            FROM qianniu_daily q
+            JOIN platform_product pp
+              ON pp.tenant_id = q.tenant_id
+              AND (pp.id = q.platform_product_id
+                   OR pp.platform_id = q.platform_id_snapshot)
+            WHERE q.tenant_id = :tenant_id
+              AND q.date BETWEEN :date_from AND :date_to
+              AND q.extra IS NOT NULL
+            UNION ALL
+            SELECT pp.style_id AS style_id, a.extra AS extra, 'ad' AS src
+            FROM ad_daily a
+            JOIN platform_product pp
+              ON pp.tenant_id = a.tenant_id
+              AND (pp.id = a.platform_product_id
+                   OR pp.platform_id = a.platform_id_snapshot)
+            WHERE a.tenant_id = :tenant_id
+              AND a.date BETWEEN :date_from AND :date_to
+              AND a.extra IS NOT NULL
             """
         )
         return list(

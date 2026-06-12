@@ -21,8 +21,8 @@
 | 拍单 | 9 | 9 | ✅ | 完全对齐 |
 | 刷单 | 17 | 10 | ⚠️ | 后端 order_adjustment 精简模型（统一拍单/刷单） |
 | 余额核对 | 7 | 7 | ✅ | 完全对齐 |
-| 店铺数据 | 24 | 7 | ⚠️ | **后端缺口**：StoreDailyRow 仅 7 字段，千牛 24 列汇总未全建 |
-| 投产报表 | 70 | 13 | ◐ | 后端建 13 核心派生指标（退货率/净投产比/加购成本等）；70 列多为中间量 |
+| 店铺数据 | 24 | 7 typed + extra | ✅ | C 完成：按日 SUM 千牛 extra 数值列动态展开（实测 27 汇总指标） |
+| 投产报表 | 70 | 13 + extra | ✅ | D 完成：按款式 SUM 千牛/站内 extra 数值列动态展开（实测 27 汇总指标） |
 | 设计制版×4 | 流程 | 3 | ✅ | 款号/款名/状态（状态流转表格版） |
 | 用户管理 | — | 7 | ✅ | 系统功能页 |
 | 数据导入 | — | 9 | ✅ | 系统功能页 |
@@ -52,8 +52,9 @@
 
 1. ~~**博主库 +26 列**~~ ✅ **已完成**（A）：migration 023 加 `crawler_metrics` JSONB，前端 43 列（含 33 灰豚列），PUT 可写灰豚数据。
 2. ~~**站外推广 +列**~~ ✅ **已完成**（B）：migration 024 加 `source_extra` JSONB，前端 23 列（含 11 源列：颜色及规格/打单地址/发货单号/订单号/寄回单号/合作方式/合作形式/收藏数/评论数/博主风格/买家秀）。
-3. **店铺数据 24 列**（C，**数据依赖，未做**）：StoreDailyService 当前聚合 7 个核心指标（访客/支付/订单 + 3 类消耗）。扩到 24 列需改 `advanced_repository.aggregate` 去 SUM `qianniu_daily.extra` 的 JSONB 键；且需千牛导入数据存在才能验证（本地无）。当前 7 列覆盖决策核心。
-4. **投产报表 70 列**（D，**核心已覆盖**）：ProductionRow 已算 13 个决策派生指标（退货退款率/净投产比/加购成本/推广单件成交成本等）。Excel 70 列多为中间量（直接/间接成交各类拆分）；扩展需大量跨表聚合，且依赖千牛/站内导入数据。
+3. ~~**店铺数据 24 列**~~ ✅ **已完成**（C，commit `1d8ed3a`）：`StoreDailyService._aggregate_extra` 按日 SUM `qianniu_daily.extra` 数值列（排除 ID/文本列）；`StoreDailyRow.extra` + 前端动态展开列。实测 custom 区间返回 27 汇总指标（下单件数/支付金额等正确求和）。
+4. ~~**投产报表 70 列**~~ ✅ **已完成**（D）：`ProductionRepository.fetch_extra_by_style`（千牛/站内 extra 经 `platform_product.platform_id=*_daily.platform_id_snapshot` 归集到款式，兼容导入数据 FK 为 NULL）+ `ProductionService._aggregate_extra` 按款式 SUM 数值列；`ProductionRow.extra` + 前端动态展开列。实测 `preset=custom&date_from=2026-01-01&date_to=2026-01-31` 返回 UI001 pay=65669 + 27 汇总指标。
 
-> C/D 是对千牛/站内**导入数据的聚合扩展**，与 A/B（人工录入字段）性质不同：必须先有导入数据才能生成与验证。建议在配置好千牛/万相台导入后再做，避免产出无数据来源的空列。
+> **验证注意**：店铺/投产报表默认 `preset=last_30d`（相对今天），导入样例数据日期为 2026-01-01 时需传 `preset=custom&date_from=...&date_to=...` 才落在窗口内。
+> **投产数据依赖**：按款式聚合需 `platform_product`（千牛/站内 platform_id → 款式）映射存在；导入数据 `platform_product_id` 为 NULL 时，新 join 走 `platform_id_snapshot=platform_product.platform_id` 兜底，仍需先建立映射。
 

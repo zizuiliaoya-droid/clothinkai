@@ -101,6 +101,9 @@ class ProductionRow(BaseModel):
     add_cart_cost: Decimal | None = None
     net_roi: Decimal | None = None
     unit_deal_cost: Decimal | None = None
+    # 千牛/站内导入数据按款式汇总的其余指标（对齐 final.xlsx 投产报表 70 列；
+    # SUM qianniu_daily.extra + ad_daily.extra 的数值列，按 platform_product→style 归集）
+    extra: dict = Field(default_factory=dict)
 
 
 class ProductionReport(BaseModel):
