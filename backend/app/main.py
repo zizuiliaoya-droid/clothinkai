@@ -64,6 +64,7 @@ from app.modules.credential.api import router as credential_router
 from app.modules.collect.crawler_api import router as crawler_router
 from app.modules.collect.worker_token_api import router as worker_token_router
 from app.modules.collect.data_quality_api import router as data_quality_router
+from app.modules.collect.daily_data_api import router as daily_data_router
 from app.modules.wecom.api import router as wecom_router
 from app.modules.wecom.callback_api import router as wecom_callback_router
 from app.modules.wecom.notification_api import router as notification_router
@@ -473,6 +474,7 @@ def create_app() -> FastAPI:
     app.include_router(crawler_router)  # U13 采集 Worker /api/crawler/tasks
     app.include_router(worker_token_router)  # U13 Worker Token /api/crawler/worker-tokens
     app.include_router(data_quality_router)  # U13 数据质量看板 /api/data-quality
+    app.include_router(daily_data_router)  # 千牛/站内日报列表 /api/qianniu /api/ad-daily
 
     return app
 

@@ -33,6 +33,9 @@ import { UserListPage } from "@/pages/UserListPage";
 import { ImportListPage } from "@/pages/ImportListPage";
 import { SettingsPage } from "@/pages/SettingsPage";
 import { BiDashboardPage } from "@/pages/BiDashboardPage";
+import { DailyDataPage } from "@/pages/DailyDataPage";
+import { listQianniu, listAdDaily } from "@/features/collect/api";
+import type { QianniuRow, AdRow } from "@/features/collect/api";
 import { PlaceholderPage } from "@/pages/PlaceholderPage";
 import { getMe } from "@/features/auth/api";
 
@@ -126,8 +129,37 @@ function AppRoutes() {
           path="/skus"
           element={<CostTablePage />}
         />
-        <Route path="/qianniu" element={<PlaceholderPage title="千牛数据" />} />
-        <Route path="/ad-data" element={<PlaceholderPage title="单品站内推广数据" />} />
+        <Route path="/qianniu" element={
+          <DailyDataPage<QianniuRow>
+            title="千牛数据"
+            queryKey="qianniu"
+            fetchFn={listQianniu}
+            totalCols={38}
+            typedColumns={[
+              { title: "统计日期", dataIndex: "date", width: 110, fixed: "left" },
+              { title: "商品ID", dataIndex: "platform_id", width: 130 },
+              { title: "商品访客数", dataIndex: "visitors", width: 100 },
+              { title: "支付金额", dataIndex: "pay_amount", width: 110, render: (v) => (v == null ? "—" : `¥${v}`) },
+              { title: "支付件数", dataIndex: "pay_orders", width: 100 },
+            ]}
+          />
+        } />
+        <Route path="/ad-data" element={
+          <DailyDataPage<AdRow>
+            title="单品站内推广数据"
+            queryKey="ad-daily"
+            fetchFn={listAdDaily}
+            totalCols={72}
+            typedColumns={[
+              { title: "日期", dataIndex: "date", width: 110, fixed: "left" },
+              { title: "主体ID", dataIndex: "platform_id", width: 130 },
+              { title: "花费", dataIndex: "cost", width: 110, render: (v) => (v == null ? "—" : `¥${v}`) },
+              { title: "展现量", dataIndex: "impressions", width: 100 },
+              { title: "点击量", dataIndex: "clicks", width: 100 },
+              { title: "总成交金额", dataIndex: "gmv", width: 120, render: (v) => (v == null ? "—" : `¥${v}`) },
+            ]}
+          />
+        } />
         {/* 推广管理 */}
         <Route path="/work-progress" element={<WorkProgressPage />} />
         <Route path="/publish-target" element={<PublishTargetPage />} />
