@@ -29,6 +29,9 @@ import { PublishProgressPage } from "@/pages/PublishProgressPage";
 import { StoreDailyPage } from "@/pages/StoreDailyPage";
 import { ProductionPage } from "@/pages/ProductionPage";
 import { DesignListPage } from "@/pages/DesignListPage";
+import { UserListPage } from "@/pages/UserListPage";
+import { ImportListPage } from "@/pages/ImportListPage";
+import { SettingsPage } from "@/pages/SettingsPage";
 import { PlaceholderPage } from "@/pages/PlaceholderPage";
 import { getMe } from "@/features/auth/api";
 
@@ -138,9 +141,9 @@ function AppRoutes() {
         <Route path="/production" element={<ProductionPage />} />
         <Route path="/bi" element={<PlaceholderPage title="BI看板" />} />
         {/* 系统管理 */}
-        <Route path="/users" element={<PlaceholderPage title="用户管理" />} />
-        <Route path="/imports" element={<PlaceholderPage title="数据导入" />} />
-        <Route path="/settings" element={<PlaceholderPage title="系统设置" />} />
+        <Route path="/users" element={<UserListPage />} />
+        <Route path="/imports" element={<ImportListPage />} />
+        <Route path="/settings" element={<SettingsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
