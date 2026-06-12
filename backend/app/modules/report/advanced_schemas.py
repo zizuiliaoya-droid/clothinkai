@@ -72,6 +72,8 @@ class StoreDailyRow(BaseModel):
     ad_spend_total: Decimal | None = None
     zhitongche_spend: Decimal | None = None
     yinli_spend: Decimal | None = None
+    # 千牛日报按日汇总的其余指标（对齐 final.xlsx 店铺数据；SUM qianniu_daily.extra 数值列）
+    extra: dict = Field(default_factory=dict)
 
 
 class StoreDailyManualUpdate(BaseModel):

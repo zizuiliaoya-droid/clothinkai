@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Card, Select, Space, Table, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import type { ColumnsType } from "antd/es/table";
@@ -20,15 +20,32 @@ export function StoreDailyPage() {
     queryFn: () => getStoreDaily({ preset }),
   });
 
-  // 列对齐 final.xlsx「店铺数据」(千牛汇总 + 手动投放)
+  // typed 列（核心）+ 动态展开千牛汇总 extra（对齐 final.xlsx 店铺数据 24 列）
+  const extraColumns = useMemo<ColumnsType<StoreDailyRow>>(() => {
+    const keys = new Set<string>();
+    for (const r of data ?? []) {
+      Object.keys(r.extra ?? {}).forEach((k) => keys.add(k));
+    }
+    return Array.from(keys).map((k) => ({
+      title: k,
+      key: `ex_${k}`,
+      width: 130,
+      render: (_: unknown, r: StoreDailyRow) => {
+        const v = (r.extra ?? {})[k];
+        return v == null || v === "" ? "—" : String(v);
+      },
+    }));
+  }, [data]);
+
   const columns: ColumnsType<StoreDailyRow> = [
-    { title: "日期", dataIndex: "date", width: 120 },
+    { title: "日期", dataIndex: "date", width: 120, fixed: "left" },
     { title: "访客数", dataIndex: "visitors", width: 100 },
     { title: "支付金额", dataIndex: "pay_amount", width: 120, render: money },
     { title: "支付订单数", dataIndex: "pay_orders", width: 110 },
     { title: "全站推消耗", dataIndex: "ad_spend_total", width: 120, render: money },
     { title: "直通车消耗", dataIndex: "zhitongche_spend", width: 120, render: money },
     { title: "引力魔方消耗", dataIndex: "yinli_spend", width: 130, render: money },
+    ...extraColumns,
   ];
 
   return (
@@ -54,6 +71,7 @@ export function StoreDailyPage() {
         loading={isLoading}
         columns={columns}
         dataSource={data ?? []}
+        scroll={{ x: Math.max(900, columns.length * 130) }}
         pagination={false}
       />
     </Card>

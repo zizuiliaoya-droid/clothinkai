@@ -83,6 +83,7 @@ export interface StoreDailyRow {
   ad_spend_total: string | null;
   zhitongche_spend: string | null;
   yinli_spend: string | null;
+  extra?: Record<string, unknown>;
 }
 
 export interface ProductionRow {
