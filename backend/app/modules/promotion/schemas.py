@@ -63,6 +63,8 @@ class PromotionBase(BaseModel):
     """创建时若为 None 则从 blogger.quote 快照；后续编辑可修改。"""
     note_title: str | None = Field(default=None, max_length=255)
     remark: str | None = None
+    # 人工源列扩展（颜色及规格/打单地址/发货单号/订单号/寄回单号/合作方式/合作形式/收藏数/评论数/博主风格 等）
+    source_extra: dict = Field(default_factory=dict)
 
 
 class PromotionCreate(PromotionBase):
@@ -87,6 +89,7 @@ class PromotionUpdate(BaseModel):
     like_count: int | None = Field(default=None, ge=0)
     remark: str | None = None
     is_active: bool | None = None
+    source_extra: dict | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -239,6 +242,9 @@ class PromotionResponse(BaseModel):
     effective_like_count: int | None = None
     is_hit: bool = False
     cpl: Decimal | None = None  # 敏感
+
+    # 人工源列扩展（对齐 final.xlsx 站外推广源列）
+    source_extra: dict = Field(default_factory=dict)
 
     # 重复警告（仅 create / detail 视图填入）
     duplicate_warnings: list[PromotionDuplicateWarning] = Field(

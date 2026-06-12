@@ -216,6 +216,7 @@ class PromotionService:
             scheduled_publish_date=payload.scheduled_publish_date,
             note_title=payload.note_title,
             remark=payload.remark,
+            source_extra=dict(payload.source_extra or {}),
             publish_status=PublishStatus.UNPUBLISHED.value,
             recall_status=RecallStatus.NOT_RECALLED.value,
             settlement_status=SettlementStatus.NOT_REVIEWED.value,
@@ -1001,6 +1002,7 @@ class PromotionService:
             effective_like_count=effective_like,
             is_hit=is_hit,
             cpl=cpl if can_see_quote else None,
+            source_extra=dict(getattr(promotion, "source_extra", {}) or {}),
             duplicate_warnings=[],
         )
 

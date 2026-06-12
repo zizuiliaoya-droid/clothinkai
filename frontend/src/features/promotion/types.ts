@@ -87,6 +87,7 @@ export interface Promotion {
   effective_like_count: number | null;
   is_hit: boolean;
   cpl: string | null; // 敏感
+  source_extra?: Record<string, unknown>;
   duplicate_warnings: PromotionDuplicateWarning[];
 }
 

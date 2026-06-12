@@ -38,6 +38,12 @@ import { extractErrorMessage } from "@/services/apiClient";
 const PLATFORMS = ["小红书", "抖音", "快手", "B站"];
 const PUBLISH_STATUS = ["未发布", "已发布", "已取消", "异常", "已删除"];
 
+// 站外推广人工源列（对齐 final.xlsx），从 source_extra 读取
+const SOURCE_FIELDS = [
+  "颜色及规格", "打单地址", "发货单号", "订单号", "寄回单号",
+  "合作方式", "合作形式", "收藏数", "评论数", "博主风格", "买家秀",
+];
+
 const statusColor: Record<string, string> = {
   未发布: "default",
   已发布: "green",
@@ -205,6 +211,15 @@ export function PromotionListPage() {
       width: 100,
       render: (v: string) => <Tag>{v}</Tag>,
     },
+    ...SOURCE_FIELDS.map((f) => ({
+      title: f,
+      key: `se_${f}`,
+      width: 110,
+      render: (_: unknown, r: Promotion) => {
+        const v = (r.source_extra ?? {})[f];
+        return v == null || v === "" ? "—" : String(v);
+      },
+    })),
     {
       title: "操作",
       width: 110,
@@ -296,7 +311,7 @@ export function PromotionListPage() {
         loading={isLoading}
         columns={columns}
         dataSource={data?.items ?? []}
-        scroll={{ x: 1300 }}
+        scroll={{ x: 2400 }}
         pagination={{
           current: data?.page ?? 1,
           pageSize: data?.page_size ?? 10,
