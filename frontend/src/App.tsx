@@ -32,6 +32,7 @@ import { DesignListPage } from "@/pages/DesignListPage";
 import { UserListPage } from "@/pages/UserListPage";
 import { ImportListPage } from "@/pages/ImportListPage";
 import { SettingsPage } from "@/pages/SettingsPage";
+import { BiDashboardPage } from "@/pages/BiDashboardPage";
 import { PlaceholderPage } from "@/pages/PlaceholderPage";
 import { getMe } from "@/features/auth/api";
 
@@ -139,7 +140,7 @@ function AppRoutes() {
         {/* 报表与分析 */}
         <Route path="/store-daily" element={<StoreDailyPage />} />
         <Route path="/production" element={<ProductionPage />} />
-        <Route path="/bi" element={<PlaceholderPage title="BI看板" />} />
+        <Route path="/bi" element={<BiDashboardPage />} />
         {/* 系统管理 */}
         <Route path="/users" element={<UserListPage />} />
         <Route path="/imports" element={<ImportListPage />} />
