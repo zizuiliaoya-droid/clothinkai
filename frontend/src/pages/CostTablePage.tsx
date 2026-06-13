@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { ColumnsType } from "antd/es/table";
 import { listBrands, listCostTable } from "@/features/product/api";
 import type { CostTableFilters, CostTableRow } from "@/features/product/types";
+import { ImportUploadButton } from "@/components/ImportUploadButton";
 
 const money = (v: string | null) => (v == null ? "—" : `¥${v}`);
 
@@ -95,6 +96,17 @@ export function CostTablePage() {
         <Typography.Title level={4} style={{ margin: 0 }}>
           商品成本表
         </Typography.Title>
+      }
+      extra={
+        <ImportUploadButton
+          source="manual_style_sku"
+          label="导入商品成本表"
+          invalidateKeys={[["cost-table"], ["styles"], ["skus"]]}
+          templateColumns={[
+            "款式编码", "商品编码", "商品名称", "商品简称", "颜色及规格",
+            "颜色", "规格", "基本售价", "成本价", "采购价", "市场吊牌价", "品牌",
+          ]}
+        />
       }
     >
       <Space style={{ marginBottom: 16 }} wrap>

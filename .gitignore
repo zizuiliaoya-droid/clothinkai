@@ -73,3 +73,6 @@ coverage/
 # Playwright MCP 本地测试产物
 .playwright-mcp/
 local-dashboard.png
+
+# 本地存储回退（R2 未配置时；dev only）
+backend/.local_storage/

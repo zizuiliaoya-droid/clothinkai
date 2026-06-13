@@ -129,7 +129,7 @@ export function AppLayout() {
       label: "系统管理",
       children: [
         { key: "/users", label: <Link to="/users">用户管理</Link> },
-        { key: "/imports", label: <Link to="/imports">数据导入</Link> },
+        { key: "/imports", label: <Link to="/imports">导入记录</Link> },
         { key: "/settings", label: <Link to="/settings">系统设置</Link> },
       ],
     },

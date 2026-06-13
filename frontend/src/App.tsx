@@ -135,6 +135,9 @@ function AppRoutes() {
             queryKey="qianniu"
             fetchFn={listQianniu}
             totalCols={38}
+            importSource="qianniu"
+            importLabel="导入千牛数据"
+            importColumns={["统计日期", "商品ID", "商品访客数", "支付金额", "支付件数"]}
             typedColumns={[
               { title: "统计日期", dataIndex: "date", width: 110, fixed: "left" },
               { title: "商品ID", dataIndex: "platform_id", width: 130 },
@@ -150,6 +153,9 @@ function AppRoutes() {
             queryKey="ad-daily"
             fetchFn={listAdDaily}
             totalCols={72}
+            importSource="wanxiangtai"
+            importLabel="导入站内推广数据"
+            importColumns={["日期", "主体ID", "花费", "展现量", "点击量", "总成交金额"]}
             typedColumns={[
               { title: "日期", dataIndex: "date", width: 110, fixed: "left" },
               { title: "主体ID", dataIndex: "platform_id", width: 130 },

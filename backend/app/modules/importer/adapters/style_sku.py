@@ -32,28 +32,38 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 # 内置默认映射（mapping=None 回退；中文表头 → 目标字段）
+# aliases：兼容 final.xlsx「商品成本表」等不同平台导出的列名变体
 _DEFAULT_COLUMNS: list[dict[str, Any]] = [
-    {"source_col": "款式编码", "target_field": "style_code", "type": "str"},
-    {"source_col": "款式名称", "target_field": "style_name", "type": "str"},
-    {"source_col": "类目", "target_field": "category", "type": "str"},
-    {"source_col": "品牌编码", "target_field": "brand_code", "type": "str"},
+    {"source_col": "款式编码", "target_field": "style_code", "type": "str",
+     "aliases": ["款号", "货号"]},
+    {"source_col": "款式名称", "target_field": "style_name", "type": "str",
+     "aliases": ["商品名称", "款名", "品名"]},
+    {"source_col": "类目", "target_field": "category", "type": "str",
+     "aliases": ["品类", "分类"]},
+    {"source_col": "品牌编码", "target_field": "brand_code", "type": "str",
+     "aliases": ["品牌"]},
     {"source_col": "季节", "target_field": "season", "type": "str"},
-    {"source_col": "SKU编码", "target_field": "sku_code", "type": "str"},
+    {"source_col": "SKU编码", "target_field": "sku_code", "type": "str",
+     "aliases": ["商品编码", "规格编码"]},
     {"source_col": "颜色", "target_field": "color", "type": "str"},
-    {"source_col": "尺码", "target_field": "size", "type": "str"},
+    {"source_col": "尺码", "target_field": "size", "type": "str",
+     "aliases": ["规格"]},
     {"source_col": "成本价", "target_field": "cost_price", "type": "decimal"},
     {"source_col": "采购价", "target_field": "purchase_price", "type": "decimal"},
-    {"source_col": "吊牌价", "target_field": "base_price", "type": "decimal"},
+    {"source_col": "吊牌价", "target_field": "base_price", "type": "decimal",
+     "aliases": ["基本售价", "市场吊牌价", "市场|吊牌价"]},
     {"source_col": "货源类型", "target_field": "sourcing_type", "type": "str"},
 ]
 
+# 类目缺省值（final.xlsx 商品成本表无「类目」列时回退）
+_DEFAULT_CATEGORY = "未分类"
+
 _REQUIRED: tuple[tuple[str, str], ...] = (
     ("style_code", "款式编码"),
-    ("style_name", "款式名称"),
-    ("category", "类目"),
-    ("sku_code", "SKU编码"),
+    ("style_name", "款式名称/商品名称"),
+    ("sku_code", "SKU编码/商品编码"),
     ("color", "颜色"),
-    ("size", "尺码"),
+    ("size", "尺码/规格"),
 )
 _DECIMAL_FIELDS: tuple[tuple[str, str], ...] = (
     ("cost_price", "成本价"),
@@ -102,6 +112,12 @@ class StyleSkuImportAdapter:
         parsed: dict[str, Any] = {}
         for col in columns:
             raw = row.get(col["source_col"])
+            # 主列名缺失时尝试别名（兼容不同平台导出表头）
+            if raw in (None, ""):
+                for alias in col.get("aliases", []):
+                    if row.get(alias) not in (None, ""):
+                        raw = row.get(alias)
+                        break
             target = col["target_field"]
             if col.get("type") == "decimal":
                 parsed[target] = _to_decimal(raw)
@@ -162,7 +178,7 @@ class StyleSkuImportAdapter:
             style = Style(
                 style_code=parsed["style_code"],
                 style_name=parsed["style_name"],
-                category=parsed["category"],
+                category=parsed.get("category") or _DEFAULT_CATEGORY,
                 season=parsed.get("season"),
                 brand_id=brand_id,
                 owner_id=actor_id,

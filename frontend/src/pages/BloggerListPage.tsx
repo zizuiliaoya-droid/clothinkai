@@ -29,6 +29,7 @@ import type {
   BloggerListFilters,
 } from "@/features/blogger/types";
 import { extractErrorMessage } from "@/services/apiClient";
+import { ImportUploadButton } from "@/components/ImportUploadButton";
 
 const PLATFORMS = ["小红书", "抖音", "快手", "B站"];
 const TYPES = ["素人", "KOC", "KOL", "明星"];
@@ -168,9 +169,22 @@ export function BloggerListPage() {
     <Card
       title={<Typography.Title level={4} style={{ margin: 0 }}>博主管理</Typography.Title>}
       extra={
-        <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-          新建博主
-        </Button>
+        <Space>
+          <ImportUploadButton
+            source="manual_blogger"
+            label="导入博主库"
+            invalidateKeys={[["bloggers"]]}
+            templateColumns={["小红书ID", "小红书昵称", "平台", "微信号", "报价", "粉丝量", "博主类型"]}
+          />
+          <ImportUploadButton
+            source="huitun"
+            label="导入灰豚画像"
+            invalidateKeys={[["bloggers"]]}
+          />
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+            新建博主
+          </Button>
+        </Space>
       }
     >
       <Space style={{ marginBottom: 16 }} wrap>

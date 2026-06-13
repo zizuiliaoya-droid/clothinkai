@@ -1,33 +1,23 @@
-import { useState } from "react";
 import {
+  Alert,
   Button,
   Card,
-  Select,
   Space,
   Table,
   Tag,
   Typography,
-  Upload,
   message,
 } from "antd";
-import { UploadOutlined } from "@ant-design/icons";
-import type { UploadProps } from "antd";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnsType } from "antd/es/table";
 import {
   downloadImportErrors,
   listImportBatches,
   retryImportBatch,
-  uploadImportFile,
 } from "@/features/import/api";
 import type { ImportBatch } from "@/features/import/types";
 import { extractErrorMessage } from "@/services/apiClient";
 
-const SOURCES = [
-  { label: "千牛", value: "qianniu" },
-  { label: "万相台", value: "wanxiangtai" },
-  { label: "灰豚", value: "huitun" },
-];
 const statusColor: Record<string, string> = {
   processing: "blue",
   completed: "green",
@@ -35,9 +25,13 @@ const statusColor: Record<string, string> = {
   failed: "red",
 };
 
+/**
+ * 导入记录（只读监控）。上传入口已下放到各业务模块页面（商品成本表/千牛数据/
+ * 站内推广/博主库/站外推广/财务结款的「导入」按钮）。此处统一查看批次状态、
+ * 重试失败批次、下载失败明细。
+ */
 export function ImportListPage() {
   const qc = useQueryClient();
-  const [source, setSource] = useState("qianniu");
 
   const { data, isLoading } = useQuery({
     queryKey: ["import-batches"],
@@ -52,21 +46,6 @@ export function ImportListPage() {
     },
     onError: (err) => message.error(extractErrorMessage(err)),
   });
-
-  const uploadProps: UploadProps = {
-    beforeUpload: async (file) => {
-      try {
-        await uploadImportFile(source, file as File);
-        message.success("上传成功，已创建导入批次");
-        void qc.invalidateQueries({ queryKey: ["import-batches"] });
-      } catch (err) {
-        message.error(extractErrorMessage(err));
-      }
-      return false; // 阻止 antd 默认上传
-    },
-    showUploadList: false,
-    accept: ".csv,.xlsx,.xls",
-  };
 
   async function handleDownload(id: string) {
     try {
@@ -83,7 +62,7 @@ export function ImportListPage() {
   }
 
   const columns: ColumnsType<ImportBatch> = [
-    { title: "来源", dataIndex: "source", width: 100 },
+    { title: "来源", dataIndex: "source", width: 120 },
     { title: "文件名", dataIndex: "original_filename" },
     {
       title: "状态",
@@ -127,23 +106,19 @@ export function ImportListPage() {
 
   return (
     <Card
-      title={<Typography.Title level={4} style={{ margin: 0 }}>数据导入</Typography.Title>}
-      extra={
-        <Space>
-          <Select
-            value={source}
-            style={{ width: 120 }}
-            options={SOURCES}
-            onChange={setSource}
-          />
-          <Upload {...uploadProps}>
-            <Button type="primary" icon={<UploadOutlined />}>
-              上传文件
-            </Button>
-          </Upload>
-        </Space>
+      title={
+        <Typography.Title level={4} style={{ margin: 0 }}>
+          导入记录
+        </Typography.Title>
       }
     >
+      <Alert
+        type="info"
+        showIcon
+        style={{ marginBottom: 16 }}
+        message="上传入口已下放到各业务模块"
+        description="请到对应模块页面（商品成本表 / 千牛数据 / 站内推广 / 博主库 / 站外推广 / 财务结款）点击「导入」按钮上传 Excel/CSV。本页用于查看导入批次状态、重试失败批次、下载失败明细。"
+      />
       <Table
         rowKey="id"
         size="small"

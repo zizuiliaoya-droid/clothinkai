@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { Card, Table, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import type { ColumnsType } from "antd/es/table";
+import { ImportUploadButton } from "@/components/ImportUploadButton";
 
 interface DailyPage<T> {
   items: T[];
@@ -18,6 +19,12 @@ interface Props<T extends { id: string; extra?: Record<string, unknown> }> {
   fetchFn: (params: { page: number; page_size: number }) => Promise<DailyPage<T>>;
   /** 该模块在 final.xlsx 的总列数（用于页头标注）。 */
   totalCols: number;
+  /** 导入 adapter source（如 qianniu / wanxiangtai）；传入则显示导入按钮。 */
+  importSource?: string;
+  /** 导入按钮文案。 */
+  importLabel?: string;
+  /** 导入支持的表头列（兼容平台导出 Excel）。 */
+  importColumns?: string[];
 }
 
 /**
@@ -26,7 +33,7 @@ interface Props<T extends { id: string; extra?: Record<string, unknown> }> {
  */
 export function DailyDataPage<
   T extends { id: string; extra?: Record<string, unknown> }
->({ title, typedColumns, queryKey, fetchFn, totalCols }: Props<T>) {
+>({ title, typedColumns, queryKey, fetchFn, totalCols, importSource, importLabel, importColumns }: Props<T>) {
   const [page, setPage] = useState(1);
 
   const { data, isLoading } = useQuery({
@@ -63,6 +70,16 @@ export function DailyDataPage<
             （final.xlsx {totalCols} 列；当前展示 {columns.length} 列）
           </Typography.Text>
         </Typography.Title>
+      }
+      extra={
+        importSource ? (
+          <ImportUploadButton
+            source={importSource}
+            label={importLabel ?? "导入 Excel"}
+            invalidateKeys={[[queryKey]]}
+            templateColumns={importColumns}
+          />
+        ) : null
       }
     >
       <Table

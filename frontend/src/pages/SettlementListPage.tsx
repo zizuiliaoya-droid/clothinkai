@@ -8,6 +8,7 @@ import type {
   SettlementListFilters,
   SettlementStatus,
 } from "@/features/finance/types";
+import { ImportUploadButton } from "@/components/ImportUploadButton";
 
 const money = (v: string | null) => (v == null ? "—" : `¥${v}`);
 const STATUS: SettlementStatus[] = [
@@ -95,6 +96,13 @@ export function SettlementListPage() {
         <Typography.Title level={4} style={{ margin: 0 }}>
           财务结款
         </Typography.Title>
+      }
+      extra={
+        <ImportUploadButton
+          source="manual_settlement"
+          label="导入结款"
+          invalidateKeys={[["settlements"]]}
+        />
       }
     >
       <Space style={{ marginBottom: 16 }} wrap>

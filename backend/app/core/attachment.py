@@ -17,6 +17,7 @@ U05 触发补齐 shared attachment 基础设施（详见 U05 code-generation-pla
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import IO, Any, Literal
 from uuid import UUID, uuid4
 
@@ -42,6 +43,14 @@ from app.core.exceptions import AttachmentError
 log = logging.getLogger(__name__)
 
 BucketKind = Literal["public", "private", "credentials", "backups"]
+
+# 本地开发回退：R2 未配置时把对象落到本地共享目录（backend 与 celery-worker
+# 同挂 ./backend:/app，故 /app 下目录天然共享）。生产配置 R2 后永不走此分支。
+_LOCAL_STORAGE_DIR = Path(__file__).resolve().parents[2] / ".local_storage"
+
+
+def _local_object_path(bucket: str, key: str) -> Path:
+    return _LOCAL_STORAGE_DIR / str(bucket) / key
 
 
 def _make_s3_client() -> Any:
@@ -175,7 +184,16 @@ class AttachmentService:
     ) -> str:
         """上传字节流到指定桶 + key，返回完整 key。"""
         if not self.is_configured:
-            raise AttachmentError("R2 未配置（环境变量 R2_ENDPOINT_URL / ACCESS_KEY_ID 缺失）")
+            # 本地回退：写入共享文件系统（dev only）
+            data_bytes = data if isinstance(data, bytes) else data.read()
+            path = _local_object_path(bucket, key)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data_bytes)
+            log.info(
+                "attachment_uploaded_local",
+                extra={"bucket": bucket, "key": key, "path": str(path)},
+            )
+            return key
         try:
             self._client.put_object(
                 Bucket=_bucket_name(bucket),
@@ -236,7 +254,11 @@ class AttachmentService:
         MVP 一次性读入内存（导入文件 ≤ 20MB 可控）；V1 评估流式 TextIOWrapper。
         """
         if not self.is_configured:
-            raise AttachmentError("R2 未配置")
+            # 本地回退：从共享文件系统读取（dev only）
+            path = _local_object_path(bucket, key)
+            if not path.exists():
+                raise AttachmentError(f"本地存储对象不存在: {path}")
+            return path.read_bytes()
         try:
             obj = self._client.get_object(Bucket=_bucket_name(bucket), Key=key)
             return bytes(obj["Body"].read())

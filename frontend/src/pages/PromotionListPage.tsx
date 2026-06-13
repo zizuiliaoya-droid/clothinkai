@@ -34,6 +34,7 @@ import type {
 import { listStyles } from "@/features/product/api";
 import { listBloggers } from "@/features/blogger/api";
 import { extractErrorMessage } from "@/services/apiClient";
+import { ImportUploadButton } from "@/components/ImportUploadButton";
 
 const PLATFORMS = ["小红书", "抖音", "快手", "B站"];
 const PUBLISH_STATUS = ["未发布", "已发布", "已取消", "异常", "已删除"];
@@ -267,16 +268,24 @@ export function PromotionListPage() {
     <Card
       title={<Typography.Title level={4} style={{ margin: 0 }}>推广管理</Typography.Title>}
       extra={
-        <Button
-          type="primary"
-          icon={<PlusOutlined />}
-          onClick={() => {
-            form.resetFields();
-            setOpen(true);
-          }}
-        >
-          新建推广
-        </Button>
+        <Space>
+          <ImportUploadButton
+            source="manual_promotion"
+            label="导入站外推广"
+            invalidateKeys={[["promotions"]]}
+            templateColumns={SOURCE_FIELDS}
+          />
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={() => {
+              form.resetFields();
+              setOpen(true);
+            }}
+          >
+            新建推广
+          </Button>
+        </Space>
       }
     >
       <Space style={{ marginBottom: 16 }} wrap>
