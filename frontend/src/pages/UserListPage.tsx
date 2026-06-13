@@ -28,6 +28,7 @@ import { extractErrorMessage } from "@/services/apiClient";
 
 const ROLE_OPTIONS = [
   "admin",
+  "platform_admin",
   "designer",
   "design_assistant",
   "pattern_maker",
@@ -35,7 +36,7 @@ const ROLE_OPTIONS = [
   "pr",
   "pr_manager",
   "finance",
-  "operator",
+  "operations",
 ];
 
 export function UserListPage() {
