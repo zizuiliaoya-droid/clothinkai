@@ -119,6 +119,7 @@ export interface PromotionUpdate {
   like_count?: number | null;
   remark?: string | null;
   is_active?: boolean;
+  source_extra?: Record<string, unknown>;
 }
 
 export interface PromotionPublishRequest {

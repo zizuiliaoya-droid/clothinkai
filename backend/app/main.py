@@ -256,6 +256,7 @@ def register_import_adapters() -> None:
         "app.modules.importer.adapters.blogger",      # U06c
         "app.modules.importer.adapters.promotion",    # U06d
         "app.modules.importer.adapters.settlement",   # U06e
+        "app.modules.importer.adapters.order_adjustment",  # U16 拍单/刷单
         "app.modules.importer.adapters.qianniu",       # U13
         "app.modules.importer.adapters.wanxiangtai",   # U13
         "app.modules.importer.adapters.huitun",        # U13

@@ -3,10 +3,19 @@ import { useQuery } from "@tanstack/react-query";
 import type { ColumnsType } from "antd/es/table";
 import { listOrderAdjustments } from "@/features/finance/api";
 import type { OrderAdjustment } from "@/features/finance/types";
+import { ImportUploadButton } from "@/components/ImportUploadButton";
 
 interface Props {
   orderType: "拍单" | "刷单";
 }
+
+// 拍单/刷单导入：按 order_type 路由到不同 adapter source
+const IMPORT_SOURCE: Record<"拍单" | "刷单", string> = {
+  拍单: "manual_tao_order",
+  刷单: "manual_brush_order",
+};
+const IMPORT_COLUMNS_TAO = ["日期", "订单号", "博主ID", "款号", "金额", "备注"];
+const IMPORT_COLUMNS_BRUSH = [...IMPORT_COLUMNS_TAO, "是否剔除ROI"];
 
 /**
  * 拍单 / 刷单（统一 order_adjustment）。
@@ -57,6 +66,16 @@ export function OrderAdjustmentPage({ orderType }: Props) {
         <Typography.Title level={4} style={{ margin: 0 }}>
           {orderType}
         </Typography.Title>
+      }
+      extra={
+        <ImportUploadButton
+          source={IMPORT_SOURCE[orderType]}
+          label={`导入${orderType}数据`}
+          invalidateKeys={[["order-adjustments", orderType]]}
+          templateColumns={
+            orderType === "刷单" ? IMPORT_COLUMNS_BRUSH : IMPORT_COLUMNS_TAO
+          }
+        />
       }
     >
       <Table

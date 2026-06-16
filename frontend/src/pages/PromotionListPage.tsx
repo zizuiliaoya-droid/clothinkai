@@ -25,6 +25,7 @@ import {
   listPromotions,
   publishPromotion,
   reviewPromotion,
+  updatePromotion,
 } from "@/features/promotion/api";
 import type {
   Promotion,
@@ -64,6 +65,9 @@ export function PromotionListPage() {
   const [publishOpen, setPublishOpen] = useState(false);
   const [publishTarget, setPublishTarget] = useState<Promotion | null>(null);
   const [publishForm] = Form.useForm();
+  const [extraOpen, setExtraOpen] = useState(false);
+  const [extraTarget, setExtraTarget] = useState<Promotion | null>(null);
+  const [extraForm] = Form.useForm();
 
   const { data, isLoading } = useQuery({
     queryKey: ["promotions", filters],
@@ -125,6 +129,29 @@ export function PromotionListPage() {
     publishForm.resetFields();
     publishForm.setFieldsValue({ actual_publish_date: dayjs() });
     setPublishOpen(true);
+  }
+
+  const updateExtraMutation = useMutation({
+    mutationFn: ({ id, source_extra }: { id: string; source_extra: Record<string, unknown> }) =>
+      updatePromotion(id, { source_extra }),
+    onSuccess: () => {
+      message.success("信息已保存");
+      setExtraOpen(false);
+      setExtraTarget(null);
+      extraForm.resetFields();
+      void qc.invalidateQueries({ queryKey: ["promotions"] });
+    },
+    onError: (err) => message.error(extractErrorMessage(err)),
+  });
+
+  function openExtra(record: Promotion) {
+    setExtraTarget(record);
+    const se = (record.source_extra ?? {}) as Record<string, unknown>;
+    extraForm.resetFields();
+    extraForm.setFieldsValue(
+      Object.fromEntries(SOURCE_FIELDS.map((f) => [f, se[f] ?? ""]))
+    );
+    setExtraOpen(true);
   }
 
   const cancelMutation = useMutation({
@@ -227,6 +254,11 @@ export function PromotionListPage() {
       fixed: "right",
       render: (_, record) => {
         const items = [
+          {
+            key: "extra",
+            label: "录入信息",
+            onClick: () => openExtra(record),
+          },
           {
             key: "publish",
             label: "标记发布",
@@ -452,6 +484,44 @@ export function PromotionListPage() {
           >
             <DatePicker style={{ width: "100%" }} />
           </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="录入推广信息（地址/订单号等）"
+        open={extraOpen}
+        onCancel={() => setExtraOpen(false)}
+        onOk={() => extraForm.submit()}
+        confirmLoading={updateExtraMutation.isPending}
+        destroyOnHidden
+        width={560}
+      >
+        <Form
+          form={extraForm}
+          layout="vertical"
+          style={{ marginTop: 16 }}
+          onFinish={(values: Record<string, unknown>) => {
+            if (!extraTarget) return;
+            // 仅提交非空字段，空值不覆盖
+            const source_extra: Record<string, unknown> = {
+              ...((extraTarget.source_extra ?? {}) as Record<string, unknown>),
+            };
+            for (const f of SOURCE_FIELDS) {
+              const v = values[f];
+              if (v === undefined || v === null || String(v).trim() === "") {
+                delete source_extra[f];
+              } else {
+                source_extra[f] = String(v).trim();
+              }
+            }
+            updateExtraMutation.mutate({ id: extraTarget.id, source_extra });
+          }}
+        >
+          {SOURCE_FIELDS.map((f) => (
+            <Form.Item key={f} name={f} label={f} style={{ marginBottom: 12 }}>
+              <Input placeholder={`请输入${f}`} allowClear />
+            </Form.Item>
+          ))}
         </Form>
       </Modal>
     </Card>
