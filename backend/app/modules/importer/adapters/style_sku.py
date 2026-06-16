@@ -32,7 +32,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 # 内置默认映射（mapping=None 回退；中文表头 → 目标字段）
-# aliases：兼容 final.xlsx「商品成本表」等不同平台导出的列名变体
+# aliases：兼容 final.xlsx「商品成本表」/真实商品资料导入模板等不同平台导出的列名变体
 _DEFAULT_COLUMNS: list[dict[str, Any]] = [
     {"source_col": "款式编码", "target_field": "style_code", "type": "str",
      "aliases": ["款号", "货号"]},
@@ -48,10 +48,14 @@ _DEFAULT_COLUMNS: list[dict[str, Any]] = [
     {"source_col": "颜色", "target_field": "color", "type": "str"},
     {"source_col": "尺码", "target_field": "size", "type": "str",
      "aliases": ["规格"]},
+    # 颜色及规格（如「深灰色;L」）：当 颜色/尺码 缺失时由它拆分
+    {"source_col": "颜色及规格", "target_field": "color_size", "type": "str"},
     {"source_col": "成本价", "target_field": "cost_price", "type": "decimal"},
     {"source_col": "采购价", "target_field": "purchase_price", "type": "decimal"},
-    {"source_col": "吊牌价", "target_field": "base_price", "type": "decimal",
-     "aliases": ["基本售价", "市场吊牌价", "市场|吊牌价"]},
+    {"source_col": "基本售价", "target_field": "base_price", "type": "decimal",
+     "aliases": ["吊牌价"]},
+    {"source_col": "市场|吊牌价", "target_field": "tag_price", "type": "decimal",
+     "aliases": ["市场吊牌价", "市场吊牌"]},
     {"source_col": "货源类型", "target_field": "sourcing_type", "type": "str"},
 ]
 
@@ -125,6 +129,20 @@ class StyleSkuImportAdapter:
                 parsed[target] = (
                     str(raw).strip() if raw not in (None, "") else None
                 )
+        # 颜色/尺码缺失时由「颜色及规格」拆分（如「深灰色;L」/「深灰色，L」）
+        cs = parsed.get("color_size")
+        if cs and (not parsed.get("color") or not parsed.get("size")):
+            for sep in (";", "；", ",", "，", "/", " "):
+                if sep in cs:
+                    parts = [p.strip() for p in cs.split(sep) if p.strip()]
+                    if len(parts) >= 2:
+                        parsed.setdefault("color", None)
+                        parsed.setdefault("size", None)
+                        if not parsed.get("color"):
+                            parsed["color"] = parts[0]
+                        if not parsed.get("size"):
+                            parsed["size"] = parts[1]
+                    break
         return parsed
 
     # ----------------------- validate（纯函数）----------------------- #
@@ -198,6 +216,7 @@ class StyleSkuImportAdapter:
                 "cost_price": parsed.get("cost_price"),
                 "purchase_price": parsed.get("purchase_price"),
                 "base_price": parsed.get("base_price"),
+                "tag_price": parsed.get("tag_price"),
                 "sourcing_type": parsed.get("sourcing_type") or "自产",
             },
         )
@@ -206,11 +225,15 @@ class StyleSkuImportAdapter:
     async def _resolve_brand(
         self, session: AsyncSession, tenant_id: UUID, brand_code: str | None
     ) -> UUID | None:
-        """brand_code → brand_id（软关联，查不到 None，不报错，BR-U06b-33）。"""
+        """品牌软关联：先按 brand_code，再按 brand_name 匹配；查不到返回 None（不报错）。
+
+        真实商品资料模板「品牌」列是品牌名称（如 LENNEALAB），故同时支持按名称匹配。
+        """
         if not brand_code:
             return None
         stmt = select(Brand.id).where(
-            Brand.tenant_id == tenant_id, Brand.brand_code == brand_code
+            Brand.tenant_id == tenant_id,
+            (Brand.brand_code == brand_code) | (Brand.brand_name == brand_code),
         )
         return (await session.execute(stmt)).scalar_one_or_none()
 

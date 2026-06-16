@@ -81,7 +81,26 @@ def run_import_batch(
         batch_id: ImportBatch.id（字符串，Celery JSON 序列化）。
         only_failed: True = 仅重跑 import_job.failed 行（FB-E partial 重试）。
     """
-    return asyncio.run(_run_import_batch(UUID(batch_id), only_failed))
+    return asyncio.run(_run_with_engine_dispose(UUID(batch_id), only_failed))
+
+
+async def _run_with_engine_dispose(
+    batch_id: UUID, only_failed: bool
+) -> dict[str, Any]:
+    """包裹任务执行：结束时 dispose 异步引擎。
+
+    Celery worker 每个任务用独立 ``asyncio.run()``（新事件循环）。异步引擎的连接池
+    会缓存绑定到上一个（已关闭）事件循环的 asyncpg 连接，下个任务复用时会挂起/报错
+    （表现为批次卡在 processing）。每个任务结束 dispose 引擎，保证下个任务拿到新循环
+    的新连接。
+    """
+    from app.core.db import engine_app, engine_bypass
+
+    try:
+        return await _run_import_batch(batch_id, only_failed)
+    finally:
+        await engine_app.dispose()
+        await engine_bypass.dispose()
 
 
 # ---------------------------------------------------------------------------
@@ -326,7 +345,12 @@ def _parse_rows(raw: bytes, filename: str) -> list[tuple[int, dict[str, Any]]]:
 def _parse_csv(raw: bytes) -> list[tuple[int, dict[str, Any]]]:
     import csv
 
-    text_stream = io.StringIO(raw.decode("utf-8-sig"))
+    # 平台导出常带前置空行（如生意参谋千牛）→ 跳过开头完全空白的行后再取表头
+    lines = raw.decode("utf-8-sig").splitlines()
+    start = 0
+    while start < len(lines) and lines[start].replace(",", "").strip() == "":
+        start += 1
+    text_stream = io.StringIO("\n".join(lines[start:]))
     reader = csv.DictReader(text_stream)
     rows: list[tuple[int, dict[str, Any]]] = []
     for idx, record in enumerate(reader, start=1):
@@ -351,13 +375,20 @@ def _parse_xlsx(raw: bytes) -> list[tuple[int, dict[str, Any]]]:
         rows: list[tuple[int, dict[str, Any]]] = []
         header: list[str] = []
         row_number = 0
-        for i, excel_row in enumerate(ws.iter_rows(values_only=True)):
-            if i == 0:
-                header = [str(c).strip() if c is not None else "" for c in excel_row]
+        for excel_row in ws.iter_rows(values_only=True):
+            cells = [
+                str(c).strip() if c is not None else "" for c in excel_row
+            ]
+            if not header:
+                # 平台导出常带前置空行/标题行（如生意参谋千牛表头在第 5 行）：
+                # 跳过完全空白的前置行，第一行非空行作为表头
+                if all(c == "" for c in cells):
+                    continue
+                header = cells
                 continue
             row_number += 1
             record = {
-                header[j] if j < len(header) else f"col_{j}": (
+                (header[j] if j < len(header) and header[j] else f"col_{j}"): (
                     "" if cell is None else str(cell)
                 )
                 for j, cell in enumerate(excel_row)

@@ -41,12 +41,19 @@ export function DailyDataPage<
     queryFn: () => fetchFn({ page, page_size: 50 }),
   });
 
-  // 动态收集 extra 中出现的所有列名
+  // 动态收集 extra 中出现的所有列名，并排除已作为固定列展示的列（避免重复列 + key 冲突）
   const extraColumns = useMemo<ColumnsType<T>>(() => {
+    const typedTitles = new Set(
+      typedColumns
+        .map((c) => (typeof c.title === "string" ? c.title : ""))
+        .filter(Boolean),
+    );
     const keys = new Set<string>();
     for (const row of data?.items ?? []) {
       const e = row.extra ?? {};
-      Object.keys(e).forEach((k) => keys.add(k));
+      Object.keys(e).forEach((k) => {
+        if (k && !typedTitles.has(k)) keys.add(k);
+      });
     }
     return Array.from(keys).map((k) => ({
       title: k,
@@ -57,7 +64,7 @@ export function DailyDataPage<
         return v == null || v === "" ? "—" : String(v);
       },
     }));
-  }, [data]);
+  }, [data, typedColumns]);
 
   const columns = [...typedColumns, ...extraColumns];
 
