@@ -145,8 +145,8 @@ class OrderAdjustmentImportAdapter:
     ) -> tuple[UUID, bool]:
         """款号软关联 → INSERT order_adjustment。返回 (id, True)。
 
-        不自行 commit（runner 持有 per-row 事务边界，FB-C）；tenant_id 由
-        before_flush 钩子从上下文注入（NF-1）。
+        不自行 commit（runner 持有 per-row 事务边界，FB-C）；tenant_id 显式传入
+        （runner per-row 走 bypass_rls，before_flush 钩子不注入，须手动赋值，NF-1）。
         """
         style_id: UUID | None = None
         if parsed.get("style_code"):
@@ -157,6 +157,7 @@ class OrderAdjustmentImportAdapter:
                 style_id = style.id
 
         row = OrderAdjustment(
+            tenant_id=tenant_id,
             order_type=self.order_type,
             order_date=parsed.get("order_date"),
             order_no=parsed.get("order_no"),
