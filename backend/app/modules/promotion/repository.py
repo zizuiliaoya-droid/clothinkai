@@ -518,6 +518,7 @@ class PromotionRepository:
                     "publish_status", "recall_status", "settlement_status",
                     "reviewed_by", "reviewed_at", "review_action",
                     "review_reason", "is_active", "created_at", "updated_at",
+                    "source_extra",
                 ) if col in row
             })
             # 防止重组的 ORM 实例污染 session unit of work
