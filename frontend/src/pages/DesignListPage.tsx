@@ -39,7 +39,7 @@ export function DesignListPage({ title, statuses }: Props) {
   }, [data, statuses]);
 
   const columns: ColumnsType<DesignListItem> = [
-    { title: "款号", dataIndex: "style_code", width: 160 },
+    { title: "货号", dataIndex: "style_code", width: 160 },
     { title: "款名", dataIndex: "style_name" },
     {
       title: "设计状态",

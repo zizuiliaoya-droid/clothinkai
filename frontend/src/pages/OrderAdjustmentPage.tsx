@@ -14,7 +14,7 @@ const IMPORT_SOURCE: Record<"拍单" | "刷单", string> = {
   拍单: "manual_tao_order",
   刷单: "manual_brush_order",
 };
-const IMPORT_COLUMNS_TAO = ["日期", "订单号", "博主ID", "款号", "金额", "备注"];
+const IMPORT_COLUMNS_TAO = ["日期", "订单号", "博主ID", "货号", "金额", "备注"];
 const IMPORT_COLUMNS_BRUSH = [...IMPORT_COLUMNS_TAO, "是否剔除ROI"];
 
 /**
@@ -34,7 +34,7 @@ export function OrderAdjustmentPage({ orderType }: Props) {
     { title: "订单号", dataIndex: "order_no", width: 160, render: (v) => v || "—" },
     { title: "博主ID/微信ID", dataIndex: "blogger_identifier", width: 140, render: (v) => v || "—" },
     { title: "款式", dataIndex: "style_name", width: 140, render: (v) => v || "—" },
-    { title: "款号", dataIndex: "style_code", width: 120, render: (v) => v || "—" },
+    { title: "货号", dataIndex: "style_code", width: 120, render: (v) => v || "—" },
     {
       title: "金额",
       dataIndex: "amount",

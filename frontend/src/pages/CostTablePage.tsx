@@ -48,7 +48,7 @@ export function CostTablePage() {
           />
         ),
     },
-    { title: "款式编码", dataIndex: "style_code", width: 120, fixed: "left" },
+    { title: "货号", dataIndex: "style_code", width: 120, fixed: "left" },
     { title: "商品编码", dataIndex: "sku_code", width: 120 },
     { title: "商品名称", dataIndex: "style_name", width: 160 },
     {
@@ -103,7 +103,7 @@ export function CostTablePage() {
           label="导入商品成本表"
           invalidateKeys={[["cost-table"], ["styles"], ["skus"]]}
           templateColumns={[
-            "款式编码", "商品编码", "商品名称", "商品简称", "颜色及规格",
+            "货号", "商品编码", "商品名称", "商品简称", "颜色及规格",
             "颜色", "规格", "基本售价", "成本价", "采购价", "市场吊牌价", "品牌",
           ]}
         />
@@ -111,7 +111,7 @@ export function CostTablePage() {
     >
       <Space style={{ marginBottom: 16 }} wrap>
         <Input.Search
-          placeholder="搜索款式编码 / 商品编码 / 名称"
+          placeholder="搜索货号 / 商品编码 / 名称"
           allowClear
           style={{ width: 260 }}
           enterButton={<SearchOutlined />}

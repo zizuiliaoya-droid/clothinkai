@@ -107,19 +107,10 @@ export function StyleListPage() {
   }
 
   const columns: ColumnsType<Style> = [
-    { title: "款号", dataIndex: "style_code", width: 140 },
+    { title: "货号", dataIndex: "style_code", width: 140 },
     { title: "款名", dataIndex: "style_name" },
-    { title: "简称", dataIndex: "short_name", render: (v) => v || "—" },
     { title: "类目", dataIndex: "category", width: 90 },
     { title: "季节", dataIndex: "season", width: 70, render: (v) => v || "—" },
-    {
-      title: "设计状态",
-      dataIndex: "design_status",
-      width: 100,
-      render: (v: string) => (
-        <Tag color={v === "大货" ? "blue" : "orange"}>{v}</Tag>
-      ),
-    },
     {
       title: "状态",
       dataIndex: "is_active",
@@ -159,7 +150,7 @@ export function StyleListPage() {
     >
       <Space style={{ marginBottom: 16 }} wrap>
         <Input.Search
-          placeholder="搜索款号 / 款名"
+          placeholder="搜索货号 / 款名"
           allowClear
           style={{ width: 220 }}
           enterButton={<SearchOutlined />}
@@ -212,12 +203,11 @@ export function StyleListPage() {
           layout="vertical"
           onFinish={(v) => saveMutation.mutate(v)}
           style={{ marginTop: 16 }}
-          initialValues={{ design_status: "设计中" }}
         >
           <Form.Item
             name="style_code"
-            label="款号"
-            rules={[{ required: true, message: "请输入款号" }]}
+            label="货号"
+            rules={[{ required: true, message: "请输入货号" }]}
           >
             <Input placeholder="如 A001" disabled={!!editing} />
           </Form.Item>
@@ -227,9 +217,6 @@ export function StyleListPage() {
             rules={[{ required: true, message: "请输入款名" }]}
           >
             <Input placeholder="款式名称" />
-          </Form.Item>
-          <Form.Item name="short_name" label="简称">
-            <Input placeholder="商品简称（可选）" />
           </Form.Item>
           <Form.Item name="brand_id" label="品牌">
             <Select allowClear placeholder="选择品牌" options={brandOptions} />
@@ -259,15 +246,6 @@ export function StyleListPage() {
                 placeholder="性别"
                 style={{ width: 140 }}
                 options={GENDERS.map((g) => ({ label: g, value: g }))}
-              />
-            </Form.Item>
-            <Form.Item name="design_status" label="设计状态">
-              <Select
-                style={{ width: 140 }}
-                options={[
-                  { label: "设计中", value: "设计中" },
-                  { label: "大货", value: "大货" },
-                ]}
               />
             </Form.Item>
           </Space>

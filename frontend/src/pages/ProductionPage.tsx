@@ -27,7 +27,7 @@ export function ProductionPage() {
 
   // 列对齐 final.xlsx「投产报表」核心派生指标
   const baseColumns: ColumnsType<ProductionRow> = [
-    { title: "款号", dataIndex: "style_code", width: 120, fixed: "left" },
+    { title: "货号", dataIndex: "style_code", width: 120, fixed: "left" },
     { title: "款名", dataIndex: "style_name", width: 150 },
     { title: "支付金额", dataIndex: "pay_amount", width: 110, render: money },
     { title: "退款金额", dataIndex: "refund_amount", width: 110, render: money },

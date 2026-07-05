@@ -42,7 +42,7 @@ export function PublishProgressPage() {
 
   // Layer2 商品卡片（表格呈现）
   const columns: ColumnsType<StyleCard> = [
-    { title: "款号", dataIndex: "style_code", width: 120, fixed: "left" },
+    { title: "货号", dataIndex: "style_code", width: 120, fixed: "left" },
     { title: "品名", dataIndex: "style_name", width: 160 },
     { title: "成本", dataIndex: "cost", width: 90, render: money },
     { title: "约篇量", dataIndex: "quote_count", width: 80 },
@@ -104,7 +104,7 @@ export function PublishProgressPage() {
         }
         extra={
           <Input.Search
-            placeholder="搜索款号/品名"
+            placeholder="搜索货号/品名"
             allowClear
             style={{ width: 220 }}
             onSearch={(v) => {

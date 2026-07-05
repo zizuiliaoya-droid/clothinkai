@@ -55,7 +55,7 @@ export function SettlementListPage() {
     },
     { title: "大类", width: 90, render: () => "站外推广" },
     { title: "项目", width: 80, render: () => "佣金" },
-    { title: "款式编码", dataIndex: "style_code", width: 120, render: (v) => v || "—" },
+    { title: "货号", dataIndex: "style_code", width: 120, render: (v) => v || "—" },
     { title: "款式", dataIndex: "style_name", width: 140, render: (v) => v || "—" },
     { title: "博主名", dataIndex: "blogger_nickname", width: 120, render: (v) => v || "—" },
     { title: "结算单号", dataIndex: "settlement_no", width: 150 },

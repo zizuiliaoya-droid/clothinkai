@@ -322,7 +322,7 @@ export function PromotionListPage() {
     >
       <Space style={{ marginBottom: 16 }} wrap>
         <Input.Search
-          placeholder="搜索内部编码 / 款号"
+          placeholder="搜索内部编码 / 货号"
           allowClear
           style={{ width: 220 }}
           onSearch={(v) =>

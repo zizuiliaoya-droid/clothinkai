@@ -17,7 +17,7 @@ export function PublishTargetPage() {
   // 列对齐 final.xlsx「爆款约篇数量」
   const columns: ColumnsType<TargetWithActual> = [
     { title: "负责PR", dataIndex: "pr_name", width: 110 },
-    { title: "款号", dataIndex: "style_code", width: 120 },
+    { title: "货号", dataIndex: "style_code", width: 120 },
     { title: "商品名称", dataIndex: "style_name" },
     { title: "统计月份", dataIndex: "period_month", width: 110 },
     { title: "最低约篇", dataIndex: "min_target", width: 100 },

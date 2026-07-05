@@ -57,7 +57,7 @@ export function BiDashboardPage() {
     .slice(0, 10);
 
   const prodColumns: ColumnsType<ProductionRow> = [
-    { title: "款号", dataIndex: "style_code", width: 120 },
+    { title: "货号", dataIndex: "style_code", width: 120 },
     { title: "款名", dataIndex: "style_name" },
     {
       title: "支付金额",
