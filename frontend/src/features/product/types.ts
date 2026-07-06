@@ -46,6 +46,7 @@ export interface Style {
   style_code: string;
   style_name: string;
   short_name: string | null;
+  qianniu_product_id?: string | null;
   brand_id: string | null;
   category: string;
   season: string | null;
@@ -67,6 +68,7 @@ export interface StyleCreate {
   style_code: string;
   style_name: string;
   short_name?: string | null;
+  qianniu_product_id?: string | null;
   brand_id?: string | null;
   category: Category;
   season?: Season | null;

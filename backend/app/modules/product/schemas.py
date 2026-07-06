@@ -65,6 +65,7 @@ class StyleBase(BaseModel):
 
     style_name: str = Field(min_length=1, max_length=255)
     short_name: str | None = Field(default=None, max_length=64)
+    qianniu_product_id: str | None = Field(default=None, max_length=64)
     brand_id: UUID | None = None
     category: _CategoryField
     season: _SeasonField | None = None
@@ -100,6 +101,7 @@ class StyleUpdate(BaseModel):
     )
     style_name: str | None = Field(default=None, min_length=1, max_length=255)
     short_name: str | None = Field(default=None, max_length=64)
+    qianniu_product_id: str | None = Field(default=None, max_length=64)
     brand_id: UUID | None = None
     category: _CategoryField | None = None
     season: _SeasonField | None = None
@@ -120,6 +122,7 @@ class StyleResponse(BaseModel):
     style_code: str
     style_name: str
     short_name: str | None = None
+    qianniu_product_id: str | None = None
     brand_id: UUID | None = None
     category: str
     season: str | None = None

@@ -109,6 +109,7 @@ export function StyleListPage() {
   const columns: ColumnsType<Style> = [
     { title: "货号", dataIndex: "style_code", width: 140 },
     { title: "款名", dataIndex: "style_name" },
+    { title: "千牛商品ID", dataIndex: "qianniu_product_id", width: 130, render: (v) => v || "—" },
     { title: "类目", dataIndex: "category", width: 90 },
     { title: "季节", dataIndex: "season", width: 70, render: (v) => v || "—" },
     {
@@ -217,6 +218,9 @@ export function StyleListPage() {
             rules={[{ required: true, message: "请输入款名" }]}
           >
             <Input placeholder="款式名称" />
+          </Form.Item>
+          <Form.Item name="qianniu_product_id" label="千牛商品ID">
+            <Input placeholder="生意参谋商品ID（用于关联投产数据，可选）" allowClear />
           </Form.Item>
           <Form.Item name="brand_id" label="品牌">
             <Select allowClear placeholder="选择品牌" options={brandOptions} />
