@@ -97,8 +97,8 @@ class StyleService:
             short_name=payload.short_name,
             qianniu_product_id=payload.qianniu_product_id,
             brand_id=payload.brand_id,
-            category=payload.category.value,
-            season=payload.season.value if payload.season else None,
+            category=payload.category,
+            season=payload.season,
             gender=payload.gender.value if payload.gender else None,
             tags=list(payload.tags),
             tag_color=list(payload.tag_color),
@@ -146,7 +146,7 @@ class StyleService:
         # 应用变更
         for field, diff in changes.items():
             new_value = getattr(payload, field)
-            if field in {"category", "season", "gender", "design_status"}:
+            if field in {"gender", "design_status"}:
                 # Enum → str 存储
                 new_value = new_value.value if new_value is not None else None
             setattr(style, field, new_value)

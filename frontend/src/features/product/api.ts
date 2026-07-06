@@ -174,3 +174,39 @@ export async function disableBrand(brandId: string): Promise<Brand> {
   const resp = await apiClient.delete<Brand>(`/api/brands/${brandId}`);
   return resp.data;
 }
+
+// ---------------------------------------------------------------------------
+// Dict Items（可维护字典：类目/季节/颜色/尺码）
+// ---------------------------------------------------------------------------
+
+export interface DictItem {
+  id: string;
+  dict_type: string;
+  value: string;
+  sort_order: number;
+  is_active: boolean;
+}
+
+export async function listDictItems(
+  dictType: string
+): Promise<DictItem[]> {
+  const resp = await apiClient.get<DictItem[]>("/api/dict-items", {
+    params: { dict_type: dictType },
+  });
+  return resp.data;
+}
+
+export async function createDictItem(
+  dictType: string,
+  value: string
+): Promise<DictItem> {
+  const resp = await apiClient.post<DictItem>("/api/dict-items", {
+    dict_type: dictType,
+    value,
+  });
+  return resp.data;
+}
+
+export async function deleteDictItem(itemId: string): Promise<void> {
+  await apiClient.delete(`/api/dict-items/${itemId}`);
+}

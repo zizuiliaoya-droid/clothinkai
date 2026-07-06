@@ -19,28 +19,18 @@ import {
   createStyle,
   disableStyle,
   listBrands,
+  listDictItems,
   listStyles,
   restoreStyle,
   updateStyle,
 } from "@/features/product/api";
 import type {
-  Category,
   Style,
   StyleCreate,
   StyleListFilters,
 } from "@/features/product/types";
 import { extractErrorMessage } from "@/services/apiClient";
 
-const CATEGORIES: Category[] = [
-  "连衣裙",
-  "上衣",
-  "裤装",
-  "裙装",
-  "外套",
-  "套装",
-  "配饰",
-];
-const SEASONS = ["春", "夏", "秋", "冬", "四季"];
 const GENDERS = ["女", "男", "中性", "童"];
 
 export function StyleListPage() {
@@ -63,6 +53,17 @@ export function StyleListPage() {
     queryFn: () => listBrands({ page: 1, page_size: 100, is_active: true }),
   });
 
+  const { data: categories } = useQuery({
+    queryKey: ["dict-items", "category"],
+    queryFn: () => listDictItems("category"),
+  });
+  const { data: seasons } = useQuery({
+    queryKey: ["dict-items", "season"],
+    queryFn: () => listDictItems("season"),
+  });
+
+  const categoryOptions = (categories ?? []).map((c) => ({ label: c.value, value: c.value }));
+  const seasonOptions = (seasons ?? []).map((s) => ({ label: s.value, value: s.value }));
   const brandOptions =
     brands?.items.map((b) => ({ label: b.brand_name, value: b.id })) ?? [];
 
@@ -163,7 +164,7 @@ export function StyleListPage() {
           placeholder="类目"
           allowClear
           style={{ width: 120 }}
-          options={CATEGORIES.map((c) => ({ label: c, value: c }))}
+          options={categoryOptions}
           onChange={(v) => setFilters((f) => ({ ...f, category: v, page: 1 }))}
         />
         <Select
@@ -232,7 +233,7 @@ export function StyleListPage() {
           >
             <Select
               placeholder="选择类目"
-              options={CATEGORIES.map((c) => ({ label: c, value: c }))}
+              options={categoryOptions}
             />
           </Form.Item>
           <Space size="large">
@@ -241,7 +242,7 @@ export function StyleListPage() {
                 allowClear
                 placeholder="季节"
                 style={{ width: 140 }}
-                options={SEASONS.map((s) => ({ label: s, value: s }))}
+                options={seasonOptions}
               />
             </Form.Item>
             <Form.Item name="gender" label="适用性别">
