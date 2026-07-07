@@ -483,3 +483,4 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
+# deploy trigger: migration 027 fix (dict_item)
