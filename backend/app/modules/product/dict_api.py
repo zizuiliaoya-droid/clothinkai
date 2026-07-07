@@ -24,6 +24,8 @@ from app.modules.product.dict_models import DictItem
 
 router = APIRouter(prefix="/api", tags=["dict"])
 
+AsyncSessionDep = Annotated[AsyncSession, Depends(get_session)]
+
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
 
