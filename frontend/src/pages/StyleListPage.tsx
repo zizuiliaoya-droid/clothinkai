@@ -30,6 +30,7 @@ import type {
   StyleListFilters,
 } from "@/features/product/types";
 import { extractErrorMessage } from "@/services/apiClient";
+import { DictManagerModal } from "@/components/DictManager/DictManagerModal";
 
 const GENDERS = ["女", "男", "中性", "童"];
 
@@ -40,6 +41,7 @@ export function StyleListPage() {
     page_size: 10,
   });
   const [open, setOpen] = useState(false);
+  const [dictOpen, setDictOpen] = useState(false);
   const [editing, setEditing] = useState<Style | null>(null);
   const [form] = Form.useForm<StyleCreate>();
 
@@ -145,9 +147,12 @@ export function StyleListPage() {
     <Card
       title={<Typography.Title level={4} style={{ margin: 0 }}>款式管理</Typography.Title>}
       extra={
-        <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-          新建款式
-        </Button>
+        <Space>
+          <Button onClick={() => setDictOpen(true)}>管理类目/季节</Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+            新建款式
+          </Button>
+        </Space>
       }
     >
       <Space style={{ marginBottom: 16 }} wrap>
@@ -259,6 +264,8 @@ export function StyleListPage() {
           </Form.Item>
         </Form>
       </Modal>
+
+      <DictManagerModal open={dictOpen} onClose={() => setDictOpen(false)} />
     </Card>
   );
 }

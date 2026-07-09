@@ -41,10 +41,24 @@ const PLATFORMS = ["小红书", "抖音", "快手", "B站"];
 const PUBLISH_STATUS = ["未发布", "已发布", "已取消", "异常", "已删除"];
 
 // 站外推广人工源列（对齐 final.xlsx），从 source_extra 读取
-const SOURCE_FIELDS = [
-  "颜色及规格", "打单地址", "发货单号", "订单号", "寄回单号",
-  "合作方式", "合作形式", "收藏数", "评论数", "博主风格", "买家秀",
+type SourceField = {
+  name: string;
+  type: "text" | "number" | "select";
+  options?: string[];
+};
+const SOURCE_FIELDS: SourceField[] = [
+  { name: "颜色及规格", type: "text" },
+  { name: "打单地址", type: "text" },
+  { name: "发货单号", type: "text" },
+  { name: "订单号", type: "text" },
+  { name: "寄回单号", type: "text" },
+  { name: "合作方式", type: "select", options: ["送拍", "寄拍", "置换"] },
+  { name: "合作形式", type: "select", options: ["线下", "拍单"] },
+  { name: "点赞数", type: "number" },
+  { name: "收藏数", type: "number" },
+  { name: "评论数", type: "number" },
 ];
+const SOURCE_FIELD_NAMES = SOURCE_FIELDS.map((f) => f.name);
 
 const statusColor: Record<string, string> = {
   未发布: "default",
@@ -149,7 +163,7 @@ export function PromotionListPage() {
     const se = (record.source_extra ?? {}) as Record<string, unknown>;
     extraForm.resetFields();
     extraForm.setFieldsValue(
-      Object.fromEntries(SOURCE_FIELDS.map((f) => [f, se[f] ?? ""]))
+      Object.fromEntries(SOURCE_FIELD_NAMES.map((f) => [f, se[f] ?? ""]))
     );
     setExtraOpen(true);
   }
@@ -239,7 +253,7 @@ export function PromotionListPage() {
       width: 100,
       render: (v: string) => <Tag>{v}</Tag>,
     },
-    ...SOURCE_FIELDS.map((f) => ({
+    ...SOURCE_FIELD_NAMES.map((f) => ({
       title: f,
       key: `se_${f}`,
       width: 110,
@@ -305,7 +319,7 @@ export function PromotionListPage() {
             source="manual_promotion"
             label="导入站外推广"
             invalidateKeys={[["promotions"]]}
-            templateColumns={SOURCE_FIELDS}
+            templateColumns={SOURCE_FIELD_NAMES}
           />
           <Button
             type="primary"
@@ -506,7 +520,7 @@ export function PromotionListPage() {
             const source_extra: Record<string, unknown> = {
               ...((extraTarget.source_extra ?? {}) as Record<string, unknown>),
             };
-            for (const f of SOURCE_FIELDS) {
+            for (const f of SOURCE_FIELD_NAMES) {
               const v = values[f];
               if (v === undefined || v === null || String(v).trim() === "") {
                 delete source_extra[f];
@@ -518,8 +532,18 @@ export function PromotionListPage() {
           }}
         >
           {SOURCE_FIELDS.map((f) => (
-            <Form.Item key={f} name={f} label={f} style={{ marginBottom: 12 }}>
-              <Input placeholder={`请输入${f}`} allowClear />
+            <Form.Item key={f.name} name={f.name} label={f.name} style={{ marginBottom: 12 }}>
+              {f.type === "select" ? (
+                <Select
+                  allowClear
+                  placeholder={`请选择${f.name}`}
+                  options={(f.options ?? []).map((o) => ({ label: o, value: o }))}
+                />
+              ) : f.type === "number" ? (
+                <Input type="number" placeholder={`请输入${f.name}`} allowClear />
+              ) : (
+                <Input placeholder={`请输入${f.name}`} allowClear />
+              )}
             </Form.Item>
           ))}
         </Form>
