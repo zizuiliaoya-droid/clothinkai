@@ -17,6 +17,13 @@ export interface Blogger {
   xiaohongshu_id: string;
   nickname: string;
   platform: string;
+  level?: string | null;
+  content_category?: string | null;
+  contact_primary?: string | null;
+  contact_primary_added?: boolean;
+  contact_backup?: string | null;
+  contact_backup_added?: boolean;
+  is_added_success?: boolean;
   wechat: string | null;
   phone: string | null;
   follower_count: number | null;
@@ -39,6 +46,12 @@ export interface BloggerCreate {
   xiaohongshu_id: string;
   nickname: string;
   platform?: Platform;
+  level?: string | null;
+  content_category?: string | null;
+  contact_primary?: string | null;
+  contact_primary_added?: boolean;
+  contact_backup?: string | null;
+  contact_backup_added?: boolean;
   wechat?: string | null;
   phone?: string | null;
   follower_count?: number | null;
@@ -56,6 +69,12 @@ export interface BloggerUpdate {
   xiaohongshu_id?: string;
   nickname?: string;
   platform?: Platform;
+  level?: string | null;
+  content_category?: string | null;
+  contact_primary?: string | null;
+  contact_primary_added?: boolean;
+  contact_backup?: string | null;
+  contact_backup_added?: boolean;
   wechat?: string | null;
   phone?: string | null;
   follower_count?: number | null;
@@ -82,6 +101,7 @@ export interface BloggerListFilters {
   page_size?: number;
   keyword?: string;
   blogger_type?: string;
+  level?: string;
   follower_count_min?: number;
   follower_count_max?: number;
   category_tag?: string;

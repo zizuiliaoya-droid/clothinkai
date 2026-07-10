@@ -67,6 +67,7 @@ async def list_bloggers(
     page_size: Annotated[int, Query(ge=1, le=100)] = 20,
     keyword: Annotated[str | None, Query(max_length=128)] = None,
     blogger_type: Annotated[str | None, Query(max_length=16)] = None,
+    level: Annotated[str | None, Query(max_length=8)] = None,
     follower_count_min: Annotated[int | None, Query(ge=0)] = None,
     follower_count_max: Annotated[int | None, Query(ge=0)] = None,
     category_tag: Annotated[str | None, Query(max_length=32)] = None,
@@ -86,6 +87,7 @@ async def list_bloggers(
     filters = BloggerListFilters(
         keyword=keyword,
         blogger_type=blogger_type,
+        level=level,
         follower_count_min=follower_count_min,
         follower_count_max=follower_count_max,
         category_tag=category_tag,

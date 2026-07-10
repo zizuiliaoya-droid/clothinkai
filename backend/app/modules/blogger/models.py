@@ -45,6 +45,19 @@ class Blogger(TenantScopedModel):
     platform: Mapped[str] = mapped_column(
         String(16), nullable=False, server_default=text("'小红书'")
     )
+    # 等级 A/B/C/D（展示在昵称前）
+    level: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    # 分类：单篇 / 合集
+    content_category: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    # 博主对接人（主/备）+ 各自是否添加成功；是否添加成功 = 主 OR 备 成功
+    contact_primary: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    contact_primary_added: Mapped[bool] = mapped_column(
+        nullable=False, server_default=text("false")
+    )
+    contact_backup: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    contact_backup_added: Mapped[bool] = mapped_column(
+        nullable=False, server_default=text("false")
+    )
     wechat: Mapped[str | None] = mapped_column(String(64), nullable=True)
     phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
     follower_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -91,6 +104,7 @@ class Blogger(TenantScopedModel):
             "is_deleted",
         ),
         Index("idx_blogger_type", "tenant_id", "blogger_type"),
+        Index("idx_blogger_level", "tenant_id", "level"),
         Index("idx_blogger_follower_count", "tenant_id", "follower_count"),
         Index("idx_blogger_platform", "tenant_id", "platform"),
         Index(

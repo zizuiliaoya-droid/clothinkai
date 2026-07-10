@@ -26,6 +26,7 @@ class BloggerListFilters:
 
     keyword: str | None = None
     blogger_type: str | None = None
+    level: str | None = None
     follower_count_min: int | None = None
     follower_count_max: int | None = None
     category_tag: str | None = None
@@ -139,6 +140,9 @@ class BloggerRepository:
         # 普通筛选
         if filters.blogger_type is not None:
             stmt = stmt.where(Blogger.blogger_type == filters.blogger_type)
+
+        if filters.level is not None:
+            stmt = stmt.where(Blogger.level == filters.level)
         if filters.platform is not None:
             stmt = stmt.where(Blogger.platform == filters.platform)
         if filters.is_suspected_fake is not None:

@@ -8,6 +8,7 @@ import {
   Modal,
   Select,
   Space,
+  Switch,
   Table,
   Tag,
   Typography,
@@ -34,15 +35,18 @@ import { ImportUploadButton } from "@/components/ImportUploadButton";
 const PLATFORMS = ["小红书", "抖音", "快手", "B站"];
 const TYPES = ["素人", "KOC", "KOL", "明星"];
 const GENDER_TARGETS = ["女性", "男性", "中性"];
+const LEVELS = ["A", "B", "C", "D"];
+const CONTENT_CATEGORIES = ["单篇", "合集"];
 
 // 灰豚爬虫/指标列（对齐 final.xlsx 博主库），从 crawler_metrics 按列名读取
+// §5.4：3篇/7篇/14篇 的 阅读/点赞/收藏/评论 这组统一后移到「爆文率」之后
 const CRAWLER_FIELDS = [
-  "3篇阅读量", "3篇点赞数", "3篇收藏数", "3篇评论数",
-  "7篇阅读量", "7篇点赞数", "7篇收藏数", "7篇评论数",
-  "14篇阅读量", "14篇点赞数", "14篇收藏数", "14篇评论数",
   "阅读点赞比", "收藏赞比", "近期数据涨的博主",
   "活跃粉丝数", "阅读粉丝数", "粉丝画像", "粉丝占比", "主要年龄",
   "粉丝赞藏比", "笔记数", "爆文率",
+  "3篇阅读量", "3篇点赞数", "3篇收藏数", "3篇评论数",
+  "7篇阅读量", "7篇点赞数", "7篇收藏数", "7篇评论数",
+  "14篇阅读量", "14篇点赞数", "14篇收藏数", "14篇评论数",
   "3天平均阅读", "7天平均阅读", "14天平均阅读",
   "3天平均点赞", "7天平均点赞", "14天平均点赞",
   "3天阅读涨跌", "7天阅读涨跌", "3天点赞涨跌", "7天点赞涨跌",
@@ -98,7 +102,19 @@ export function BloggerListPage() {
   }
 
   const columns: ColumnsType<Blogger> = [
-    { title: "小红书昵称", dataIndex: "nickname", width: 140 },
+    {
+      title: "等级",
+      dataIndex: "level",
+      width: 70,
+      render: (v: string | null) => (v ? <Tag color="blue">{v}</Tag> : "—"),
+    },
+    {
+      title: "分类",
+      dataIndex: "content_category",
+      width: 80,
+      render: (v) => v || "—",
+    },
+    { title: "昵称", dataIndex: "nickname", width: 140 },
     { title: "小红书ID", dataIndex: "xiaohongshu_id", width: 130 },
     { title: "平台", dataIndex: "platform", width: 80 },
     { title: "微信号", dataIndex: "wechat", width: 110, render: (v) => v || "—" },
@@ -113,6 +129,25 @@ export function BloggerListPage() {
       dataIndex: "follower_count",
       width: 100,
       render: (v: number | null) => (v == null ? "—" : v.toLocaleString()),
+    },
+    {
+      title: "博主对接人(主)",
+      dataIndex: "contact_primary",
+      width: 130,
+      render: (v) => v || "—",
+    },
+    {
+      title: "博主对接人(备)",
+      dataIndex: "contact_backup",
+      width: 130,
+      render: (v) => v || "—",
+    },
+    {
+      title: "是否添加成功",
+      dataIndex: "is_added_success",
+      width: 110,
+      render: (v: boolean) =>
+        v ? <Tag color="green">是</Tag> : "—",
     },
     {
       title: "博主类型",
@@ -213,6 +248,13 @@ export function BloggerListPage() {
             setFilters((f) => ({ ...f, blogger_type: v, page: 1 }))
           }
         />
+        <Select
+          placeholder="等级"
+          allowClear
+          style={{ width: 100 }}
+          options={LEVELS.map((l) => ({ label: l, value: l }))}
+          onChange={(v) => setFilters((f) => ({ ...f, level: v, page: 1 }))}
+        />
       </Space>
 
       <Table
@@ -261,6 +303,40 @@ export function BloggerListPage() {
           >
             <Input placeholder="博主昵称" />
           </Form.Item>
+          <Space size="large">
+            <Form.Item name="level" label="等级">
+              <Select
+                allowClear
+                placeholder="A/B/C/D"
+                style={{ width: 140 }}
+                options={LEVELS.map((l) => ({ label: l, value: l }))}
+              />
+            </Form.Item>
+            <Form.Item name="content_category" label="分类">
+              <Select
+                allowClear
+                placeholder="单篇/合集"
+                style={{ width: 140 }}
+                options={CONTENT_CATEGORIES.map((c) => ({ label: c, value: c }))}
+              />
+            </Form.Item>
+          </Space>
+          <Space size="large" align="end">
+            <Form.Item name="contact_primary" label="博主对接人(主)">
+              <Input placeholder="如 张三-1号机" style={{ width: 180 }} />
+            </Form.Item>
+            <Form.Item name="contact_primary_added" label="主-已添加" valuePropName="checked">
+              <Switch />
+            </Form.Item>
+          </Space>
+          <Space size="large" align="end">
+            <Form.Item name="contact_backup" label="博主对接人(备)">
+              <Input placeholder="如 李四-2号机" style={{ width: 180 }} />
+            </Form.Item>
+            <Form.Item name="contact_backup_added" label="备-已添加" valuePropName="checked">
+              <Switch />
+            </Form.Item>
+          </Space>
           <Space size="large">
             <Form.Item name="platform" label="平台">
               <Select

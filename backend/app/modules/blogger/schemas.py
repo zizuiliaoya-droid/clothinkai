@@ -35,6 +35,12 @@ class BloggerBase(BaseModel):
 
     nickname: str = Field(min_length=1, max_length=128)
     platform: Platform = Platform.XIAOHONGSHU
+    level: str | None = Field(default=None, max_length=8)
+    content_category: str | None = Field(default=None, max_length=8)
+    contact_primary: str | None = Field(default=None, max_length=64)
+    contact_primary_added: bool = False
+    contact_backup: str | None = Field(default=None, max_length=64)
+    contact_backup_added: bool = False
     wechat: str | None = Field(default=None, max_length=64)
     phone: str | None = Field(default=None, max_length=32)
     follower_count: int | None = Field(default=None, ge=0)
@@ -70,6 +76,12 @@ class BloggerUpdate(BaseModel):
     )
     nickname: str | None = Field(default=None, min_length=1, max_length=128)
     platform: Platform | None = None
+    level: str | None = Field(default=None, max_length=8)
+    content_category: str | None = Field(default=None, max_length=8)
+    contact_primary: str | None = Field(default=None, max_length=64)
+    contact_primary_added: bool | None = None
+    contact_backup: str | None = Field(default=None, max_length=64)
+    contact_backup_added: bool | None = None
     wechat: str | None = Field(default=None, max_length=64)
     phone: str | None = Field(default=None, max_length=32)
     follower_count: int | None = Field(default=None, ge=0)
@@ -103,6 +115,13 @@ class BloggerResponse(BaseModel):
     xiaohongshu_id: str
     nickname: str
     platform: str
+    level: str | None = None
+    content_category: str | None = None
+    contact_primary: str | None = None
+    contact_primary_added: bool = False
+    contact_backup: str | None = None
+    contact_backup_added: bool = False
+    is_added_success: bool = False  # 衍生：主/备任一添加成功
     # 敏感字段 — service 层按角色填 None 屏蔽
     wechat: str | None = None
     phone: str | None = None
