@@ -14,19 +14,69 @@ const PRESETS = [
   { label: "自定义", value: "custom" },
 ];
 const money = (v: string | null) => (v == null ? "—" : `¥${v}`);
+const GRANULARITY = [
+  { label: "按日", value: "day" },
+  { label: "按周", value: "week" },
+  { label: "按月", value: "month" },
+];
+
+// 周起始（周一）YYYY-MM-DD
+function weekKey(d: string): string {
+  const dt = new Date(d + "T00:00:00");
+  const off = (dt.getDay() + 6) % 7; // 周一=0
+  dt.setDate(dt.getDate() - off);
+  return dt.toISOString().slice(0, 10);
+}
 
 export function StoreDailyPage() {
   const [preset, setPreset] = useState("last_30d");
   const [range, setRange] = useState<[Dayjs, Dayjs] | null>(null);
+  const [granularity, setGranularity] = useState("day");
   const isCustom = preset === "custom";
   const df = isCustom && range ? range[0].format("YYYY-MM-DD") : undefined;
   const dt = isCustom && range ? range[1].format("YYYY-MM-DD") : undefined;
   const enabled = !isCustom || (!!df && !!dt);
-  const { data, isLoading } = useQuery({
+  const { data: raw, isLoading } = useQuery({
     queryKey: ["store-daily", preset, df, dt],
     enabled,
     queryFn: () => getStoreDaily({ preset, date_from: df, date_to: dt }),
   });
+
+  // §8：按 日/周/月 聚合（对数值字段求和；日粒度不聚合）
+  const data = useMemo<StoreDailyRow[]>(() => {
+    const rows = raw ?? [];
+    if (granularity === "day") return rows;
+    const groups = new Map<string, StoreDailyRow>();
+    for (const r of rows) {
+      const key =
+        granularity === "month"
+          ? String(r.date).slice(0, 7)
+          : weekKey(String(r.date));
+      const g = groups.get(key);
+      if (!g) {
+        groups.set(key, { ...r, date: key });
+        continue;
+      }
+      for (const [k, v] of Object.entries(r)) {
+        if (k === "date" || k === "extra") continue;
+        const n = Number(v);
+        if (!Number.isNaN(n) && v != null && v !== "") {
+          (g as Record<string, unknown>)[k] = Number((g as Record<string, unknown>)[k] ?? 0) + n;
+        }
+      }
+      const ge = (g.extra ?? {}) as Record<string, unknown>;
+      for (const [k, v] of Object.entries(r.extra ?? {})) {
+        const n = Number(v);
+        if (!Number.isNaN(n) && v != null && v !== "") {
+          ge[k] = Number(ge[k] ?? 0) + n;
+        }
+      }
+      g.extra = ge;
+    }
+    return Array.from(groups.values()).sort((a, b) =>
+      String(a.date) < String(b.date) ? 1 : -1
+    );
+  }, [raw, granularity]);
 
   // typed 列（核心）+ 动态展开千牛汇总 extra（对齐 final.xlsx 店铺数据 24 列）
   const extraColumns = useMemo<ColumnsType<StoreDailyRow>>(() => {
@@ -79,6 +129,13 @@ export function StoreDailyPage() {
             allowClear
           />
         ) : null}
+        <span style={{ marginLeft: 12 }}>统计单位：</span>
+        <Select
+          value={granularity}
+          style={{ width: 110 }}
+          options={GRANULARITY}
+          onChange={setGranularity}
+        />
       </Space>
       <Table
         rowKey="date"
