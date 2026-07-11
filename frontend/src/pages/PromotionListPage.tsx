@@ -54,6 +54,7 @@ const SOURCE_FIELDS: SourceField[] = [
   { name: "寄回单号", type: "text" },
   { name: "合作方式", type: "select", options: ["送拍", "寄拍", "置换"] },
   { name: "合作形式", type: "select", options: ["线下", "拍单"] },
+  { name: "负责PR", type: "text" },
   { name: "点赞数", type: "number" },
   { name: "收藏数", type: "number" },
   { name: "评论数", type: "number" },
