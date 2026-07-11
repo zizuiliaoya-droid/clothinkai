@@ -173,7 +173,9 @@ class ProductionRepository:
             LEFT JOIN platform_product pp ON pp.style_id = s.id
             LEFT JOIN qianniu_daily q
               ON (q.platform_product_id = pp.id
-                  OR q.platform_id_snapshot = pp.platform_id)
+                  OR q.platform_id_snapshot = pp.platform_id
+                  OR (s.qianniu_product_id IS NOT NULL
+                      AND q.platform_id_snapshot = s.qianniu_product_id))
               AND q.tenant_id = s.tenant_id
               AND q.date BETWEEN :date_from AND :date_to
             LEFT JOIN (
@@ -226,6 +228,22 @@ class ProductionRepository:
             WHERE q.tenant_id = :tenant_id
               AND q.date BETWEEN :date_from AND :date_to
               AND q.extra IS NOT NULL
+            UNION ALL
+            SELECT s.id AS style_id, q.extra AS extra, 'qianniu' AS src
+            FROM qianniu_daily q
+            JOIN style s
+              ON s.tenant_id = q.tenant_id
+              AND s.qianniu_product_id IS NOT NULL
+              AND s.qianniu_product_id = q.platform_id_snapshot
+            WHERE q.tenant_id = :tenant_id
+              AND q.date BETWEEN :date_from AND :date_to
+              AND q.extra IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM platform_product pp
+                WHERE pp.tenant_id = q.tenant_id
+                  AND (pp.id = q.platform_product_id
+                       OR pp.platform_id = q.platform_id_snapshot)
+              )
             UNION ALL
             SELECT pp.style_id AS style_id, a.extra AS extra, 'ad' AS src
             FROM ad_daily a
