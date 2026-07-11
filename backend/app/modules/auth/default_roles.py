@@ -129,6 +129,10 @@ DEFAULT_ROLES: tuple[RoleSpec, ...] = (
             "finance.settlement:read",
             "finance.settlement:write",
             "finance.settlement_extra_item:write",
+            # 结款页 API 实际使用的作用域（migration 029 同步授予现存库）
+            "settlement:read",
+            "settlement:write",
+            "settlement.review:approve",
             REPORT_READ,
             IMPORTER_BATCH_READ,
             IMPORTER_BATCH_WRITE,
@@ -147,6 +151,11 @@ DEFAULT_ROLES: tuple[RoleSpec, ...] = (
             "finance.settlement:read",
             "finance.order_adjustment:write",
             "finance.balance:write",
+            # 结款页 API 实际使用的作用域（migration 029 同步授予现存库）
+            "settlement:read",
+            "settlement:write",
+            "settlement.review:approve",
+            "settlement.pay:upload_proof",
         ),
     ),
     RoleSpec(
