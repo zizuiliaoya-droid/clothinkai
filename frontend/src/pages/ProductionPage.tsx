@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { Card, Select, Space, Switch, Table, Typography } from "antd";
+import { Card, DatePicker, Select, Space, Switch, Table, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import type { ColumnsType } from "antd/es/table";
+import type { Dayjs } from "dayjs";
 import { getProduction } from "@/features/report/api";
 import type { ProductionRow } from "@/features/report/types";
 
@@ -10,6 +11,7 @@ const PRESETS = [
   { label: "近30天", value: "last_30d" },
   { label: "本月", value: "this_month" },
   { label: "上月", value: "last_month" },
+  { label: "自定义", value: "custom" },
 ];
 const money = (v: string | null) => (v == null ? "—" : `¥${v}`);
 const pct = (v: string | null) =>
@@ -17,12 +19,25 @@ const pct = (v: string | null) =>
 
 export function ProductionPage() {
   const [preset, setPreset] = useState("last_30d");
+  const [range, setRange] = useState<[Dayjs, Dayjs] | null>(null);
   const [excludeBrushing, setExcludeBrushing] = useState(true);
 
+  const isCustom = preset === "custom";
+  const df = isCustom && range ? range[0].format("YYYY-MM-DD") : undefined;
+  const dt = isCustom && range ? range[1].format("YYYY-MM-DD") : undefined;
+  // 自定义但未选区间时不发请求（避免后端报错）
+  const enabled = !isCustom || (!!df && !!dt);
+
   const { data, isLoading } = useQuery({
-    queryKey: ["production", preset, excludeBrushing],
+    queryKey: ["production", preset, df, dt, excludeBrushing],
+    enabled,
     queryFn: () =>
-      getProduction({ preset, exclude_brushing: excludeBrushing }),
+      getProduction({
+        preset,
+        date_from: df,
+        date_to: dt,
+        exclude_brushing: excludeBrushing,
+      }),
   });
 
   // 列对齐 final.xlsx「投产报表」核心派生指标
@@ -77,6 +92,13 @@ export function ProductionPage() {
           options={PRESETS}
           onChange={setPreset}
         />
+        {isCustom ? (
+          <DatePicker.RangePicker
+            value={range as never}
+            onChange={(v) => setRange(v as [Dayjs, Dayjs] | null)}
+            allowClear
+          />
+        ) : null}
         <span style={{ marginLeft: 12 }}>剔除刷单：</span>
         <Switch checked={excludeBrushing} onChange={setExcludeBrushing} />
       </Space>

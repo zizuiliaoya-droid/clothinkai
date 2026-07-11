@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
-import { Card, Select, Space, Table, Typography } from "antd";
+import { Card, DatePicker, Select, Space, Table, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import type { ColumnsType } from "antd/es/table";
+import type { Dayjs } from "dayjs";
 import { getStoreDaily } from "@/features/report/api";
 import type { StoreDailyRow } from "@/features/report/types";
 
@@ -10,14 +11,21 @@ const PRESETS = [
   { label: "近30天", value: "last_30d" },
   { label: "本月", value: "this_month" },
   { label: "上月", value: "last_month" },
+  { label: "自定义", value: "custom" },
 ];
 const money = (v: string | null) => (v == null ? "—" : `¥${v}`);
 
 export function StoreDailyPage() {
   const [preset, setPreset] = useState("last_30d");
+  const [range, setRange] = useState<[Dayjs, Dayjs] | null>(null);
+  const isCustom = preset === "custom";
+  const df = isCustom && range ? range[0].format("YYYY-MM-DD") : undefined;
+  const dt = isCustom && range ? range[1].format("YYYY-MM-DD") : undefined;
+  const enabled = !isCustom || (!!df && !!dt);
   const { data, isLoading } = useQuery({
-    queryKey: ["store-daily", preset],
-    queryFn: () => getStoreDaily({ preset }),
+    queryKey: ["store-daily", preset, df, dt],
+    enabled,
+    queryFn: () => getStoreDaily({ preset, date_from: df, date_to: dt }),
   });
 
   // typed 列（核心）+ 动态展开千牛汇总 extra（对齐 final.xlsx 店铺数据 24 列）
@@ -64,6 +72,13 @@ export function StoreDailyPage() {
           options={PRESETS}
           onChange={setPreset}
         />
+        {isCustom ? (
+          <DatePicker.RangePicker
+            value={range as never}
+            onChange={(v) => setRange(v as [Dayjs, Dayjs] | null)}
+            allowClear
+          />
+        ) : null}
       </Space>
       <Table
         rowKey="date"
