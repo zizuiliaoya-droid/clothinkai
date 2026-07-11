@@ -67,7 +67,7 @@ FIELD_PERMISSION_REGISTRY: dict[str, dict[str, FieldRule]] = {
         "total_amount": FieldRule(frozenset({"admin", "pr_manager", "finance"})),
         "payment_amount": FieldRule(
             frozenset({"admin", "pr_manager", "finance"}),
-            frozenset({"admin", "pr_manager"}),
+            frozenset({"admin", "pr_manager", "finance"}),
         ),
     },
 }
