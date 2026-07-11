@@ -26,17 +26,6 @@ export function ProductionPage() {
   const [season, setSeason] = useState<string | undefined>(undefined);
   const [trendStyle, setTrendStyle] = useState<ProductionRow | null>(null);
 
-  const { data: trend, isLoading: trendLoading } = useQuery({
-    queryKey: ["production-trend", trendStyle?.style_id, preset, df, dt],
-    enabled: !!trendStyle,
-    queryFn: () =>
-      getProductionTrend(trendStyle!.style_id, {
-        preset,
-        date_from: df,
-        date_to: dt,
-      }),
-  });
-
   const { data: seasons } = useQuery({
     queryKey: ["dict-items", "season"],
     queryFn: () => listDictItems("season"),
@@ -48,6 +37,17 @@ export function ProductionPage() {
   const dt = isCustom && range ? range[1].format("YYYY-MM-DD") : undefined;
   // 自定义但未选区间时不发请求（避免后端报错）
   const enabled = !isCustom || (!!df && !!dt);
+
+  const { data: trend, isLoading: trendLoading } = useQuery({
+    queryKey: ["production-trend", trendStyle?.style_id, preset, df, dt],
+    enabled: !!trendStyle,
+    queryFn: () =>
+      getProductionTrend(trendStyle!.style_id, {
+        preset,
+        date_from: df,
+        date_to: dt,
+      }),
+  });
 
   const { data, isLoading } = useQuery({
     queryKey: ["production", preset, df, dt, excludeBrushing, season],
