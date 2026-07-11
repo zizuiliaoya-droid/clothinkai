@@ -144,7 +144,7 @@ class ProductionRepository:
 
     async def aggregate_by_style(
         self, *, tenant_id: UUID, date_from: date, date_to: date,
-        exclude_brushing: bool = False,
+        exclude_brushing: bool = False, season: str | None = None,
     ) -> list[Mapping[str, Any]]:
         # ad_daily / promotion 各自子查询预聚合为 style 维度，避免与 qianniu 多行笛卡尔积
         # U16：exclude_brushing=true 时 pay_amount 减去刷单金额（真实 ROI）
@@ -160,6 +160,7 @@ class ProductionRepository:
             if exclude_brushing
             else ""
         )
+        season_clause = "AND s.season = :season" if season else ""
         sql = text(
             f"""
             SELECT
@@ -193,6 +194,7 @@ class ProductionRepository:
               GROUP BY style_id
             ) promo ON promo.style_id = s.id
             WHERE s.tenant_id = :tenant_id AND s.is_deleted = false
+              {season_clause}
             GROUP BY s.id, s.style_code, s.style_name
             HAVING COALESCE(SUM(q.pay_amount), 0) > 0
                 OR COALESCE(MAX(promo.promo_cost), 0) > 0
@@ -200,13 +202,11 @@ class ProductionRepository:
             ORDER BY pay_amount DESC
             """
         )
+        params = {"tenant_id": tenant_id, "date_from": date_from, "date_to": date_to}
+        if season:
+            params["season"] = season
         return list(
-            (
-                await self._s.execute(
-                    sql,
-                    {"tenant_id": tenant_id, "date_from": date_from, "date_to": date_to},
-                )
-            ).mappings().all()
+            (await self._s.execute(sql, params)).mappings().all()
         )
 
     async def fetch_extra_by_style(

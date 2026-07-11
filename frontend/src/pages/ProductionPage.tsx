@@ -5,6 +5,7 @@ import type { ColumnsType } from "antd/es/table";
 import type { Dayjs } from "dayjs";
 import { getProduction } from "@/features/report/api";
 import type { ProductionRow } from "@/features/report/types";
+import { listDictItems } from "@/features/product/api";
 
 const PRESETS = [
   { label: "近7天", value: "last_7d" },
@@ -21,6 +22,13 @@ export function ProductionPage() {
   const [preset, setPreset] = useState("last_30d");
   const [range, setRange] = useState<[Dayjs, Dayjs] | null>(null);
   const [excludeBrushing, setExcludeBrushing] = useState(true);
+  const [season, setSeason] = useState<string | undefined>(undefined);
+
+  const { data: seasons } = useQuery({
+    queryKey: ["dict-items", "season"],
+    queryFn: () => listDictItems("season"),
+  });
+  const seasonOptions = (seasons ?? []).map((s) => ({ label: s.value, value: s.value }));
 
   const isCustom = preset === "custom";
   const df = isCustom && range ? range[0].format("YYYY-MM-DD") : undefined;
@@ -29,7 +37,7 @@ export function ProductionPage() {
   const enabled = !isCustom || (!!df && !!dt);
 
   const { data, isLoading } = useQuery({
-    queryKey: ["production", preset, df, dt, excludeBrushing],
+    queryKey: ["production", preset, df, dt, excludeBrushing, season],
     enabled,
     queryFn: () =>
       getProduction({
@@ -37,6 +45,7 @@ export function ProductionPage() {
         date_from: df,
         date_to: dt,
         exclude_brushing: excludeBrushing,
+        season,
       }),
   });
 
@@ -99,6 +108,15 @@ export function ProductionPage() {
             allowClear
           />
         ) : null}
+        <span style={{ marginLeft: 12 }}>季节/系列：</span>
+        <Select
+          value={season}
+          style={{ width: 140 }}
+          placeholder="全部"
+          allowClear
+          options={seasonOptions}
+          onChange={(v) => setSeason(v)}
+        />
         <span style={{ marginLeft: 12 }}>剔除刷单：</span>
         <Switch checked={excludeBrushing} onChange={setExcludeBrushing} />
       </Space>

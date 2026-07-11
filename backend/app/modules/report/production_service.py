@@ -32,6 +32,7 @@ class ProductionService:
         time_range: tuple[date, date],
         *,
         exclude_brushing: bool = True,
+        season: str | None = None,
     ) -> ProductionReport:
         cur_from, cur_to = time_range
         span = cur_to - cur_from
@@ -40,11 +41,11 @@ class ProductionService:
         with report_query_duration_seconds.labels("production").time():
             cur_rows = await self._repo.aggregate_by_style(
                 tenant_id=tenant_id, date_from=cur_from, date_to=cur_to,
-                exclude_brushing=exclude_brushing,
+                exclude_brushing=exclude_brushing, season=season,
             )
             prev_rows = await self._repo.aggregate_by_style(
                 tenant_id=tenant_id, date_from=prev_from, date_to=prev_to,
-                exclude_brushing=exclude_brushing,
+                exclude_brushing=exclude_brushing, season=season,
             )
             extra_by_style = await self._aggregate_extra(
                 tenant_id, cur_from, cur_to

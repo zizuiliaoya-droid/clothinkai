@@ -70,6 +70,7 @@ export async function getProduction(
     date_from?: string;
     date_to?: string;
     exclude_brushing?: boolean;
+    season?: string;
   } = {}
 ): Promise<ProductionReport> {
   const resp = await apiClient.get<ProductionReport>(
