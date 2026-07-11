@@ -32,7 +32,7 @@ import type {
   PromotionCreate,
   PromotionListFilters,
 } from "@/features/promotion/types";
-import { listStyles } from "@/features/product/api";
+import { listStyles, listSkusByStyle } from "@/features/product/api";
 import { listBloggers } from "@/features/blogger/api";
 import { extractErrorMessage } from "@/services/apiClient";
 import { ImportUploadButton } from "@/components/ImportUploadButton";
@@ -82,6 +82,10 @@ export function PromotionListPage() {
   const [extraOpen, setExtraOpen] = useState(false);
   const [extraTarget, setExtraTarget] = useState<Promotion | null>(null);
   const [extraForm] = Form.useForm();
+  // §11：颜色及规格按货号联动——当前推广所属款式的 SKU 颜色+尺码组合
+  const [colorSizeOptions, setColorSizeOptions] = useState<
+    { label: string; value: string }[]
+  >([]);
 
   const { data, isLoading } = useQuery({
     queryKey: ["promotions", filters],
@@ -166,6 +170,24 @@ export function PromotionListPage() {
       Object.fromEntries(SOURCE_FIELD_NAMES.map((f) => [f, se[f] ?? ""]))
     );
     setExtraOpen(true);
+    // §11：按货号(款式)加载该款 SKU 的「颜色 + 尺码」组合作为下拉选项
+    setColorSizeOptions([]);
+    if (record.style_id) {
+      void listSkusByStyle(record.style_id)
+        .then((skus) => {
+          const seen = new Set<string>();
+          const opts: { label: string; value: string }[] = [];
+          for (const s of skus) {
+            const combo = `${s.color}${s.size ? " " + s.size : ""}`.trim();
+            if (combo && !seen.has(combo)) {
+              seen.add(combo);
+              opts.push({ label: combo, value: combo });
+            }
+          }
+          setColorSizeOptions(opts);
+        })
+        .catch(() => setColorSizeOptions([]));
+    }
   }
 
   const cancelMutation = useMutation({
@@ -533,7 +555,19 @@ export function PromotionListPage() {
         >
           {SOURCE_FIELDS.map((f) => (
             <Form.Item key={f.name} name={f.name} label={f.name} style={{ marginBottom: 12 }}>
-              {f.type === "select" ? (
+              {f.name === "颜色及规格" ? (
+                <Select
+                  allowClear
+                  showSearch
+                  placeholder={
+                    colorSizeOptions.length
+                      ? "按货号选择颜色+尺码组合"
+                      : "该款暂无SKU，可在商品成本表维护后选择"
+                  }
+                  options={colorSizeOptions}
+                  notFoundContent="该货号下暂无颜色/尺码，请先在商品成本表维护"
+                />
+              ) : f.type === "select" ? (
                 <Select
                   allowClear
                   placeholder={`请选择${f.name}`}

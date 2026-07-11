@@ -17,6 +17,8 @@ interface Props {
 const SECTIONS: { type: string; label: string }[] = [
   { type: "category", label: "类目" },
   { type: "season", label: "季节 / 系列" },
+  { type: "color", label: "颜色" },
+  { type: "size", label: "尺码" },
 ];
 
 function DictSection({ type, label }: { type: string; label: string }) {
@@ -89,7 +91,7 @@ function DictSection({ type, label }: { type: string; label: string }) {
 export function DictManagerModal({ open, onClose }: Props) {
   return (
     <Modal
-      title="管理类目 / 季节字典"
+      title="管理字典（类目 / 季节 / 颜色 / 尺码）"
       open={open}
       onCancel={onClose}
       onOk={onClose}

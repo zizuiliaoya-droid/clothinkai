@@ -148,7 +148,7 @@ export function StyleListPage() {
       title={<Typography.Title level={4} style={{ margin: 0 }}>款式管理</Typography.Title>}
       extra={
         <Space>
-          <Button onClick={() => setDictOpen(true)}>管理类目/季节</Button>
+          <Button onClick={() => setDictOpen(true)}>管理字典</Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
             新建款式
           </Button>
