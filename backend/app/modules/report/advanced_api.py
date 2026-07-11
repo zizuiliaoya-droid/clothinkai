@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import APIRouter, Path, Query, status
 
@@ -11,6 +12,7 @@ from app.modules.auth.deps import CurrentActiveUser, require_permission
 from app.modules.report.advanced_schemas import (
     PrWorkProgress,
     ProductionReport,
+    ProductionTrend,
     StoreDailyManualUpdate,
     StoreDailyRow,
     TargetCreate,
@@ -138,6 +140,24 @@ async def get_production(
     return await service.get_report(
         user.tenant_id, tr, exclude_brushing=exclude_brushing, season=season
     )
+
+
+@router.get(
+    "/production/trend",
+    response_model=ProductionTrend,
+    dependencies=[require_permission("report.production", "read")],
+)
+async def get_production_trend(
+    user: CurrentActiveUser,
+    service: ProductionServiceDep,
+    style_id: UUID,
+    preset: _PresetQ = "last_30d",
+    date_from: _FromQ = None,
+    date_to: _ToQ = None,
+) -> ProductionTrend:
+    """单款按日投产趋势（支付金额 + 站内花费折线）。"""
+    tr = resolve_time_range(preset, date_from, date_to)
+    return await service.get_trend(user.tenant_id, style_id, tr)
 
 
 __all__ = ["router"]

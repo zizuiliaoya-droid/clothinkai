@@ -111,10 +111,26 @@ class ProductionReport(BaseModel):
     previous: list[ProductionRow] | None = None
 
 
+class ProductionTrendPoint(BaseModel):
+    """单款按日趋势点。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    date: date
+    pay_amount: Decimal = Decimal("0")
+    ad_spend: Decimal = Decimal("0")
+
+
+class ProductionTrend(BaseModel):
+    points: list[ProductionTrendPoint]
+
+
 __all__ = [
     "PrWorkProgress",
     "ProductionReport",
     "ProductionRow",
+    "ProductionTrend",
+    "ProductionTrendPoint",
     "StoreDailyManualUpdate",
     "StoreDailyRow",
     "TargetCreate",

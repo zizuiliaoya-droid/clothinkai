@@ -60,6 +60,22 @@ class ProductionService:
             previous=[self._to_row(r, exclude_brushing) for r in prev_rows],
         )
 
+    async def get_trend(
+        self, tenant_id: UUID, style_id: UUID, time_range: tuple[date, date]
+    ) -> "ProductionTrend":
+        from app.modules.report.advanced_schemas import (
+            ProductionTrend,
+            ProductionTrendPoint,
+        )
+
+        rows = await self._repo.daily_trend_by_style(
+            tenant_id=tenant_id, style_id=style_id,
+            date_from=time_range[0], date_to=time_range[1],
+        )
+        return ProductionTrend(
+            points=[ProductionTrendPoint.model_validate(r) for r in rows]
+        )
+
     async def _aggregate_extra(
         self, tenant_id: UUID, date_from: date, date_to: date
     ) -> dict[str, dict[str, Any]]:

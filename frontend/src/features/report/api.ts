@@ -79,3 +79,20 @@ export async function getProduction(
   );
   return resp.data;
 }
+
+export interface ProductionTrendPoint {
+  date: string;
+  pay_amount: string;
+  ad_spend: string;
+}
+
+export async function getProductionTrend(
+  styleId: string,
+  params: { preset?: string; date_from?: string; date_to?: string } = {}
+): Promise<{ points: ProductionTrendPoint[] }> {
+  const resp = await apiClient.get<{ points: ProductionTrendPoint[] }>(
+    "/api/reports/production/trend",
+    { params: { style_id: styleId, ...params } }
+  );
+  return resp.data;
+}

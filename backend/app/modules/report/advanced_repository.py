@@ -209,6 +209,119 @@ class ProductionRepository:
             (await self._s.execute(sql, params)).mappings().all()
         )
 
+    async def daily_trend(
+        self, *, tenant_id: UUID, style_id: UUID, date_from: date, date_to: date
+    ) -> list[dict[str, Any]]:
+        """单款按日的 支付金额(千牛) + 推广花费(站内ad + 站外promo)，用于投产趋势折线图。"""
+        params = {"sid": style_id, "t": tenant_id, "df": date_from, "dt": date_to}
+        pay_sql = text(
+            """
+            SELECT q.date AS d, COALESCE(SUM(q.pay_amount), 0) AS v
+            FROM style s
+            LEFT JOIN platform_product pp ON pp.style_id = s.id
+            JOIN qianniu_daily q
+              ON (q.platform_product_id = pp.id
+                  OR q.platform_id_snapshot = pp.platform_id
+                  OR (s.qianniu_product_id IS NOT NULL
+                      AND q.platform_id_snapshot = s.qianniu_product_id))
+              AND q.tenant_id = s.tenant_id
+            WHERE s.id = :sid AND s.tenant_id = :t AND q.date BETWEEN :df AND :dt
+            GROUP BY q.date
+            """
+        )
+        ad_sql = text(
+            """
+            SELECT a.date AS d, COALESCE(SUM(a.cost), 0) AS v
+            FROM ad_daily a
+            JOIN platform_product pp
+              ON (pp.id = a.platform_product_id OR pp.platform_id = a.platform_id_snapshot)
+              AND pp.tenant_id = a.tenant_id
+            WHERE pp.style_id = :sid AND a.tenant_id = :t AND a.date BETWEEN :df AND :dt
+            GROUP BY a.date
+            """
+        )
+        promo_sql = text(
+            """
+            SELECT cooperation_date AS d, COALESCE(SUM(quote_amount), 0) AS v
+            FROM promotion
+            WHERE style_id = :sid AND tenant_id = :t
+              AND cooperation_date BETWEEN :df AND :dt AND is_active = true
+            GROUP BY cooperation_date
+            """
+        )
+        pay: dict[Any, Any] = {
+            r["d"]: r["v"]
+            for r in (await self._s.execute(pay_sql, params)).mappings()
+        }
+        spend: dict[Any, Any] = {}
+        for r in (await self._s.execute(ad_sql, params)).mappings():
+            spend[r["d"]] = spend.get(r["d"], 0) + r["v"]
+        for r in (await self._s.execute(promo_sql, params)).mappings():
+            spend[r["d"]] = spend.get(r["d"], 0) + r["v"]
+        dates = sorted(set(pay) | set(spend))
+        return [
+            {
+                "date": d.isoformat() if hasattr(d, "isoformat") else str(d),
+                "pay_amount": float(pay.get(d, 0) or 0),
+                "spend": float(spend.get(d, 0) or 0),
+            }
+            for d in dates
+        ]
+
+    async def daily_trend_by_style(
+        self, *, tenant_id: UUID, style_id: UUID, date_from: date, date_to: date
+    ) -> list[Mapping[str, Any]]:
+        """单款按日趋势：每天的千牛支付金额 + 站内投放花费（用于折线图）。
+
+        千牛按 platform_product 映射或款式 qianniu_product_id 直连归集；
+        站内花费按 platform_product 归集到款式。
+        """
+        sql = text(
+            """
+            WITH pay AS (
+              SELECT q.date AS d, SUM(q.pay_amount) AS pay_amount
+              FROM style s
+              LEFT JOIN platform_product pp ON pp.style_id = s.id
+              JOIN qianniu_daily q
+                ON (q.platform_product_id = pp.id
+                    OR q.platform_id_snapshot = pp.platform_id
+                    OR (s.qianniu_product_id IS NOT NULL
+                        AND q.platform_id_snapshot = s.qianniu_product_id))
+                AND q.tenant_id = s.tenant_id
+                AND q.date BETWEEN :date_from AND :date_to
+              WHERE s.id = :style_id AND s.tenant_id = :tenant_id
+              GROUP BY q.date
+            ),
+            spend AS (
+              SELECT a.date AS d, SUM(a.cost) AS ad_spend
+              FROM ad_daily a
+              JOIN platform_product pp2
+                ON (pp2.id = a.platform_product_id
+                    OR pp2.platform_id = a.platform_id_snapshot)
+                AND pp2.tenant_id = a.tenant_id
+              WHERE pp2.style_id = :style_id AND a.tenant_id = :tenant_id
+                AND a.date BETWEEN :date_from AND :date_to
+              GROUP BY a.date
+            )
+            SELECT COALESCE(pay.d, spend.d) AS date,
+                   COALESCE(pay.pay_amount, 0) AS pay_amount,
+                   COALESCE(spend.ad_spend, 0) AS ad_spend
+            FROM pay FULL OUTER JOIN spend ON pay.d = spend.d
+            ORDER BY 1
+            """
+        )
+        return list(
+            (
+                await self._s.execute(
+                    sql,
+                    {
+                        "tenant_id": tenant_id, "style_id": style_id,
+                        "date_from": date_from, "date_to": date_to,
+                    },
+                )
+            ).mappings().all()
+        )
+
     async def fetch_extra_by_style(
         self, *, tenant_id: UUID, date_from: date, date_to: date
     ) -> list[Mapping[str, Any]]:

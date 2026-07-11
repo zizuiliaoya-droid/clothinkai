@@ -1,11 +1,12 @@
 import { useState } from "react";
-import { Card, DatePicker, Select, Space, Switch, Table, Typography } from "antd";
+import { Button, Card, DatePicker, Modal, Select, Space, Switch, Table, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import type { ColumnsType } from "antd/es/table";
 import type { Dayjs } from "dayjs";
-import { getProduction } from "@/features/report/api";
+import { getProduction, getProductionTrend } from "@/features/report/api";
 import type { ProductionRow } from "@/features/report/types";
 import { listDictItems } from "@/features/product/api";
+import { MiniLineChart } from "@/components/MiniLineChart/MiniLineChart";
 
 const PRESETS = [
   { label: "近7天", value: "last_7d" },
@@ -23,6 +24,18 @@ export function ProductionPage() {
   const [range, setRange] = useState<[Dayjs, Dayjs] | null>(null);
   const [excludeBrushing, setExcludeBrushing] = useState(true);
   const [season, setSeason] = useState<string | undefined>(undefined);
+  const [trendStyle, setTrendStyle] = useState<ProductionRow | null>(null);
+
+  const { data: trend, isLoading: trendLoading } = useQuery({
+    queryKey: ["production-trend", trendStyle?.style_id, preset, df, dt],
+    enabled: !!trendStyle,
+    queryFn: () =>
+      getProductionTrend(trendStyle!.style_id, {
+        preset,
+        date_from: df,
+        date_to: dt,
+      }),
+  });
 
   const { data: seasons } = useQuery({
     queryKey: ["dict-items", "season"],
@@ -64,6 +77,17 @@ export function ProductionPage() {
     { title: "加购成本", dataIndex: "add_cart_cost", width: 110, render: money },
     { title: "净投产比", dataIndex: "net_roi", width: 100, render: (v) => (v == null ? "—" : v) },
     { title: "推广单件成交成本", dataIndex: "unit_deal_cost", width: 150, render: money },
+    {
+      title: "趋势",
+      key: "trend",
+      width: 80,
+      fixed: "right",
+      render: (_: unknown, row: ProductionRow) => (
+        <Button type="link" size="small" onClick={() => setTrendStyle(row)}>
+          折线图
+        </Button>
+      ),
+    },
   ];
 
   // 动态展开千牛/站内导入按款式汇总的其余指标（对齐 final.xlsx 投产报表全列）
@@ -129,6 +153,39 @@ export function ProductionPage() {
         scroll={{ x: scrollX }}
         pagination={false}
       />
+
+      <Modal
+        title={
+          trendStyle
+            ? `投产趋势 · ${trendStyle.style_code} ${trendStyle.style_name}`
+            : "投产趋势"
+        }
+        open={!!trendStyle}
+        onCancel={() => setTrendStyle(null)}
+        footer={null}
+        width={780}
+        destroyOnHidden
+      >
+        {trendLoading ? (
+          <div style={{ textAlign: "center", padding: 40 }}>加载中…</div>
+        ) : (
+          <MiniLineChart
+            labels={(trend?.points ?? []).map((p) => p.date)}
+            series={[
+              {
+                name: "支付金额",
+                color: "#1677ff",
+                data: (trend?.points ?? []).map((p) => Number(p.pay_amount)),
+              },
+              {
+                name: "站内花费",
+                color: "#fa8c16",
+                data: (trend?.points ?? []).map((p) => Number(p.ad_spend)),
+              },
+            ]}
+          />
+        )}
+      </Modal>
     </Card>
   );
 }
