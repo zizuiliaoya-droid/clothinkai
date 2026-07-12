@@ -37,6 +37,7 @@ const ROLE_OPTIONS = [
   "pr_manager",
   "finance",
   "operations",
+  "warehouse",
 ];
 
 export function UserListPage() {

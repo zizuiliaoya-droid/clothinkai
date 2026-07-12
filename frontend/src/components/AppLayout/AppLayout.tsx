@@ -152,6 +152,21 @@ export function AppLayout() {
     },
   ];
 
+  // 仓库角色只能操作打单：仅保留「仓库打单」菜单（admin/平台管理员不受限）
+  const roles = user?.roles ?? [];
+  const isWarehouseOnly =
+    roles.includes("warehouse") &&
+    !roles.some((r) => r === "admin" || r === "platform_admin");
+  const visibleMenuItems: MenuProps["items"] = isWarehouseOnly
+    ? [
+        {
+          key: "/warehouse-orders",
+          icon: <NotificationOutlined />,
+          label: <Link to="/warehouse-orders">仓库打单</Link>,
+        },
+      ]
+    : menuItems;
+
   return (
     <Layout style={{ minHeight: "100vh" }}>
       <Sider
@@ -175,7 +190,7 @@ export function AppLayout() {
           mode="inline"
           selectedKeys={[location.pathname]}
           defaultOpenKeys={["design", "data", "promotion", "finance", "report", "system"]}
-          items={menuItems}
+          items={visibleMenuItems}
         />
       </Sider>
       <Layout>

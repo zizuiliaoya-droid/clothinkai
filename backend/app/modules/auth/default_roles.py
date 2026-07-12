@@ -172,6 +172,16 @@ DEFAULT_ROLES: tuple[RoleSpec, ...] = (
             NOTIFICATION_READ,
         ),
     ),
+    RoleSpec(
+        code="warehouse",
+        name="仓库",
+        description="仓库打单：仅能查看待打单推广单并回传发货单号",
+        permissions=(
+            # 精确 scope（migration 030 同步授予现存库）；刻意不含删除/发布/审核
+            "promotion:read",
+            "promotion:write",
+        ),
+    ),
 )
 
 

@@ -44,6 +44,7 @@ import { getMe } from "@/features/auth/api";
 function ProtectedRoute({ children }: { children: JSX.Element }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const mustChange = useAuthStore((s) => s.mustChangePassword);
+  const user = useAuthStore((s) => s.user);
   const location = useLocation();
 
   if (!isAuthenticated) {
@@ -51,6 +52,18 @@ function ProtectedRoute({ children }: { children: JSX.Element }) {
   }
   if (mustChange && location.pathname !== "/change-password") {
     return <Navigate to="/change-password" replace />;
+  }
+  // 仓库角色只能操作打单：其余路由一律重定向到 /warehouse-orders
+  const roles = user?.roles ?? [];
+  const isWarehouseOnly =
+    roles.includes("warehouse") &&
+    !roles.some((r) => r === "admin" || r === "platform_admin");
+  if (
+    isWarehouseOnly &&
+    location.pathname !== "/warehouse-orders" &&
+    location.pathname !== "/change-password"
+  ) {
+    return <Navigate to="/warehouse-orders" replace />;
   }
   return children;
 }
