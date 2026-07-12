@@ -38,7 +38,7 @@ export function WarehousePage() {
 
   const { data, isLoading } = useQuery({
     queryKey: ["promotions", "warehouse"],
-    queryFn: () => listPromotions({ page: 1, page_size: 200, is_active: true }),
+    queryFn: () => listPromotions({ page: 1, page_size: 100, is_active: true }),
   });
 
   const rows = useMemo(() => {
