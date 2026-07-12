@@ -19,9 +19,11 @@ import { BrandListPage } from "@/pages/BrandListPage";
 import { StyleListPage } from "@/pages/StyleListPage";
 import { BloggerListPage } from "@/pages/BloggerListPage";
 import { PromotionListPage } from "@/pages/PromotionListPage";
+import { WarehouseOrderPage } from "@/pages/WarehouseOrderPage";
 import { CostTablePage } from "@/pages/CostTablePage";
 import { SettlementListPage } from "@/pages/SettlementListPage";
 import { OrderAdjustmentPage } from "@/pages/OrderAdjustmentPage";
+import { WarehousePage } from "@/pages/WarehousePage";
 import { BalancePage } from "@/pages/BalancePage";
 import { WorkProgressPage } from "@/pages/WorkProgressPage";
 import { PublishTargetPage } from "@/pages/PublishTargetPage";
@@ -119,6 +121,7 @@ function AppRoutes() {
         <Route path="/brands" element={<BrandListPage />} />
         <Route path="/bloggers" element={<BloggerListPage />} />
         <Route path="/promotions" element={<PromotionListPage />} />
+        <Route path="/warehouse-orders" element={<WarehouseOrderPage />} />
         {/* 设计制版 */}
         <Route path="/designs" element={<DesignListPage title="设计管理" />} />
         <Route path="/patterns" element={<DesignListPage title="制版管理" statuses={["制版中"]} />} />
@@ -170,6 +173,7 @@ function AppRoutes() {
         <Route path="/work-progress" element={<WorkProgressPage />} />
         <Route path="/publish-target" element={<PublishTargetPage />} />
         <Route path="/publish-progress" element={<PublishProgressPage />} />
+        <Route path="/warehouse-orders" element={<WarehousePage />} />
         {/* 财务管理 */}
         <Route path="/settlements" element={<SettlementListPage />} />
         <Route path="/tao-orders" element={<OrderAdjustmentPage orderType="拍单" />} />
