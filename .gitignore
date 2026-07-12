@@ -76,3 +76,6 @@ local-dashboard.png
 
 # 本地存储回退（R2 未配置时；dev only）
 backend/.local_storage/
+
+# 部署密钥（本地保存，勿提交）
+deploy-secrets.local.md

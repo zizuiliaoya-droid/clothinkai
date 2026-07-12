@@ -57,7 +57,7 @@ def _parse_date(s: str | None) -> date | None:
 @router.get(
     "/settlements/",
     response_model=SettlementPage,
-    dependencies=[require_permission("settlement", "read")],
+    dependencies=[require_permission("finance.settlement", "read")],
 )
 async def list_settlements(
     user: CurrentActiveUser,
@@ -102,7 +102,7 @@ async def list_settlements(
 @router.get(
     "/settlements/daily-summary/as-of",
     response_model=DailySummaryAsOfResponse,
-    dependencies=[require_permission("settlement", "read")],
+    dependencies=[require_permission("finance.settlement", "read")],
 )
 async def daily_summary_as_of(
     user: CurrentActiveUser,
@@ -118,7 +118,7 @@ async def daily_summary_as_of(
 @router.get(
     "/settlements/daily-summary/activity",
     response_model=DailySummaryActivityResponse,
-    dependencies=[require_permission("settlement", "read")],
+    dependencies=[require_permission("finance.settlement", "read")],
 )
 async def daily_summary_activity(
     user: CurrentActiveUser,

@@ -88,6 +88,7 @@ export function AppLayout() {
       label: "推广管理",
       children: [
         { key: "/promotions", label: <Link to="/promotions">站外推广</Link> },
+        { key: "/warehouse-orders", label: <Link to="/warehouse-orders">仓库打单</Link> },
         {
           key: "/work-progress",
           label: <Link to="/work-progress">工作进度表</Link>,

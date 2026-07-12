@@ -1,0 +1,383 @@
+- generic [ref=e11]:
+  - complementary [ref=e12]:
+    - generic [ref=e13]:
+      - generic [ref=e14]: 服装电商管理
+      - menu [ref=e15]:
+        - menuitem [ref=e16] [cursor=pointer]:
+          - img "dashboard" [ref=e17]
+          - link "概览" [ref=e21]:
+            - /url: /
+        - menuitem "highlight 设计制版" [expanded] [ref=e22] [cursor=pointer]:
+          - img "highlight" [ref=e23]
+          - generic [ref=e26]: 设计制版
+        - menu [ref=e27]:
+          - menuitem [ref=e28] [cursor=pointer]:
+            - link "设计管理" [ref=e30]:
+              - /url: /designs
+          - menuitem [ref=e31] [cursor=pointer]:
+            - link "制版管理" [ref=e33]:
+              - /url: /patterns
+          - menuitem [ref=e34] [cursor=pointer]:
+            - link "工艺管理" [ref=e36]:
+              - /url: /crafts
+          - menuitem [ref=e37] [cursor=pointer]:
+            - link "核价管理" [ref=e39]:
+              - /url: /pricing
+        - menuitem "appstore 数据管理" [expanded] [ref=e40] [cursor=pointer]:
+          - img "appstore" [ref=e41]
+          - generic [ref=e44]: 数据管理
+        - menu [ref=e45]:
+          - menuitem [ref=e46] [cursor=pointer]:
+            - img "appstore" [ref=e47]
+            - link "商品成本表" [ref=e51]:
+              - /url: /skus
+          - menuitem [ref=e52] [cursor=pointer]:
+            - img "skin" [ref=e53]
+            - link "款式管理" [ref=e57]:
+              - /url: /styles
+          - menuitem [ref=e58] [cursor=pointer]:
+            - img "tags" [ref=e59]
+            - link "品牌管理" [ref=e63]:
+              - /url: /brands
+          - menuitem [ref=e64] [cursor=pointer]:
+            - img "team" [ref=e65]
+            - link "博主库" [ref=e69]:
+              - /url: /bloggers
+          - menuitem [ref=e70] [cursor=pointer]:
+            - link "千牛数据" [ref=e72]:
+              - /url: /qianniu
+          - menuitem [ref=e73] [cursor=pointer]:
+            - link "单品站内推广" [ref=e75]:
+              - /url: /ad-data
+        - menuitem "notification 推广管理" [expanded] [ref=e76] [cursor=pointer]:
+          - img "notification" [ref=e77]
+          - generic [ref=e80]: 推广管理
+        - menu [ref=e81]:
+          - menuitem [ref=e82] [cursor=pointer]:
+            - link "站外推广" [ref=e84]:
+              - /url: /promotions
+          - menuitem [ref=e85] [cursor=pointer]:
+            - link "工作进度表" [ref=e87]:
+              - /url: /work-progress
+          - menuitem [ref=e88] [cursor=pointer]:
+            - link "爆款约篇数量" [ref=e90]:
+              - /url: /publish-target
+          - menuitem [ref=e91] [cursor=pointer]:
+            - link "发文进度表" [ref=e93]:
+              - /url: /publish-progress
+        - menuitem "dollar 财务管理" [expanded] [ref=e94] [cursor=pointer]:
+          - img "dollar" [ref=e95]
+          - generic [ref=e98]: 财务管理
+        - menu [ref=e99]:
+          - menuitem [ref=e100] [cursor=pointer]:
+            - link "财务结款" [ref=e102]:
+              - /url: /settlements
+          - menuitem [ref=e103] [cursor=pointer]:
+            - link "拍单" [ref=e105]:
+              - /url: /tao-orders
+          - menuitem [ref=e106] [cursor=pointer]:
+            - link "刷单" [ref=e108]:
+              - /url: /brush-orders
+          - menuitem [ref=e109] [cursor=pointer]:
+            - link "余额核对" [ref=e111]:
+              - /url: /balance
+        - menuitem "bar-chart 报表与分析" [expanded] [ref=e112] [cursor=pointer]:
+          - img "bar-chart" [ref=e113]
+          - generic [ref=e116]: 报表与分析
+        - menu [ref=e117]:
+          - menuitem [ref=e118] [cursor=pointer]:
+            - link "店铺数据" [ref=e120]:
+              - /url: /store-daily
+          - menuitem [ref=e121] [cursor=pointer]:
+            - link "投产报表" [ref=e123]:
+              - /url: /production
+          - menuitem [ref=e124] [cursor=pointer]:
+            - link "BI看板" [ref=e126]:
+              - /url: /bi
+        - menuitem "setting 系统管理" [expanded] [ref=e127] [cursor=pointer]:
+          - img "setting" [ref=e128]
+          - generic [ref=e131]: 系统管理
+        - menu [ref=e132]:
+          - menuitem [ref=e133] [cursor=pointer]:
+            - link "用户管理" [ref=e135]:
+              - /url: /users
+          - menuitem [ref=e136] [cursor=pointer]:
+            - link "导入记录" [ref=e138]:
+              - /url: /imports
+          - menuitem [ref=e139] [cursor=pointer]:
+            - link "系统设置" [ref=e141]:
+              - /url: /settings
+  - generic [ref=e142]:
+    - banner [ref=e143]:
+      - generic [ref=e144] [cursor=pointer]:
+        - img "user" [ref=e147]
+        - generic [ref=e150]: Initial Admin
+    - main [ref=e151]:
+      - generic [ref=e152]:
+        - generic [ref=e154]:
+          - heading "推广管理" [level=4] [ref=e156]
+          - generic [ref=e158]:
+            - generic [ref=e160]:
+              - button "upload 导入站外推广" [ref=e165] [cursor=pointer]:
+                - img "upload" [ref=e167]
+                - generic [ref=e170]: 导入站外推广
+              - button "列说明" [ref=e172] [cursor=pointer]
+            - button "plus 新建推广" [ref=e175] [cursor=pointer]:
+              - img "plus" [ref=e177]
+              - generic [ref=e181]: 新建推广
+        - generic [ref=e182]:
+          - generic [ref=e183]:
+            - generic [ref=e186]:
+              - searchbox "搜索内部编码 / 货号" [ref=e188]
+              - button [ref=e191] [cursor=pointer]:
+                - img "search" [ref=e193]
+            - generic [ref=e199] [cursor=pointer]:
+              - combobox [ref=e201]
+              - generic: 发布状态
+            - generic [ref=e205] [cursor=pointer]:
+              - combobox [ref=e207]
+              - generic: 平台
+          - generic [ref=e210]:
+            - table [ref=e214]:
+              - rowgroup [ref=e238]:
+                - row [ref=e239]:
+                  - columnheader "内部编码" [ref=e240]
+                  - columnheader "货号" [ref=e241]
+                  - columnheader "品名" [ref=e242]
+                  - columnheader "合作平台" [ref=e243]
+                  - columnheader "合作日期" [ref=e244]
+                  - columnheader "预定发布日期" [ref=e245]
+                  - columnheader "报价" [ref=e246]
+                  - columnheader "是否催发" [ref=e247]
+                  - columnheader "是否发布" [ref=e248]
+                  - columnheader "点赞量" [ref=e249]
+                  - columnheader "结算状态" [ref=e250]
+                  - columnheader "颜色及规格" [ref=e251]
+                  - columnheader "打单地址" [ref=e252]
+                  - columnheader "发货单号" [ref=e253]
+                  - columnheader "订单号" [ref=e254]
+                  - columnheader "寄回单号" [ref=e255]
+                  - columnheader "合作方式" [ref=e256]
+                  - columnheader "合作形式" [ref=e257]
+                  - columnheader "点赞数" [ref=e258]
+                  - columnheader "收藏数" [ref=e259]
+                  - columnheader "评论数" [ref=e260]
+                  - columnheader "操作" [ref=e261]
+              - rowgroup [ref=e262]:
+                - row [ref=e263]:
+                  - cell "DE2607050001" [ref=e264]
+                  - cell "2026003" [ref=e265]
+                  - cell "假两件波点短袖" [ref=e266]
+                  - cell "小红书" [ref=e267]
+                  - cell "2026-07-05" [ref=e268]
+                  - cell "—" [ref=e269]
+                  - cell "¥555.00" [ref=e270]
+                  - cell "未排期" [ref=e271]
+                  - cell "未发布" [ref=e273]
+                  - cell "—" [ref=e275]
+                  - cell "未核查" [ref=e276]
+                  - cell "—" [ref=e278]
+                  - cell "—" [ref=e279]
+                  - cell "—" [ref=e280]
+                  - cell "—" [ref=e281]
+                  - cell "—" [ref=e282]
+                  - cell "—" [ref=e283]
+                  - cell "—" [ref=e284]
+                  - cell "—" [ref=e285]
+                  - cell "—" [ref=e286]
+                  - cell "—" [ref=e287]
+                  - cell [ref=e288]:
+                    - button "操作 down" [ref=e289] [cursor=pointer]:
+                      - generic [ref=e290]: 操作
+                      - img "down" [ref=e291]
+                - row [ref=e294]:
+                  - cell "DE2607040001" [ref=e295]
+                  - cell "2026003" [ref=e296]
+                  - cell "假两件波点短袖" [ref=e297]
+                  - cell "小红书" [ref=e298]
+                  - cell "2026-07-04" [ref=e299]
+                  - cell "—" [ref=e300]
+                  - cell "¥111.00" [ref=e301]
+                  - cell "未排期" [ref=e302]
+                  - cell "未发布" [ref=e304]
+                  - cell "—" [ref=e306]
+                  - cell "未核查" [ref=e307]
+                  - cell "—" [ref=e309]
+                  - cell "—" [ref=e310]
+                  - cell "—" [ref=e311]
+                  - cell "—" [ref=e312]
+                  - cell "—" [ref=e313]
+                  - cell "—" [ref=e314]
+                  - cell "—" [ref=e315]
+                  - cell "—" [ref=e316]
+                  - cell "—" [ref=e317]
+                  - cell "—" [ref=e318]
+                  - cell [ref=e319]:
+                    - button "操作 down" [ref=e320] [cursor=pointer]:
+                      - generic [ref=e321]: 操作
+                      - img "down" [ref=e322]
+                - row [ref=e325]:
+                  - cell "DE2607030001" [ref=e326]
+                  - cell "2026003" [ref=e327]
+                  - cell "假两件波点短袖" [ref=e328]
+                  - cell "小红书" [ref=e329]
+                  - cell "2026-07-03" [ref=e330]
+                  - cell "—" [ref=e331]
+                  - cell "¥500.00" [ref=e332]
+                  - cell "未排期" [ref=e333]
+                  - cell "未发布" [ref=e335]
+                  - cell "—" [ref=e337]
+                  - cell "未核查" [ref=e338]
+                  - cell "—" [ref=e340]
+                  - cell "—" [ref=e341]
+                  - cell "—" [ref=e342]
+                  - cell "—" [ref=e343]
+                  - cell "—" [ref=e344]
+                  - cell "—" [ref=e345]
+                  - cell "—" [ref=e346]
+                  - cell "—" [ref=e347]
+                  - cell "—" [ref=e348]
+                  - cell "—" [ref=e349]
+                  - cell [ref=e350]:
+                    - button "操作 down" [ref=e351] [cursor=pointer]:
+                      - generic [ref=e352]: 操作
+                      - img "down" [ref=e353]
+                - row [ref=e356]:
+                  - cell "DE2607010003" [ref=e357]
+                  - cell "2026003" [ref=e358]
+                  - cell "假两件波点短袖" [ref=e359]
+                  - cell "小红书" [ref=e360]
+                  - cell "2026-07-01" [ref=e361]
+                  - cell "—" [ref=e362]
+                  - cell "¥300.00" [ref=e363]
+                  - cell "未排期" [ref=e364]
+                  - cell "未发布" [ref=e366]
+                  - cell "—" [ref=e368]
+                  - cell "未核查" [ref=e369]
+                  - cell "—" [ref=e371]
+                  - cell "—" [ref=e372]
+                  - cell "—" [ref=e373]
+                  - cell "—" [ref=e374]
+                  - cell "—" [ref=e375]
+                  - cell "—" [ref=e376]
+                  - cell "—" [ref=e377]
+                  - cell "—" [ref=e378]
+                  - cell "—" [ref=e379]
+                  - cell "—" [ref=e380]
+                  - cell [ref=e381]:
+                    - button "操作 down" [ref=e382] [cursor=pointer]:
+                      - generic [ref=e383]: 操作
+                      - img "down" [ref=e384]
+                - row [ref=e387]:
+                  - cell "DE2607010002" [ref=e388]
+                  - cell "2026003" [ref=e389]
+                  - cell "假两件波点短袖" [ref=e390]
+                  - cell "小红书" [ref=e391]
+                  - cell "2026-07-01" [ref=e392]
+                  - cell "—" [ref=e393]
+                  - cell "¥300.00" [ref=e394]
+                  - cell "已发布" [ref=e395]
+                  - cell "已发布" [ref=e397]
+                  - cell "—" [ref=e399]
+                  - cell "待付款" [ref=e400]
+                  - cell "—" [ref=e402]
+                  - cell "—" [ref=e403]
+                  - cell "—" [ref=e404]
+                  - cell "—" [ref=e405]
+                  - cell "—" [ref=e406]
+                  - cell "—" [ref=e407]
+                  - cell "—" [ref=e408]
+                  - cell "—" [ref=e409]
+                  - cell "—" [ref=e410]
+                  - cell "—" [ref=e411]
+                  - cell [ref=e412]:
+                    - button "操作 down" [ref=e413] [cursor=pointer]:
+                      - generic [ref=e414]: 操作
+                      - img "down" [ref=e415]
+                - row [ref=e418]:
+                  - cell "DE2607010001" [ref=e419]
+                  - cell "PRODX" [ref=e420]
+                  - cell "测试商品" [ref=e421]
+                  - cell "小红书" [ref=e422]
+                  - cell "2026-07-01" [ref=e423]
+                  - cell "—" [ref=e424]
+                  - cell "¥500.00" [ref=e425]
+                  - cell "已发布" [ref=e426]
+                  - cell "已发布" [ref=e428]
+                  - cell "—" [ref=e430]
+                  - cell "待付款" [ref=e431]
+                  - cell "—" [ref=e433]
+                  - cell "—" [ref=e434]
+                  - cell "—" [ref=e435]
+                  - cell "—" [ref=e436]
+                  - cell "—" [ref=e437]
+                  - cell "—" [ref=e438]
+                  - cell "—" [ref=e439]
+                  - cell "—" [ref=e440]
+                  - cell "—" [ref=e441]
+                  - cell "—" [ref=e442]
+                  - cell [ref=e443]:
+                    - button "操作 down" [ref=e444] [cursor=pointer]:
+                      - generic [ref=e445]: 操作
+                      - img "down" [ref=e446]
+                - row [ref=e449]:
+                  - cell "DE2606140002" [ref=e450]
+                  - cell "A001" [ref=e451]
+                  - cell "短袖" [ref=e452]
+                  - cell "小红书" [ref=e453]
+                  - cell "2026-06-14" [ref=e454]
+                  - cell "—" [ref=e455]
+                  - cell "¥600.00" [ref=e456]
+                  - cell "已发布" [ref=e457]
+                  - cell "已发布" [ref=e459]
+                  - cell "—" [ref=e461]
+                  - cell "待核查" [ref=e462]
+                  - cell "—" [ref=e464]
+                  - cell "—" [ref=e465]
+                  - cell "—" [ref=e466]
+                  - cell "—" [ref=e467]
+                  - cell "—" [ref=e468]
+                  - cell "—" [ref=e469]
+                  - cell "—" [ref=e470]
+                  - cell "—" [ref=e471]
+                  - cell "—" [ref=e472]
+                  - cell "—" [ref=e473]
+                  - cell [ref=e474]:
+                    - button "操作 down" [ref=e475] [cursor=pointer]:
+                      - generic [ref=e476]: 操作
+                      - img "down" [ref=e477]
+                - row [ref=e480]:
+                  - cell "DE2606140001" [ref=e481]
+                  - cell "A001" [ref=e482]
+                  - cell "短袖" [ref=e483]
+                  - cell "小红书" [ref=e484]
+                  - cell "2026-06-14" [ref=e485]
+                  - cell "—" [ref=e486]
+                  - cell "¥500.00" [ref=e487]
+                  - cell "已发布" [ref=e488]
+                  - cell "已发布" [ref=e490]
+                  - cell "—" [ref=e492]
+                  - cell "待核查" [ref=e493]
+                  - cell "—" [ref=e495]
+                  - cell "—" [ref=e496]
+                  - cell "—" [ref=e497]
+                  - cell "—" [ref=e498]
+                  - cell "—" [ref=e499]
+                  - cell "—" [ref=e500]
+                  - cell "—" [ref=e501]
+                  - cell "—" [ref=e502]
+                  - cell "—" [ref=e503]
+                  - cell "—" [ref=e504]
+                  - cell [ref=e505]:
+                    - button "操作 down" [ref=e506] [cursor=pointer]:
+                      - generic [ref=e507]: 操作
+                      - img "down" [ref=e508]
+            - list [ref=e511]:
+              - listitem [ref=e512]: 共 8 条
+              - listitem "上一页" [ref=e513]:
+                - button [disabled] [ref=e514]:
+                  - img "left" [ref=e515]
+              - listitem "1" [ref=e518] [cursor=pointer]
+              - listitem "下一页" [ref=e520]:
+                - button [disabled] [ref=e521]:
+                  - img "right" [ref=e522]
