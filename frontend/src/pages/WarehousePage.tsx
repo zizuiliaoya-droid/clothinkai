@@ -14,7 +14,7 @@ import {
 } from "antd";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnsType } from "antd/es/table";
-import { listPromotions, updatePromotion } from "@/features/promotion/api";
+import { listPromotions, updateWarehouseWaybill } from "@/features/promotion/api";
 import type { Promotion } from "@/features/promotion/types";
 import { extractErrorMessage } from "@/services/apiClient";
 
@@ -52,12 +52,7 @@ export function WarehousePage() {
 
   const saveMutation = useMutation({
     mutationFn: ({ id, waybill }: { id: string; waybill: string }) =>
-      updatePromotion(id, {
-        source_extra: {
-          ...((target?.source_extra ?? {}) as Record<string, unknown>),
-          发货单号: waybill,
-        },
-      }),
+      updateWarehouseWaybill(id, waybill),
     onSuccess: () => {
       message.success("发货单号已回传，标记为已打单");
       setTarget(null);

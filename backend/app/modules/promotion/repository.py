@@ -20,7 +20,9 @@ from datetime import date
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import exists, func, select, text, update
+from sqlalchemy import bindparam, exists, func, select, text, update
+from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.metrics import promotion_sequence_lock_duration_seconds
@@ -65,6 +67,15 @@ class PromotionListRow:
     dual_platform: bool
 
 
+@dataclass(frozen=True)
+class PromotionAttachmentRefs:
+    payment_qr_attachment_id: UUID | None = None
+    payment_qr_r2_key: str | None = None
+    payment_qr_status: str | None = None
+    settlement_proof_r2_key: str | None = None
+    settlement_proof_status: str | None = None
+
+
 # ---------------------------------------------------------------------------
 # Repository
 # ---------------------------------------------------------------------------
@@ -85,6 +96,50 @@ class PromotionRepository:
         if not promotion.is_active and not include_inactive:
             return None
         return promotion
+
+    async def get_payment_attachment_refs(
+        self, *, tenant_id: UUID, promotion_ids: list[UUID]
+    ) -> dict[UUID, PromotionAttachmentRefs]:
+        """一次批量取得收款码与结算付款凭证引用，避免列表 N+1。"""
+        if not promotion_ids:
+            return {}
+        sql = text(
+            """
+            SELECT p.id AS promotion_id, p.payment_qr_attachment_id,
+                   qr.r2_key AS payment_qr_r2_key, qr.status AS payment_qr_status,
+                   proof.r2_key AS settlement_proof_r2_key,
+                   proof.status AS settlement_proof_status
+            FROM promotion p
+            LEFT JOIN attachment qr
+              ON qr.id=p.payment_qr_attachment_id AND qr.tenant_id=p.tenant_id
+            LEFT JOIN settlement s
+              ON s.promotion_id=p.id AND s.tenant_id=p.tenant_id
+            LEFT JOIN attachment proof
+              ON proof.id=s.payment_proof_attachment_id AND proof.tenant_id=s.tenant_id
+            WHERE p.tenant_id=:tenant_id
+              AND p.id = ANY(:promotion_ids)
+            """
+        ).bindparams(
+            bindparam("tenant_id", type_=PGUUID(as_uuid=True)),
+            bindparam(
+                "promotion_ids",
+                type_=ARRAY(PGUUID(as_uuid=True)),
+            ),
+        )
+        result = await self._session.execute(
+            sql,
+            {"tenant_id": tenant_id, "promotion_ids": promotion_ids},
+        )
+        return {
+            row["promotion_id"]: PromotionAttachmentRefs(
+                payment_qr_attachment_id=row["payment_qr_attachment_id"],
+                payment_qr_r2_key=row["payment_qr_r2_key"],
+                payment_qr_status=row["payment_qr_status"],
+                settlement_proof_r2_key=row["settlement_proof_r2_key"],
+                settlement_proof_status=row["settlement_proof_status"],
+            )
+            for row in result.mappings().all()
+        }
 
     async def get_by_internal_code(
         self, internal_code: str
@@ -518,7 +573,7 @@ class PromotionRepository:
                     "publish_status", "recall_status", "settlement_status",
                     "reviewed_by", "reviewed_at", "review_action",
                     "review_reason", "is_active", "created_at", "updated_at",
-                    "source_extra",
+                    "source_extra", "payment_qr_attachment_id",
                 ) if col in row
             })
             # 防止重组的 ORM 实例污染 session unit of work
@@ -535,6 +590,7 @@ class PromotionRepository:
 
 
 __all__ = [
+    "PromotionAttachmentRefs",
     "PromotionListFilters",
     "PromotionListRow",
     "PromotionRepository",

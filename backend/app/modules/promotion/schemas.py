@@ -92,6 +92,30 @@ class PromotionUpdate(BaseModel):
     source_extra: dict | None = None
 
 
+class PromotionPaymentQrUploadInitRequest(BaseModel):
+    """收款码上传初始化；bucket/purpose 由服务端强制指定。"""
+
+    model_config = ConfigDict(strict=True, str_strip_whitespace=True)
+
+    filename: str | None = Field(default=None, max_length=255)
+    mime_type: str = Field(min_length=1, max_length=64)
+    size_bytes: int = Field(ge=1, le=10 * 1024 * 1024)
+
+
+class PromotionPaymentQrUploadInitResponse(BaseModel):
+    attachment_id: UUID
+    presigned_url: str
+    expires_in_seconds: int = 900
+
+
+class PromotionPaymentQrBindRequest(BaseModel):
+    payment_qr_attachment_id: UUID
+
+
+class PromotionWarehouseWaybillRequest(BaseModel):
+    waybill: str = Field(min_length=1, max_length=128)
+
+
 # ---------------------------------------------------------------------------
 # 状态推进入参
 # ---------------------------------------------------------------------------
@@ -246,6 +270,11 @@ class PromotionResponse(BaseModel):
     # 人工源列扩展（对齐 final.xlsx 站外推广源列）
     source_extra: dict = Field(default_factory=dict)
 
+    # 结款附件（仅 PR/PR主管/管理员可见；warehouse 始终为 null）
+    payment_qr_attachment_id: UUID | None = None
+    payment_qr_signed_url: str | None = None
+    settlement_payment_proof_signed_url: str | None = None
+
     # 重复警告（仅 create / detail 视图填入）
     duplicate_warnings: list[PromotionDuplicateWarning] = Field(
         default_factory=list
@@ -294,6 +323,9 @@ __all__ = [
     "PromotionListFilters",
     "PromotionMarkAbnormalRequest",
     "PromotionPage",
+    "PromotionPaymentQrBindRequest",
+    "PromotionPaymentQrUploadInitRequest",
+    "PromotionPaymentQrUploadInitResponse",
     "PromotionPublishRequest",
     "PromotionRecallResultRequest",
     "PromotionRecallStartRequest",
@@ -301,4 +333,5 @@ __all__ = [
     "PromotionReviewRequest",
     "PromotionUpdate",
     "PromotionUpdateLikeRequest",
+    "PromotionWarehouseWaybillRequest",
 ]

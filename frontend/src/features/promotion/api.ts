@@ -49,6 +49,45 @@ export async function updatePromotion(
   return resp.data;
 }
 
+export interface PaymentQrUploadInit {
+  attachment_id: string;
+  presigned_url: string;
+  expires_in_seconds: number;
+}
+
+export async function initPaymentQrUpload(
+  promotionId: string,
+  payload: { filename?: string; mime_type: string; size_bytes: number }
+): Promise<PaymentQrUploadInit> {
+  const resp = await apiClient.post<PaymentQrUploadInit>(
+    `/api/promotions/${promotionId}/payment-qr/upload-init`, payload
+  );
+  return resp.data;
+}
+
+export async function bindPaymentQr(
+  promotionId: string, attachmentId: string
+): Promise<Promotion> {
+  const resp = await apiClient.put<Promotion>(
+    `/api/promotions/${promotionId}/payment-qr`,
+    { payment_qr_attachment_id: attachmentId }
+  );
+  return resp.data;
+}
+
+export async function removePaymentQr(promotionId: string): Promise<void> {
+  await apiClient.delete(`/api/promotions/${promotionId}/payment-qr`);
+}
+
+export async function updateWarehouseWaybill(
+  promotionId: string, waybill: string
+): Promise<Promotion> {
+  const resp = await apiClient.patch<Promotion>(
+    `/api/promotions/${promotionId}/warehouse-waybill`, { waybill }
+  );
+  return resp.data;
+}
+
 export async function deletePromotion(promotionId: string): Promise<void> {
   await apiClient.delete(`/api/promotions/${promotionId}`);
 }

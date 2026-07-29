@@ -79,6 +79,11 @@ class Promotion(TenantScopedModel):
         ForeignKey("user.id", ondelete="SET NULL"),
         nullable=True,
     )
+    payment_qr_attachment_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("attachment.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
 
     # --- 业务键 ---
     internal_code: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -164,6 +169,11 @@ class Promotion(TenantScopedModel):
             "publish_status",
         ),
         Index("idx_promotion_pr", "tenant_id", "pr_id"),
+        Index(
+            "idx_promotion_payment_qr_attachment_id",
+            "payment_qr_attachment_id",
+            postgresql_where=text("payment_qr_attachment_id IS NOT NULL"),
+        ),
         # 重复检测 + 按博主 / 款式查
         Index(
             "idx_promotion_blogger",

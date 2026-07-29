@@ -27,6 +27,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import events as event_bus
+from app.core.attachment import attachment_service
 from app.core.audit import AuditService
 from app.core.db import AsyncSessionBypass
 from app.core.metrics import (
@@ -64,6 +65,7 @@ from app.modules.promotion.exceptions import (
     CancelReasonRequiredError,
     FieldPermissionDenied,
     InvalidBloggerReferenceError,
+    InvalidPaymentQrAttachmentError,
     InvalidSkuReferenceError,
     InvalidStyleReferenceError,
     PromotionNotFoundError,
@@ -84,6 +86,7 @@ from app.modules.promotion.metrics_calculator import (
 )
 from app.modules.promotion.models import Promotion
 from app.modules.promotion.repository import (
+    PromotionAttachmentRefs,
     PromotionListFilters as RepoPromotionListFilters,
 )
 from app.modules.promotion.repository import PromotionRepository
@@ -93,12 +96,16 @@ from app.modules.promotion.schemas import (
     PromotionDuplicateWarning,
     PromotionListFilters as ApiPromotionListFilters,
     PromotionPage,
+    PromotionPaymentQrBindRequest,
+    PromotionPaymentQrUploadInitRequest,
+    PromotionPaymentQrUploadInitResponse,
     PromotionPublishRequest,
     PromotionRecallResultRequest,
     PromotionRecallStartRequest,
     PromotionResponse,
     PromotionReviewRequest,
     PromotionUpdate,
+    PromotionWarehouseWaybillRequest,
 )
 from app.modules.promotion.state_machines import (
     PublishStatusMachine,
@@ -130,6 +137,7 @@ class PromotionService:
         self._roles = RoleRepository(session)
         self._perms = PermissionRepository(session)
         self._audit = AuditService(session)
+        self._attachment_service = attachment_service
 
     # ============================================================
     # CRUD: create
@@ -331,6 +339,97 @@ class PromotionService:
         await self._session.commit()
         return await self._to_response(promotion, user)
 
+    async def init_payment_qr_upload(
+        self, promotion_id: UUID, payload: PromotionPaymentQrUploadInitRequest, user: User
+    ) -> PromotionPaymentQrUploadInitResponse:
+        if await self._repo.get_by_id(promotion_id) is None:
+            raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
+        allowed = {"image/jpeg", "image/png", "image/webp"}
+        if payload.mime_type not in allowed:
+            raise InvalidPaymentQrAttachmentError(
+                "收款码仅支持 JPG、PNG、WebP 图片",
+                details={"allowed": sorted(allowed), "actual": payload.mime_type},
+            )
+        attachment, url = await self._attachment_service.create_upload_record(
+            session=self._session,
+            tenant_id=user.tenant_id,
+            created_by=user.id,
+            bucket="private",
+            purpose="promotion_payment_qr",
+            filename=payload.filename,
+            mime_type=payload.mime_type,
+            size_bytes=payload.size_bytes,
+        )
+        await self._session.commit()
+        return PromotionPaymentQrUploadInitResponse(
+            attachment_id=attachment.id, presigned_url=url
+        )
+
+    async def bind_payment_qr(
+        self, promotion_id: UUID, payload: PromotionPaymentQrBindRequest, user: User
+    ) -> PromotionResponse:
+        promotion = await self._repo.get_by_id(promotion_id)
+        if promotion is None:
+            raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
+        attachment = await self._attachment_service.get_by_id(
+            session=self._session, attachment_id=payload.payment_qr_attachment_id
+        )
+        if (
+            attachment is None
+            or attachment.tenant_id != user.tenant_id
+            or attachment.bucket != "private"
+            or attachment.purpose != "promotion_payment_qr"
+            or attachment.mime_type not in {"image/jpeg", "image/png", "image/webp"}
+            or attachment.size_bytes > 10 * 1024 * 1024
+            or attachment.status != "ready"
+        ):
+            raise InvalidPaymentQrAttachmentError("收款码附件无效或尚未上传完成")
+        old_id = promotion.payment_qr_attachment_id
+        promotion.payment_qr_attachment_id = attachment.id
+        await self._audit.log(
+            action="promotion.payment_qr.bind",
+            resource="promotion",
+            resource_id=promotion.id,
+            before={"attachment_changed": old_id is not None},
+            after={"attachment_changed": True},
+            user_id=user.id,
+        )
+        await self._session.commit()
+        return await self._to_response(promotion, user)
+
+    async def remove_payment_qr(self, promotion_id: UUID, user: User) -> None:
+        promotion = await self._repo.get_by_id(promotion_id)
+        if promotion is None:
+            raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
+        promotion.payment_qr_attachment_id = None
+        await self._audit.log(
+            action="promotion.payment_qr.remove",
+            resource="promotion",
+            resource_id=promotion.id,
+            after={"attachment_removed": True},
+            user_id=user.id,
+        )
+        await self._session.commit()
+
+    async def update_warehouse_waybill(
+        self, promotion_id: UUID, payload: PromotionWarehouseWaybillRequest, user: User
+    ) -> PromotionResponse:
+        promotion = await self._repo.get_by_id(promotion_id)
+        if promotion is None:
+            raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
+        source_extra = dict(promotion.source_extra or {})
+        source_extra["发货单号"] = payload.waybill.strip()
+        promotion.source_extra = source_extra
+        await self._audit.log(
+            action="promotion.warehouse_waybill.update",
+            resource="promotion",
+            resource_id=promotion.id,
+            after={"waybill_changed": True},
+            user_id=user.id,
+        )
+        await self._session.commit()
+        return await self._to_response(promotion, user)
+
 
     # ============================================================
     # Read
@@ -397,6 +496,11 @@ class PromotionService:
 
         promotion_search_results_count.observe(total)
 
+        attachment_refs = await self._repo.get_payment_attachment_refs(
+            tenant_id=user.tenant_id,
+            promotion_ids=[row.promotion.id for row in rows],
+        )
+
         # 用 CTE 计算结果填充响应（避免重复计算 urge_status / dual_platform）
         items = [
             await self._to_response(
@@ -405,6 +509,7 @@ class PromotionService:
                 today=today,
                 urge_status_override=row.urge_status,
                 dual_platform_override=row.dual_platform,
+                attachment_refs=attachment_refs.get(row.promotion.id),
             )
             for row in rows
         ]
@@ -916,6 +1021,7 @@ class PromotionService:
         today: Any = None,
         urge_status_override: str | None = None,
         dual_platform_override: bool | None = None,
+        attachment_refs: PromotionAttachmentRefs | None = None,
     ) -> PromotionResponse:
         """组装响应：字段权限过滤 + 衍生字段计算.
 
@@ -927,6 +1033,39 @@ class PromotionService:
         ctx = await build_field_perm_context(user.id, self._roles, self._perms)
         can_see_quote = can_read_field("promotion", "quote_amount", ctx)
         can_see_cost = can_read_field("promotion", "cost_snapshot", ctx)
+        can_see_payment_attachments = bool(
+            ctx.role_codes & {"admin", "platform_admin", "pr", "pr_manager"}
+        )
+
+        payment_qr_url: str | None = None
+        settlement_proof_url: str | None = None
+        visible_payment_qr_id: UUID | None = None
+        if can_see_payment_attachments:
+            if attachment_refs is None:
+                attachment_refs = (
+                    await self._repo.get_payment_attachment_refs(
+                        tenant_id=user.tenant_id, promotion_ids=[promotion.id]
+                    )
+                ).get(promotion.id)
+            if attachment_refs is not None:
+                visible_payment_qr_id = attachment_refs.payment_qr_attachment_id
+                try:
+                    if (
+                        attachment_refs.payment_qr_status == "ready"
+                        and attachment_refs.payment_qr_r2_key
+                    ):
+                        payment_qr_url = self._attachment_service.get_signed_url(
+                            "private", attachment_refs.payment_qr_r2_key, expires_in=900
+                        )
+                    if (
+                        attachment_refs.settlement_proof_status == "ready"
+                        and attachment_refs.settlement_proof_r2_key
+                    ):
+                        settlement_proof_url = self._attachment_service.get_signed_url(
+                            "private", attachment_refs.settlement_proof_r2_key, expires_in=900
+                        )
+                except Exception:  # noqa: BLE001
+                    log.warning("promotion_payment_attachment_signed_url_failed")
 
         # 衍生字段计算
         if today is None:
@@ -1003,6 +1142,9 @@ class PromotionService:
             is_hit=is_hit,
             cpl=cpl if can_see_quote else None,
             source_extra=dict(getattr(promotion, "source_extra", {}) or {}),
+            payment_qr_attachment_id=visible_payment_qr_id,
+            payment_qr_signed_url=payment_qr_url,
+            settlement_payment_proof_signed_url=settlement_proof_url,
             duplicate_warnings=[],
         )
 

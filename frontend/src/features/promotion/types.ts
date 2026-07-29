@@ -88,6 +88,9 @@ export interface Promotion {
   is_hit: boolean;
   cpl: string | null; // 敏感
   source_extra?: Record<string, unknown>;
+  payment_qr_attachment_id: string | null;
+  payment_qr_signed_url: string | null;
+  settlement_payment_proof_signed_url: string | null;
   duplicate_warnings: PromotionDuplicateWarning[];
 }
 

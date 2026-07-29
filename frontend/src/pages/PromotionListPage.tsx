@@ -13,17 +13,27 @@ import {
   Table,
   Tag,
   Typography,
+  Upload,
   message,
 } from "antd";
-import { DownOutlined, PlusOutlined } from "@ant-design/icons";
+import {
+  DeleteOutlined,
+  DownOutlined,
+  EyeOutlined,
+  PlusOutlined,
+  UploadOutlined,
+} from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnsType } from "antd/es/table";
 import dayjs from "dayjs";
 import {
+  bindPaymentQr,
   cancelPromotion,
   createPromotion,
+  initPaymentQrUpload,
   listPromotions,
   publishPromotion,
+  removePaymentQr,
   reviewPromotion,
   updatePromotion,
 } from "@/features/promotion/api";
@@ -35,6 +45,11 @@ import type {
 import { listStyles, listSkusByStyle } from "@/features/product/api";
 import { listBloggers } from "@/features/blogger/api";
 import { extractErrorMessage } from "@/services/apiClient";
+import {
+  completeAttachmentUpload,
+  putFileToR2,
+} from "@/features/finance/api";
+import { useAuthStore } from "@/stores/authStore";
 import { ImportUploadButton } from "@/components/ImportUploadButton";
 
 const PLATFORMS = ["小红书", "抖音", "快手", "B站"];
@@ -71,6 +86,10 @@ const statusColor: Record<string, string> = {
 
 export function PromotionListPage() {
   const qc = useQueryClient();
+  const user = useAuthStore((s) => s.user);
+  const canManagePaymentQr = Boolean(
+    user?.roles.some((r) => ["admin", "platform_admin", "pr", "pr_manager"].includes(r))
+  );
   const [filters, setFilters] = useState<PromotionListFilters>({
     page: 1,
     page_size: 10,
@@ -83,6 +102,8 @@ export function PromotionListPage() {
   const [extraOpen, setExtraOpen] = useState(false);
   const [extraTarget, setExtraTarget] = useState<Promotion | null>(null);
   const [extraForm] = Form.useForm();
+  const [paymentQrFile, setPaymentQrFile] = useState<File | null>(null);
+  const [paymentQrUploading, setPaymentQrUploading] = useState(false);
   // §11：颜色及规格按货号联动——当前推广所属款式的 SKU 颜色+尺码组合
   const [colorSizeOptions, setColorSizeOptions] = useState<
     { label: string; value: string }[]
@@ -165,6 +186,7 @@ export function PromotionListPage() {
 
   function openExtra(record: Promotion) {
     setExtraTarget(record);
+    setPaymentQrFile(null);
     const se = (record.source_extra ?? {}) as Record<string, unknown>;
     extraForm.resetFields();
     extraForm.setFieldsValue(
@@ -188,6 +210,57 @@ export function PromotionListPage() {
           setColorSizeOptions(opts);
         })
         .catch(() => setColorSizeOptions([]));
+    }
+  }
+
+  async function uploadPaymentQr() {
+    if (!extraTarget || !paymentQrFile) return;
+    if (!["image/jpeg", "image/png", "image/webp"].includes(paymentQrFile.type)) {
+      message.error("收款码仅支持 JPG、PNG、WebP 图片");
+      return;
+    }
+    if (paymentQrFile.size > 10 * 1024 * 1024) {
+      message.error("收款码图片不能超过 10MB");
+      return;
+    }
+    setPaymentQrUploading(true);
+    try {
+      const init = await initPaymentQrUpload(extraTarget.id, {
+        filename: paymentQrFile.name,
+        mime_type: paymentQrFile.type,
+        size_bytes: paymentQrFile.size,
+      });
+      await putFileToR2(init.presigned_url, paymentQrFile);
+      await completeAttachmentUpload(init.attachment_id);
+      const updated = await bindPaymentQr(extraTarget.id, init.attachment_id);
+      setExtraTarget(updated);
+      setPaymentQrFile(null);
+      void qc.invalidateQueries({ queryKey: ["promotions"] });
+      message.success("博主收款码已上传");
+    } catch (err) {
+      message.error(extractErrorMessage(err));
+    } finally {
+      setPaymentQrUploading(false);
+    }
+  }
+
+  async function deletePaymentQr() {
+    if (!extraTarget) return;
+    setPaymentQrUploading(true);
+    try {
+      await removePaymentQr(extraTarget.id);
+      setExtraTarget({
+        ...extraTarget,
+        payment_qr_attachment_id: null,
+        payment_qr_signed_url: null,
+      });
+      setPaymentQrFile(null);
+      void qc.invalidateQueries({ queryKey: ["promotions"] });
+      message.success("收款码已移除");
+    } catch (err) {
+      message.error(extractErrorMessage(err));
+    } finally {
+      setPaymentQrUploading(false);
     }
   }
 
@@ -527,7 +600,12 @@ export function PromotionListPage() {
       <Modal
         title="录入推广信息（地址/订单号等）"
         open={extraOpen}
-        onCancel={() => setExtraOpen(false)}
+        onCancel={() => {
+          setExtraOpen(false);
+          setExtraTarget(null);
+          setPaymentQrFile(null);
+          extraForm.resetFields();
+        }}
         onOk={() => extraForm.submit()}
         confirmLoading={updateExtraMutation.isPending}
         destroyOnHidden
@@ -554,6 +632,91 @@ export function PromotionListPage() {
             updateExtraMutation.mutate({ id: extraTarget.id, source_extra });
           }}
         >
+          {canManagePaymentQr && (
+            <>
+              <Form.Item label="结款信息（博主收款码）" style={{ marginBottom: 12 }}>
+                <Space direction="vertical" size={8} style={{ width: "100%" }}>
+                  {extraTarget?.payment_qr_signed_url ? (
+                    <Typography.Link
+                      href={extraTarget.payment_qr_signed_url}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      <EyeOutlined /> 查看当前收款码
+                    </Typography.Link>
+                  ) : (
+                    <Typography.Text type="secondary">尚未上传收款码</Typography.Text>
+                  )}
+                  <Upload
+                    accept="image/jpeg,image/png,image/webp"
+                    maxCount={1}
+                    beforeUpload={(file) => {
+                      setPaymentQrFile(file);
+                      return false;
+                    }}
+                    onRemove={() => setPaymentQrFile(null)}
+                    fileList={
+                      paymentQrFile
+                        ? [{ uid: "payment-qr", name: paymentQrFile.name }]
+                        : []
+                    }
+                  >
+                    <Button icon={<UploadOutlined />} disabled={paymentQrUploading}>
+                      选择图片
+                    </Button>
+                  </Upload>
+                  <Space wrap>
+                    <Button
+                      type="primary"
+                      icon={<UploadOutlined />}
+                      disabled={!paymentQrFile}
+                      loading={paymentQrUploading}
+                      onClick={() => void uploadPaymentQr()}
+                    >
+                      {extraTarget?.payment_qr_attachment_id ? "替换收款码" : "上传收款码"}
+                    </Button>
+                    {extraTarget?.payment_qr_attachment_id && (
+                      <Button
+                        danger
+                        icon={<DeleteOutlined />}
+                        disabled={paymentQrUploading}
+                        onClick={() =>
+                          Modal.confirm({
+                            title: "移除收款码？",
+                            content: "移除后，财务结款信息中的收款码将不可再查看。",
+                            okText: "确认移除",
+                            okButtonProps: { danger: true },
+                            cancelText: "取消",
+                            onOk: deletePaymentQr,
+                          })
+                        }
+                      >
+                        移除
+                      </Button>
+                    )}
+                  </Space>
+                  <Typography.Text type="secondary">
+                    支持 JPG、PNG、WebP，单张不超过 10MB；文件存储于私有空间。
+                  </Typography.Text>
+                </Space>
+              </Form.Item>
+
+              <Form.Item label="结款凭证（财务同步）" style={{ marginBottom: 12 }}>
+                {extraTarget?.settlement_payment_proof_signed_url ? (
+                  <Typography.Link
+                    href={extraTarget.settlement_payment_proof_signed_url}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <EyeOutlined /> 查看结款凭证
+                  </Typography.Link>
+                ) : (
+                  <Typography.Text type="secondary">财务尚未上传结款凭证</Typography.Text>
+                )}
+              </Form.Item>
+            </>
+          )}
+
           {SOURCE_FIELDS.map((f) => (
             <Form.Item key={f.name} name={f.name} label={f.name} style={{ marginBottom: 12 }}>
               {f.name === "颜色及规格" ? (

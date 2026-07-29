@@ -37,12 +37,16 @@ from app.modules.promotion.schemas import (
     PromotionCreate,
     PromotionListFilters,
     PromotionPage,
+    PromotionPaymentQrBindRequest,
+    PromotionPaymentQrUploadInitRequest,
+    PromotionPaymentQrUploadInitResponse,
     PromotionPublishRequest,
     PromotionRecallResultRequest,
     PromotionRecallStartRequest,
     PromotionResponse,
     PromotionReviewRequest,
     PromotionUpdate,
+    PromotionWarehouseWaybillRequest,
 )
 
 
@@ -149,6 +153,63 @@ async def update_promotion(
 ) -> PromotionResponse:
     """编辑推广（PATCH 语义；状态字段不在此改）."""
     return await service.update_promotion(promotion_id, payload, user)
+
+
+@router.post(
+    "/promotions/{promotion_id}/payment-qr/upload-init",
+    response_model=PromotionPaymentQrUploadInitResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[require_permission("promotion.payment_qr", "write")],
+)
+async def init_payment_qr_upload(
+    promotion_id: UUID,
+    payload: PromotionPaymentQrUploadInitRequest,
+    user: CurrentActiveUser,
+    service: PromotionServiceDep,
+) -> PromotionPaymentQrUploadInitResponse:
+    return await service.init_payment_qr_upload(promotion_id, payload, user)
+
+
+@router.put(
+    "/promotions/{promotion_id}/payment-qr",
+    response_model=PromotionResponse,
+    dependencies=[require_permission("promotion.payment_qr", "write")],
+)
+async def bind_payment_qr(
+    promotion_id: UUID,
+    payload: PromotionPaymentQrBindRequest,
+    user: CurrentActiveUser,
+    service: PromotionServiceDep,
+) -> PromotionResponse:
+    return await service.bind_payment_qr(promotion_id, payload, user)
+
+
+@router.delete(
+    "/promotions/{promotion_id}/payment-qr",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[require_permission("promotion.payment_qr", "write")],
+)
+async def remove_payment_qr(
+    promotion_id: UUID,
+    user: CurrentActiveUser,
+    service: PromotionServiceDep,
+) -> Response:
+    await service.remove_payment_qr(promotion_id, user)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.patch(
+    "/promotions/{promotion_id}/warehouse-waybill",
+    response_model=PromotionResponse,
+    dependencies=[require_permission("promotion.warehouse", "write")],
+)
+async def update_warehouse_waybill(
+    promotion_id: UUID,
+    payload: PromotionWarehouseWaybillRequest,
+    user: CurrentActiveUser,
+    service: PromotionServiceDep,
+) -> PromotionResponse:
+    return await service.update_warehouse_waybill(promotion_id, payload, user)
 
 
 @router.delete(

@@ -70,6 +70,12 @@ class InvalidBloggerReferenceError(ValidationError):
     code = "INVALID_BLOGGER_REFERENCE"
 
 
+class InvalidPaymentQrAttachmentError(ValidationError):
+    """收款码附件不存在、跨租户或属性不符合要求。"""
+
+    code = "INVALID_PAYMENT_QR_ATTACHMENT"
+
+
 class PublishUrlRequiredError(ValidationError):
     """publish 时 publish_url 必填。"""
 
@@ -131,6 +137,7 @@ __all__ = [
     "CancelReasonRequiredError",
     "FieldPermissionDenied",  # re-exported from modules/product/exceptions
     "InvalidBloggerReferenceError",
+    "InvalidPaymentQrAttachmentError",
     "InvalidSkuReferenceError",
     "InvalidStyleReferenceError",
     "PromotionInternalCodeConflictError",

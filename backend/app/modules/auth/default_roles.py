@@ -177,9 +177,9 @@ DEFAULT_ROLES: tuple[RoleSpec, ...] = (
         name="仓库",
         description="仓库打单：仅能查看待打单推广单并回传发货单号",
         permissions=(
-            # 精确 scope（migration 030 同步授予现存库）；刻意不含删除/发布/审核
+            # 仓库仅允许专用接口回传发货单号；不可通用编辑/发布推广
             "promotion:read",
-            "promotion:write",
+            "promotion.warehouse:write",
         ),
     ),
 )
