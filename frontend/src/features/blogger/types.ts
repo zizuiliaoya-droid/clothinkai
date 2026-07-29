@@ -110,4 +110,5 @@ export interface BloggerListFilters {
   is_suspected_fake?: boolean;
   is_active?: boolean;
   include_inactive?: boolean;
+  recent_growth_only?: boolean;
 }

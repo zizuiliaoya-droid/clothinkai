@@ -76,6 +76,7 @@ async def list_bloggers(
     is_suspected_fake: bool | None = None,
     is_active: bool = True,
     include_inactive: bool = False,
+    recent_growth_only: bool = False,
 ) -> BloggerPage:
     """EP04-S03 博主搜索筛选 + 列表（合并接口）.
 
@@ -96,6 +97,7 @@ async def list_bloggers(
         is_suspected_fake=is_suspected_fake,
         is_active=is_active,
         include_inactive=include_inactive,
+        recent_growth_only=recent_growth_only,
     )
     return await service.list_bloggers(
         filters=filters, page=page, page_size=page_size, user=user

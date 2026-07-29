@@ -52,6 +52,19 @@ const CRAWLER_FIELDS = [
   "3天阅读涨跌", "7天阅读涨跌", "3天点赞涨跌", "7天点赞涨跌",
 ];
 
+function isRecentGrowthValue(value: unknown): boolean {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return Number.isFinite(value) && value > 0;
+  if (typeof value !== "string") return false;
+
+  const normalized = value.trim().toLowerCase();
+  if (["是", "上涨", "true", "1"].includes(normalized)) return true;
+  return (
+    /^\+?(?:\d+(?:\.\d*)?|\.\d+)$/.test(normalized) &&
+    Number(normalized) > 0
+  );
+}
+
 export function BloggerListPage() {
   const qc = useQueryClient();
   const [filters, setFilters] = useState<BloggerListFilters>({
@@ -167,6 +180,9 @@ export function BloggerListPage() {
       width: 110,
       render: (_: unknown, r: Blogger) => {
         const v = (r.crawler_metrics ?? {})[f];
+        if (f === "近期数据涨的博主") {
+          return isRecentGrowthValue(v) ? <Tag color="green">上涨</Tag> : "—";
+        }
         return v == null || v === "" ? "—" : String(v);
       },
     })),
@@ -254,6 +270,22 @@ export function BloggerListPage() {
           style={{ width: 100 }}
           options={LEVELS.map((l) => ({ label: l, value: l }))}
           onChange={(v) => setFilters((f) => ({ ...f, level: v, page: 1 }))}
+        />
+        <Select
+          aria-label="近期数据筛选"
+          value={filters.recent_growth_only ? "up" : "all"}
+          style={{ width: 120 }}
+          options={[
+            { label: "全部", value: "all" },
+            { label: "上涨", value: "up" },
+          ]}
+          onChange={(value) =>
+            setFilters((f) => ({
+              ...f,
+              recent_growth_only: value === "up" ? true : undefined,
+              page: 1,
+            }))
+          }
         />
       </Space>
 

@@ -35,6 +35,7 @@ class BloggerListFilters:
     is_suspected_fake: bool | None = None
     is_active: bool | None = True
     include_inactive: bool = False
+    recent_growth_only: bool = False
 
 
 class BloggerRepository:
@@ -148,6 +149,25 @@ class BloggerRepository:
         if filters.is_suspected_fake is not None:
             stmt = stmt.where(
                 Blogger.is_suspected_fake.is_(filters.is_suspected_fake)
+            )
+
+        if filters.recent_growth_only:
+            growth_json = Blogger.crawler_metrics["近期数据涨的博主"]
+            growth_text = func.btrim(growth_json.astext)
+            normalized_growth = func.lower(growth_text)
+            numeric_pattern = r"^[+]?([0-9]+([.][0-9]*)?|[.][0-9]+)$"
+            positive_number = sa.case(
+                (
+                    growth_text.op("~")(numeric_pattern),
+                    sa.cast(growth_text, sa.Numeric) > 0,
+                ),
+                else_=False,
+            )
+            stmt = stmt.where(
+                or_(
+                    normalized_growth.in_(("是", "上涨", "true", "1")),
+                    positive_number,
+                )
             )
 
         total_stmt = select(func.count()).select_from(stmt.subquery())
