@@ -19,7 +19,7 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Query, status
+from fastapi import APIRouter, File, Query, UploadFile, status
 from fastapi.responses import Response
 
 from app.modules.auth.deps import (
@@ -168,6 +168,31 @@ async def init_payment_qr_upload(
     service: PromotionServiceDep,
 ) -> PromotionPaymentQrUploadInitResponse:
     return await service.init_payment_qr_upload(promotion_id, payload, user)
+
+
+@router.post(
+    "/promotions/{promotion_id}/payment-qr/upload",
+    response_model=PromotionResponse,
+    dependencies=[require_permission("promotion.payment_qr", "write")],
+)
+async def upload_payment_qr(
+    promotion_id: UUID,
+    user: CurrentActiveUser,
+    service: PromotionServiceDep,
+    file: Annotated[UploadFile, File(description="JPG、PNG 或 WebP 收款码图片")],
+) -> PromotionResponse:
+    """由后端代传收款码到私有 R2，避免浏览器依赖 bucket CORS。"""
+    try:
+        data = await file.read(10 * 1024 * 1024 + 1)
+    finally:
+        await file.close()
+    return await service.upload_payment_qr(
+        promotion_id,
+        filename=file.filename,
+        mime_type=file.content_type,
+        data=data,
+        user=user,
+    )
 
 
 @router.put(

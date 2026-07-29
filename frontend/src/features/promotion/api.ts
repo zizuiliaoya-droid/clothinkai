@@ -75,6 +75,18 @@ export async function bindPaymentQr(
   return resp.data;
 }
 
+export async function uploadPaymentQrFile(
+  promotionId: string, file: File
+): Promise<Promotion> {
+  const formData = new FormData();
+  formData.append("file", file, file.name);
+  const resp = await apiClient.post<Promotion>(
+    `/api/promotions/${promotionId}/payment-qr/upload`,
+    formData
+  );
+  return resp.data;
+}
+
 export async function removePaymentQr(promotionId: string): Promise<void> {
   await apiClient.delete(`/api/promotions/${promotionId}/payment-qr`);
 }

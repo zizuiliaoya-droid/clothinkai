@@ -27,15 +27,14 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnsType } from "antd/es/table";
 import dayjs from "dayjs";
 import {
-  bindPaymentQr,
   cancelPromotion,
   createPromotion,
-  initPaymentQrUpload,
   listPromotions,
   publishPromotion,
   removePaymentQr,
   reviewPromotion,
   updatePromotion,
+  uploadPaymentQrFile,
 } from "@/features/promotion/api";
 import type {
   Promotion,
@@ -45,10 +44,6 @@ import type {
 import { listStyles, listSkusByStyle } from "@/features/product/api";
 import { listBloggers } from "@/features/blogger/api";
 import { extractErrorMessage } from "@/services/apiClient";
-import {
-  completeAttachmentUpload,
-  putFileToR2,
-} from "@/features/finance/api";
 import { useAuthStore } from "@/stores/authStore";
 import { ImportUploadButton } from "@/components/ImportUploadButton";
 
@@ -225,14 +220,7 @@ export function PromotionListPage() {
     }
     setPaymentQrUploading(true);
     try {
-      const init = await initPaymentQrUpload(extraTarget.id, {
-        filename: paymentQrFile.name,
-        mime_type: paymentQrFile.type,
-        size_bytes: paymentQrFile.size,
-      });
-      await putFileToR2(init.presigned_url, paymentQrFile);
-      await completeAttachmentUpload(init.attachment_id);
-      const updated = await bindPaymentQr(extraTarget.id, init.attachment_id);
+      const updated = await uploadPaymentQrFile(extraTarget.id, paymentQrFile);
       setExtraTarget(updated);
       setPaymentQrFile(null);
       void qc.invalidateQueries({ queryKey: ["promotions"] });
