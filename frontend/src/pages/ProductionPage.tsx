@@ -1,31 +1,45 @@
 import { useState } from "react";
-import { Button, Card, DatePicker, Modal, Select, Space, Switch, Table, Typography } from "antd";
+import { Button, Card, Modal, Select, Space, Switch, Table, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import type { ColumnsType } from "antd/es/table";
-import type { Dayjs } from "dayjs";
 import { getProduction, getProductionTrend } from "@/features/report/api";
-import type { ProductionRow } from "@/features/report/types";
+import type {
+  ProductionRow,
+  TimeGranularity,
+  TimePreset,
+} from "@/features/report/types";
 import { listDictItems } from "@/features/product/api";
 import { MiniLineChart } from "@/components/MiniLineChart/MiniLineChart";
 import { StyleImageThumbnail } from "@/components/StyleImageThumbnail/StyleImageThumbnail";
+import {
+  ReportTimeRangeFilter,
+  type ReportDateRange,
+  useReportTimeRange,
+} from "@/components/ReportTimeRangeFilter/ReportTimeRangeFilter";
 
-const PRESETS = [
-  { label: "近7天", value: "last_7d" },
-  { label: "近30天", value: "last_30d" },
-  { label: "本月", value: "this_month" },
-  { label: "上月", value: "last_month" },
-  { label: "自定义", value: "custom" },
-];
 const money = (v: string | null) => (v == null ? "—" : `¥${v}`);
 const pct = (v: string | null) =>
   v == null ? "—" : `${(Number(v) * 100).toFixed(1)}%`;
+const TREND_GRANULARITY: Array<{ label: string; value: TimeGranularity }> = [
+  { label: "按日", value: "day" },
+  { label: "按周", value: "week" },
+  { label: "按月", value: "month" },
+  { label: "按年", value: "year" },
+];
+
+function trendLabel(value: string, granularity: TimeGranularity): string {
+  if (granularity === "year") return value.slice(0, 4);
+  if (granularity === "month") return value.slice(0, 7);
+  return value;
+}
 
 export function ProductionPage() {
-  const [preset, setPreset] = useState("last_30d");
-  const [range, setRange] = useState<[Dayjs, Dayjs] | null>(null);
+  const [preset, setPreset] = useState<TimePreset>("last_30d");
+  const [range, setRange] = useState<ReportDateRange>(null);
   const [excludeBrushing, setExcludeBrushing] = useState(true);
   const [season, setSeason] = useState<string | undefined>(undefined);
   const [trendStyle, setTrendStyle] = useState<ProductionRow | null>(null);
+  const [trendGranularity, setTrendGranularity] = useState<TimeGranularity>("day");
 
   const { data: seasons } = useQuery({
     queryKey: ["dict-items", "season"],
@@ -33,20 +47,24 @@ export function ProductionPage() {
   });
   const seasonOptions = (seasons ?? []).map((s) => ({ label: s.value, value: s.value }));
 
-  const isCustom = preset === "custom";
-  const df = isCustom && range ? range[0].format("YYYY-MM-DD") : undefined;
-  const dt = isCustom && range ? range[1].format("YYYY-MM-DD") : undefined;
-  // 自定义但未选区间时不发请求（避免后端报错）
-  const enabled = !isCustom || (!!df && !!dt);
+  const { dateFrom: df, dateTo: dt, enabled } = useReportTimeRange(preset, range);
 
   const { data: trend, isLoading: trendLoading } = useQuery({
-    queryKey: ["production-trend", trendStyle?.style_id, preset, df, dt],
-    enabled: !!trendStyle,
+    queryKey: [
+      "production-trend",
+      trendStyle?.style_id,
+      preset,
+      df,
+      dt,
+      trendGranularity,
+    ],
+    enabled: !!trendStyle && enabled,
     queryFn: () =>
       getProductionTrend(trendStyle!.style_id, {
         preset,
         date_from: df,
         date_to: dt,
+        granularity: trendGranularity,
       }),
   });
 
@@ -128,22 +146,15 @@ export function ProductionPage() {
       }
     >
       <Space style={{ marginBottom: 16 }} wrap>
-        <span>时间范围：</span>
-        <Select
-          value={preset}
-          style={{ width: 140 }}
-          options={PRESETS}
-          onChange={setPreset}
+        <ReportTimeRangeFilter
+          preset={preset}
+          onPresetChange={setPreset}
+          range={range}
+          onRangeChange={setRange}
         />
-        {isCustom ? (
-          <DatePicker.RangePicker
-            value={range as never}
-            onChange={(v) => setRange(v as [Dayjs, Dayjs] | null)}
-            allowClear
-          />
-        ) : null}
         <span style={{ marginLeft: 12 }}>季节/系列：</span>
         <Select
+          aria-label="季节或系列"
           value={season}
           style={{ width: 140 }}
           placeholder="全部"
@@ -152,7 +163,11 @@ export function ProductionPage() {
           onChange={(v) => setSeason(v)}
         />
         <span style={{ marginLeft: 12 }}>剔除刷单：</span>
-        <Switch checked={excludeBrushing} onChange={setExcludeBrushing} />
+        <Switch
+          aria-label="剔除刷单"
+          checked={excludeBrushing}
+          onChange={setExcludeBrushing}
+        />
       </Space>
       <Table
         rowKey="style_id"
@@ -176,11 +191,23 @@ export function ProductionPage() {
         width={780}
         destroyOnHidden
       >
+        <Space style={{ marginBottom: 16 }} wrap>
+          <span>统计单位：</span>
+          <Select<TimeGranularity>
+            aria-label="投产趋势统计单位"
+            value={trendGranularity}
+            style={{ width: 110 }}
+            options={TREND_GRANULARITY}
+            onChange={setTrendGranularity}
+          />
+        </Space>
         {trendLoading ? (
           <div style={{ textAlign: "center", padding: 40 }}>加载中…</div>
         ) : (
           <MiniLineChart
-            labels={(trend?.points ?? []).map((p) => p.date)}
+            labels={(trend?.points ?? []).map((p) =>
+              trendLabel(p.date, trendGranularity)
+            )}
             series={[
               {
                 name: "支付金额",

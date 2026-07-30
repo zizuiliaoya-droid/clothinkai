@@ -3,11 +3,13 @@
 import { apiClient } from "@/services/apiClient";
 import type {
   ProductionReport,
+  ProductionTrend,
   ProgressSummary,
   PrWorkProgress,
   StoreDailyRow,
   StyleCardPage,
   TargetWithActual,
+  TimeGranularity,
 } from "./types";
 
 export async function getWorkProgress(
@@ -80,17 +82,16 @@ export async function getProduction(
   return resp.data;
 }
 
-export interface ProductionTrendPoint {
-  date: string;
-  pay_amount: string;
-  ad_spend: string;
-}
-
 export async function getProductionTrend(
   styleId: string,
-  params: { preset?: string; date_from?: string; date_to?: string } = {}
-): Promise<{ points: ProductionTrendPoint[] }> {
-  const resp = await apiClient.get<{ points: ProductionTrendPoint[] }>(
+  params: {
+    preset?: string;
+    date_from?: string;
+    date_to?: string;
+    granularity?: TimeGranularity;
+  } = {}
+): Promise<ProductionTrend> {
+  const resp = await apiClient.get<ProductionTrend>(
     "/api/reports/production/trend",
     { params: { style_id: styleId, ...params } }
   );

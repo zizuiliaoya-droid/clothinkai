@@ -1,60 +1,58 @@
 import { useMemo, useState } from "react";
-import { Card, DatePicker, Select, Space, Table, Typography } from "antd";
+import { Card, Select, Space, Table, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import type { ColumnsType } from "antd/es/table";
-import type { Dayjs } from "dayjs";
+import dayjs from "dayjs";
 import { getStoreDaily } from "@/features/report/api";
-import type { StoreDailyRow } from "@/features/report/types";
+import type { StoreDailyRow, TimeGranularity, TimePreset } from "@/features/report/types";
+import {
+  ReportTimeRangeFilter,
+  type ReportDateRange,
+  useReportTimeRange,
+} from "@/components/ReportTimeRangeFilter/ReportTimeRangeFilter";
 
-const PRESETS = [
-  { label: "近7天", value: "last_7d" },
-  { label: "近30天", value: "last_30d" },
-  { label: "本月", value: "this_month" },
-  { label: "上月", value: "last_month" },
-  { label: "自定义", value: "custom" },
-];
 const money = (v: string | null) => (v == null ? "—" : `¥${v}`);
-const GRANULARITY = [
+const GRANULARITY: Array<{ label: string; value: TimeGranularity }> = [
   { label: "按日", value: "day" },
   { label: "按周", value: "week" },
   { label: "按月", value: "month" },
+  { label: "按年", value: "year" },
 ];
 
-// 周起始（周一）YYYY-MM-DD
-function weekKey(d: string): string {
-  const dt = new Date(d + "T00:00:00");
-  const off = (dt.getDay() + 6) % 7; // 周一=0
-  dt.setDate(dt.getDate() - off);
-  return dt.toISOString().slice(0, 10);
+// 周起始（周一）YYYY-MM-DD；仅做日历日期运算，不转 UTC，避免时区偏移。
+function weekKey(value: string): string {
+  const current = dayjs(value);
+  const daysFromMonday = (current.day() + 6) % 7;
+  return current.subtract(daysFromMonday, "day").format("YYYY-MM-DD");
+}
+
+function groupKey(value: string, granularity: TimeGranularity): string {
+  if (granularity === "year") return value.slice(0, 4);
+  if (granularity === "month") return value.slice(0, 7);
+  return weekKey(value);
 }
 
 export function StoreDailyPage() {
-  const [preset, setPreset] = useState("last_30d");
-  const [range, setRange] = useState<[Dayjs, Dayjs] | null>(null);
-  const [granularity, setGranularity] = useState("day");
-  const isCustom = preset === "custom";
-  const df = isCustom && range ? range[0].format("YYYY-MM-DD") : undefined;
-  const dt = isCustom && range ? range[1].format("YYYY-MM-DD") : undefined;
-  const enabled = !isCustom || (!!df && !!dt);
+  const [preset, setPreset] = useState<TimePreset>("last_30d");
+  const [range, setRange] = useState<ReportDateRange>(null);
+  const [granularity, setGranularity] = useState<TimeGranularity>("day");
+  const { dateFrom: df, dateTo: dt, enabled } = useReportTimeRange(preset, range);
   const { data: raw, isLoading } = useQuery({
     queryKey: ["store-daily", preset, df, dt],
     enabled,
     queryFn: () => getStoreDaily({ preset, date_from: df, date_to: dt }),
   });
 
-  // §8：按 日/周/月 聚合（对数值字段求和；日粒度不聚合）
+  // 按日/周/月/年聚合；保持既有可转数字字段求和口径。
   const data = useMemo<StoreDailyRow[]>(() => {
     const rows = raw ?? [];
     if (granularity === "day") return rows;
     const groups = new Map<string, StoreDailyRow>();
     for (const r of rows) {
-      const key =
-        granularity === "month"
-          ? String(r.date).slice(0, 7)
-          : weekKey(String(r.date));
+      const key = groupKey(String(r.date), granularity);
       const g = groups.get(key);
       if (!g) {
-        groups.set(key, { ...r, date: key });
+        groups.set(key, { ...r, date: key, extra: { ...(r.extra ?? {}) } });
         continue;
       }
       for (const [k, v] of Object.entries(r)) {
@@ -114,23 +112,16 @@ export function StoreDailyPage() {
         </Typography.Title>
       }
     >
-      <Space style={{ marginBottom: 16 }}>
-        <span>时间范围：</span>
-        <Select
-          value={preset}
-          style={{ width: 140 }}
-          options={PRESETS}
-          onChange={setPreset}
+      <Space style={{ marginBottom: 16 }} wrap>
+        <ReportTimeRangeFilter
+          preset={preset}
+          onPresetChange={setPreset}
+          range={range}
+          onRangeChange={setRange}
         />
-        {isCustom ? (
-          <DatePicker.RangePicker
-            value={range as never}
-            onChange={(v) => setRange(v as [Dayjs, Dayjs] | null)}
-            allowClear
-          />
-        ) : null}
         <span style={{ marginLeft: 12 }}>统计单位：</span>
-        <Select
+        <Select<TimeGranularity>
+          aria-label="店铺数据统计单位"
           value={granularity}
           style={{ width: 110 }}
           options={GRANULARITY}

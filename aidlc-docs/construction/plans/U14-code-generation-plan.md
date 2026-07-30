@@ -42,4 +42,36 @@
 
 ---
 
-**本轮执行全部 3 批 + Build & Test。**
+## 2. 交付后增量 TASK 14 — 时间粒度补齐（已批准）
+
+> 范围：店铺数据补充按年聚合；投产趋势支持 day/week/month/year，周起点固定为周一；两页复用统一时间范围筛选。
+> 兼容：趋势 API 默认 `day`；不生成无数据零值桶；不改变现有投产口径；无数据库迁移。
+
+### Increment 14.1 — 计划与设计约束
+- [x] 14.1.1 读取现有前后端调用链、相关测试、AI-DLC 状态与审计记录。
+- [x] 14.1.2 执行 ui-ux-pro-max 设计系统与 React 栈检索；保持 Ant Design 亮色后台一致性，采纳可访问标签、焦点、响应式与无布局位移规则。
+- [x] 14.1.3 将已批准增量范围、兼容约束和验证步骤追加到 U14 单一事实源计划。
+
+### Increment 14.2 — 前端共享时间筛选与店铺聚合
+- [x] 14.2.1 新建 `ReportTimeRangeFilter`，统一时间预设、自定义日期区间和请求启用条件。
+- [x] 14.2.2 `StoreDailyPage` 复用共享筛选，增加按年选项，修复周一分桶的时区风险。
+- [x] 14.2.3 店铺非日粒度聚合深复制 `extra`，避免修改 React Query 原始缓存。
+
+### Increment 14.3 — 投产趋势四粒度
+- [x] 14.3.1 后端 API/Service/Repository 增加 `day|week|month|year`，使用固定 SQL 映射并保持默认 day。
+- [x] 14.3.2 前端类型/API/queryKey/Modal 增加趋势粒度并修复 custom 日期未完成时仍请求的问题。
+- [x] 14.3.3 按粒度格式化图表标签，轻量 SVG 图表完整展示调用方标签。
+
+### Increment 14.4 — 本地验证
+- [x] 14.4.1 对所有改动文件执行 diagnostics，修复发现的问题。
+- [x] 14.4.2 执行 frontend build、Python compileall、migration null-byte/AST 回归、`git diff --check`。
+- [x] 14.4.3 运行现有相关 pytest；本机在加载 `tests/conftest.py` 时缺少 `boto3`，按约束记录环境阻断且未安装依赖、未新增测试文件。
+
+### Increment 14.5 — 发布、线上验收与清理
+- [ ] 14.5.1 提交并推送 main，等待 Zeabur frontend/backend RUNNING 且 `/ready` 正常。
+- [ ] 14.5.2 使用真实登录表单验证店铺日/周/月/年与投产趋势四粒度，检查网络和控制台。
+- [ ] 14.5.3 清理测试数据（如有），更新 `aidlc-state.md`，仅追加 `audit.md`，提交收尾文档。
+
+---
+
+**原始 U14 三批与 Build & Test 已完成；当前执行已批准的交付后增量 TASK 14。**

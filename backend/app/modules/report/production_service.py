@@ -62,7 +62,12 @@ class ProductionService:
         )
 
     async def get_trend(
-        self, tenant_id: UUID, style_id: UUID, time_range: tuple[date, date]
+        self,
+        tenant_id: UUID,
+        style_id: UUID,
+        time_range: tuple[date, date],
+        *,
+        granularity: str = "day",
     ) -> "ProductionTrend":
         from app.modules.report.advanced_schemas import (
             ProductionTrend,
@@ -70,8 +75,11 @@ class ProductionService:
         )
 
         rows = await self._repo.daily_trend_by_style(
-            tenant_id=tenant_id, style_id=style_id,
-            date_from=time_range[0], date_to=time_range[1],
+            tenant_id=tenant_id,
+            style_id=style_id,
+            date_from=time_range[0],
+            date_to=time_range[1],
+            granularity=granularity,
         )
         return ProductionTrend(
             points=[ProductionTrendPoint.model_validate(r) for r in rows]

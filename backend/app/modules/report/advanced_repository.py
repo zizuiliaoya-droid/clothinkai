@@ -270,17 +270,35 @@ class ProductionRepository:
         ]
 
     async def daily_trend_by_style(
-        self, *, tenant_id: UUID, style_id: UUID, date_from: date, date_to: date
+        self,
+        *,
+        tenant_id: UUID,
+        style_id: UUID,
+        date_from: date,
+        date_to: date,
+        granularity: str = "day",
     ) -> list[Mapping[str, Any]]:
-        """单款按日趋势：每天的千牛支付金额 + 站内投放花费（用于折线图）。
+        """单款趋势：按受信粒度汇总千牛支付金额和站内投放花费。
 
         千牛按 platform_product 映射或款式 qianniu_product_id 直连归集；
-        站内花费按 platform_product 归集到款式。
+        站内花费按 platform_product 归集到款式。周桶由 PostgreSQL 从周一开始。
         """
+        bucket_templates = {
+            "day": "{column}",
+            "week": "date_trunc('week', {column})::date",
+            "month": "date_trunc('month', {column})::date",
+            "year": "date_trunc('year', {column})::date",
+        }
+        try:
+            template = bucket_templates[granularity]
+        except KeyError as exc:
+            raise ValueError(f"Unsupported trend granularity: {granularity}") from exc
+        pay_bucket = template.format(column="q.date")
+        spend_bucket = template.format(column="a.date")
         sql = text(
-            """
+            f"""
             WITH pay AS (
-              SELECT q.date AS d, SUM(q.pay_amount) AS pay_amount
+              SELECT {pay_bucket} AS d, SUM(q.pay_amount) AS pay_amount
               FROM style s
               LEFT JOIN platform_product pp ON pp.style_id = s.id
               JOIN qianniu_daily q
@@ -291,10 +309,10 @@ class ProductionRepository:
                 AND q.tenant_id = s.tenant_id
                 AND q.date BETWEEN :date_from AND :date_to
               WHERE s.id = :style_id AND s.tenant_id = :tenant_id
-              GROUP BY q.date
+              GROUP BY {pay_bucket}
             ),
             spend AS (
-              SELECT a.date AS d, SUM(a.cost) AS ad_spend
+              SELECT {spend_bucket} AS d, SUM(a.cost) AS ad_spend
               FROM ad_daily a
               JOIN platform_product pp2
                 ON (pp2.id = a.platform_product_id
@@ -302,7 +320,7 @@ class ProductionRepository:
                 AND pp2.tenant_id = a.tenant_id
               WHERE pp2.style_id = :style_id AND a.tenant_id = :tenant_id
                 AND a.date BETWEEN :date_from AND :date_to
-              GROUP BY a.date
+              GROUP BY {spend_bucket}
             )
             SELECT COALESCE(pay.d, spend.d) AS date,
                    COALESCE(pay.pay_amount, 0) AS pay_amount,

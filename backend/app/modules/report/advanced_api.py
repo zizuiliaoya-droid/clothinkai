@@ -154,10 +154,16 @@ async def get_production_trend(
     preset: _PresetQ = "last_30d",
     date_from: _FromQ = None,
     date_to: _ToQ = None,
+    granularity: Annotated[
+        str,
+        Query(pattern=r"^(day|week|month|year)$", description="趋势粒度"),
+    ] = "day",
 ) -> ProductionTrend:
-    """单款按日投产趋势（支付金额 + 站内花费折线）。"""
+    """单款投产趋势；date 表示日或周/月/年桶的起始日期。"""
     tr = resolve_time_range(preset, date_from, date_to)
-    return await service.get_trend(user.tenant_id, style_id, tr)
+    return await service.get_trend(
+        user.tenant_id, style_id, tr, granularity=granularity
+    )
 
 
 __all__ = ["router"]

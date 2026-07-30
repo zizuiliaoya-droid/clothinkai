@@ -116,3 +116,15 @@ export type TimePreset =
   | "this_month"
   | "last_month"
   | "custom";
+
+export type TimeGranularity = "day" | "week" | "month" | "year";
+
+export interface ProductionTrendPoint {
+  date: string;
+  pay_amount: string;
+  ad_spend: string;
+}
+
+export interface ProductionTrend {
+  points: ProductionTrendPoint[];
+}

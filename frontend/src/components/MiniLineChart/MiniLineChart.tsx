@@ -66,7 +66,7 @@ export function MiniLineChart({ labels, series, height = 260, width = 720 }: Pro
               fontSize="10"
               fill="#999"
             >
-              {lb.slice(5)}
+              {lb}
             </text>
           ) : null
         )}

@@ -113,7 +113,7 @@ class ProductionReport(BaseModel):
 
 
 class ProductionTrendPoint(BaseModel):
-    """单款按日趋势点。"""
+    """单款趋势桶；date 为日值或周/月/年桶的起始日期。"""
 
     model_config = ConfigDict(from_attributes=True)
 
