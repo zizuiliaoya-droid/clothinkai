@@ -115,7 +115,9 @@ class ProductionService:
         main_image_key = r.get("main_image_key")
         if main_image_key:
             try:
-                main_image_url = attachment_service.get_public_url(main_image_key)
+                main_image_url = attachment_service.get_signed_url(
+                    "private", main_image_key, expires_in=3600
+                )
             except Exception:  # noqa: BLE001
                 main_image_url = None
         return ProductionRow(

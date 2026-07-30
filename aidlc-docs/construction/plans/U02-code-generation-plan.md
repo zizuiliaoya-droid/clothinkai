@@ -228,7 +228,7 @@ U02 完成后可选路径：
 
 > 批准范围：单张款式主图；浏览器压缩后严格小于 300KB；在款式管理、投产报表、站外推广展示。
 
-- [x] 13.1 沿用 `style.main_image_key`，实现 public R2 同源代理上传、格式/魔数/大小校验、替换和回滚补偿
+- [x] 13.1 沿用 `style.main_image_key`，实现 private R2 同源代理上传、签名访问、格式/魔数/大小校验、替换和回滚补偿
 - [x] 13.2 增加 `POST/DELETE /api/styles/{style_id}/main-image`，保持 `product:write` 权限边界
 - [x] 13.3 投产聚合和推广列表批量关联主图，推广列表避免 N+1
 - [x] 13.4 新增无依赖 Canvas 压缩：最长边 1600px、目标 280KB、最终严格小于 300KB、WebP 优先/JPEG 回退

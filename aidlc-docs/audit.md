@@ -5872,3 +5872,11 @@ EP05-S02 / S03 / S04 / S05 / S06 / S07 / S08 / S09 / S10 / S11 / S12 / S13
 **Context**: CONSTRUCTION / U02 Code Generation / 已批准增量任务继续执行
 
 ---
+
+## TASK 13 生产存储兼容修正
+**Timestamp**: 2026-07-30T02:12:13Z
+**User Input**: "继续"
+**AI Response**: "线上验证发现生产未配置 public R2 桶及公开域名，且 public PutObject 返回 AccessDenied；确认历史主图为 0 后，改用现有 private R2 代理上传和 1 小时签名访问，不新增公开权限。"
+**Context**: CONSTRUCTION / U02 Code Generation / 线上验证缺陷修复
+
+---

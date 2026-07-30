@@ -302,7 +302,7 @@ class StyleService:
             await run_in_threadpool(
                 attachment_service.upload_bytes,
                 data,
-                bucket="public",
+                bucket="private",
                 key=new_key,
                 content_type=mime_type,
             )
@@ -319,7 +319,7 @@ class StyleService:
         except Exception:
             await self._session.rollback()
             try:
-                await run_in_threadpool(attachment_service.delete, "public", new_key)
+                await run_in_threadpool(attachment_service.delete, "private", new_key)
             except Exception:  # noqa: BLE001
                 log.warning(
                     "style_main_image_compensation_delete_failed",
@@ -329,7 +329,7 @@ class StyleService:
 
         if old_key and old_key != new_key:
             try:
-                await run_in_threadpool(attachment_service.delete, "public", old_key)
+                await run_in_threadpool(attachment_service.delete, "private", old_key)
             except Exception:  # noqa: BLE001
                 log.warning(
                     "style_main_image_old_object_delete_failed",
@@ -338,7 +338,7 @@ class StyleService:
         return await self._to_response(style, user)
 
     async def remove_main_image(self, style_id: UUID, user: User) -> None:
-        """解除款式主图绑定，并尽力清理 public R2 对象。"""
+        """解除款式主图绑定，并尽力清理 private R2 对象。"""
         style = await self._styles.get_by_id(style_id)
         if style is None:
             raise StyleNotFoundError(f"款式 {style_id} 不存在")
@@ -356,7 +356,7 @@ class StyleService:
         )
         await self._session.commit()
         try:
-            await run_in_threadpool(attachment_service.delete, "public", old_key)
+            await run_in_threadpool(attachment_service.delete, "private", old_key)
         except Exception:  # noqa: BLE001
             log.warning(
                 "style_main_image_object_delete_failed",
@@ -442,7 +442,9 @@ class StyleService:
         main_url: str | None = None
         if style.main_image_key and attachment_service.is_configured:
             try:
-                main_url = attachment_service.get_public_url(style.main_image_key)
+                main_url = attachment_service.get_signed_url(
+                    "private", style.main_image_key, expires_in=3600
+                )
             except Exception:  # noqa: BLE001
                 main_url = None
         return StyleResponse(

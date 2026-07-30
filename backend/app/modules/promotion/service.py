@@ -1179,8 +1179,8 @@ class PromotionService:
         style_main_image_url: str | None = None
         if resolved_style_image_key:
             try:
-                style_main_image_url = self._attachment_service.get_public_url(
-                    resolved_style_image_key
+                style_main_image_url = self._attachment_service.get_signed_url(
+                    "private", resolved_style_image_key, expires_in=3600
                 )
             except Exception:  # noqa: BLE001
                 log.warning(
