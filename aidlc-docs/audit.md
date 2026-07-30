@@ -5880,3 +5880,23 @@ EP05-S02 / S03 / S04 / S05 / S06 / S07 / S08 / S09 / S10 / S11 / S12 / S13
 **Context**: CONSTRUCTION / U02 Code Generation / 线上验证缺陷修复
 
 ---
+
+## TASK 13 最终线上验收与清理
+**Timestamp**: 2026-07-30T13:34:41Z
+**User Input**: "继续"
+**AI Response**: "完成 private R2 款式主图的真实表单登录验收、三页跨页展示验证、网络与控制台检查、生产数据及对象存储清理，并更新 AI-DLC 计划和状态。"
+**Context**: CONSTRUCTION / U02 Code Generation / 交付后增量 TASK 13 完成
+
+**验证摘要**:
+- Zeabur frontend/backend 最新功能部署均为 RUNNING，`/ready` 的 DB、Redis 均为 ok。
+- 真实登录表单使用 admin 登录成功；未通过 localStorage 注入令牌。
+- 4,468,474 bytes、2000×2000 PNG 经浏览器压缩为 273,710 bytes、1600×1600 WebP，严格小于 300KB；上传成功并在款式管理显示。
+- 站外推广 `/api/promotions/?page=1&page_size=10` 返回 200，PRODX 缩略图加载 200。
+- 投产报表 `/api/reports/production?preset=last_30d&exclude_brushing=true` 返回 200，PRODX 缩略图加载 200。
+- 三页 URL 的签名参数不同，但对象 key 均为 `8ef64d28-d9b6-4da0-adbf-920e1a634639/styles/ff3c799a-035a-4a4b-9a29-b1d9faf97708/main/7168550229d946bd94e87c7929ee1089_main.webp`；图片自然尺寸为 1600×1600。
+- 成功流程范围内浏览器控制台无 error，相关 API 与 R2 请求无 4xx/5xx；Zeabur runtime log 查询无新增错误记录。
+- 清理时 PUT 款式返回 200、DELETE 主图返回 204；列表恢复无图占位。
+- 生产数据库 PRODX 的 `main_image_key` 已恢复 NULL；原 private R2 key 的 `head_object` 返回 NOT_FOUND。
+- 本地 `.tmp-style-main-test.png` 与 `.tmp-generate-style-image.py` 已删除；用户删除的 Word 临时文件保持不恢复、不暂存。
+
+---

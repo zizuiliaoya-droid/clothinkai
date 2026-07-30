@@ -355,3 +355,13 @@
 - 2026-06-07 U06e Code Generation + Build & Test — 单批：adapters/settlement.py（INSERT-only 历史迁移 + promotion 派生 + settlement_no FB2 序列 + 合成 request_event_id + UNIQUE(promotion_id) IntegrityError catch FB3 + 不触发事件）+ 22 unit + 2 integration + 3 文档；Docker（PG16:5548+Redis7:6403）全量 576 passed/0 failed；覆盖率 79.30%；仅修 1 测试断言（all-success 状态 "completed"）；无生产 bug；**导入支线 U06a-e 全部交付完成，MVP 10/12**
 - 2026-06-07 U07 企微集成基础 全部 5 阶段 + Code Generation 5 批 + Build & Test — modules/wecom 19 文件 + wecom_tasks + crypto 落地 AESGCM+HKDF + migration 011（5 表）+ 36 测试；Docker（PG16:5549+Redis7:6404）全量 612 passed/0 failed；覆盖率 79.20%；修 2 真实 bug（hmac.compare_digest / notification 204→200 app 构造失败）；**MVP 11/12，剩 U08**
 - 2026-06-07 U08 发文进度看板 全部 5 阶段 + Code Generation 单批 + Build & Test — services/metric（safe_div + like_sum_expr）+ modules/report 9 文件（resolve_time_range + 4 聚合显式 tenant 过滤 + safe_div 组装 + 4 GET）+ 26 测试；Docker（PG16:5550+Redis7:6405）全量 638 passed/0 failed；覆盖率 79.73%；首次运行全通过无 bug；**MVP 12/12 全部交付完成** 🎉
+
+## 交付后增量 TASK 13 — 款式主图上传压缩与跨页展示（完成）
+
+- [x] 后端采用现有 private R2 代理上传与 1 小时签名访问，完成格式、魔数、严格小于 300KB、替换及失败补偿校验。
+- [x] 前端 Canvas 压缩最长边 1600px、目标 280KB，WebP 优先/JPEG 回退；款式新建和编辑支持预览、替换、移除。
+- [x] 款式管理、站外推广、投产报表三页固定尺寸缩略图线上展示通过，同一 R2 key 的独立签名请求均为 200。
+- [x] Zeabur frontend/backend 部署 RUNNING，`/ready` 的 DB 与 Redis 均为 ok；真实登录表单验收完成，页面控制台无错误。
+- [x] 测试图片清理完成：DELETE 主图返回 204，生产数据库 `main_image_key` 恢复 NULL，R2 原 key 返回 NOT_FOUND，本地临时脚本和图片已删除。
+- **实现提交**：`6c91bea feat(product): 增加款式主图压缩上传与跨页展示`、`cc31ad7 fix(product): 使用私有存储提供款式主图`
+- **完成时间**：2026-07-30T13:34:41Z
