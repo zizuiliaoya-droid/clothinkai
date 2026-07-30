@@ -365,3 +365,15 @@
 - [x] 测试图片清理完成：DELETE 主图返回 204，生产数据库 `main_image_key` 恢复 NULL，R2 原 key 返回 NOT_FOUND，本地临时脚本和图片已删除。
 - **实现提交**：`6c91bea feat(product): 增加款式主图压缩上传与跨页展示`、`cc31ad7 fix(product): 使用私有存储提供款式主图`
 - **完成时间**：2026-07-30T13:34:41Z
+
+## 交付后增量 TASK 14 — 时间粒度补齐（完成）
+
+- [x] 新增共享 `ReportTimeRangeFilter`，统一店铺数据与投产报表的时间预设、自定义日期范围和请求启用条件。
+- [x] 店铺数据增加按年聚合；周分桶改为 dayjs 日历日期运算并固定周一开始；非日粒度首行深复制 `extra`，不再污染 React Query 原始缓存。
+- [x] 投产趋势 API/Service/Repository 支持 `day/week/month/year`，默认 `day` 保持兼容；Repository 仅从固定映射选择 SQL 分桶表达式，周桶使用 PostgreSQL `date_trunc('week', ...)`。
+- [x] 投产趋势前端加入四粒度选择器、queryKey 与 API 参数，custom 日期未完成时不发请求；SVG 图表按调用方标签完整显示。
+- [x] 本地 diagnostics、frontend build、Python compileall、31 个 migration null-byte/AST 检查、`git diff --check` 均通过；现有 pytest 因本机缺少 `boto3` 在 conftest 加载阶段阻断，未安装依赖、未新增测试文件。
+- [x] 实现提交 `a9c45ab feat(report): 补齐报表时间粒度` 已推送 main；Zeabur frontend `6a6b568a9cd65e28a342e31e`、backend `6a6b568d9cd65e28a342e31f` 均 RUNNING，`/ready` DB/Redis 均为 ok。
+- [x] 线上验收：店铺统计单位日/周/月/年依次切换成功；PRODX 趋势 day/week/month/year 第二轮请求均一次返回 200；最终控制台 0 error，backend runtime logs 为空。
+- [x] 本轮未新增或修改生产测试数据，无需清理；用户删除的 Word 临时文件继续保持未恢复、未暂存。
+- **完成时间**：2026-07-30T15:28:56Z

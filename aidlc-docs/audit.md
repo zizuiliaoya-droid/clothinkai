@@ -5900,3 +5900,28 @@ EP05-S02 / S03 / S04 / S05 / S06 / S07 / S08 / S09 / S10 / S11 / S12 / S13
 - 本地 `.tmp-style-main-test.png` 与 `.tmp-generate-style-image.py` 已删除；用户删除的 Word 临时文件保持不恢复、不暂存。
 
 ---
+
+## 交付后增量 TASK 14 最终线上验收与收尾
+**Timestamp**: 2026-07-30T15:28:56Z
+**User Input**: "继续"
+**AI Response**: "完成时间粒度补齐的第二轮无错误线上复测、AI-DLC 计划与状态更新，并提交收尾文档。"
+**Context**: CONSTRUCTION / U14 Code Generation / 交付后增量 TASK 14 完成
+
+**实现与发布**:
+- 实现提交：`a9c45ab feat(report): 补齐报表时间粒度`，已推送 main。
+- Zeabur frontend `6a6b568a9cd65e28a342e31e`、backend `6a6b568d9cd65e28a342e31f` 均为 RUNNING。
+- `/ready` 返回 `status=ok`，DB 与 Redis 均为 ok。
+
+**本地验证**:
+- 所有改动文件 diagnostics 无问题；frontend build、Python compileall、31 个 migration null-byte/AST 检查、`git diff --check` 通过。
+- 现有相关 pytest 在加载 `tests/conftest.py` 时因本机缺少 `boto3` 阻断；按约束未安装依赖、未新增测试文件。
+
+**线上验收**:
+- 延续上一任务通过真实登录表单建立的浏览器认证会话，未写入 localStorage token。
+- 店铺数据统计单位按日、按周、按月、按年依次切换成功，`/api/reports/store-daily` 返回 200。
+- PRODX 投产趋势 `granularity=day/week/month/year` 第二轮请求全部一次返回 200。
+- 首轮跨 30 分钟验证曾触发 access token 到期，表现为 401 后 refresh 自动重试 200；刷新 token 后第二轮无 401。
+- 最终页面控制台 0 error，backend runtime logs 为空。
+- 本轮未新增生产测试数据，无需清理；用户删除的 Word 临时文件未恢复、未暂存。
+
+---

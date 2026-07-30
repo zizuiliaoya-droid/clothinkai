@@ -68,9 +68,9 @@
 - [x] 14.4.3 运行现有相关 pytest；本机在加载 `tests/conftest.py` 时缺少 `boto3`，按约束记录环境阻断且未安装依赖、未新增测试文件。
 
 ### Increment 14.5 — 发布、线上验收与清理
-- [ ] 14.5.1 提交并推送 main，等待 Zeabur frontend/backend RUNNING 且 `/ready` 正常。
-- [ ] 14.5.2 使用真实登录表单验证店铺日/周/月/年与投产趋势四粒度，检查网络和控制台。
-- [ ] 14.5.3 清理测试数据（如有），更新 `aidlc-state.md`，仅追加 `audit.md`，提交收尾文档。
+- [x] 14.5.1 提交 `a9c45ab` 并推送 main；Zeabur frontend `6a6b568a9cd65e28a342e31e`、backend `6a6b568d9cd65e28a342e31f` 均 RUNNING，`/ready` 的 DB/Redis 均为 ok。
+- [x] 14.5.2 使用上一任务真实登录表单建立且未写入 localStorage token 的认证会话完成验收：店铺日/周/月/年可切换，PRODX 趋势四粒度均 200；最终控制台 0 error，runtime logs 为空。
+- [x] 14.5.3 本轮未新增测试数据，无需清理；已更新 `aidlc-state.md`，并仅追加 `audit.md` 后提交收尾文档。
 
 ---
 
