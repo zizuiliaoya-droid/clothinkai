@@ -90,6 +90,7 @@ export interface ProductionRow {
   style_id: string;
   style_code: string;
   style_name: string;
+  main_image_url: string | null;
   pay_amount: string;
   refund_amount: string;
   return_rate: string | null;

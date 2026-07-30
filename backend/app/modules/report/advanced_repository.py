@@ -165,6 +165,7 @@ class ProductionRepository:
             f"""
             SELECT
               s.id AS style_id, s.style_code AS style_code, s.style_name AS style_name,
+              s.main_image_key AS main_image_key,
               (COALESCE(SUM(q.pay_amount), 0){brushing_sub}) AS pay_amount,
               COALESCE(SUM((q.extra->>'refund_amount')::numeric), 0) AS refund_amount,
               COALESCE(SUM((q.extra->>'add_cart_count')::int), 0) AS add_cart_count,
@@ -195,7 +196,7 @@ class ProductionRepository:
             ) promo ON promo.style_id = s.id
             WHERE s.tenant_id = :tenant_id AND s.is_deleted = false
               {season_clause}
-            GROUP BY s.id, s.style_code, s.style_name
+            GROUP BY s.id, s.style_code, s.style_name, s.main_image_key
             HAVING COALESCE(SUM(q.pay_amount), 0) > 0
                 OR COALESCE(MAX(promo.promo_cost), 0) > 0
                 OR COALESCE(MAX(ad.ad_spend), 0) > 0

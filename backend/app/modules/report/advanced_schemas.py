@@ -90,6 +90,7 @@ class ProductionRow(BaseModel):
     style_id: UUID
     style_code: str
     style_name: str
+    main_image_url: str | None = None
     pay_amount: Decimal
     refund_amount: Decimal
     return_rate: Decimal | None = None

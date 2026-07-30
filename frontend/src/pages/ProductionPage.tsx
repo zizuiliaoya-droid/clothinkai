@@ -7,6 +7,7 @@ import { getProduction, getProductionTrend } from "@/features/report/api";
 import type { ProductionRow } from "@/features/report/types";
 import { listDictItems } from "@/features/product/api";
 import { MiniLineChart } from "@/components/MiniLineChart/MiniLineChart";
+import { StyleImageThumbnail } from "@/components/StyleImageThumbnail/StyleImageThumbnail";
 
 const PRESETS = [
   { label: "近7天", value: "last_7d" },
@@ -64,6 +65,15 @@ export function ProductionPage() {
 
   // 列对齐 final.xlsx「投产报表」核心派生指标
   const baseColumns: ColumnsType<ProductionRow> = [
+    {
+      title: "主图",
+      dataIndex: "main_image_url",
+      width: 68,
+      fixed: "left",
+      render: (src: string | null, row) => (
+        <StyleImageThumbnail src={src} alt={`${row.style_code} 款式主图`} />
+      ),
+    },
     { title: "货号", dataIndex: "style_code", width: 120, fixed: "left" },
     { title: "款名", dataIndex: "style_name", width: 150 },
     { title: "支付金额", dataIndex: "pay_amount", width: 110, render: money },
@@ -117,7 +127,7 @@ export function ProductionPage() {
         </Typography.Title>
       }
     >
-      <Space style={{ marginBottom: 16 }}>
+      <Space style={{ marginBottom: 16 }} wrap>
         <span>时间范围：</span>
         <Select
           value={preset}

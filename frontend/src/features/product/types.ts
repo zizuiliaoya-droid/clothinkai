@@ -70,8 +70,8 @@ export interface StyleCreate {
   short_name?: string | null;
   qianniu_product_id?: string | null;
   brand_id?: string | null;
-  category: Category;
-  season?: Season | null;
+  category: string;
+  season?: string | null;
   gender?: Gender | null;
   tags?: string[];
   tag_color?: string[];
@@ -85,9 +85,10 @@ export interface StyleUpdate {
   style_code?: string;
   style_name?: string;
   short_name?: string | null;
+  qianniu_product_id?: string | null;
   brand_id?: string | null;
-  category?: Category;
-  season?: Season | null;
+  category?: string;
+  season?: string | null;
   gender?: Gender | null;
   tags?: string[];
   tag_color?: string[];

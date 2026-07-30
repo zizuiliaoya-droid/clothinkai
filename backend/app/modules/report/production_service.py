@@ -10,6 +10,7 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.attachment import attachment_service
 from app.core.metrics import report_query_duration_seconds
 from app.modules.report.advanced_repository import ProductionRepository
 from app.modules.report.advanced_schemas import ProductionReport, ProductionRow
@@ -110,10 +111,18 @@ class ProductionService:
         confirmed = pay - refund
         total_spend = r["promo_cost"] + r["ad_spend"]
         ret_rate = style_roi.return_rate(refund, pay)
+        main_image_url: str | None = None
+        main_image_key = r.get("main_image_key")
+        if main_image_key:
+            try:
+                main_image_url = attachment_service.get_public_url(main_image_key)
+            except Exception:  # noqa: BLE001
+                main_image_url = None
         return ProductionRow(
             style_id=r["style_id"],
             style_code=r["style_code"],
             style_name=r["style_name"],
+            main_image_url=main_image_url,
             pay_amount=pay,
             refund_amount=refund,
             return_rate=ret_rate,

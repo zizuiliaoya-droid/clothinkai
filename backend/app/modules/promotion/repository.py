@@ -60,11 +60,12 @@ class PromotionListFilters:
 
 @dataclass(frozen=True)
 class PromotionListRow:
-    """list_with_cte 返回的轻量行（含计算字段）。"""
+    """list_with_cte 返回的轻量行（含计算字段和款式主图 key）。"""
 
     promotion: Promotion
     urge_status: str
     dual_platform: bool
+    style_main_image_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -454,6 +455,7 @@ class PromotionRepository:
         base_sql = f"""
         WITH base AS (
             SELECT p.*,
+                   s.main_image_key AS style_main_image_key,
                    {URGE_STATUS_SQL_EXPR.strip()} AS urge_status,
                    EXISTS (
                        SELECT 1 FROM promotion p2
@@ -465,6 +467,8 @@ class PromotionRepository:
                          AND p2.id <> p.id
                    ) AS dual_platform_calc
             FROM promotion p
+            LEFT JOIN style s
+              ON s.id = p.style_id AND s.tenant_id = p.tenant_id
             WHERE p.tenant_id = :tenant_id
         )
         SELECT * FROM base WHERE 1=1
@@ -584,6 +588,7 @@ class PromotionRepository:
                     promotion=promotion,
                     urge_status=row["urge_status"],
                     dual_platform=bool(row["dual_platform_calc"]),
+                    style_main_image_key=row["style_main_image_key"],
                 )
             )
         return rows, total

@@ -16,7 +16,7 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, File, Query, UploadFile, status
 from fastapi.responses import Response
 
 from app.core.exceptions import ValidationError
@@ -158,6 +158,45 @@ async def update_style(
 ) -> StyleResponse:
     """EP02-S03 编辑款式."""
     return await service.update_style(style_id, payload, user)
+
+
+@router.post(
+    "/styles/{style_id}/main-image",
+    response_model=StyleResponse,
+    dependencies=[require_permission("product", "write")],
+)
+async def upload_style_main_image(
+    style_id: UUID,
+    image: Annotated[UploadFile, File(...)],
+    user: CurrentActiveUser,
+    service: StyleServiceDep,
+) -> StyleResponse:
+    """上传单张款式主图；压缩后文件必须严格小于 300KB。"""
+    try:
+        data = await image.read(300 * 1024 + 1)
+    finally:
+        await image.close()
+    return await service.upload_main_image(
+        style_id,
+        filename=image.filename,
+        mime_type=image.content_type,
+        data=data,
+        user=user,
+    )
+
+
+@router.delete(
+    "/styles/{style_id}/main-image",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[require_permission("product", "write")],
+)
+async def remove_style_main_image(
+    style_id: UUID,
+    user: CurrentActiveUser,
+    service: StyleServiceDep,
+) -> Response:
+    await service.remove_main_image(style_id, user)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.delete(

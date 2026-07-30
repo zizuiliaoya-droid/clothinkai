@@ -46,6 +46,7 @@ import { listBloggers } from "@/features/blogger/api";
 import { extractErrorMessage } from "@/services/apiClient";
 import { useAuthStore } from "@/stores/authStore";
 import { ImportUploadButton } from "@/components/ImportUploadButton";
+import { StyleImageThumbnail } from "@/components/StyleImageThumbnail/StyleImageThumbnail";
 
 const PLATFORMS = ["小红书", "抖音", "快手", "B站"];
 const PUBLISH_STATUS = ["未发布", "已发布", "已取消", "异常", "已删除"];
@@ -289,8 +290,17 @@ export function PromotionListPage() {
   }
 
   const columns: ColumnsType<Promotion> = [
-    { title: "内部编码", dataIndex: "internal_code", width: 150 },
-    { title: "货号", dataIndex: "style_code_snapshot", width: 110 },
+    { title: "内部编码", dataIndex: "internal_code", width: 150, fixed: "left" },
+    {
+      title: "主图",
+      dataIndex: "style_main_image_url",
+      width: 68,
+      fixed: "left",
+      render: (src: string | null, row) => (
+        <StyleImageThumbnail src={src} alt={`${row.style_code_snapshot} 款式主图`} />
+      ),
+    },
+    { title: "货号", dataIndex: "style_code_snapshot", width: 110, fixed: "left" },
     { title: "品名", dataIndex: "style_short_name_snapshot", width: 130, render: (v) => v || "—" },
     { title: "合作平台", dataIndex: "platform", width: 90 },
     { title: "合作日期", dataIndex: "cooperation_date", width: 110 },

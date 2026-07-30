@@ -12,9 +12,11 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 from uuid import UUID
 
+from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.attachment import attachment_service
@@ -38,6 +40,7 @@ from app.modules.product.domain import (
 )
 from app.modules.product.exceptions import (
     FieldPermissionDenied,
+    InvalidAttachmentReferenceError,
     InvalidStyleReferenceError,
     SkuCodeConflictError,
     SkuHasReferenceError,
@@ -65,6 +68,15 @@ from app.modules.product.schemas import (
     StyleResponse,
     StyleUpdate,
 )
+
+
+log = logging.getLogger(__name__)
+STYLE_MAIN_IMAGE_MAX_BYTES = 300 * 1024
+_STYLE_IMAGE_MIME_EXTENSIONS = {
+    "image/jpeg": "jpg",
+    "image/png": "png",
+    "image/webp": "webp",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -236,6 +248,120 @@ class StyleService:
         )
         await self._session.commit()
         return await self._to_response(style, user)
+
+    async def upload_main_image(
+        self,
+        style_id: UUID,
+        *,
+        filename: str | None,
+        mime_type: str | None,
+        data: bytes,
+        user: User,
+    ) -> StyleResponse:
+        """上传并绑定单张款式主图，替换成功后清理旧对象。"""
+        style = await self._styles.get_by_id(style_id)
+        if style is None:
+            raise StyleNotFoundError(f"款式 {style_id} 不存在")
+
+        if mime_type not in _STYLE_IMAGE_MIME_EXTENSIONS:
+            raise InvalidAttachmentReferenceError(
+                "主图仅支持 JPG、PNG、WebP 图片",
+                details={
+                    "allowed": sorted(_STYLE_IMAGE_MIME_EXTENSIONS),
+                    "actual": mime_type,
+                },
+            )
+        if not data:
+            raise InvalidAttachmentReferenceError("主图文件不能为空")
+        if len(data) >= STYLE_MAIN_IMAGE_MAX_BYTES:
+            raise InvalidAttachmentReferenceError("主图文件必须小于 300KB")
+        if filename is not None and len(filename) > 255:
+            raise InvalidAttachmentReferenceError("主图文件名不能超过 255 个字符")
+
+        valid_signature = (
+            (mime_type == "image/jpeg" and data.startswith(b"\xff\xd8\xff"))
+            or (mime_type == "image/png" and data.startswith(b"\x89PNG\r\n\x1a\n"))
+            or (
+                mime_type == "image/webp"
+                and len(data) >= 12
+                and data[:4] == b"RIFF"
+                and data[8:12] == b"WEBP"
+            )
+        )
+        if not valid_signature:
+            raise InvalidAttachmentReferenceError("主图内容与声明格式不一致")
+
+        extension = _STYLE_IMAGE_MIME_EXTENSIONS[mime_type]
+        new_key = attachment_service.make_tenant_key(
+            user.tenant_id,
+            f"styles/{style_id}/main",
+            filename=f"main.{extension}",
+        )
+        old_key = style.main_image_key
+        try:
+            await run_in_threadpool(
+                attachment_service.upload_bytes,
+                data,
+                bucket="public",
+                key=new_key,
+                content_type=mime_type,
+            )
+            style.main_image_key = new_key
+            await self._audit.log(
+                action="style.main_image.update",
+                resource="style",
+                resource_id=style.id,
+                before={"main_image_changed": old_key is not None},
+                after={"main_image_changed": True},
+                user_id=user.id,
+            )
+            await self._session.commit()
+        except Exception:
+            await self._session.rollback()
+            try:
+                await run_in_threadpool(attachment_service.delete, "public", new_key)
+            except Exception:  # noqa: BLE001
+                log.warning(
+                    "style_main_image_compensation_delete_failed",
+                    extra={"style_id": str(style_id), "key": new_key},
+                )
+            raise
+
+        if old_key and old_key != new_key:
+            try:
+                await run_in_threadpool(attachment_service.delete, "public", old_key)
+            except Exception:  # noqa: BLE001
+                log.warning(
+                    "style_main_image_old_object_delete_failed",
+                    extra={"style_id": str(style_id), "key": old_key},
+                )
+        return await self._to_response(style, user)
+
+    async def remove_main_image(self, style_id: UUID, user: User) -> None:
+        """解除款式主图绑定，并尽力清理 public R2 对象。"""
+        style = await self._styles.get_by_id(style_id)
+        if style is None:
+            raise StyleNotFoundError(f"款式 {style_id} 不存在")
+        old_key = style.main_image_key
+        if old_key is None:
+            return
+
+        style.main_image_key = None
+        await self._audit.log(
+            action="style.main_image.remove",
+            resource="style",
+            resource_id=style.id,
+            after={"main_image_removed": True},
+            user_id=user.id,
+        )
+        await self._session.commit()
+        try:
+            await run_in_threadpool(attachment_service.delete, "public", old_key)
+        except Exception:  # noqa: BLE001
+            log.warning(
+                "style_main_image_object_delete_failed",
+                extra={"style_id": str(style_id), "key": old_key},
+            )
 
     # ----------------------- read ----------------------- #
 

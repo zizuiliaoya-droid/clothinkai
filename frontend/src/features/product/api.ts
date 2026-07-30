@@ -63,6 +63,23 @@ export async function updateStyle(
   return resp.data;
 }
 
+export async function uploadStyleMainImage(
+  styleId: string,
+  file: File
+): Promise<Style> {
+  const body = new FormData();
+  body.append("image", file, file.name);
+  const resp = await apiClient.post<Style>(
+    `/api/styles/${styleId}/main-image`,
+    body
+  );
+  return resp.data;
+}
+
+export async function removeStyleMainImage(styleId: string): Promise<void> {
+  await apiClient.delete(`/api/styles/${styleId}/main-image`);
+}
+
 export async function deleteStyle(styleId: string): Promise<void> {
   await apiClient.delete(`/api/styles/${styleId}`);
 }

@@ -229,6 +229,7 @@ class PromotionResponse(BaseModel):
     # 快照字段
     style_code_snapshot: str
     style_short_name_snapshot: str
+    style_main_image_url: str | None = None
     quote_amount: Decimal | None = None  # 敏感
     cost_snapshot: Decimal | None = None  # 敏感
 

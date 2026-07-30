@@ -55,6 +55,7 @@ export interface Promotion {
   // 快照
   style_code_snapshot: string;
   style_short_name_snapshot: string;
+  style_main_image_url: string | null;
   quote_amount: string | null; // Decimal as string；敏感
   cost_snapshot: string | null; // 敏感
   // 业务字段

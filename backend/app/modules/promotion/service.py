@@ -609,6 +609,8 @@ class PromotionService:
                 urge_status_override=row.urge_status,
                 dual_platform_override=row.dual_platform,
                 attachment_refs=attachment_refs.get(row.promotion.id),
+                style_main_image_key=row.style_main_image_key,
+                style_main_image_preloaded=True,
             )
             for row in rows
         ]
@@ -1121,12 +1123,16 @@ class PromotionService:
         urge_status_override: str | None = None,
         dual_platform_override: bool | None = None,
         attachment_refs: PromotionAttachmentRefs | None = None,
+        style_main_image_key: str | None = None,
+        style_main_image_preloaded: bool = False,
     ) -> PromotionResponse:
         """组装响应：字段权限过滤 + 衍生字段计算.
 
         Args:
             urge_status_override: 列表查询时由 SQL CTE 计算后透传，避免重复计算。
             dual_platform_override: 同上。
+            style_main_image_key: 列表查询预加载的款式主图 key。
+            style_main_image_preloaded: 为 True 时不再查询 Style，避免列表 N+1。
             today: 列表查询时由 service 层 get_today() 透传，单条响应时缺省现算。
         """
         ctx = await build_field_perm_context(user.id, self._roles, self._perms)
@@ -1165,6 +1171,22 @@ class PromotionService:
                         )
                 except Exception:  # noqa: BLE001
                     log.warning("promotion_payment_attachment_signed_url_failed")
+
+        resolved_style_image_key = style_main_image_key
+        if not style_main_image_preloaded:
+            style = await self._style_repo.get_by_id(promotion.style_id)
+            resolved_style_image_key = style.main_image_key if style is not None else None
+        style_main_image_url: str | None = None
+        if resolved_style_image_key:
+            try:
+                style_main_image_url = self._attachment_service.get_public_url(
+                    resolved_style_image_key
+                )
+            except Exception:  # noqa: BLE001
+                log.warning(
+                    "promotion_style_main_image_url_failed",
+                    extra={"promotion_id": str(promotion.id)},
+                )
 
         # 衍生字段计算
         if today is None:
@@ -1209,6 +1231,7 @@ class PromotionService:
             pr_id=promotion.pr_id,
             style_code_snapshot=promotion.style_code_snapshot,
             style_short_name_snapshot=promotion.style_short_name_snapshot,
+            style_main_image_url=style_main_image_url,
             quote_amount=(
                 promotion.quote_amount if can_see_quote else None
             ),
