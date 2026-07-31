@@ -126,7 +126,92 @@ class ProductionTrend(BaseModel):
     points: list[ProductionTrendPoint]
 
 
+# ----------------------------- BI 看板 ----------------------------- #
+
+
+class BiStoreSummary(BaseModel):
+    sales_amount: Decimal
+    refund_amount: Decimal
+    return_rate: Decimal | None = None
+    internal_spend: Decimal
+    external_spend: Decimal
+    total_spend: Decimal
+    internal_spend_ratio: Decimal | None = None
+    external_spend_ratio: Decimal | None = None
+    roi: Decimal | None = None
+
+
+class BiPromotionSummary(BaseModel):
+    commission_amount: Decimal
+    commission_count: int
+    published_spend: Decimal
+    published_count: int
+    unpublished_spend: Decimal
+    unpublished_count: int
+    cancelled_amount: Decimal
+    cancelled_count: int
+    publish_rate: Decimal | None = None
+
+
+class BiWorkloadRow(BaseModel):
+    pr_id: UUID | None = None
+    pr_name: str
+    target_count: int
+    quote_count: int
+    quote_progress: Decimal | None = None
+    publish_count: int
+    publish_progress: Decimal | None = None
+    pending_count: int
+    cancel_count: int
+    overdue_count: int
+
+
+class BiStylePerformance(BaseModel):
+    style_id: UUID
+    style_code: str
+    style_name: str
+    main_image_url: str | None = None
+    sales_amount: Decimal
+    refund_amount: Decimal
+    return_rate: Decimal | None = None
+    confirmed_amount: Decimal
+    internal_spend: Decimal
+    external_spend: Decimal
+    total_spend: Decimal
+    roi: Decimal | None = None
+
+
+class BiTrendPoint(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    date: date
+    sales_amount: Decimal = Decimal("0")
+    refund_amount: Decimal = Decimal("0")
+    internal_spend: Decimal = Decimal("0")
+    external_spend: Decimal = Decimal("0")
+
+
+class BiDashboard(BaseModel):
+    date_from: date
+    date_to: date
+    granularity: str
+    store_summary: BiStoreSummary
+    promotion_summary: BiPromotionSummary
+    workload: list[BiWorkloadRow]
+    style_performance: list[BiStylePerformance]
+    trend: list[BiTrendPoint]
+    # 兼容 U17 旧客户端；新前端只消费上面的结构化字段。
+    cards: list[dict] = Field(default_factory=list)
+    charts: list[dict] = Field(default_factory=list)
+
+
 __all__ = [
+    "BiDashboard",
+    "BiPromotionSummary",
+    "BiStoreSummary",
+    "BiStylePerformance",
+    "BiTrendPoint",
+    "BiWorkloadRow",
     "PrWorkProgress",
     "ProductionReport",
     "ProductionRow",

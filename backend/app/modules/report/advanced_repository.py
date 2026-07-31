@@ -398,6 +398,227 @@ class ProductionRepository:
         )
 
 
+class BiRepository:
+    """TASK 15 BI 看板专用聚合，统一合作日期、状态与租户口径。"""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    async def aggregate_store_summary(
+        self, *, tenant_id: UUID, date_from: date, date_to: date
+    ) -> Mapping[str, Any]:
+        sql = text(
+            """
+            WITH sales AS (
+              SELECT COALESCE(SUM(q.pay_amount), 0) AS sales_amount,
+                     COALESCE(SUM(
+                       CASE
+                         WHEN COALESCE(q.extra->>'refund_amount', '')
+                              ~ '^[0-9]+([.][0-9]+)?$'
+                         THEN (q.extra->>'refund_amount')::numeric
+                         ELSE 0
+                       END
+                     ), 0) AS refund_amount
+              FROM qianniu_daily q
+              WHERE q.tenant_id = :tenant_id
+                AND q.date BETWEEN :date_from AND :date_to
+            ), ads AS (
+              SELECT COALESCE(SUM(a.cost), 0) AS internal_spend
+              FROM ad_daily a
+              WHERE a.tenant_id = :tenant_id
+                AND a.date BETWEEN :date_from AND :date_to
+            ), promos AS (
+              SELECT COALESCE(SUM(p.quote_amount), 0) AS external_spend
+              FROM promotion p
+              WHERE p.tenant_id = :tenant_id AND p.is_active = true
+                AND p.publish_status = '已发布'
+                AND p.cooperation_date BETWEEN :date_from AND :date_to
+            )
+            SELECT sales.sales_amount, sales.refund_amount,
+                   ads.internal_spend, promos.external_spend
+            FROM sales CROSS JOIN ads CROSS JOIN promos
+            """
+        )
+        return (
+            await self._s.execute(
+                sql,
+                {"tenant_id": tenant_id, "date_from": date_from, "date_to": date_to},
+            )
+        ).mappings().one()
+
+    async def aggregate_promotion_summary(
+        self, *, tenant_id: UUID, date_from: date, date_to: date
+    ) -> Mapping[str, Any]:
+        sql = text(
+            """
+            SELECT
+              COALESCE(SUM(p.quote_amount), 0) AS commission_amount,
+              COUNT(*) AS commission_count,
+              COALESCE(SUM(p.quote_amount)
+                FILTER (WHERE p.publish_status = '已发布'), 0) AS published_spend,
+              COUNT(*) FILTER (WHERE p.publish_status = '已发布') AS published_count,
+              COALESCE(SUM(p.quote_amount)
+                FILTER (WHERE p.publish_status = '未发布'), 0) AS unpublished_spend,
+              COUNT(*) FILTER (WHERE p.publish_status = '未发布') AS unpublished_count,
+              COALESCE(SUM(p.quote_amount)
+                FILTER (WHERE p.publish_status = '已取消'), 0) AS cancelled_amount,
+              COUNT(*) FILTER (WHERE p.publish_status = '已取消') AS cancelled_count
+            FROM promotion p
+            WHERE p.tenant_id = :tenant_id AND p.is_active = true
+              AND p.cooperation_date BETWEEN :date_from AND :date_to
+            """
+        )
+        return (
+            await self._s.execute(
+                sql,
+                {"tenant_id": tenant_id, "date_from": date_from, "date_to": date_to},
+            )
+        ).mappings().one()
+
+    async def aggregate_workload(
+        self,
+        *,
+        tenant_id: UUID,
+        date_from: date,
+        date_to: date,
+        today: date,
+    ) -> list[Mapping[str, Any]]:
+        sql = text(
+            f"""
+            WITH work AS (
+              SELECT p.pr_id,
+                     COALESCE(u.display_name, u.username, '未分配') AS pr_name,
+                     COUNT(*) AS quote_count,
+                     COUNT(*) FILTER (WHERE p.publish_status = '已发布') AS publish_count,
+                     COUNT(*) FILTER (WHERE p.publish_status = '未发布') AS pending_count,
+                     COUNT(*) FILTER (WHERE p.publish_status = '已取消') AS cancel_count,
+                     COUNT(*) FILTER (WHERE ({_URGE}) = '超时') AS overdue_count
+              FROM promotion p
+              LEFT JOIN "user" u ON u.id = p.pr_id
+              WHERE p.tenant_id = :tenant_id AND p.is_active = true
+                AND p.cooperation_date BETWEEN :date_from AND :date_to
+              GROUP BY p.pr_id, u.display_name, u.username
+            ), targets AS (
+              SELECT t.pr_id, COALESCE(SUM(t.min_target), 0) AS target_count
+              FROM target_planning t
+              WHERE t.tenant_id = :tenant_id
+                AND t.period_month BETWEEN
+                    to_char(CAST(:date_from AS date), 'YYYY-MM') AND
+                    to_char(CAST(:date_to AS date), 'YYYY-MM')
+              GROUP BY t.pr_id
+            )
+            SELECT work.*, COALESCE(targets.target_count, 0) AS target_count
+            FROM work
+            LEFT JOIN targets ON targets.pr_id = work.pr_id
+            ORDER BY work.quote_count DESC, work.pr_name
+            """
+        )
+        params = {
+            "tenant_id": tenant_id,
+            "date_from": date_from,
+            "date_to": date_to,
+            "today": today,
+            "urge_days": _URGE_DAYS,
+            "important_days": _IMPORTANT_DAYS,
+        }
+        return list((await self._s.execute(sql, params)).mappings().all())
+
+    async def aggregate_trend(
+        self,
+        *,
+        tenant_id: UUID,
+        date_from: date,
+        date_to: date,
+        granularity: str,
+    ) -> list[Mapping[str, Any]]:
+        bucket_templates = {
+            "day": "{column}",
+            "week": "date_trunc('week', {column})::date",
+            "month": "date_trunc('month', {column})::date",
+            "year": "date_trunc('year', {column})::date",
+        }
+        try:
+            template = bucket_templates[granularity]
+        except KeyError as exc:
+            raise ValueError(f"Unsupported BI granularity: {granularity}") from exc
+        q_bucket = template.format(column="q.date")
+        a_bucket = template.format(column="a.date")
+        p_bucket = template.format(column="p.cooperation_date")
+        sql = text(
+            f"""
+            SELECT d AS date,
+                   COALESCE(SUM(sales_amount), 0) AS sales_amount,
+                   COALESCE(SUM(refund_amount), 0) AS refund_amount,
+                   COALESCE(SUM(internal_spend), 0) AS internal_spend,
+                   COALESCE(SUM(external_spend), 0) AS external_spend
+            FROM (
+              SELECT {q_bucket} AS d,
+                     COALESCE(SUM(q.pay_amount), 0) AS sales_amount,
+                     COALESCE(SUM(
+                       CASE
+                         WHEN COALESCE(q.extra->>'refund_amount', '')
+                              ~ '^[0-9]+([.][0-9]+)?$'
+                         THEN (q.extra->>'refund_amount')::numeric
+                         ELSE 0
+                       END
+                     ), 0) AS refund_amount,
+                     0::numeric AS internal_spend, 0::numeric AS external_spend
+              FROM qianniu_daily q
+              WHERE q.tenant_id = :tenant_id
+                AND q.date BETWEEN :date_from AND :date_to
+              GROUP BY {q_bucket}
+              UNION ALL
+              SELECT {a_bucket} AS d, 0, 0,
+                     COALESCE(SUM(a.cost), 0), 0
+              FROM ad_daily a
+              WHERE a.tenant_id = :tenant_id
+                AND a.date BETWEEN :date_from AND :date_to
+              GROUP BY {a_bucket}
+              UNION ALL
+              SELECT {p_bucket} AS d, 0, 0, 0,
+                     COALESCE(SUM(p.quote_amount), 0)
+              FROM promotion p
+              WHERE p.tenant_id = :tenant_id AND p.is_active = true
+                AND p.publish_status = '已发布'
+                AND p.cooperation_date BETWEEN :date_from AND :date_to
+              GROUP BY {p_bucket}
+            ) source
+            GROUP BY d
+            ORDER BY d
+            """
+        )
+        return list(
+            (
+                await self._s.execute(
+                    sql,
+                    {"tenant_id": tenant_id, "date_from": date_from, "date_to": date_to},
+                )
+            ).mappings().all()
+        )
+
+    async def published_spend_by_style(
+        self, *, tenant_id: UUID, date_from: date, date_to: date
+    ) -> list[Mapping[str, Any]]:
+        sql = text(
+            """
+            SELECT p.style_id, COALESCE(SUM(p.quote_amount), 0) AS external_spend
+            FROM promotion p
+            WHERE p.tenant_id = :tenant_id AND p.is_active = true
+              AND p.publish_status = '已发布'
+              AND p.cooperation_date BETWEEN :date_from AND :date_to
+            GROUP BY p.style_id
+            """
+        )
+        return list(
+            (
+                await self._s.execute(
+                    sql,
+                    {"tenant_id": tenant_id, "date_from": date_from, "date_to": date_to},
+                )
+            ).mappings().all()
+        )
+
+
 async def style_exists(session: AsyncSession, tenant_id: UUID, style_id: UUID) -> bool:
     sql = text("SELECT 1 FROM style WHERE id = :sid AND tenant_id = :tid LIMIT 1")
     return (
@@ -406,6 +627,7 @@ async def style_exists(session: AsyncSession, tenant_id: UUID, style_id: UUID) -
 
 
 __all__ = [
+    "BiRepository",
     "ProductionRepository",
     "StoreDailyRepository",
     "TargetPlanningRepository",

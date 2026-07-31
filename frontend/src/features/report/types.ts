@@ -128,3 +128,76 @@ export interface ProductionTrendPoint {
 export interface ProductionTrend {
   points: ProductionTrendPoint[];
 }
+
+export interface BiStoreSummary {
+  sales_amount: string;
+  refund_amount: string;
+  return_rate: string | null;
+  internal_spend: string;
+  external_spend: string;
+  total_spend: string;
+  internal_spend_ratio: string | null;
+  external_spend_ratio: string | null;
+  roi: string | null;
+}
+
+export interface BiPromotionSummary {
+  commission_amount: string;
+  commission_count: number;
+  published_spend: string;
+  published_count: number;
+  unpublished_spend: string;
+  unpublished_count: number;
+  cancelled_amount: string;
+  cancelled_count: number;
+  publish_rate: string | null;
+}
+
+export interface BiWorkloadRow {
+  pr_id: string | null;
+  pr_name: string;
+  target_count: number;
+  quote_count: number;
+  quote_progress: string | null;
+  publish_count: number;
+  publish_progress: string | null;
+  pending_count: number;
+  cancel_count: number;
+  overdue_count: number;
+}
+
+export interface BiStylePerformance {
+  style_id: string;
+  style_code: string;
+  style_name: string;
+  main_image_url: string | null;
+  sales_amount: string;
+  refund_amount: string;
+  return_rate: string | null;
+  confirmed_amount: string;
+  internal_spend: string;
+  external_spend: string;
+  total_spend: string;
+  roi: string | null;
+}
+
+export interface BiTrendPoint {
+  date: string;
+  sales_amount: string;
+  refund_amount: string;
+  internal_spend: string;
+  external_spend: string;
+}
+
+export interface BiDashboard {
+  date_from: string;
+  date_to: string;
+  granularity: TimeGranularity;
+  store_summary: BiStoreSummary;
+  promotion_summary: BiPromotionSummary;
+  workload: BiWorkloadRow[];
+  style_performance: BiStylePerformance[];
+  trend: BiTrendPoint[];
+  cards: Array<Record<string, unknown>>;
+  charts: Array<Record<string, unknown>>;
+}

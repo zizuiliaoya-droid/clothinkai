@@ -5,7 +5,7 @@
 - **语言**: 中文
 - **项目类型**: Greenfield（全新项目）
 - **当前阶段**: CONSTRUCTION
-- **当前步骤**: U18 AI 决策建议全部 5 阶段完成 + Build & Test（794 passed / 80.75%）；**全部 23/23 sub-unit 交付完成（MVP 12 + V1 8 + V2 2 + P3 1）；项目 CONSTRUCTION 全部交付完成** 🎉🎉
+- **当前步骤**: 交付后增量 TASK 15 — BI 看板重构（U17 Increment 15，本地实现与验证完成，等待 Zeabur 发布及线上验收）
 - **交付方式**: 分阶段（MVP/P0 → V1/P1 → V2/P2 → P3）
 
 ## 工作区状态

@@ -1,4 +1,4 @@
-"""U17 BI 看板 API（/api/reports/bi + /api/reports/bi/layout）。"""
+"""TASK 15 BI 看板 API（/api/reports/bi + /api/reports/bi/layout）。"""
 
 from __future__ import annotations
 
@@ -8,7 +8,8 @@ from typing import Annotated
 from fastapi import APIRouter, Body, Query
 
 from app.modules.auth.deps import CurrentActiveUser, require_permission
-from app.modules.report.bi_service import DEFAULT_BI_LAYOUT, BiService
+from app.modules.report.advanced_schemas import BiDashboard
+from app.modules.report.bi_service import DEFAULT_BI_LAYOUT
 from app.modules.report.deps import BiServiceDep, UserPreferenceServiceDep
 from app.modules.report.domain import resolve_time_range
 
@@ -23,6 +24,7 @@ _BI_LAYOUT_KEY = "bi_layout"
 
 @router.get(
     "/bi",
+    response_model=BiDashboard,
     dependencies=[require_permission("report.production", "read")],
 )
 async def get_bi_dashboard(
@@ -31,9 +33,15 @@ async def get_bi_dashboard(
     preset: _PresetQ = "last_30d",
     date_from: _FromQ = None,
     date_to: _ToQ = None,
-) -> dict:
+    granularity: Annotated[
+        str,
+        Query(pattern=r"^(day|week|month|year)$", description="趋势粒度"),
+    ] = "day",
+) -> BiDashboard:
     tr = resolve_time_range(preset, date_from, date_to)
-    return await service.get_dashboard(user.tenant_id, tr)
+    return await service.get_dashboard(
+        user.tenant_id, tr, granularity=granularity
+    )
 
 
 @router.get(

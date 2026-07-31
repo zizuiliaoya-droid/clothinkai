@@ -2,6 +2,7 @@
 
 import { apiClient } from "@/services/apiClient";
 import type {
+  BiDashboard,
   ProductionReport,
   ProductionTrend,
   ProgressSummary,
@@ -95,5 +96,17 @@ export async function getProductionTrend(
     "/api/reports/production/trend",
     { params: { style_id: styleId, ...params } }
   );
+  return resp.data;
+}
+
+export async function getBiDashboard(
+  params: {
+    preset?: string;
+    date_from?: string;
+    date_to?: string;
+    granularity?: TimeGranularity;
+  } = {}
+): Promise<BiDashboard> {
+  const resp = await apiClient.get<BiDashboard>("/api/reports/bi", { params });
   return resp.data;
 }
