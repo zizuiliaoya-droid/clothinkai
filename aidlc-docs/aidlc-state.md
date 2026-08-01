@@ -5,7 +5,7 @@
 - **语言**: 中文
 - **项目类型**: Greenfield（全新项目）
 - **当前阶段**: CONSTRUCTION
-- **当前步骤**: 交付后增量 TASK 15 — BI 看板重构（U17 Increment 15，本地实现与验证完成，等待 Zeabur 发布及线上验收）
+- **当前步骤**: 交付后增量 TASK 15 — BI 看板重构（U17 Increment 15，发布、真实表单线上验收与清理全部完成）
 - **交付方式**: 分阶段（MVP/P0 → V1/P1 → V2/P2 → P3）
 
 ## 工作区状态
@@ -377,3 +377,14 @@
 - [x] 线上验收：店铺统计单位日/周/月/年依次切换成功；PRODX 趋势 day/week/month/year 第二轮请求均一次返回 200；最终控制台 0 error，backend runtime logs 为空。
 - [x] 本轮未新增或修改生产测试数据，无需清理；用户删除的 Word 临时文件继续保持未恢复、未暂存。
 - **完成时间**：2026-07-30T15:28:56Z
+
+## 交付后增量 TASK 15 — BI 看板重构（完成）
+
+- [x] 服务端统一 BI 聚合、前端单接口三大区域与指标字典已完成；本地 diagnostics、frontend build、Python compileall、31 个 migration null-byte/AST、`git diff --check` 通过。
+- [x] 实现提交 `00f8552 feat(report): 重构 BI 看板统一聚合` 已推送 main；Zeabur backend `6a6bf4319cd65e28a342fbf6`、frontend `6a6bf42f9cd65e28a342fbf4` 均为 RUNNING。
+- [x] `/ready` 返回 `status=ok`，DB 与 Redis 均为 ok；backend runtime logs 为空。
+- [x] 用户通过真实登录表单进入 Initial Admin 会话；默认 day 及页面切换 week/month/year 均返回 200，自定义日期范围未完成时不发请求，完成后自动 refresh 并重试 200。
+- [x] BI 响应包含 `store_summary`、`promotion_summary`、`workload`、`style_performance`、`trend`、兼容 `cards/charts`；页面四个目标区域完整、不含点赞量并保留取消金额。
+- [x] 375px 与 768px 视口无页面横向溢出，表格内部横向滚动正常；刷新后的干净网络无 4xx/5xx，控制台无 error/warn。
+- [x] 本轮未创建生产测试数据，无需清理；用户删除的 Word 临时文件保持未恢复、未暂存。
+- **完成时间**：2026-08-01T01:27:23Z

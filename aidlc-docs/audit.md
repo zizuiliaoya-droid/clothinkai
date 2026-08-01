@@ -5949,3 +5949,51 @@ EP05-S02 / S03 / S04 / S05 / S06 / S07 / S08 / S09 / S10 / S11 / S12 / S13
 **上下文**: U17 Increment 15.2–15.4 完成，进入提交、Zeabur 部署和真实登录验收。
 
 ---
+## 交付后增量 TASK 15 — 发布检查与真实登录阻断
+**时间戳**: 2026-07-31T01:21:52Z
+**用户输入**: "继续"
+**AI响应**: "确认实现提交已推送，Zeabur 前后端部署均为 RUNNING，/ready 的 DB 与 Redis 均为 ok；检查线上浏览器后确认当前处于空白登录表单，退出操作已吊销 refresh token，持久化状态不含用户或令牌。为遵守必须通过真实登录表单认证的要求，未猜测或重置密码、未注入 localStorage 令牌；BI 登录后 UI/API 验收保持未完成。"
+**上下文**: CONSTRUCTION / U17 Increment 15.5；15.5.1 完成，15.5.2 因缺少可用真实表单登录会话受阻。
+
+**发布与无凭据检查**:
+- 实现提交：`00f8552 feat(report): 重构 BI 看板统一聚合`，`HEAD` 与 `origin/main` 一致。
+- Zeabur backend `6a6bf4319cd65e28a342fbf6`、frontend `6a6bf42f9cd65e28a342fbf4` 均为 RUNNING。
+- `/ready` 返回 `status=ok`，DB=`ok`，Redis=`ok`；backend runtime logs 为空。
+- 未认证访问 BI 的 day/week/month/year 请求均返回 401，证明权限边界生效，但不能替代登录后 200 与页面验收。
+- 当前 Chrome 与 Playwright 都停在 `/login`；用户名、密码为空；localStorage 持久化状态无 user/access token/refresh token。
+- 本轮没有创建生产测试数据，无需清理；未恢复或暂存用户删除的 Word 临时文件。
+
+---
+## TASK 15 登录协作 — 用户接管真实表单
+**时间戳**: 2026-08-01T01:22:00Z
+**用户输入**: "我来帮你登录"
+**AI响应**: "保持生产登录页打开，等待用户通过真实表单完成认证。"
+**上下文**: CONSTRUCTION / U17 Increment 15.5 — 真实登录验收协作。
+
+---
+
+## TASK 15 登录协作 — 首次会话未继承
+**时间戳**: 2026-08-01T01:23:00Z
+**用户输入**: "我登录好了"
+**AI响应**: "自动化浏览器会话重置后仍被重定向到登录页；未使用其他浏览器会话或注入令牌，保持新登录页等待再次登录。"
+**上下文**: CONSTRUCTION / U17 Increment 15.5 — 坚持真实登录表单验收。
+
+---
+
+## 交付后增量 TASK 15 — 最终线上验收
+**时间戳**: 2026-08-01T01:27:23Z
+**用户输入**: "登陆好了"
+**AI响应**: "确认本次真实表单 POST /api/auth/login 返回 200 并进入 Initial Admin 会话；完成 BI 四粒度、自定义日期、响应结构、页面区域、无点赞量、控制台、网络和移动视口验收。"
+**上下文**: CONSTRUCTION / U17 Increment 15.5 — TASK 15 完成。
+
+**线上验收结果**:
+- 登录网络记录：首次错误尝试 401 后，用户真实表单登录 POST `/api/auth/login` 返回 200，随后 `/api/auth/me` 返回 200；未注入伪造令牌。
+- BI 默认 `/api/reports/bi?preset=last_30d&granularity=day` 返回 200；通过页面选择器切换 week/month/year，三个请求均返回 200。
+- 切换自定义后，在日期范围不完整时没有 BI 请求；完成 `2026-07-01` 至 `2026-07-31` 后请求触发。首次因 access token 到期返回 401，应用 refresh 返回 200 并自动重试为 200；刷新后的干净复测中 auth/me 与默认 BI 请求均为 200，无 4xx/5xx。
+- 响应包含 `store_summary`、`promotion_summary`、`workload`、`style_performance`、`trend`、兼容 `cards`、`charts`，数组字段类型正确，日期和 granularity 与请求一致。
+- 页面包含“店铺经营与推广汇总”“经营趋势”“员工工作量与进度”“单款表现”；不包含“点赞量”，保留“取消金额”。
+- 375×812 与 768×1024 视口下 document/body/main 均无横向溢出；两张表分别保留内部横向滚动。
+- 最终成功流程控制台无 error/warn，backend runtime logs 为空；`/ready` 的 DB、Redis 均为 ok。
+- 本轮未创建或修改生产测试数据，无需清理；用户删除的 Word 临时文件保持未恢复、未暂存。
+
+---

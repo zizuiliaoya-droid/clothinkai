@@ -69,9 +69,11 @@
 > 本地验证说明：diagnostics、frontend build、compileall、31 个 migration null-byte/AST、`git diff --check` 通过；pytest 被本机缺少 `boto3` 阻断于 conftest 导入，ruff 未安装，独立 type-check 被项目既有 tsconfig node 引用配置阻断；未安装依赖、未新增测试文件。
 
 ### Increment 15.5 — 发布、线上验收与清理
-- [ ] 15.5.1 提交并推送 main，等待 Zeabur frontend/backend 部署 RUNNING，验证 `/ready` DB/Redis。
-- [ ] 15.5.2 通过真实登录表单验收 BI 自定义日期、四粒度、三大区域、无点赞量、网络 200 和控制台无 error。
-- [ ] 15.5.3 清理测试数据（若产生），更新 `aidlc-state.md`，仅追加 `audit.md` 并提交收尾文档。
+- [x] 15.5.1 提交并推送 main，等待 Zeabur frontend/backend 部署 RUNNING，验证 `/ready` DB/Redis。
+- [x] 15.5.2 通过真实登录表单验收 BI 自定义日期、四粒度、三大区域、无点赞量、网络 200 和控制台无 error。
+- [x] 15.5.3 清理测试数据（若产生），更新 `aidlc-state.md`，仅追加 `audit.md` 并提交收尾文档。
+
+> 2026-08-01 最终验收：实现提交 `00f8552` 已推送 `origin/main`；backend `6a6bf4319cd65e28a342fbf6`、frontend `6a6bf42f9cd65e28a342fbf4` 均为 RUNNING，`/ready` 的 DB、Redis 均为 ok。用户通过真实登录表单进入系统；BI 默认请求与 day/week/month/year 均为 200；自定义日期在范围未完成时不发请求，完成后自动 refresh 并重试 200；响应包含全部结构化字段及兼容 `cards/charts`。页面包含四个目标区域、不含点赞量；375px/768px 无页面横向溢出，表格内部可横向滚动；刷新后干净网络无 4xx/5xx、控制台无 error、backend runtime logs 为空。本轮未创建生产测试数据，无需清理。
 
 ---
 
