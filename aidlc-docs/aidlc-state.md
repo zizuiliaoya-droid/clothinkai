@@ -5,11 +5,11 @@
 - **语言**: 中文
 - **项目类型**: Greenfield（全新项目）
 - **当前阶段**: CONSTRUCTION
-- **当前步骤**: 交付后遗留功能收口（实现已发布且 Zeabur 运行正常；等待用户通过真实登录表单建立验收会话）
+- **当前步骤**: 交付后遗留功能收口已完成（实现、发布、管理员真实登录线上验收及测试数据清理均完成；保留已记录的安全验证限制）
 - **交付方式**: 分阶段（MVP/P0 → V1/P1 → V2/P2 → P3）
 
 ## 工作区状态
-- **现有代码**: 是（全栈系统，当前有未提交的交付后收口增量）
+- **现有代码**: 是（主系统遗留功能收口代码与文档均已完成；仅保留用户主动删除且明确不恢复、不暂存的 Word 临时文件）
 - **逆向工程需要**: 否
 - **工作区根目录**: e:\work\Pycharm_Projection\eCommerce_v4\
 - **技术栈**: React 18 + FastAPI + PostgreSQL 16 + Redis 7 + Celery + Cloudflare R2 + Zeabur
@@ -389,14 +389,21 @@
 - [x] 本轮未创建生产测试数据，无需清理；用户删除的 Word 临时文件保持未恢复、未暂存。
 - **完成时间**：2026-08-01T01:27:23Z
 
-## 交付后遗留功能收口（进行中）
+## 交付后遗留功能收口（完成）
 
 - [x] SKU/博主真实引用校验、套装公开路由下线、配置备份白名单和过期代码清理。
 - [x] 可运行采集 Worker、平台凭据/Worker Token/数据质量前端、投产趋势和三类报表导出。
 - [x] Worker 租约 fencing、重复文件幂等复用、停滞导入恢复、跨消息 advisory lock、上传限流与事务原子性。
 - [x] 工作进度第 20 列、Excel 数值单元格和公式注入防护、Windows Job Object 停机清理、Windows/UNC Vite alias。
 - [x] 本地 diagnostics、compileall、Worker CLI/停机/后代清理 smoke、frontend lint/type-check/build、31 个 migration null-byte/AST、导出 smoke、diff check 通过。
-- [ ] 目标 pytest 在加载 `tests/conftest.py` 时被本机缺少 `boto3` 阻断；按约束未安装依赖。
-- [x] 实现提交 `1aa7e3e feat: 收口采集运营与报表导出` 已推送 main；Zeabur frontend `6a7683bedb4ec8cd006a71ae`、backend `6a7683c1db4ec8cd006a71af`、celery-worker `6a7683bbdb4ec8cd006a71ad`、celery-beat `6a7683b8db4ec8cd006a71ab` 均 RUNNING，`/ready` DB/Redis 均为 ok。
-- [ ] 通过真实登录表单完成新增页面、权限、报表、引用保护和路由下线线上验收并清理测试数据。
-- [ ] 外部 Worker 因无生产 service ID 和真实合规平台命令，不声明生产部署完成。
+- [ ] 目标 pytest 在加载 `tests/conftest.py` 时被本机缺少 `boto3` 阻断；按约束未安装依赖，此限制不影响已完成的其他验证。
+- [x] 实现提交 `1aa7e3e feat: 收口采集运营与报表导出` 与状态提交 `c78f4cc docs: 记录遗留功能发布状态` 已推送 main；最近确认 RUNNING 的 Zeabur 部署为 frontend `6a76857fdb4ec8cd006a71e7`、backend `6a768582db4ec8cd006a71e8`、celery-worker `6a76857ddb4ec8cd006a71e6`、celery-beat `6a76857adb4ec8cd006a71e4`，`/ready` HTTP 200 且 DB/Redis 均为 ok。
+- [x] 管理员通过真实登录表单进入 `Initial Admin` 会话；未手工写入或伪造 Token。平台凭据完成创建、修改、启停和永久删除；临时凭据已删除。Worker Token 完成签发、一次性明文、IPv4/IPv6/CIDR 列表契约及吊销验证；已吊销记录作为不可用审计记录保留。
+- [x] 数据质量入口、列表、汇总及管理员操作可见性已验证；现有 142 条生产千牛 `platform_product` 未匹配警告未执行“标记已修复”或“忽略”，避免不可逆修改真实业务问题。
+- [x] 工作进度 `2026-06` 显示完整 20 列并导出 20 列/1 行；投产 `2026-06-01` 至 `2026-08-08` 显示 3 行、四种趋势粒度并导出 13 个核心列/3 行；店铺数据同期导出 34 列/1 行。openpyxl 核验分别为 17/24/30 个数值单元格，公式单元格均为 0。
+- [x] `/api/bundles` 在管理员会话下返回 404；`/credentials`、`/worker-tokens`、`/data-quality`、`/work-progress`、`/production`、`/store-daily` 在 375px 与 768px 下无页面级横向溢出；受控重导航首页及上述页面均无 console error/page error。
+- [x] 管理员验收产生的临时凭据已删除，Worker Token 已吊销；报表下载文件仅为本地测试产物，未提交仓库。
+- [ ] operations-only 与 warehouse 角色真实登录验收未执行：当前无可安全使用的专用凭据；未猜测、重置或暴力尝试生产账号。代码已核对 operations 对平台凭据/数据质量只读且不可访问 Worker Token，warehouse 路由只允许仓库打单。
+- [ ] SKU/博主引用删除保护未对生产数据执行 DELETE：无只读引用检查 HTTP 端点，破坏性尝试可能删除真实数据；代码级调用链与本地验证已通过。
+- [ ] 外部 Worker 因无生产 service ID 和真实合规平台命令，未生产部署且不声明生产部署完成。
+- **完成时间**：2026-08-08T08:16:25Z
