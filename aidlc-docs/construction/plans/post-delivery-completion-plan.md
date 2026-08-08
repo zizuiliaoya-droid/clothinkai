@@ -29,6 +29,6 @@
 
 ## 6. 验证与发布
 - [x] 6.1 diagnostics、前端 build、Python compileall、现有测试、migration null-byte/AST、diff check。（pytest 已执行但被本机缺少既有依赖 `boto3` 在 conftest 加载阶段阻断；未擅自安装依赖，其余检查与独立 smoke 均通过。）
-- [ ] 6.2 提交并推送 main，等待 Zeabur 前后端部署 RUNNING，检查 `/ready`。
+- [x] 6.2 提交并推送 main，等待 Zeabur 前后端部署 RUNNING，检查 `/ready`。
 - [ ] 6.3 真实登录线上验收新增页面、报表、权限和已下线路由；清理测试数据。
 - [ ] 6.4 更新 aidlc-state.md，audit.md 仅追加并提交收尾记录。

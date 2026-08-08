@@ -6037,3 +6037,17 @@ EP05-S02 / S03 / S04 / S05 / S06 / S07 / S08 / S09 / S10 / S11 / S12 / S13
 **Context**: 发布前复审完成；外部 Worker 无生产 service ID 和真实合规命令，后续不得声称其生产部署完成。
 
 ---
+
+## 交付后遗留功能收口 — 发布与公开契约验证
+**Timestamp**: 2026-08-08T01:22:58Z
+**AI Response**: "提交 `1aa7e3e feat: 收口采集运营与报表导出` 并推送 main；等待 Zeabur 自动部署完成。frontend、backend、celery-worker、celery-beat 新部署均 RUNNING，backend 完成 migration 和应用启动，worker 注册新恢复任务，beat 正常启动；`/ready` 返回 DB/Redis ok。"
+**Context**: Zeabur deployment IDs：frontend `6a7683bedb4ec8cd006a71ae`、backend `6a7683c1db4ec8cd006a71af`、celery-worker `6a7683bbdb4ec8cd006a71ad`、celery-beat `6a7683b8db4ec8cd006a71ab`。
+
+**Public Contract Verification**:
+- OpenAPI 200；平台凭据、Worker Token、数据质量和报表导出端点存在。
+- crawler result multipart 必填 `lease_token` 和 `status_value`。
+- `/api/bundles` 返回 404，OpenAPI 无公开 bundle 路由。
+- 未登录访问平台凭据、Worker Token、数据质量均返回 401。
+- 浏览器未注入 Token；当前停留在真实登录表单，等待用户建立管理员会话后继续角色和业务验收。
+
+---

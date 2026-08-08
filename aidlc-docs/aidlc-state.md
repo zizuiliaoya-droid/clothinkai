@@ -5,7 +5,7 @@
 - **语言**: 中文
 - **项目类型**: Greenfield（全新项目）
 - **当前阶段**: CONSTRUCTION
-- **当前步骤**: 交付后遗留功能收口（本地实现与验证完成；等待提交、Zeabur 部署和真实登录线上验收）
+- **当前步骤**: 交付后遗留功能收口（实现已发布且 Zeabur 运行正常；等待用户通过真实登录表单建立验收会话）
 - **交付方式**: 分阶段（MVP/P0 → V1/P1 → V2/P2 → P3）
 
 ## 工作区状态
@@ -397,6 +397,6 @@
 - [x] 工作进度第 20 列、Excel 数值单元格和公式注入防护、Windows Job Object 停机清理、Windows/UNC Vite alias。
 - [x] 本地 diagnostics、compileall、Worker CLI/停机/后代清理 smoke、frontend lint/type-check/build、31 个 migration null-byte/AST、导出 smoke、diff check 通过。
 - [ ] 目标 pytest 在加载 `tests/conftest.py` 时被本机缺少 `boto3` 阻断；按约束未安装依赖。
-- [ ] 提交并推送 main，等待 Zeabur frontend/backend RUNNING 并检查 `/ready`。
+- [x] 实现提交 `1aa7e3e feat: 收口采集运营与报表导出` 已推送 main；Zeabur frontend `6a7683bedb4ec8cd006a71ae`、backend `6a7683c1db4ec8cd006a71af`、celery-worker `6a7683bbdb4ec8cd006a71ad`、celery-beat `6a7683b8db4ec8cd006a71ab` 均 RUNNING，`/ready` DB/Redis 均为 ok。
 - [ ] 通过真实登录表单完成新增页面、权限、报表、引用保护和路由下线线上验收并清理测试数据。
 - [ ] 外部 Worker 因无生产 service ID 和真实合规平台命令，不声明生产部署完成。
