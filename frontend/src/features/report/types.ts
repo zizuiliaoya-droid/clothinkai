@@ -9,6 +9,7 @@ export interface PrWorkProgress {
   important_urge_count: number;
   overdue_count: number;
   publish_count: number;
+  info_complete_count: number;
   info_complete_rate: string | null;
   cancel_count: number;
   recall_due_count: number;
@@ -122,7 +123,12 @@ export type TimeGranularity = "day" | "week" | "month" | "year";
 export interface ProductionTrendPoint {
   date: string;
   pay_amount: string;
+  refund_amount: string;
+  confirmed_amount: string;
+  promo_cost: string;
   ad_spend: string;
+  total_spend: string;
+  net_roi: string | null;
 }
 
 export interface ProductionTrend {

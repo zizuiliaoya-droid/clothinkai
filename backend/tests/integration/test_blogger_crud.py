@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.tenancy import tenant_id_ctx
 from app.modules.blogger.exceptions import (
+    BloggerHasReferenceError,
     BloggerNotFoundError,
     BloggerXhsIdConflictError,
     FieldPermissionDenied,
@@ -205,7 +206,7 @@ class TestSoftDeleteBlogger:
         admin_role: Any,
         blogger_factory: Any,
     ) -> None:
-        """U03 阶段 promotion 表不存在，引用永远 0，应允许软删."""
+        """无推广历史引用时应允许软删。"""
         token = tenant_id_ctx.set(tenant_a.id)
         try:
             blogger = await blogger_factory.blogger()
@@ -214,5 +215,35 @@ class TestSoftDeleteBlogger:
             await svc.soft_delete_blogger(blogger.id, user)
             await session.refresh(blogger)
             assert blogger.is_deleted is True
+        finally:
+            tenant_id_ctx.reset(token)
+    async def test_soft_delete_referenced_blogger_is_denied(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        """已停用推广仍属于历史引用，真实仓储计数应阻止软删。"""
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            style = await product_factory.style()
+            blogger = await blogger_factory.blogger()
+            await promotion_factory.promotion(
+                style=style,
+                blogger=blogger,
+                is_active=False,
+            )
+            user = await factory.user(tenant_a, roles=[admin_role])
+            svc = BloggerService(session)
+
+            refs = await svc.check_references(blogger.id)
+            assert refs == {"promotion_count": 1}
+            with pytest.raises(BloggerHasReferenceError):
+                await svc.soft_delete_blogger(blogger.id, user)
+            assert blogger.is_deleted is False
         finally:
             tenant_id_ctx.reset(token)

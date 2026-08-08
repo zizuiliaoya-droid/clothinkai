@@ -21,6 +21,7 @@ class PrWorkProgress(BaseModel):
     important_urge_count: int
     overdue_count: int
     publish_count: int
+    info_complete_count: int
     info_complete_rate: Decimal | None = None
     cancel_count: int
     recall_due_count: int
@@ -119,7 +120,12 @@ class ProductionTrendPoint(BaseModel):
 
     date: date
     pay_amount: Decimal = Decimal("0")
+    refund_amount: Decimal = Decimal("0")
+    confirmed_amount: Decimal = Decimal("0")
+    promo_cost: Decimal = Decimal("0")
     ad_spend: Decimal = Decimal("0")
+    total_spend: Decimal = Decimal("0")
+    net_roi: Decimal | None = None
 
 
 class ProductionTrend(BaseModel):

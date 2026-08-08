@@ -105,6 +105,12 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(hour=2, minute=0),
         "options": {"queue": "crawler"},
     },
+    # U13 每 15 分钟恢复已提交但 Celery 投递失败/中断的采集导入批次。
+    "crawler-recover-stalled-imports": {
+        "task": "app.tasks.crawler_tasks.recover_stalled_crawler_imports",
+        "schedule": crontab(minute="*/15"),
+        "options": {"queue": "crawler"},
+    },
     # U15 每小时异常预警监控（default 队列，与 09:00 催发/02:00 采集错峰）
     "check-anomaly-hourly": {
         "task": "app.tasks.wecom_tasks.check_anomaly_and_alert",

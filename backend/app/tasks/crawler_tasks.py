@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
@@ -67,4 +68,57 @@ async def _schedule_one_tenant(tenant_id: UUID) -> int:
         tenant_id_ctx.reset(tok)
 
 
-__all__ = ["schedule_daily_tasks"]
+@celery_app.task(
+    name="app.tasks.crawler_tasks.recover_stalled_crawler_imports",
+    queue="crawler",
+)
+def recover_stalled_crawler_imports() -> dict[str, Any]:
+    """重新投递已提交成功但长时间未开始处理的采集导入批次。"""
+    return asyncio.run(_recover_stalled_imports_impl())
+
+
+async def _recover_stalled_imports_impl() -> dict[str, Any]:
+    cutoff = datetime.now(UTC) - timedelta(minutes=35)
+    async with AsyncSessionBypass() as session:
+        rows = (
+            await session.execute(
+                text(
+                    "WITH candidates AS ("
+                    " SELECT b.id FROM import_batch b"
+                    " JOIN crawler_task ct ON ct.import_batch_id = b.id"
+                    " WHERE ct.status = 'success' AND b.status = 'processing'"
+                    "   AND b.updated_at < :cutoff"
+                    " ORDER BY b.updated_at LIMIT 100"
+                    " FOR UPDATE OF b SKIP LOCKED"
+                    ") UPDATE import_batch b SET updated_at = NOW()"
+                    " FROM candidates c WHERE b.id = c.id RETURNING b.id"
+                ),
+                {"cutoff": cutoff},
+            )
+        ).all()
+        batch_ids = [row.id for row in rows]
+        await session.commit()
+
+    if not batch_ids:
+        return {"recovered": 0, "enqueue_failed": 0}
+
+    from app.tasks.import_tasks import run_import_batch
+
+    enqueue_failed = 0
+    for batch_id in batch_ids:
+        try:
+            run_import_batch.delay(str(batch_id))
+        except Exception as exc:  # noqa: BLE001 单批投递失败不阻断其余恢复
+            enqueue_failed += 1
+            log.exception(
+                "crawler_stalled_import_enqueue_failed batch_id=%s",
+                str(batch_id),
+            )
+            sentry_sdk.capture_exception(exc)
+    return {
+        "recovered": len(batch_ids) - enqueue_failed,
+        "enqueue_failed": enqueue_failed,
+    }
+
+
+__all__ = ["recover_stalled_crawler_imports", "schedule_daily_tasks"]

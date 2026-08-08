@@ -85,7 +85,7 @@ def run_import_batch(
 
 
 async def _run_with_engine_dispose(
-    batch_id: UUID, only_failed: bool
+    batch_id: UUID, only_failed: bool = False
 ) -> dict[str, Any]:
     """包裹任务执行：结束时 dispose 异步引擎。
 
@@ -104,11 +104,54 @@ async def _run_with_engine_dispose(
 
 
 # ---------------------------------------------------------------------------
-# 主编排（双 session + per-row SET LOCAL）
+# 主编排（session advisory lock + 双 session + per-row SET LOCAL）
 # ---------------------------------------------------------------------------
 
 
-async def _run_import_batch(batch_id: UUID, only_failed: bool) -> dict[str, Any]:
+async def _run_import_batch(
+    batch_id: UUID, only_failed: bool = False
+) -> dict[str, Any]:
+    """原子 claim 一个批次；原始投递与恢复投递并发时只允许一个 runner。"""
+    lock_sql = text(
+        "SELECT pg_try_advisory_lock("
+        "hashtextextended(CAST(:batch_id AS text), 0))"
+    )
+    unlock_sql = text(
+        "SELECT pg_advisory_unlock("
+        "hashtextextended(CAST(:batch_id AS text), 0))"
+    )
+    async with AsyncSessionBypass() as lock_session:
+        acquired = bool(
+            (
+                await lock_session.execute(
+                    lock_sql, {"batch_id": str(batch_id)}
+                )
+            ).scalar_one()
+        )
+        if not acquired:
+            log.info(
+                "import_batch_already_running",
+                extra={"batch_id": str(batch_id)},
+            )
+            return {"status": "already_running"}
+        try:
+            return await _run_import_batch_claimed(batch_id, only_failed)
+        finally:
+            try:
+                await lock_session.execute(
+                    unlock_sql, {"batch_id": str(batch_id)}
+                )
+            except Exception as exc:  # noqa: BLE001 连接关闭也会释放会话锁
+                log.warning(
+                    "import_batch_advisory_unlock_failed",
+                    extra={"batch_id": str(batch_id)},
+                )
+                sentry_sdk.capture_exception(exc)
+
+
+async def _run_import_batch_claimed(
+    batch_id: UUID, only_failed: bool = False
+) -> dict[str, Any]:
     # ── 1. 元数据读取 + 状态守卫（bypass，系统级）──
     async with AsyncSessionBypass() as meta_s:
         batch = await meta_s.get(ImportBatch, batch_id)

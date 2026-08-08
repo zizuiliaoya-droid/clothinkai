@@ -19,8 +19,10 @@ import subprocess
 import tarfile
 import tempfile
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 import sentry_sdk
 from celery import Task
@@ -30,7 +32,15 @@ from app.core.attachment import attachment_service
 from app.core.celery_app import celery_app
 from app.core.config import settings
 from app.core.db import AsyncSessionBypass
-from app.modules.auth.models import BackupRecord
+from app.modules.auth.models import (
+    BackupRecord,
+    Permission,
+    Role,
+    RolePermission,
+)
+from app.modules.importer.models import FieldMapping
+from app.modules.product.dict_models import DictItem
+from app.modules.report.user_preference_models import UserPreference
 
 log = logging.getLogger(__name__)
 
@@ -92,9 +102,9 @@ async def _run_backup_database(task: Task) -> dict[str, Any]:
             pg_path = tmp / f"pg-{today.isoformat()}.sql.gz"
             _run_pg_dump(pg_path)
 
-            # 2. 配置导出（暂时占位，U01 仅 role/permission seed 是不变的）
+            # 2. 导出显式白名单配置
             config_path = tmp / f"config-{today.isoformat()}.json.gz"
-            _export_config(config_path)
+            await _export_config(config_path)
 
             # 3. 合并到 tar.gz
             out_path = tmp / f"{backup_type}-{today.isoformat()}.tar.gz"
@@ -181,15 +191,95 @@ def _run_pg_dump(out_path: Path) -> None:
         )
 
 
-def _export_config(out_path: Path) -> None:
-    """导出关键配置到 gzip JSON（U01 阶段先占位空 dict）。"""
-    payload: dict[str, Any] = {
-        "exported_at": datetime.now(timezone.utc).isoformat(),
-        "version": "0.1.0",
-        # 后续单元会在此处加入：field_mapping / message_template / role_permission
+_CONFIG_EXPORT_FIELDS: dict[type[Any], tuple[str, ...]] = {
+    Role: (
+        "id", "code", "name", "description", "is_system",
+        "created_at", "updated_at",
+    ),
+    Permission: (
+        "id", "scope", "name", "category", "created_at", "updated_at",
+    ),
+    RolePermission: ("id", "role_id", "permission_id"),
+    FieldMapping: (
+        "id", "tenant_id", "source", "version", "mapping_config",
+        "is_active", "created_by", "created_at", "updated_at",
+    ),
+    DictItem: (
+        "id", "tenant_id", "dict_type", "value", "sort_order",
+        "is_active", "created_at", "updated_at",
+    ),
+    UserPreference: (
+        "id", "tenant_id", "user_id", "pref_key", "pref_value",
+        "created_at", "updated_at",
+    ),
+}
+
+_SENSITIVE_CONFIG_NAMES = (
+    "password", "passwd", "secret", "token", "hash", "credential",
+    "private_key", "api_key", "access_key",
+)
+_SAFE_USER_PREFERENCE_KEYS = {"bi_layout"}
+
+
+def _is_sensitive_config_name(name: str) -> bool:
+    normalized = name.lower().replace("-", "_")
+    return any(part in normalized for part in _SENSITIVE_CONFIG_NAMES)
+
+
+def _serialize_config_value(value: Any) -> Any:
+    """将配置字段转换为稳定 JSON 值，显式覆盖常见数据库类型。"""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, UUID):
+        return str(value)
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, dict):
+        return {
+            str(key): _serialize_config_value(item)
+            for key, item in value.items()
+            if not _is_sensitive_config_name(str(key))
+        }
+    if isinstance(value, (list, tuple)):
+        return [_serialize_config_value(item) for item in value]
+    raise TypeError(f"不支持的配置字段类型: {type(value).__name__}")
+
+
+def _serialize_config_row(
+    row: Any, fields: tuple[str, ...]
+) -> dict[str, Any]:
+    """仅序列化审核过的字段，模型未来新增列不会自动进入备份。"""
+    return {
+        field: _serialize_config_value(getattr(row, field))
+        for field in fields
     }
-    with gzip.open(out_path, "wb") as f:
-        f.write(json.dumps(payload).encode("utf-8"))
+
+
+async def _export_config(out_path: Path) -> None:
+    """异步导出非敏感配置的模型与字段双重显式白名单。"""
+    tables: dict[str, list[dict[str, Any]]] = {}
+    async with AsyncSessionBypass() as session:
+        for model, fields in _CONFIG_EXPORT_FIELDS.items():
+            stmt = select(model).order_by(*model.__table__.primary_key.columns)
+            rows = (await session.execute(stmt)).scalars().all()
+            if model is UserPreference:
+                rows = [
+                    row for row in rows
+                    if row.pref_key in _SAFE_USER_PREFERENCE_KEYS
+                ]
+            tables[model.__tablename__] = [
+                _serialize_config_row(row, fields) for row in rows
+            ]
+
+    payload: dict[str, Any] = {
+        "schema_version": 1,
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "tables": tables,
+    }
+    with gzip.open(out_path, "wt", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, separators=(",", ":"))
 
 
 def _sha256_of_file(path: Path) -> str:

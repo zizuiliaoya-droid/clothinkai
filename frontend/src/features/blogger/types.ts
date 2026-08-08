@@ -8,9 +8,7 @@ export type GenderTarget = "女性" | "男性" | "中性";
  * 博主响应。
  *
  * 注意：quote / wechat / phone 由后端按角色过滤；
- * 当前角色不可见时返回 null（前端在 UI 上隐藏对应列即可）。
- *
- * TODO U09: 改为基于服务端字段级权限矩阵的字段过滤。
+ * 敏感字段由后端字段级权限矩阵过滤，无权角色收到 null。
  */
 export interface Blogger {
   id: string;

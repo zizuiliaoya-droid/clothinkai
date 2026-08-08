@@ -143,11 +143,15 @@ class ProductionRepository:
         self._s = session
 
     async def aggregate_by_style(
-        self, *, tenant_id: UUID, date_from: date, date_to: date,
-        exclude_brushing: bool = False, season: str | None = None,
+        self,
+        *,
+        tenant_id: UUID,
+        date_from: date,
+        date_to: date,
+        exclude_brushing: bool = False,
+        season: str | None = None,
     ) -> list[Mapping[str, Any]]:
-        # ad_daily / promotion 各自子查询预聚合为 style 维度，避免与 qianniu 多行笛卡尔积
-        # U16：exclude_brushing=true 时 pay_amount 减去刷单金额（真实 ROI）
+        """按款式聚合；EXISTS/LATERAL 保证每条日报只映射一次。"""
         brushing_sub = (
             """
             - COALESCE((
@@ -167,31 +171,73 @@ class ProductionRepository:
               s.id AS style_id, s.style_code AS style_code, s.style_name AS style_name,
               s.main_image_key AS main_image_key,
               (COALESCE(SUM(q.pay_amount), 0){brushing_sub}) AS pay_amount,
-              COALESCE(SUM((q.extra->>'refund_amount')::numeric), 0) AS refund_amount,
+              COALESCE(SUM(
+                CASE
+                  WHEN COALESCE(q.extra->>'refund_amount', '')
+                       ~ '^-?[0-9]+([.][0-9]+)?$'
+                  THEN (q.extra->>'refund_amount')::numeric
+                  ELSE 0
+                END
+              ), 0) AS refund_amount,
               COALESCE(SUM((q.extra->>'add_cart_count')::int), 0) AS add_cart_count,
               COALESCE(MAX(promo.promo_cost), 0) AS promo_cost,
               COALESCE(MAX(ad.ad_spend), 0) AS ad_spend
             FROM style s
-            LEFT JOIN platform_product pp ON pp.style_id = s.id
             LEFT JOIN qianniu_daily q
-              ON (q.platform_product_id = pp.id
-                  OR q.platform_id_snapshot = pp.platform_id
-                  OR (s.qianniu_product_id IS NOT NULL
-                      AND q.platform_id_snapshot = s.qianniu_product_id))
-              AND q.tenant_id = s.tenant_id
+              ON q.tenant_id = s.tenant_id
               AND q.date BETWEEN :date_from AND :date_to
+              AND (
+                EXISTS (
+                  SELECT 1 FROM platform_product mapped_q
+                  WHERE mapped_q.tenant_id = q.tenant_id
+                    AND mapped_q.style_id = s.id
+                    AND mapped_q.platform = '千牛'
+                    AND (
+                      (q.platform_product_id IS NOT NULL
+                       AND mapped_q.id = q.platform_product_id)
+                      OR (q.platform_product_id IS NULL
+                          AND mapped_q.platform_id = q.platform_id_snapshot)
+                    )
+                )
+                OR (
+                  q.platform_product_id IS NULL
+                  AND s.qianniu_product_id IS NOT NULL
+                  AND q.platform_id_snapshot = s.qianniu_product_id
+                  AND NOT EXISTS (
+                    SELECT 1 FROM platform_product any_q
+                    WHERE any_q.tenant_id = q.tenant_id
+                      AND any_q.platform = '千牛'
+                      AND any_q.platform_id = q.platform_id_snapshot
+                  )
+                  AND (
+                    SELECT COUNT(*) FROM style legacy_s
+                    WHERE legacy_s.tenant_id = q.tenant_id
+                      AND legacy_s.is_deleted = false
+                      AND legacy_s.qianniu_product_id = q.platform_id_snapshot
+                  ) = 1
+                )
+              )
             LEFT JOIN (
-              SELECT pp2.style_id, SUM(a.cost) AS ad_spend FROM ad_daily a
-              JOIN platform_product pp2
-                ON (pp2.id = a.platform_product_id
-                    OR pp2.platform_id = a.platform_id_snapshot)
-                AND pp2.tenant_id = a.tenant_id
-              WHERE a.date BETWEEN :date_from AND :date_to
-              GROUP BY pp2.style_id
+              SELECT mapped_a.style_id, SUM(a.cost) AS ad_spend
+              FROM ad_daily a
+              JOIN platform_product mapped_a
+                ON mapped_a.tenant_id = a.tenant_id
+                AND mapped_a.platform = '万相台'
+                AND (
+                  (a.platform_product_id IS NOT NULL
+                   AND mapped_a.id = a.platform_product_id)
+                  OR (a.platform_product_id IS NULL
+                      AND mapped_a.platform_id = a.platform_id_snapshot)
+                )
+              WHERE a.tenant_id = :tenant_id
+                AND a.date BETWEEN :date_from AND :date_to
+              GROUP BY mapped_a.style_id
             ) ad ON ad.style_id = s.id
             LEFT JOIN (
               SELECT style_id, SUM(quote_amount) AS promo_cost FROM promotion
-              WHERE cooperation_date BETWEEN :date_from AND :date_to AND is_active = true
+              WHERE tenant_id = :tenant_id
+                AND cooperation_date BETWEEN :date_from AND :date_to
+                AND is_active = true AND publish_status = '已发布'
               GROUP BY style_id
             ) promo ON promo.style_id = s.id
             WHERE s.tenant_id = :tenant_id AND s.is_deleted = false
@@ -206,68 +252,7 @@ class ProductionRepository:
         params = {"tenant_id": tenant_id, "date_from": date_from, "date_to": date_to}
         if season:
             params["season"] = season
-        return list(
-            (await self._s.execute(sql, params)).mappings().all()
-        )
-
-    async def daily_trend(
-        self, *, tenant_id: UUID, style_id: UUID, date_from: date, date_to: date
-    ) -> list[dict[str, Any]]:
-        """单款按日的 支付金额(千牛) + 推广花费(站内ad + 站外promo)，用于投产趋势折线图。"""
-        params = {"sid": style_id, "t": tenant_id, "df": date_from, "dt": date_to}
-        pay_sql = text(
-            """
-            SELECT q.date AS d, COALESCE(SUM(q.pay_amount), 0) AS v
-            FROM style s
-            LEFT JOIN platform_product pp ON pp.style_id = s.id
-            JOIN qianniu_daily q
-              ON (q.platform_product_id = pp.id
-                  OR q.platform_id_snapshot = pp.platform_id
-                  OR (s.qianniu_product_id IS NOT NULL
-                      AND q.platform_id_snapshot = s.qianniu_product_id))
-              AND q.tenant_id = s.tenant_id
-            WHERE s.id = :sid AND s.tenant_id = :t AND q.date BETWEEN :df AND :dt
-            GROUP BY q.date
-            """
-        )
-        ad_sql = text(
-            """
-            SELECT a.date AS d, COALESCE(SUM(a.cost), 0) AS v
-            FROM ad_daily a
-            JOIN platform_product pp
-              ON (pp.id = a.platform_product_id OR pp.platform_id = a.platform_id_snapshot)
-              AND pp.tenant_id = a.tenant_id
-            WHERE pp.style_id = :sid AND a.tenant_id = :t AND a.date BETWEEN :df AND :dt
-            GROUP BY a.date
-            """
-        )
-        promo_sql = text(
-            """
-            SELECT cooperation_date AS d, COALESCE(SUM(quote_amount), 0) AS v
-            FROM promotion
-            WHERE style_id = :sid AND tenant_id = :t
-              AND cooperation_date BETWEEN :df AND :dt AND is_active = true
-            GROUP BY cooperation_date
-            """
-        )
-        pay: dict[Any, Any] = {
-            r["d"]: r["v"]
-            for r in (await self._s.execute(pay_sql, params)).mappings()
-        }
-        spend: dict[Any, Any] = {}
-        for r in (await self._s.execute(ad_sql, params)).mappings():
-            spend[r["d"]] = spend.get(r["d"], 0) + r["v"]
-        for r in (await self._s.execute(promo_sql, params)).mappings():
-            spend[r["d"]] = spend.get(r["d"], 0) + r["v"]
-        dates = sorted(set(pay) | set(spend))
-        return [
-            {
-                "date": d.isoformat() if hasattr(d, "isoformat") else str(d),
-                "pay_amount": float(pay.get(d, 0) or 0),
-                "spend": float(spend.get(d, 0) or 0),
-            }
-            for d in dates
-        ]
+        return list((await self._s.execute(sql, params)).mappings().all())
 
     async def daily_trend_by_style(
         self,
@@ -277,12 +262,9 @@ class ProductionRepository:
         date_from: date,
         date_to: date,
         granularity: str = "day",
+        exclude_brushing: bool = True,
     ) -> list[Mapping[str, Any]]:
-        """单款趋势：按受信粒度汇总千牛支付金额和站内投放花费。
-
-        千牛按 platform_product 映射或款式 qianniu_product_id 直连归集；
-        站内花费按 platform_product 归集到款式。周桶由 PostgreSQL 从周一开始。
-        """
+        """按日/周/月/年汇总单款投产指标，与投产主表保持相同口径。"""
         bucket_templates = {
             "day": "{column}",
             "week": "date_trunc('week', {column})::date",
@@ -293,40 +275,140 @@ class ProductionRepository:
             template = bucket_templates[granularity]
         except KeyError as exc:
             raise ValueError(f"Unsupported trend granularity: {granularity}") from exc
-        pay_bucket = template.format(column="q.date")
-        spend_bucket = template.format(column="a.date")
+
+        sales_bucket = template.format(column="q.date")
+        ad_bucket = template.format(column="a.date")
+        promo_bucket = template.format(column="p.cooperation_date")
+        brushing_bucket = template.format(column="oa.order_date")
         sql = text(
             f"""
-            WITH pay AS (
-              SELECT {pay_bucket} AS d, SUM(q.pay_amount) AS pay_amount
+            WITH sales AS (
+              SELECT {sales_bucket} AS d,
+                     COALESCE(SUM(q.pay_amount), 0) AS pay_amount,
+                     COALESCE(SUM(
+                       CASE
+                         WHEN COALESCE(q.extra->>'refund_amount', '')
+                              ~ '^-?[0-9]+([.][0-9]+)?$'
+                         THEN (q.extra->>'refund_amount')::numeric
+                         ELSE 0
+                       END
+                     ), 0) AS refund_amount
               FROM style s
-              LEFT JOIN platform_product pp ON pp.style_id = s.id
               JOIN qianniu_daily q
-                ON (q.platform_product_id = pp.id
-                    OR q.platform_id_snapshot = pp.platform_id
-                    OR (s.qianniu_product_id IS NOT NULL
-                        AND q.platform_id_snapshot = s.qianniu_product_id))
-                AND q.tenant_id = s.tenant_id
+                ON q.tenant_id = s.tenant_id
                 AND q.date BETWEEN :date_from AND :date_to
+                AND (
+                  EXISTS (
+                    SELECT 1 FROM platform_product mapped_q
+                    WHERE mapped_q.tenant_id = q.tenant_id
+                      AND mapped_q.style_id = s.id
+                      AND mapped_q.platform = '千牛'
+                      AND (
+                        (q.platform_product_id IS NOT NULL
+                         AND mapped_q.id = q.platform_product_id)
+                        OR (q.platform_product_id IS NULL
+                            AND mapped_q.platform_id = q.platform_id_snapshot)
+                      )
+                  )
+                  OR (
+                    q.platform_product_id IS NULL
+                    AND s.qianniu_product_id IS NOT NULL
+                    AND q.platform_id_snapshot = s.qianniu_product_id
+                    AND NOT EXISTS (
+                      SELECT 1 FROM platform_product any_q
+                      WHERE any_q.tenant_id = q.tenant_id
+                        AND any_q.platform = '千牛'
+                        AND any_q.platform_id = q.platform_id_snapshot
+                    )
+                    AND (
+                      SELECT COUNT(*) FROM style legacy_s
+                      WHERE legacy_s.tenant_id = q.tenant_id
+                        AND legacy_s.is_deleted = false
+                        AND legacy_s.qianniu_product_id = q.platform_id_snapshot
+                    ) = 1
+                  )
+                )
               WHERE s.id = :style_id AND s.tenant_id = :tenant_id
-              GROUP BY {pay_bucket}
+              GROUP BY {sales_bucket}
             ),
-            spend AS (
-              SELECT {spend_bucket} AS d, SUM(a.cost) AS ad_spend
+            brushing AS (
+              SELECT {brushing_bucket} AS d,
+                     COALESCE(SUM(oa.amount), 0) AS brushing_amount
+              FROM order_adjustment oa
+              WHERE :exclude_brushing = true
+                AND oa.tenant_id = :tenant_id
+                AND oa.style_id = :style_id
+                AND oa.order_type = '刷单'
+                AND oa.exclude_from_roi = true
+                AND oa.order_date BETWEEN :date_from AND :date_to
+              GROUP BY {brushing_bucket}
+            ),
+            ads AS (
+              SELECT {ad_bucket} AS d,
+                     COALESCE(SUM(a.cost), 0) AS ad_spend
               FROM ad_daily a
-              JOIN platform_product pp2
-                ON (pp2.id = a.platform_product_id
-                    OR pp2.platform_id = a.platform_id_snapshot)
-                AND pp2.tenant_id = a.tenant_id
-              WHERE pp2.style_id = :style_id AND a.tenant_id = :tenant_id
+              WHERE a.tenant_id = :tenant_id
                 AND a.date BETWEEN :date_from AND :date_to
-              GROUP BY {spend_bucket}
+                AND EXISTS (
+                  SELECT 1 FROM platform_product mapped_a
+                  WHERE mapped_a.tenant_id = a.tenant_id
+                    AND mapped_a.style_id = :style_id
+                    AND mapped_a.platform = '万相台'
+                    AND (
+                      (a.platform_product_id IS NOT NULL
+                       AND mapped_a.id = a.platform_product_id)
+                      OR (a.platform_product_id IS NULL
+                          AND mapped_a.platform_id = a.platform_id_snapshot)
+                    )
+                )
+              GROUP BY {ad_bucket}
+            ),
+            promos AS (
+              SELECT {promo_bucket} AS d,
+                     COALESCE(SUM(p.quote_amount), 0) AS promo_cost
+              FROM promotion p
+              WHERE p.tenant_id = :tenant_id
+                AND p.style_id = :style_id
+                AND p.is_active = true
+                AND p.publish_status = '已发布'
+                AND p.cooperation_date BETWEEN :date_from AND :date_to
+              GROUP BY {promo_bucket}
+            ),
+            aggregated AS (
+              SELECT d,
+                     COALESCE(SUM(pay_amount), 0)
+                       - COALESCE(SUM(brushing_amount), 0) AS pay_amount,
+                     COALESCE(SUM(refund_amount), 0) AS refund_amount,
+                     COALESCE(SUM(promo_cost), 0) AS promo_cost,
+                     COALESCE(SUM(ad_spend), 0) AS ad_spend
+              FROM (
+                SELECT d, pay_amount, refund_amount,
+                       0::numeric AS brushing_amount,
+                       0::numeric AS promo_cost, 0::numeric AS ad_spend
+                FROM sales
+                UNION ALL
+                SELECT d, 0, 0, brushing_amount, 0, 0 FROM brushing
+                UNION ALL
+                SELECT d, 0, 0, 0, 0, ad_spend FROM ads
+                UNION ALL
+                SELECT d, 0, 0, 0, promo_cost, 0 FROM promos
+              ) source
+              GROUP BY d
+            ),
+            calculated AS (
+              SELECT d, pay_amount, refund_amount,
+                     pay_amount - refund_amount AS confirmed_amount,
+                     promo_cost, ad_spend,
+                     promo_cost + ad_spend AS total_spend
+              FROM aggregated
             )
-            SELECT COALESCE(pay.d, spend.d) AS date,
-                   COALESCE(pay.pay_amount, 0) AS pay_amount,
-                   COALESCE(spend.ad_spend, 0) AS ad_spend
-            FROM pay FULL OUTER JOIN spend ON pay.d = spend.d
-            ORDER BY 1
+            SELECT d AS date, pay_amount, refund_amount, confirmed_amount,
+                   promo_cost, ad_spend, total_spend,
+                   CASE WHEN total_spend = 0 THEN NULL
+                        ELSE ROUND(confirmed_amount / total_spend, 4)
+                   END AS net_roi
+            FROM calculated
+            ORDER BY d
             """
         )
         return list(
@@ -334,8 +416,11 @@ class ProductionRepository:
                 await self._s.execute(
                     sql,
                     {
-                        "tenant_id": tenant_id, "style_id": style_id,
-                        "date_from": date_from, "date_to": date_to,
+                        "tenant_id": tenant_id,
+                        "style_id": style_id,
+                        "date_from": date_from,
+                        "date_to": date_to,
+                        "exclude_brushing": exclude_brushing,
                     },
                 )
             ).mappings().all()
@@ -344,19 +429,20 @@ class ProductionRepository:
     async def fetch_extra_by_style(
         self, *, tenant_id: UUID, date_from: date, date_to: date
     ) -> list[Mapping[str, Any]]:
-        """拉取千牛/站内导入明细的 (style_id, extra) 用于按款式汇总 JSONB 数值列。
-
-        通过 platform_product.platform_id = *_daily.platform_id_snapshot 归集到款式，
-        兼容导入数据 platform_product_id 为 NULL 的场景。
-        """
+        """按款式拉取千牛/站内 extra，显式 ID 优先并限制平台，避免重复归集。"""
         sql = text(
             """
             SELECT pp.style_id AS style_id, q.extra AS extra, 'qianniu' AS src
             FROM qianniu_daily q
             JOIN platform_product pp
               ON pp.tenant_id = q.tenant_id
-              AND (pp.id = q.platform_product_id
-                   OR pp.platform_id = q.platform_id_snapshot)
+              AND pp.platform = '千牛'
+              AND (
+                (q.platform_product_id IS NOT NULL
+                 AND pp.id = q.platform_product_id)
+                OR (q.platform_product_id IS NULL
+                    AND pp.platform_id = q.platform_id_snapshot)
+              )
             WHERE q.tenant_id = :tenant_id
               AND q.date BETWEEN :date_from AND :date_to
               AND q.extra IS NOT NULL
@@ -365,24 +451,37 @@ class ProductionRepository:
             FROM qianniu_daily q
             JOIN style s
               ON s.tenant_id = q.tenant_id
+              AND s.is_deleted = false
               AND s.qianniu_product_id IS NOT NULL
               AND s.qianniu_product_id = q.platform_id_snapshot
             WHERE q.tenant_id = :tenant_id
               AND q.date BETWEEN :date_from AND :date_to
               AND q.extra IS NOT NULL
+              AND q.platform_product_id IS NULL
               AND NOT EXISTS (
                 SELECT 1 FROM platform_product pp
                 WHERE pp.tenant_id = q.tenant_id
-                  AND (pp.id = q.platform_product_id
-                       OR pp.platform_id = q.platform_id_snapshot)
+                  AND pp.platform = '千牛'
+                  AND pp.platform_id = q.platform_id_snapshot
               )
+              AND (
+                SELECT COUNT(*) FROM style legacy_s
+                WHERE legacy_s.tenant_id = q.tenant_id
+                  AND legacy_s.is_deleted = false
+                  AND legacy_s.qianniu_product_id = q.platform_id_snapshot
+              ) = 1
             UNION ALL
             SELECT pp.style_id AS style_id, a.extra AS extra, 'ad' AS src
             FROM ad_daily a
             JOIN platform_product pp
               ON pp.tenant_id = a.tenant_id
-              AND (pp.id = a.platform_product_id
-                   OR pp.platform_id = a.platform_id_snapshot)
+              AND pp.platform = '万相台'
+              AND (
+                (a.platform_product_id IS NOT NULL
+                 AND pp.id = a.platform_product_id)
+                OR (a.platform_product_id IS NULL
+                    AND pp.platform_id = a.platform_id_snapshot)
+              )
             WHERE a.tenant_id = :tenant_id
               AND a.date BETWEEN :date_from AND :date_to
               AND a.extra IS NOT NULL

@@ -22,6 +22,7 @@ from collections.abc import Sequence
 from typing import cast
 from uuid import UUID, uuid4
 
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
 from app.core.attachment import BucketKind
@@ -200,8 +201,8 @@ class ImportService:
         filename: str,
         content_type: str = "text/csv",
         mapping_version: int | None = None,
-    ) -> ImportBatch:
-        """采集 Worker result 成功路径：系统 actor 创建 batch + 触发导入。
+    ) -> tuple[ImportBatch, bool]:
+        """采集 Worker 创建或幂等复用批次，返回 ``(batch, should_enqueue)``。
 
         与 ``upload`` 共用核心逻辑，但 actor_id=None（audit actor_type=worker），
         tenant_id 由调用方（CrawlerTaskService，system_context）显式传入。
@@ -209,6 +210,9 @@ class ImportService:
         """
         if source not in ImportAdapterRegistry.sources():
             raise ImportSourceUnknownError(source)
+        self._assert_format(filename, content_type)
+        if not content:
+            raise ImportFormatUnsupportedError("导入文件不能为空")
 
         size_bytes = len(content)
         if size_bytes > settings.IMPORT_MAX_FILE_MB * 1024 * 1024:
@@ -252,9 +256,42 @@ class ImportService:
                     raise ImportStorageError() from exc
         except IntegrityError:
             existing = await self._repo.find_by_hash(tenant_id, source, file_hash)
-            raise ImportDuplicateFileError(
-                batch_id=existing.id if existing else None
+            if existing is None:
+                raise ImportDuplicateFileError()
+            should_enqueue = False
+            if existing.status == "failed":
+                # 仅允许观察到该 failed generation 的请求原子 claim。updated_at
+                # 作为版本栅栏，避免另一个迟到事务覆盖已重新执行后的终态。
+                claimed_id = (
+                    await self._session.execute(
+                        text(
+                            "UPDATE import_batch SET status='processing', "
+                            "error_summary=NULL, mapping_version=:mapping_version, "
+                            "updated_at=NOW() WHERE id=:id AND status='failed' "
+                            "AND updated_at=:observed_updated_at RETURNING id"
+                        ),
+                        {
+                            "id": str(existing.id),
+                            "mapping_version": resolved_version,
+                            "observed_updated_at": existing.updated_at,
+                        },
+                    )
+                ).scalar_one_or_none()
+                should_enqueue = claimed_id is not None
+                await self._session.refresh(existing)
+            await self._audit.log(
+                action="import.reuse_via_crawler",
+                resource="import_batch",
+                resource_id=existing.id,
+                after={
+                    "source": source,
+                    "file_hash": file_hash,
+                    "mapping_version": existing.mapping_version,
+                    "should_enqueue": should_enqueue,
+                },
+                actor_type="worker",
             )
+            return existing, should_enqueue
 
         await self._audit.log(
             action="import.upload_via_crawler",
@@ -263,13 +300,9 @@ class ImportService:
             after={"source": source, "file_hash": file_hash},
             actor_type="worker",
         )
-        await self._session.commit()
-        await self._session.refresh(batch)
-
-        from app.tasks.import_tasks import run_import_batch
-
-        run_import_batch.delay(str(batch_id))
-        return batch
+        # 由 CrawlerTaskService 与任务终态、凭据副作用在同一事务提交；
+        # 提交后再投递导入任务，避免并发结果回传重复建批次。
+        return batch, True
 
 
     # ============================================================

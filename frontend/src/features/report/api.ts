@@ -90,6 +90,7 @@ export async function getProductionTrend(
     date_from?: string;
     date_to?: string;
     granularity?: TimeGranularity;
+    exclude_brushing?: boolean;
   } = {}
 ): Promise<ProductionTrend> {
   const resp = await apiClient.get<ProductionTrend>(
@@ -109,4 +110,72 @@ export async function getBiDashboard(
 ): Promise<BiDashboard> {
   const resp = await apiClient.get<BiDashboard>("/api/reports/bi", { params });
   return resp.data;
+}
+
+export type ReportExportType = "work-progress" | "store-daily" | "production";
+
+export interface ReportExportParams {
+  preset?: string;
+  date_from?: string;
+  date_to?: string;
+  exclude_brushing?: boolean;
+  season?: string;
+  granularity?: TimeGranularity;
+}
+
+function exportFilename(disposition: string | undefined, fallback: string): string {
+  if (!disposition) return fallback;
+  const encoded = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+  if (encoded) {
+    try {
+      return decodeURIComponent(encoded.replace(/^"|"$/g, ""));
+    } catch {
+      return encoded;
+    }
+  }
+  return disposition.match(/filename="?([^";]+)"?/i)?.[1] ?? fallback;
+}
+
+async function normalizeExportError(error: unknown): Promise<never> {
+  const response = (error as { response?: { data?: unknown } } | null)?.response;
+  if (response?.data instanceof Blob) {
+    const text = await response.data.text();
+    try {
+      const payload = JSON.parse(text) as { message?: string; detail?: string };
+      throw new Error(payload.message ?? payload.detail ?? "导出失败");
+    } catch (parseError) {
+      if (parseError instanceof SyntaxError) {
+        throw new Error(text || "导出失败");
+      }
+      throw parseError;
+    }
+  }
+  throw error;
+}
+
+export async function exportReport(
+  type: ReportExportType,
+  params: ReportExportParams = {},
+): Promise<string> {
+  try {
+    const response = await apiClient.get<Blob>(`/api/reports/${type}/export`, {
+      params,
+      responseType: "blob",
+    });
+    const filename = exportFilename(
+      response.headers["content-disposition"],
+      `${type}.xlsx`,
+    );
+    const url = URL.createObjectURL(response.data);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+    return filename;
+  } catch (error) {
+    return normalizeExportError(error);
+  }
 }

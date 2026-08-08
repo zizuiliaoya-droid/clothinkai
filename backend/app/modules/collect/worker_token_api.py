@@ -8,9 +8,27 @@ from fastapi import APIRouter, status
 
 from app.modules.auth.deps import CurrentActiveUser, require_permission
 from app.modules.collect.deps import WorkerTokenServiceDep
-from app.modules.collect.schemas import WorkerTokenCreate, WorkerTokenIssued
+from app.modules.collect.schemas import (
+    WorkerTokenCreate,
+    WorkerTokenIssued,
+    WorkerTokenPublic,
+)
 
 router = APIRouter(prefix="/api/crawler/worker-tokens", tags=["crawler"])
+
+
+@router.get(
+    "/",
+    response_model=list[WorkerTokenPublic],
+    dependencies=[require_permission("crawler.worker", "write")],
+)
+async def list_worker_tokens(
+    user: CurrentActiveUser,
+    service: WorkerTokenServiceDep,
+) -> list[WorkerTokenPublic]:
+    """列出当前租户 Worker Token 公开字段，不返回 token/hash。"""
+    tokens = await service.list(user.tenant_id)
+    return [WorkerTokenPublic.model_validate(token) for token in tokens]
 
 
 @router.post(

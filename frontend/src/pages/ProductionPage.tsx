@@ -1,8 +1,20 @@
 import { useState } from "react";
-import { Button, Card, Modal, Select, Space, Switch, Table, Typography } from "antd";
-import { useQuery } from "@tanstack/react-query";
+import {
+  Button,
+  Card,
+  Modal,
+  Select,
+  Space,
+  Statistic,
+  Switch,
+  Table,
+  Typography,
+  message,
+} from "antd";
+import { DownloadOutlined } from "@ant-design/icons";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import type { ColumnsType } from "antd/es/table";
-import { getProduction, getProductionTrend } from "@/features/report/api";
+import { exportReport, getProduction, getProductionTrend } from "@/features/report/api";
 import type {
   ProductionRow,
   TimeGranularity,
@@ -16,6 +28,7 @@ import {
   type ReportDateRange,
   useReportTimeRange,
 } from "@/components/ReportTimeRangeFilter/ReportTimeRangeFilter";
+import { extractErrorMessage } from "@/services/apiClient";
 
 const money = (v: string | null) => (v == null ? "—" : `¥${v}`);
 const pct = (v: string | null) =>
@@ -57,6 +70,7 @@ export function ProductionPage() {
       df,
       dt,
       trendGranularity,
+      excludeBrushing,
     ],
     enabled: !!trendStyle && enabled,
     queryFn: () =>
@@ -65,6 +79,7 @@ export function ProductionPage() {
         date_from: df,
         date_to: dt,
         granularity: trendGranularity,
+        exclude_brushing: excludeBrushing,
       }),
   });
 
@@ -79,6 +94,18 @@ export function ProductionPage() {
         exclude_brushing: excludeBrushing,
         season,
       }),
+  });
+  const exportMutation = useMutation({
+    mutationFn: () =>
+      exportReport("production", {
+        preset,
+        date_from: df,
+        date_to: dt,
+        exclude_brushing: excludeBrushing,
+        season,
+      }),
+    onSuccess: (filename) => message.success(`已导出 ${filename}`),
+    onError: (error) => message.error(extractErrorMessage(error, "导出失败")),
   });
 
   // 列对齐 final.xlsx「投产报表」核心派生指标
@@ -98,7 +125,7 @@ export function ProductionPage() {
     { title: "退款金额", dataIndex: "refund_amount", width: 110, render: money },
     { title: "退货退款率", dataIndex: "return_rate", width: 110, render: pct },
     { title: "待确认收货金额", dataIndex: "confirmed_amount", width: 130, render: money },
-    { title: "推广花费", dataIndex: "promo_cost", width: 110, render: money },
+    { title: "站外推广费", dataIndex: "promo_cost", width: 120, render: money },
     { title: "站内投放", dataIndex: "ad_spend", width: 110, render: money },
     { title: "推广总花费", dataIndex: "total_spend", width: 120, render: money },
     { title: "总加购数", dataIndex: "add_cart_count", width: 100 },
@@ -136,6 +163,10 @@ export function ProductionPage() {
 
   const columns = [...baseColumns, ...extraColumns];
   const scrollX = 1500 + extraColumns.length * 130;
+  const trendPoints = trend?.points ?? [];
+  const latestTrendPoint = trendPoints.length
+    ? trendPoints[trendPoints.length - 1]
+    : undefined;
 
   return (
     <Card
@@ -168,6 +199,14 @@ export function ProductionPage() {
           checked={excludeBrushing}
           onChange={setExcludeBrushing}
         />
+        <Button
+          icon={<DownloadOutlined />}
+          loading={exportMutation.isPending}
+          disabled={!enabled}
+          onClick={() => exportMutation.mutate()}
+        >
+          导出
+        </Button>
       </Space>
       <Table
         rowKey="style_id"
@@ -201,23 +240,59 @@ export function ProductionPage() {
             onChange={setTrendGranularity}
           />
         </Space>
+        {latestTrendPoint && (
+          <Card size="small" style={{ marginBottom: 16, maxWidth: 240 }}>
+            <Statistic
+              title={`最新 ROI（${trendLabel(latestTrendPoint.date, trendGranularity)}）`}
+              value={
+                latestTrendPoint.net_roi == null
+                  ? "—"
+                  : Number(latestTrendPoint.net_roi)
+              }
+              precision={latestTrendPoint.net_roi == null ? undefined : 2}
+              suffix={latestTrendPoint.net_roi == null ? undefined : "x"}
+            />
+          </Card>
+        )}
         {trendLoading ? (
-          <div style={{ textAlign: "center", padding: 40 }}>加载中…</div>
+          <div role="status" aria-live="polite" style={{ textAlign: "center", padding: 40 }}>
+            加载中…
+          </div>
         ) : (
           <MiniLineChart
-            labels={(trend?.points ?? []).map((p) =>
-              trendLabel(p.date, trendGranularity)
+            labels={trendPoints.map((point) =>
+              trendLabel(point.date, trendGranularity)
             )}
             series={[
               {
                 name: "支付金额",
                 color: "#1677ff",
-                data: (trend?.points ?? []).map((p) => Number(p.pay_amount)),
+                data: trendPoints.map((point) => Number(point.pay_amount)),
               },
               {
-                name: "站内花费",
+                name: "退款金额",
+                color: "#cf1322",
+                data: trendPoints.map((point) => Number(point.refund_amount)),
+              },
+              {
+                name: "确认金额",
+                color: "#389e0d",
+                data: trendPoints.map((point) => Number(point.confirmed_amount)),
+              },
+              {
+                name: "站外推广费",
+                color: "#722ed1",
+                data: trendPoints.map((point) => Number(point.promo_cost)),
+              },
+              {
+                name: "站内投放",
                 color: "#fa8c16",
-                data: (trend?.points ?? []).map((p) => Number(p.ad_spend)),
+                data: trendPoints.map((point) => Number(point.ad_spend)),
+              },
+              {
+                name: "总花费",
+                color: "#08979c",
+                data: trendPoints.map((point) => Number(point.total_spend)),
               },
             ]}
           />

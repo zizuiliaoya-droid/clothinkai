@@ -11,12 +11,15 @@ import hashlib
 import logging
 import secrets
 from datetime import UTC, datetime
+from ipaddress import ip_address, ip_network
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import AuditService
+from app.core.db import AsyncSessionApp
 from app.core.metrics import worker_token_auth_failures_total
+from app.core.tenancy import bypass_rls_ctx, tenant_id_ctx
 from app.modules.auth.models import User
 from app.modules.auth.repository import RoleRepository
 from app.modules.collect.config import WORKER_AUTH_FAILURE_THRESHOLD
@@ -36,13 +39,26 @@ def hash_token(raw: str) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
+def ip_is_allowed(client_ip: str, allowlist: list[str]) -> bool:
+    """按单 IP/CIDR 白名单匹配；无效或空白名单一律拒绝。"""
+    try:
+        address = ip_address(client_ip)
+    except ValueError:
+        return False
+    for entry in allowlist:
+        try:
+            if address in ip_network(entry, strict=False):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
 class WorkerTokenService:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
         self._repo = WorkerTokenRepository(session)
         self._audit = AuditService(session)
-        self._roles = RoleRepository(session)
-        self._notifier = NotificationService(session)
 
     async def issue(
         self, name: str, ip_allowlist: list[str], user: User
@@ -67,8 +83,12 @@ class WorkerTokenService:
         await self._session.commit()
         return wt, raw
 
+    async def list(self, tenant_id: UUID) -> list[WorkerToken]:
+        """返回当前租户 Token 实体；API 仅序列化 WorkerTokenPublic。"""
+        return list(await self._repo.list(tenant_id))
+
     async def revoke(self, token_id: UUID, user: User) -> None:
-        wt = await self._repo.get_by_id(token_id)
+        wt = await self._repo.get_by_id(token_id, user.tenant_id)
         if wt is None:
             raise WorkerTokenInvalid("Worker token 不存在")
         wt.is_active = False
@@ -82,11 +102,13 @@ class WorkerTokenService:
         await self._session.commit()
 
     async def authenticate(self, raw_token: str, client_ip: str) -> WorkerToken:
-        wt = await self._repo.get_active_by_hash(hash_token(raw_token))
+        wt = await self._repo.get_active_by_hash(
+            hash_token(raw_token), for_update=True
+        )
         if wt is None:
             worker_token_auth_failures_total.inc()
             raise WorkerTokenInvalid()
-        if client_ip not in (wt.ip_allowlist or []):
+        if not ip_is_allowed(client_ip, list(wt.ip_allowlist or [])):
             await self._register_failure(wt)
             raise WorkerIpForbidden()
         # 成功：重置计数 + last_seen
@@ -102,18 +124,33 @@ class WorkerTokenService:
         if wt.consecutive_auth_failures >= WORKER_AUTH_FAILURE_THRESHOLD:
             wt.is_active = False
             revoked = True
+        tenant_id = wt.tenant_id
+        token_id = wt.id
+        token_name = wt.name
         await self._session.commit()
         if revoked:
+            tenant_token = tenant_id_ctx.set(tenant_id)
+            bypass_token = bypass_rls_ctx.set(False)
             try:
-                admin_ids = await self._roles.list_user_ids_by_role_code("admin")
-                await self._notifier.notify(
-                    admin_ids,
-                    f"采集 Worker [{wt.name}] 连续鉴权失败已自动吊销，请检查 Worker 配置。",
-                    type=NotificationType.SYSTEM.value,
-                )
-                await self._session.commit()
+                # 鉴权使用 BYPASS 会话；通知必须切回普通应用角色，确保管理员
+                # 查询和通知写入均受目标租户的 ORM 过滤与 PostgreSQL RLS 约束。
+                async with AsyncSessionApp() as notification_session:
+                    admin_ids = await RoleRepository(
+                        notification_session
+                    ).list_user_ids_by_role_code("admin")
+                    await NotificationService(notification_session).notify(
+                        admin_ids,
+                        f"采集 Worker [{token_name}] 连续鉴权失败已自动吊销，请检查 Worker 配置。",
+                        type=NotificationType.SYSTEM.value,
+                    )
+                    await notification_session.commit()
             except Exception:  # noqa: BLE001
-                log.warning("worker_token_revoke_notify_failed id=%s", str(wt.id))
+                log.warning(
+                    "worker_token_revoke_notify_failed id=%s", str(token_id)
+                )
+            finally:
+                bypass_rls_ctx.reset(bypass_token)
+                tenant_id_ctx.reset(tenant_token)
 
 
-__all__ = ["WorkerTokenService", "hash_token"]
+__all__ = ["WorkerTokenService", "hash_token", "ip_is_allowed"]

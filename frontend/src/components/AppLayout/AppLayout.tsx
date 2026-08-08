@@ -6,13 +6,16 @@ import {
   DashboardOutlined,
   DollarOutlined,
   HighlightOutlined,
+  KeyOutlined,
   LogoutOutlined,
   NotificationOutlined,
+  SafetyCertificateOutlined,
   SettingOutlined,
   SkinOutlined,
   TagsOutlined,
   TeamOutlined,
   UserOutlined,
+  WarningOutlined,
 } from "@ant-design/icons";
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useAuthStore } from "@/stores/authStore";
@@ -25,6 +28,13 @@ export function AppLayout() {
   const location = useLocation();
   const user = useAuthStore((s) => s.user);
   const logout = useAuthStore((s) => s.logout);
+  const roles = user?.roles ?? [];
+  const isSystemAdmin = roles.some(
+    (role) => role === "admin" || role === "platform_admin"
+  );
+  const canViewCredentials =
+    isSystemAdmin || roles.includes("operations");
+  const canViewDataQuality = canViewCredentials;
 
   async function handleLogout() {
     try {
@@ -131,6 +141,33 @@ export function AppLayout() {
       children: [
         { key: "/users", label: <Link to="/users">用户管理</Link> },
         { key: "/imports", label: <Link to="/imports">导入记录</Link> },
+        ...(canViewCredentials
+          ? [
+              {
+                key: "/credentials",
+                icon: <SafetyCertificateOutlined />,
+                label: <Link to="/credentials">平台凭据</Link>,
+              },
+            ]
+          : []),
+        ...(isSystemAdmin
+          ? [
+              {
+                key: "/worker-tokens",
+                icon: <KeyOutlined />,
+                label: <Link to="/worker-tokens">Worker Token</Link>,
+              },
+            ]
+          : []),
+        ...(canViewDataQuality
+          ? [
+              {
+                key: "/data-quality",
+                icon: <WarningOutlined />,
+                label: <Link to="/data-quality">数据质量</Link>,
+              },
+            ]
+          : []),
         { key: "/settings", label: <Link to="/settings">系统设置</Link> },
       ],
     },
@@ -153,7 +190,6 @@ export function AppLayout() {
   ];
 
   // 仓库角色只能操作打单：仅保留「仓库打单」菜单（admin/平台管理员不受限）
-  const roles = user?.roles ?? [];
   const isWarehouseOnly =
     roles.includes("warehouse") &&
     !roles.some((r) => r === "admin" || r === "platform_admin");

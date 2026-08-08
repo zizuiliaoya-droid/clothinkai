@@ -1,7 +1,7 @@
 """U14 投产报表指标（style ROI）。
 
 5 核心公式均经 safe_div（分母 0/None→null）。
-exclude_brushing 形参占位（V1 默认 False 不影响；U16 启用剔除 order_adjustment）。
+exclude_brushing 是口径标识；刷单金额由上游聚合在计算 confirmed_amount 前剔除。
 """
 
 from __future__ import annotations

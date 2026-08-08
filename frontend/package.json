@@ -8,7 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "lint": "eslint .",
-    "type-check": "tsc -b --noEmit",
+    "type-check": "tsc -b --pretty false",
     "test": "vitest --run"
   },
   "dependencies": {

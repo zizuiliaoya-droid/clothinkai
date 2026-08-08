@@ -98,7 +98,7 @@ async function compressAs(
       if (blob.size <= TARGET_BYTES) return { blob, width, height };
     }
   }
-  return best?.blob.size < MAX_BYTES ? best : null;
+  return best && best.blob.size < MAX_BYTES ? best : null;
 }
 
 function outputName(name: string, type: "image/webp" | "image/jpeg"): string {

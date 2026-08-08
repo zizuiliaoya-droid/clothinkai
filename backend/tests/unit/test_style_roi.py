@@ -1,4 +1,4 @@
-"""U14 单元测试：投产报表 5 公式 safe_div 边界 + exclude_brushing 占位。"""
+"""U14 单元测试：投产报表 5 公式 safe_div 边界与刷单口径标识。"""
 
 from __future__ import annotations
 
@@ -33,8 +33,8 @@ class TestNetRoi:
     def test_zero_spend(self) -> None:
         assert style_roi.net_roi(Decimal("800"), Decimal("0")) is None
 
-    def test_exclude_brushing_placeholder_no_effect(self) -> None:
-        # V1 占位：exclude_brushing 不影响结果
+    def test_exclude_brushing_is_upstream_contract(self) -> None:
+        # 刷单剔除由仓储聚合完成，公式函数仅接收已调整的 confirmed_amount。
         a = style_roi.net_roi(Decimal("800"), Decimal("200"), exclude_brushing=False)
         b = style_roi.net_roi(Decimal("800"), Decimal("200"), exclude_brushing=True)
         assert a == b == Decimal("4.0000")

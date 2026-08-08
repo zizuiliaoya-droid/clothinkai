@@ -117,7 +117,7 @@ class TestExport:
             wb = load_workbook(io.BytesIO(body))
             ws = wb.active
             header = [c.value for c in next(ws.iter_rows())]
-            assert "款号" in header and "净投产比" in header
+            assert "货号" in header and "净投产比" in header
         finally:
             tenant_id_ctx.reset(tok)
 

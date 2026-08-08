@@ -4,10 +4,7 @@
 - P-U02-01：GIN trgm 模糊搜索（match）+ 降级语义
 - P-U02-02：字段权限硬编码过渡（PRICE_VISIBLE_ROLES）
 - P-U02-03：数据库原子 upsert（仅 SkuService.upsert_sku）
-- P-U02-04：软删 + 引用检查（U02 占位 + U04/U16 扩展）
-
-所有 ``# TODO U09`` 标记位置在 U09 阶段统一替换为 ``Permission.field_filter()``
-/ ``Permission.field_writable()``，并删除 ``legacy_field_permissions.py``。
+- P-U02-04：软删 + 跨模块历史引用检查
 """
 
 from __future__ import annotations
@@ -30,6 +27,8 @@ from app.core.security.field_permissions import (
 )
 from app.modules.auth.models import User
 from app.modules.auth.repository import PermissionRepository, RoleRepository
+from app.modules.finance.order_adjustment_repository import OrderAdjustmentRepository
+from app.modules.promotion.repository import PromotionRepository
 from app.modules.product.domain import (
     build_sku_audit_changes,
     build_style_audit_changes,
@@ -483,6 +482,8 @@ class SkuService:
         self._styles = StyleRepository(session)
         self._roles = RoleRepository(session)
         self._perms = PermissionRepository(session)
+        self._promotion_repo = PromotionRepository(session)
+        self._order_repo = OrderAdjustmentRepository(session)
         self._audit = AuditService(session)
 
     # ----------------------- create / update / delete ----------------------- #
@@ -737,15 +738,13 @@ class SkuService:
         await self._session.commit()
 
     async def check_references(self, sku_id: UUID) -> dict[str, int]:
-        """检查 sku 是否被其他模块引用。
-
-        U02 阶段：promotion / order 表不存在，返回零引用。
-        TODO U04: 改为 ``await self._promotion_repo.count_by_sku(sku_id)``
-        TODO U16: 改为 ``await self._order_repo.count_by_sku(sku_id)``
-        """
-        # 依赖 sku_id 提示可能未来需要查询；保留参数命名以便 U04/U16 使用
-        _ = sku_id
-        return {"promotion_count": 0, "order_count": 0}
+        """检查 SKU 的全部历史推广和订单调整引用；依赖 RLS 隔离租户。"""
+        promotion_count = await self._promotion_repo.count_by_sku(sku_id)
+        order_count = await self._order_repo.count_by_sku(sku_id)
+        return {
+            "promotion_count": promotion_count,
+            "order_count": order_count,
+        }
 
     # ----------------------- read ----------------------- #
 

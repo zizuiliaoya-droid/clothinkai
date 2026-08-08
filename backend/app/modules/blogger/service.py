@@ -5,11 +5,8 @@
 - P-U03-02：GIN JSONB tag 包含查询
 - 复用 U02 P-U02-02 字段权限硬编码（QUOTE_VISIBLE_ROLES + CONTACT_VISIBLE_ROLES）
 - 复用 U02 P-U02-03 数据库原子 upsert
-- 复用 U02 P-U02-04 软删 + 引用检查（U03 占位）
+- 复用 U02 P-U02-04 软删 + 推广历史引用检查
 - match 降级语义：业务未匹配 200 + 空数组 / 系统失败异常冒泡（不 try/except）
-
-U10b 4 个钩子方法占位（NotImplementedError）：
-- recompute_blogger_type / recompute_quality_tags / mark_suspected_fake / bulk_recompute_tags
 """
 
 from __future__ import annotations
@@ -47,6 +44,7 @@ from app.modules.blogger.schemas import (
     BloggerUpdate,
 )
 from app.modules.blogger.tag_service import BloggerTagService
+from app.modules.promotion.repository import PromotionRepository
 
 
 class BloggerService:
@@ -57,7 +55,7 @@ class BloggerService:
         self._perms = PermissionRepository(session)
         self._audit = AuditService(session)
         self._tags = BloggerTagService(session)
-        # 注：U04 时增加 promotion_repo: PromotionRepository
+        self._promotion_repo = PromotionRepository(session)
 
     # ============================================================
     # CRUD
@@ -381,19 +379,17 @@ class BloggerService:
         )
 
     # ============================================================
-    # 引用检查（U04 启用）
+    # 历史引用检查
     # ============================================================
 
     async def check_references(self, blogger_id: UUID) -> dict[str, int]:
-        """U03 阶段：promotion 表不存在，返回零引用。
-
-        TODO U04: 改为 ``await self._promotion_repo.count_by_blogger(blogger_id)``
-        """
-        _ = blogger_id
-        return {"promotion_count": 0}
+        """检查博主的全部历史推广引用；租户隔离由 RLS 保证。"""
+        return {
+            "promotion_count": await self._promotion_repo.count_by_blogger(blogger_id)
+        }
 
     # ============================================================
-    # U11 标签计算（替换 U10b 占位钩子）
+    # U11 标签计算
     # ============================================================
 
     async def recompute_blogger_type(self, blogger_id: UUID) -> Blogger:

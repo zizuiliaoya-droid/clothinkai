@@ -1,4 +1,4 @@
-"""U14 ProductionService（投产报表 + 周环比 + exclude_brushing 占位）。"""
+"""U14 ProductionService（投产报表、周环比与单款趋势）。"""
 
 from __future__ import annotations
 
@@ -68,6 +68,7 @@ class ProductionService:
         time_range: tuple[date, date],
         *,
         granularity: str = "day",
+        exclude_brushing: bool = True,
     ) -> "ProductionTrend":
         from app.modules.report.advanced_schemas import (
             ProductionTrend,
@@ -80,10 +81,33 @@ class ProductionService:
             date_from=time_range[0],
             date_to=time_range[1],
             granularity=granularity,
+            exclude_brushing=exclude_brushing,
         )
-        return ProductionTrend(
-            points=[ProductionTrendPoint.model_validate(r) for r in rows]
-        )
+        points: list[ProductionTrendPoint] = []
+        for row in rows:
+            pay_amount = Decimal(str(row.get("pay_amount") or 0))
+            refund_amount = Decimal(str(row.get("refund_amount") or 0))
+            confirmed_amount = Decimal(str(row.get("confirmed_amount") or 0))
+            promo_cost = Decimal(str(row.get("promo_cost") or 0))
+            ad_spend = Decimal(str(row.get("ad_spend") or 0))
+            total_spend = Decimal(str(row.get("total_spend") or 0))
+            points.append(
+                ProductionTrendPoint(
+                    date=row["date"],
+                    pay_amount=pay_amount,
+                    refund_amount=refund_amount,
+                    confirmed_amount=confirmed_amount,
+                    promo_cost=promo_cost,
+                    ad_spend=ad_spend,
+                    total_spend=total_spend,
+                    net_roi=style_roi.net_roi(
+                        confirmed_amount,
+                        total_spend,
+                        exclude_brushing=exclude_brushing,
+                    ),
+                )
+            )
+        return ProductionTrend(points=points)
 
     async def _aggregate_extra(
         self, tenant_id: UUID, date_from: date, date_to: date

@@ -44,7 +44,7 @@ class BloggerNotFoundError(ResourceNotFoundError):
 
 
 class BloggerHasReferenceError(AppException):
-    """软删 blogger 但已被 promotion 引用（BR-U03-20）。U03 阶段不会触发。"""
+    """软删 blogger 但已有推广历史引用（BR-U03-20）。"""
 
     code = "BLOGGER_HAS_REFERENCE"
     status_code = 409

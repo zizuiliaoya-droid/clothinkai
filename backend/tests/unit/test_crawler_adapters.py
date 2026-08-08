@@ -5,7 +5,10 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 
-from app.modules.collect.worker_token_service import hash_token
+import pytest
+from pydantic import ValidationError
+
+from app.modules.collect.schemas import CrawlerResultIn
 from app.modules.importer.adapters.huitun import HuitunImportAdapter
 from app.modules.importer.adapters.qianniu import QianniuImportAdapter
 from app.modules.importer.adapters.wanxiangtai import WanxiangtaiImportAdapter
@@ -75,8 +78,40 @@ class TestHuitunAdapter:
         assert a.validate(a.parse_row({}, None)) == ["小红书ID不能为空"]
 
 
+class TestCrawlerResultSchema:
+    @pytest.mark.parametrize("status", ["success", "failed"])
+    def test_accepts_protocol_status(self, status: str) -> None:
+        assert CrawlerResultIn(status=status).status == status
+
+    @pytest.mark.parametrize("status", ["", "partial", "error", "SUCCESS"])
+    def test_rejects_unknown_status(self, status: str) -> None:
+        with pytest.raises(ValidationError):
+            CrawlerResultIn(status=status)
+
+
 class TestWorkerTokenHash:
     def test_hash_deterministic(self) -> None:
+        from app.modules.collect.worker_token_service import hash_token
+
         assert hash_token("abc") == hash_token("abc")
         assert hash_token("abc") != hash_token("abd")
         assert len(hash_token("abc")) == 64
+
+    def test_ip_and_cidr_allowlist(self) -> None:
+        from app.modules.collect.schemas import WorkerTokenCreate
+        from app.modules.collect.worker_token_service import ip_is_allowed
+
+        payload = WorkerTokenCreate(
+            name="worker", ip_allowlist=["10.0.0.10", "10.0.1.7/24"]
+        )
+        assert payload.ip_allowlist == ["10.0.0.10", "10.0.1.0/24"]
+        assert ip_is_allowed("10.0.0.10", payload.ip_allowlist)
+        assert ip_is_allowed("10.0.1.99", payload.ip_allowlist)
+        assert not ip_is_allowed("10.0.2.1", payload.ip_allowlist)
+
+    @pytest.mark.parametrize("allowlist", [[], ["not-an-ip"], ["10.0.0.1/99"]])
+    def test_rejects_invalid_or_empty_allowlist(self, allowlist: list[str]) -> None:
+        from app.modules.collect.schemas import WorkerTokenCreate
+
+        with pytest.raises(ValidationError):
+            WorkerTokenCreate(name="worker", ip_allowlist=allowlist)

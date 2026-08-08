@@ -30,6 +30,7 @@ yarn-error.log*
 # Vite / React
 frontend/dist/
 frontend/.vite/
+*.tsbuildinfo
 
 # Environment
 .env

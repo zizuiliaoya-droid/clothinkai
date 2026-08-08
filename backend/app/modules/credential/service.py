@@ -60,8 +60,12 @@ class CredentialService:
     # ------------------------------------------------------------------ #
     # helpers
     # ------------------------------------------------------------------ #
-    async def _require(self, credential_id: UUID) -> Credential:
-        cred = await self._repo.get_by_id(credential_id)
+    async def _require(
+        self, credential_id: UUID, *, for_update: bool = False
+    ) -> Credential:
+        cred = await self._repo.get_by_id(
+            credential_id, for_update=for_update
+        )
         if cred is None:
             raise CredentialNotFound(f"凭据 {credential_id} 不存在")
         return cred
@@ -211,7 +215,11 @@ class CredentialService:
     # decrypt（供 U13 Worker，写审计 + 指标）
     # ------------------------------------------------------------------ #
     async def decrypt_for_purpose(
-        self, credential_id: UUID, purpose: str
+        self,
+        credential_id: UUID,
+        purpose: str,
+        *,
+        commit: bool = True,
     ) -> str:
         cred = await self._require(credential_id)
         try:
@@ -226,7 +234,8 @@ class CredentialService:
                 resource_id=cred.id,
                 after={"purpose": purpose},
             )
-            await self._session.commit()
+            if commit:
+                await self._session.commit()
             raise
         credential_decrypt_total.labels(cred.platform, "success").inc()
         await self._audit.log(
@@ -239,52 +248,72 @@ class CredentialService:
                 "username": cred.username,
             },
         )
-        await self._session.commit()
+        if commit:
+            await self._session.commit()
         return plaintext
 
     # ------------------------------------------------------------------ #
     # 采集失败/成功回调（供 U13）
     # ------------------------------------------------------------------ #
     async def report_failure(
-        self, credential_id: UUID, error_reason: str
-    ) -> None:
-        cred = await self._require(credential_id)
+        self,
+        credential_id: UUID,
+        error_reason: str,
+        *,
+        commit: bool = True,
+    ) -> bool:
+        """累计失败；返回是否刚达到自动暂停阈值。"""
+        cred = await self._require(credential_id, for_update=True)
         cred.consecutive_failures += 1
         cred.last_failure_reason = error_reason
         cred.last_failure_at = datetime.now(UTC)
         notify_needed = False
-        if cred.consecutive_failures >= CONSECUTIVE_FAILURE_THRESHOLD:
+        if (
+            cred.consecutive_failures >= CONSECUTIVE_FAILURE_THRESHOLD
+            and cred.status != "paused"
+        ):
             cred.status = "paused"
             credential_auto_paused_total.labels(cred.platform).inc()
             notify_needed = True
         await self._session.flush()
-        await self._session.commit()
+        if commit:
+            await self._session.commit()
+            if notify_needed:
+                await self.notify_failure(credential_id, error_reason)
+        return notify_needed
 
-        if notify_needed:
-            try:
-                admin_ids = await self._roles.list_user_ids_by_role_code("admin")
-                content = (
-                    f"{cred.platform} 凭据 {cred.username} 连续 "
-                    f"{cred.consecutive_failures} 次采集失败，已自动暂停。"
-                    f"请检查平台账号状态。原因：{error_reason}"
-                )
-                await self._notifier.notify(
-                    admin_ids,
-                    content,
-                    type=NotificationType.CREDENTIAL_FAILURE.value,
-                )
-                await self._session.commit()
-            except Exception:  # noqa: BLE001 通知失败不影响凭据状态
-                log.warning(
-                    "credential_failure_notify_failed credential_id=%s",
-                    str(credential_id),
-                )
+    async def notify_failure(
+        self, credential_id: UUID, error_reason: str
+    ) -> None:
+        """在业务事务提交后发送自动暂停通知，失败不回滚状态。"""
+        try:
+            cred = await self._require(credential_id)
+            admin_ids = await self._roles.list_user_ids_by_role_code("admin")
+            content = (
+                f"{cred.platform} 凭据 {cred.username} 连续 "
+                f"{cred.consecutive_failures} 次采集失败，已自动暂停。"
+                f"请检查平台账号状态。原因：{error_reason}"
+            )
+            await self._notifier.notify(
+                admin_ids,
+                content,
+                type=NotificationType.CREDENTIAL_FAILURE.value,
+            )
+            await self._session.commit()
+        except Exception:  # noqa: BLE001 通知失败不影响凭据状态
+            log.warning(
+                "credential_failure_notify_failed credential_id=%s",
+                str(credential_id),
+            )
 
-    async def report_success(self, credential_id: UUID) -> None:
-        cred = await self._require(credential_id)
+    async def report_success(
+        self, credential_id: UUID, *, commit: bool = True
+    ) -> None:
+        cred = await self._require(credential_id, for_update=True)
         cred.consecutive_failures = 0
         await self._session.flush()
-        await self._session.commit()
+        if commit:
+            await self._session.commit()
 
 
 __all__ = ["CredentialService"]

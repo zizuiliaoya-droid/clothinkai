@@ -18,8 +18,13 @@ class CredentialRepository:
     def add(self, credential: Credential) -> None:
         self._session.add(credential)
 
-    async def get_by_id(self, credential_id: UUID) -> Credential | None:
-        return await self._session.get(Credential, credential_id)
+    async def get_by_id(
+        self, credential_id: UUID, *, for_update: bool = False
+    ) -> Credential | None:
+        stmt = select(Credential).where(Credential.id == credential_id)
+        if for_update:
+            stmt = stmt.with_for_update()
+        return (await self._session.execute(stmt)).scalar_one_or_none()
 
     async def list(
         self,

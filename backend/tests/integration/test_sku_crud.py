@@ -17,11 +17,13 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.tenancy import tenant_id_ctx
+from app.modules.finance.order_adjustment_models import OrderAdjustment
 from app.modules.product.enums import SourcingType
 from app.modules.product.exceptions import (
     FieldPermissionDenied,
     InvalidStyleReferenceError,
     SkuCodeConflictError,
+    SkuHasReferenceError,
     StyleNotFoundError,
 )
 from app.modules.product.schemas import SkuCreate, SkuUpdate
@@ -292,7 +294,7 @@ class TestSoftDeleteSku:
         admin_role: Any,
         product_factory: Any,
     ) -> None:
-        """U02 阶段 promotion/order 表不存在，引用永远 0，应允许软删."""
+        """无推广或订单调整历史引用时应允许软删。"""
         token = tenant_id_ctx.set(tenant_a.id)
         try:
             style = await product_factory.style()
@@ -302,5 +304,48 @@ class TestSoftDeleteSku:
             await svc.soft_delete_sku(sku.id, user)
             await session.refresh(sku)
             assert sku.is_deleted is True
+        finally:
+            tenant_id_ctx.reset(token)
+    async def test_soft_delete_referenced_sku_is_denied(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        """推广和订单调整历史引用均通过真实仓储计数并阻止软删。"""
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            style = await product_factory.style()
+            sku = await product_factory.sku(style)
+            blogger = await blogger_factory.blogger()
+            await promotion_factory.promotion(
+                style=style,
+                blogger=blogger,
+                sku_id=sku.id,
+                is_active=False,
+            )
+            session.add(
+                OrderAdjustment(
+                    order_type="刷单",
+                    style_id=style.id,
+                    sku_id=sku.id,
+                    amount=Decimal("10.00"),
+                    exclude_from_roi=True,
+                    status="待付款",
+                )
+            )
+            await session.flush()
+            user = await factory.user(tenant_a, roles=[admin_role])
+            svc = SkuService(session)
+
+            refs = await svc.check_references(sku.id)
+            assert refs == {"promotion_count": 1, "order_count": 1}
+            with pytest.raises(SkuHasReferenceError):
+                await svc.soft_delete_sku(sku.id, user)
+            assert sku.is_deleted is False
         finally:
             tenant_id_ctx.reset(token)

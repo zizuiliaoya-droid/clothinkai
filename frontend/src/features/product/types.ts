@@ -114,9 +114,7 @@ export interface StylePage {
  * SKU 响应。
  *
  * 注意：cost_price / purchase_price 由后端按角色过滤；
- * 当前角色（PR / 设计师等）不可见时返回 null（PR 在 UI 上隐藏价格列即可）。
- *
- * TODO U09: 改为基于服务端字段级权限矩阵的字段过滤。
+ * 字段可见性由后端字段级权限矩阵过滤；无权角色收到 null。
  */
 export interface Sku {
   id: string;

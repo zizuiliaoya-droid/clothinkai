@@ -26,12 +26,23 @@ export function HomePage() {
           </Descriptions.Item>
         </Descriptions>
       </Card>
-      <Typography.Paragraph
-        type="secondary"
-        style={{ marginTop: 16, fontSize: 13 }}
-      >
-        商品管理（款式 / 品牌）已上线。设计制版、推广、财务、报表等模块正在陆续接入。
-      </Typography.Paragraph>
+      <Card title="已上线能力概览" style={{ marginTop: 16 }}>
+        <Typography.Paragraph type="secondary" style={{ marginBottom: 12 }}>
+          系统已覆盖商品与设计制版、达人推广、仓库打单、财务结算、运营报表、自动采集及数据质量治理等核心流程。
+        </Typography.Paragraph>
+        {[
+          "商品与设计制版",
+          "推广与发文进度",
+          "仓库打单与财务",
+          "店铺与投产报表",
+          "平台凭据与 Worker",
+          "导入与数据质量",
+        ].map((capability) => (
+          <Tag color="blue" key={capability} style={{ marginBottom: 8 }}>
+            {capability}
+          </Tag>
+        ))}
+      </Card>
     </div>
   );
 }

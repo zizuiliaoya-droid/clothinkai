@@ -158,11 +158,16 @@ async def get_production_trend(
         str,
         Query(pattern=r"^(day|week|month|year)$", description="趋势粒度"),
     ] = "day",
+    exclude_brushing: bool = True,
 ) -> ProductionTrend:
     """单款投产趋势；date 表示日或周/月/年桶的起始日期。"""
     tr = resolve_time_range(preset, date_from, date_to)
     return await service.get_trend(
-        user.tenant_id, style_id, tr, granularity=granularity
+        user.tenant_id,
+        style_id,
+        tr,
+        granularity=granularity,
+        exclude_brushing=exclude_brushing,
     )
 
 

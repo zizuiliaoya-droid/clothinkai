@@ -23,6 +23,15 @@ class OrderAdjustmentRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._s = session
 
+    async def count_by_sku(self, sku_id: UUID) -> int:
+        """统计 SKU 的全部历史订单调整引用；租户隔离由 RLS 保证。"""
+        stmt = (
+            select(func.count())
+            .select_from(OrderAdjustment)
+            .where(OrderAdjustment.sku_id == sku_id)
+        )
+        return int((await self._s.execute(stmt)).scalar_one())
+
     def add(self, row: OrderAdjustment) -> None:
         self._s.add(row)
 

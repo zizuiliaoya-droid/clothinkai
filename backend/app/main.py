@@ -47,7 +47,6 @@ from app.core.tenancy import bypass_rls_ctx
 from app.modules.auth.api import router as auth_router
 from app.modules.blogger.api import router as blogger_router
 from app.modules.product.api import router as product_router
-from app.modules.product.bundle_api import router as bundle_router
 from app.modules.product.dict_api import router as dict_router
 from app.modules.promotion.api import router as promotion_router
 from app.modules.finance.api import router as finance_router
@@ -418,7 +417,7 @@ def create_app() -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
-        expose_headers=["X-Request-ID"],
+        expose_headers=["X-Request-ID", "Content-Disposition"],
     )
 
     # ----- 错误处理 -----
@@ -454,7 +453,6 @@ def create_app() -> FastAPI:
     # ----- 路由挂载 -----
     app.include_router(auth_router, prefix="/api")
     app.include_router(product_router)  # product router 已含 /api 前缀
-    app.include_router(bundle_router)  # U17 套装 /api/bundles
     app.include_router(dict_router)  # 可维护字典 /api/dict-items
     app.include_router(blogger_router)  # blogger router 已含 /api 前缀
     app.include_router(promotion_router)  # promotion router 已含 /api 前缀
@@ -483,6 +481,3 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
-# deploy trigger: migration 027 fix (dict_item)
-
-# deploy: trigger rebuild for migration 027 fix

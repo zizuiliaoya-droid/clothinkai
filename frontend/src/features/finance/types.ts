@@ -19,9 +19,7 @@ export type ReviewAction = "approve" | "reject";
  * 当前角色不可见时返回 null，前端在 UI 上隐藏对应列即可。
  *
  * payment_proof_signed_url：后端生成的 R2 私有桶签名 URL（15 分钟有效）；
- * 不暴露 r2_key，前端只读不可写。
- *
- * TODO U09: 改为基于服务端字段级权限矩阵的字段过滤。
+ * 不暴露 r2_key，字段可见性由后端字段级权限矩阵过滤。
  */
 export interface Settlement {
   id: string;

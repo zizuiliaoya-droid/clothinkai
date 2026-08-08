@@ -30,6 +30,18 @@ class CrawlerTaskNotFound(ResourceNotFoundError):
     message = "采集任务不存在"
 
 
+class CrawlerTaskResultConflict(AppException):
+    code = "CRAWLER_TASK_RESULT_CONFLICT"
+    status_code = 409
+    message = "采集任务已进入终态，不能覆盖结果"
+
+
+class CrawlerTaskResultInvalid(AppException):
+    code = "CRAWLER_TASK_RESULT_INVALID"
+    status_code = 422
+    message = "采集成功结果必须包含非空 CSV/XLSX 文件"
+
+
 class DqIssueNotFound(ResourceNotFoundError):
     code = "DQ_ISSUE_NOT_FOUND"
     message = "数据质量异常记录不存在"
@@ -37,6 +49,8 @@ class DqIssueNotFound(ResourceNotFoundError):
 
 __all__ = [
     "CrawlerTaskNotFound",
+    "CrawlerTaskResultConflict",
+    "CrawlerTaskResultInvalid",
     "CredTokenInvalid",
     "DqIssueNotFound",
     "WorkerIpForbidden",

@@ -5,11 +5,11 @@
 - **语言**: 中文
 - **项目类型**: Greenfield（全新项目）
 - **当前阶段**: CONSTRUCTION
-- **当前步骤**: 交付后增量 TASK 15 — BI 看板重构（U17 Increment 15，发布、真实表单线上验收与清理全部完成）
+- **当前步骤**: 交付后遗留功能收口（本地实现与验证完成；等待提交、Zeabur 部署和真实登录线上验收）
 - **交付方式**: 分阶段（MVP/P0 → V1/P1 → V2/P2 → P3）
 
 ## 工作区状态
-- **现有代码**: 否
+- **现有代码**: 是（全栈系统，当前有未提交的交付后收口增量）
 - **逆向工程需要**: 否
 - **工作区根目录**: e:\work\Pycharm_Projection\eCommerce_v4\
 - **技术栈**: React 18 + FastAPI + PostgreSQL 16 + Redis 7 + Celery + Cloudflare R2 + Zeabur
@@ -388,3 +388,15 @@
 - [x] 375px 与 768px 视口无页面横向溢出，表格内部横向滚动正常；刷新后的干净网络无 4xx/5xx，控制台无 error/warn。
 - [x] 本轮未创建生产测试数据，无需清理；用户删除的 Word 临时文件保持未恢复、未暂存。
 - **完成时间**：2026-08-01T01:27:23Z
+
+## 交付后遗留功能收口（进行中）
+
+- [x] SKU/博主真实引用校验、套装公开路由下线、配置备份白名单和过期代码清理。
+- [x] 可运行采集 Worker、平台凭据/Worker Token/数据质量前端、投产趋势和三类报表导出。
+- [x] Worker 租约 fencing、重复文件幂等复用、停滞导入恢复、跨消息 advisory lock、上传限流与事务原子性。
+- [x] 工作进度第 20 列、Excel 数值单元格和公式注入防护、Windows Job Object 停机清理、Windows/UNC Vite alias。
+- [x] 本地 diagnostics、compileall、Worker CLI/停机/后代清理 smoke、frontend lint/type-check/build、31 个 migration null-byte/AST、导出 smoke、diff check 通过。
+- [ ] 目标 pytest 在加载 `tests/conftest.py` 时被本机缺少 `boto3` 阻断；按约束未安装依赖。
+- [ ] 提交并推送 main，等待 Zeabur frontend/backend RUNNING 并检查 `/ready`。
+- [ ] 通过真实登录表单完成新增页面、权限、报表、引用保护和路由下线线上验收并清理测试数据。
+- [ ] 外部 Worker 因无生产 service ID 和真实合规平台命令，不声明生产部署完成。

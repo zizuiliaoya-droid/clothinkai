@@ -5997,3 +5997,43 @@ EP05-S02 / S03 / S04 / S05 / S06 / S07 / S08 / S09 / S10 / S11 / S12 / S13
 - 本轮未创建或修改生产测试数据，无需清理；用户删除的 Word 临时文件保持未恢复、未暂存。
 
 ---
+
+## 交付后遗留功能收口启动
+**Timestamp**: 2026-08-04T15:36:50Z
+**User Input**: "按照你的建议实施"
+**AI Response**: "按已批准优先级启动数据引用校验、自动采集 Worker、采集管理前端、投产趋势、报表导出、套装 API 下线、配置备份和过期代码清理；直接进入实现、验证、发布与线上验收。"
+**Context**: CONSTRUCTION / 交付后遗留功能收口；不重复请求已批准方案，audit.md 仅追加。
+
+---
+
+## 交付后遗留功能收口 — 继续实施
+**Timestamp**: 2026-08-08T01:14:02Z
+**User Input**: "继续"
+**AI Response**: "恢复交付后遗留功能收口计划，读取采集、导入、Worker、报表、前端和 AI-DLC 状态；继续修复此前半成品并执行本地验证、独立复审和发布准备。"
+**Context**: CONSTRUCTION / 交付后遗留功能收口；中文和实施顺序已批准，不重复询问；audit.md 仅追加。
+
+---
+
+## 交付后遗留功能收口 — 本地实现与验证
+**Timestamp**: 2026-08-08T01:14:02Z
+**AI Response**: "完成 Worker 结果租约 fencing、重复导入幂等复用、停滞导入跨消息 advisory lock、工作进度第 20 列、Excel 公式注入防护、Windows Job Object、失败回传重试和 Windows/UNC Vite alias；同步后端、Worker、前端、测试与 README。"
+**Context**: 关键修复包括：exchange 后保留随机租约 generation；success/failed multipart 必传 lease_token；旧租约 409；同租约同终态幂等；failed 批次使用 status+updated_at 原子 claim 并采用当前 mapping version；Job Object 使用 CREATE_SUSPENDED→Assign→NtResumeProcess，分配失败 fail-closed。
+
+**Validation**:
+- IDE diagnostics：关键后端、Worker、前端和现有测试文件无问题。
+- Backend：`python -m compileall -q app tests` 通过。
+- Worker：`python -m compileall -q worker`、`python -m worker --help` 通过；Windows 根进程先退出后代清理 smoke、suspended Job 正常执行 smoke、SIGTERM/stop_event 与任务目录清理 smoke 均通过。
+- Frontend：`npm run lint` 0 error（2 个既有 Fast Refresh warning）；`npm run type-check` 通过；`npm run build` 通过（既有动态/静态 import 与大 chunk warning）。
+- Migration：31 个 migration，null byte=0，AST 全部通过。
+- 报表：独立 openpyxl smoke 验证 20 列、Decimal 数值和危险 header/text 非公式。
+- `git diff --check` 通过，无临时 smoke 文件或生成物残留。
+- 目标 pytest 已执行，但在加载 `tests/conftest.py` 时被本机缺少 `boto3` 阻断；按用户约束未安装依赖。
+
+---
+
+## 交付后遗留功能收口 — 独立复审
+**Timestamp**: 2026-08-08T01:14:02Z
+**AI Response**: "两轮独立只读复审均无 P0；已修复 lease_token 未贯通、重复批次调用方、runner 并发 claim、工作进度列错位、Excel 公式注入、Windows 后代清理、Vite 路径、failed 批次迟到事务覆盖和 failed 回传缺重试等 P1/P2。"
+**Context**: 发布前复审完成；外部 Worker 无生产 service ID 和真实合规命令，后续不得声称其生产部署完成。
+
+---

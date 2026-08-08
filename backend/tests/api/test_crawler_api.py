@@ -25,11 +25,13 @@ class TestCrawlerApiContract:
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as ac:
-            resp = await ac.post(
+            list_resp = await ac.get("/api/crawler/worker-tokens/")
+            issue_resp = await ac.post(
                 "/api/crawler/worker-tokens/",
-                json={"name": "x", "ip_allowlist": []},
+                json={"name": "x", "ip_allowlist": ["127.0.0.1"]},
             )
-        assert resp.status_code == 401
+        assert list_resp.status_code == 401
+        assert issue_resp.status_code == 401
 
     async def test_data_quality_summary_requires_auth(self) -> None:
         from app.main import app
@@ -53,5 +55,15 @@ class TestCrawlerApiContract:
         assert "/api/crawler/tasks/{task_id}/exchange" in paths
         assert "/api/crawler/tasks/{task_id}/result" in paths
         assert "/api/crawler/worker-tokens/" in paths
+        worker_token_get = paths["/api/crawler/worker-tokens/"]["get"]
+        item_ref = worker_token_get["responses"]["200"]["content"][
+            "application/json"
+        ]["schema"]["items"]["$ref"]
+        schema_name = item_ref.rsplit("/", 1)[-1]
+        public_fields = set(
+            resp.json()["components"]["schemas"][schema_name]["properties"]
+        )
+        assert "token" not in public_fields
+        assert "token_hash" not in public_fields
         assert "/api/data-quality/summary" in paths
         assert "/api/data-quality/issues" in paths

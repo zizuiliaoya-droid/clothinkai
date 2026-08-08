@@ -88,6 +88,24 @@ class PromotionRepository:
 
     # ----------------------- get / count ----------------------- #
 
+    async def count_by_sku(self, sku_id: UUID) -> int:
+        """统计 SKU 的全部历史推广引用；租户隔离由 RLS 保证。"""
+        stmt = (
+            select(func.count())
+            .select_from(Promotion)
+            .where(Promotion.sku_id == sku_id)
+        )
+        return int((await self._session.execute(stmt)).scalar_one())
+
+    async def count_by_blogger(self, blogger_id: UUID) -> int:
+        """统计博主的全部历史推广引用；租户隔离由 RLS 保证。"""
+        stmt = (
+            select(func.count())
+            .select_from(Promotion)
+            .where(Promotion.blogger_id == blogger_id)
+        )
+        return int((await self._session.execute(stmt)).scalar_one())
+
     async def get_by_id(
         self, promotion_id: UUID, *, include_inactive: bool = False
     ) -> Promotion | None:

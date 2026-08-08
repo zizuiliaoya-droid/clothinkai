@@ -35,9 +35,11 @@ import { ImportListPage } from "@/pages/ImportListPage";
 import { SettingsPage } from "@/pages/SettingsPage";
 import { BiDashboardPage } from "@/pages/BiDashboardPage";
 import { DailyDataPage } from "@/pages/DailyDataPage";
+import { CredentialPage } from "@/pages/CredentialPage";
+import { WorkerTokenPage } from "@/pages/WorkerTokenPage";
+import { DataQualityPage } from "@/pages/DataQualityPage";
 import { listQianniu, listAdDaily } from "@/features/collect/api";
 import type { QianniuRow, AdRow } from "@/features/collect/api";
-import { PlaceholderPage } from "@/pages/PlaceholderPage";
 import { getMe } from "@/features/auth/api";
 
 // 受保护路由：未登录跳 /login；must_change 跳 /change-password
@@ -66,6 +68,18 @@ function ProtectedRoute({ children }: { children: JSX.Element }) {
     return <Navigate to="/warehouse-orders" replace />;
   }
   return children;
+}
+
+function RoleRoute({
+  children,
+  requireAnyRole,
+}: {
+  children: JSX.Element;
+  requireAnyRole: string[];
+}) {
+  const user = useAuthStore((s) => s.user);
+  const allowed = requireAnyRole.some((role) => user?.roles.includes(role));
+  return allowed ? children : <Navigate to="/" replace />;
 }
 
 function AppRoutes() {
@@ -197,6 +211,21 @@ function AppRoutes() {
         {/* 系统管理 */}
         <Route path="/users" element={<UserListPage />} />
         <Route path="/imports" element={<ImportListPage />} />
+        <Route path="/credentials" element={
+          <RoleRoute requireAnyRole={["admin", "platform_admin", "operations"]}>
+            <CredentialPage />
+          </RoleRoute>
+        } />
+        <Route path="/worker-tokens" element={
+          <RoleRoute requireAnyRole={["admin", "platform_admin"]}>
+            <WorkerTokenPage />
+          </RoleRoute>
+        } />
+        <Route path="/data-quality" element={
+          <RoleRoute requireAnyRole={["admin", "platform_admin", "operations"]}>
+            <DataQualityPage />
+          </RoleRoute>
+        } />
         <Route path="/settings" element={<SettingsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

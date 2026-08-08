@@ -1,10 +1,12 @@
 import { useMemo, useState } from "react";
-import { Card, Select, Space, Table, Typography } from "antd";
-import { useQuery } from "@tanstack/react-query";
+import { Button, Card, Select, Space, Table, Typography, message } from "antd";
+import { DownloadOutlined } from "@ant-design/icons";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import type { ColumnsType } from "antd/es/table";
 import dayjs from "dayjs";
-import { getStoreDaily } from "@/features/report/api";
+import { exportReport, getStoreDaily } from "@/features/report/api";
 import type { StoreDailyRow, TimeGranularity, TimePreset } from "@/features/report/types";
+import { extractErrorMessage } from "@/services/apiClient";
 import {
   ReportTimeRangeFilter,
   type ReportDateRange,
@@ -42,6 +44,17 @@ export function StoreDailyPage() {
     enabled,
     queryFn: () => getStoreDaily({ preset, date_from: df, date_to: dt }),
   });
+  const exportMutation = useMutation({
+    mutationFn: () =>
+      exportReport("store-daily", {
+        preset,
+        date_from: df,
+        date_to: dt,
+        granularity,
+      }),
+    onSuccess: (filename) => message.success(`已导出 ${filename}`),
+    onError: (error) => message.error(extractErrorMessage(error, "导出失败")),
+  });
 
   // 按日/周/月/年聚合；保持既有可转数字字段求和口径。
   const data = useMemo<StoreDailyRow[]>(() => {
@@ -55,11 +68,12 @@ export function StoreDailyPage() {
         groups.set(key, { ...r, date: key, extra: { ...(r.extra ?? {}) } });
         continue;
       }
+      const aggregate = g as unknown as Record<string, unknown>;
       for (const [k, v] of Object.entries(r)) {
         if (k === "date" || k === "extra") continue;
         const n = Number(v);
         if (!Number.isNaN(n) && v != null && v !== "") {
-          (g as Record<string, unknown>)[k] = Number((g as Record<string, unknown>)[k] ?? 0) + n;
+          aggregate[k] = Number(aggregate[k] ?? 0) + n;
         }
       }
       const ge = (g.extra ?? {}) as Record<string, unknown>;
@@ -127,6 +141,14 @@ export function StoreDailyPage() {
           options={GRANULARITY}
           onChange={setGranularity}
         />
+        <Button
+          icon={<DownloadOutlined />}
+          loading={exportMutation.isPending}
+          disabled={!enabled}
+          onClick={() => exportMutation.mutate()}
+        >
+          导出
+        </Button>
       </Space>
       <Table
         rowKey="date"

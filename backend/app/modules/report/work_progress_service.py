@@ -59,6 +59,7 @@ class WorkProgressService:
             important_urge_count=int(r["important_urge_count"]),
             overdue_count=int(r["overdue_count"]),
             publish_count=publish,
+            info_complete_count=int(r["info_complete_count"]),
             info_complete_rate=safe_div(
                 r["info_complete_count"], publish, quantize=_Q4
             ),

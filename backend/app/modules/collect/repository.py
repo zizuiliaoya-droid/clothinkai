@@ -22,15 +22,34 @@ class WorkerTokenRepository:
     def add(self, token: WorkerToken) -> None:
         self._session.add(token)
 
-    async def get_active_by_hash(self, token_hash: str) -> WorkerToken | None:
+    async def get_active_by_hash(
+        self, token_hash: str, *, for_update: bool = False
+    ) -> WorkerToken | None:
         stmt = select(WorkerToken).where(
             WorkerToken.token_hash == token_hash,
             WorkerToken.is_active.is_(True),
         )
+        if for_update:
+            stmt = stmt.with_for_update()
         return (await self._session.execute(stmt)).scalar_one_or_none()
 
-    async def get_by_id(self, token_id: UUID) -> WorkerToken | None:
-        return await self._session.get(WorkerToken, token_id)
+    async def get_by_id(
+        self, token_id: UUID, tenant_id: UUID
+    ) -> WorkerToken | None:
+        stmt = select(WorkerToken).where(
+            WorkerToken.id == token_id,
+            WorkerToken.tenant_id == tenant_id,
+        )
+        return (await self._session.execute(stmt)).scalar_one_or_none()
+
+    async def list(self, tenant_id: UUID) -> Sequence[WorkerToken]:
+        """列出指定租户的 Worker Token；显式租户条件作为 RLS 之外的防线。"""
+        stmt = (
+            select(WorkerToken)
+            .where(WorkerToken.tenant_id == tenant_id)
+            .order_by(WorkerToken.created_at.desc())
+        )
+        return (await self._session.execute(stmt)).scalars().all()
 
 
 class CrawlerTaskRepository:
@@ -39,6 +58,23 @@ class CrawlerTaskRepository:
 
     async def get(self, task_id: UUID) -> CrawlerTask | None:
         return await self._session.get(CrawlerTask, task_id)
+
+    async def get_for_worker(
+        self,
+        task_id: UUID,
+        worker: WorkerToken,
+        *,
+        for_update: bool = False,
+    ) -> CrawlerTask | None:
+        """按租户和领取 Worker 显式绑定任务，可选行锁保护终态副作用。"""
+        stmt = select(CrawlerTask).where(
+            CrawlerTask.id == task_id,
+            CrawlerTask.tenant_id == worker.tenant_id,
+            CrawlerTask.worker_token_id == worker.id,
+        )
+        if for_update:
+            stmt = stmt.with_for_update()
+        return (await self._session.execute(stmt)).scalar_one_or_none()
 
 
 class DataQualityRepository:
@@ -93,7 +129,10 @@ class DataQualityRepository:
                 DataQualityIssue.severity,
                 func.count().label("cnt"),
             )
-            .where(DataQualityIssue.tenant_id == tenant_id)
+            .where(
+                DataQualityIssue.tenant_id == tenant_id,
+                DataQualityIssue.status == "open",
+            )
             .group_by(DataQualityIssue.source, DataQualityIssue.severity)
         )
         rows = (await self._session.execute(stmt)).all()

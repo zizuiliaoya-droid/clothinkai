@@ -41,9 +41,7 @@ export type UrgeStatus =
  * 当前角色不可见时返回 null（前端在 UI 上隐藏对应列即可）。
  *
  * 衍生字段（urge_status / dual_platform / effective_like_count / is_hit / cpl）
- * 由后端实时计算，前端只读不写。
- *
- * TODO U09: 改为基于服务端字段级权限矩阵的字段过滤。
+ * 字段可见性由后端字段级权限矩阵过滤，当前角色无权查看时返回 null。
  */
 export interface Promotion {
   id: string;

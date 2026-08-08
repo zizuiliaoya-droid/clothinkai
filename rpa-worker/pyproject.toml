@@ -1,0 +1,19 @@
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ecommerce-rpa-worker"
+version = "1.0.0"
+description = "Local command collection worker for the eCommerce crawler API"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "httpx==0.28.1",
+]
+
+[project.scripts]
+rpa-worker = "worker.main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["worker"]

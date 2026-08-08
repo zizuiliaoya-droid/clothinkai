@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from ipaddress import ip_address, ip_network
+from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.modules.collect.enums import CrawlerPlatform
 
@@ -17,7 +19,24 @@ class WorkerTokenCreate(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
     name: str = Field(..., min_length=1, max_length=64)
-    ip_allowlist: list[str] = Field(default_factory=list)
+    ip_allowlist: list[str] = Field(..., min_length=1, max_length=32)
+
+    @field_validator("ip_allowlist")
+    @classmethod
+    def validate_ip_allowlist(cls, values: list[str]) -> list[str]:
+        """校验并规范化单 IP/CIDR；空白名单不允许签发可用 Token。"""
+        normalized: list[str] = []
+        for value in values:
+            item = value.strip()
+            try:
+                parsed = str(ip_network(item, strict=False)) if "/" in item else str(ip_address(item))
+            except ValueError as exc:
+                raise ValueError(f"无效的 IP 或 CIDR: {item}") from exc
+            if parsed not in normalized:
+                normalized.append(parsed)
+        if not normalized:
+            raise ValueError("IP 白名单至少需要一个 IP 或 CIDR")
+        return normalized
 
 
 class WorkerTokenPublic(BaseModel):
@@ -67,7 +86,7 @@ class CredExchangeResponse(BaseModel):
 
 
 class CrawlerResultIn(BaseModel):
-    status: str = Field(..., pattern=r"^(success|failed)$")
+    status: Literal["success", "failed"]
     error: str | None = None
 
 

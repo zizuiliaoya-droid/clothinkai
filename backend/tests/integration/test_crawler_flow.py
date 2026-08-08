@@ -14,6 +14,9 @@ from app.core.security.crypto import encrypt_credential
 from app.core.tenancy import tenant_id_ctx
 from app.modules.collect.crawler_task_service import CrawlerTaskService
 from app.modules.collect.exceptions import (
+    CrawlerTaskNotFound,
+    CrawlerTaskResultConflict,
+    CrawlerTaskResultInvalid,
     CredTokenInvalid,
     WorkerIpForbidden,
     WorkerTokenInvalid,
@@ -105,6 +108,10 @@ class TestScheduleAndPoll:
             n = await svc.schedule_for_tenant(tenant_a.id)
             await session.commit()
             assert n == 1
+            # UNIQUE 冲突不应虚报已创建任务。
+            duplicate_n = await svc.schedule_for_tenant(tenant_a.id)
+            await session.commit()
+            assert duplicate_n == 0
 
             # poll
             assignment = await svc.poll_next_task(wt)
@@ -115,14 +122,14 @@ class TestScheduleAndPoll:
 
             # exchange → 明文
             resp = await svc.exchange_credential(
-                assignment.task_id, assignment.cred_token
+                assignment.task_id, assignment.cred_token, wt
             )
             assert resp.password == "secret-pass"
 
             # 再次 exchange → 403（一次性）
             with pytest.raises(CredTokenInvalid):
                 await svc.exchange_credential(
-                    assignment.task_id, assignment.cred_token
+                    assignment.task_id, assignment.cred_token, wt
                 )
         finally:
             tenant_id_ctx.reset(token)
@@ -143,6 +150,7 @@ class TestScheduleAndPoll:
                 credential_id=cred.id,
                 target_date=datetime.now(UTC).date(),
                 status="assigned",
+                worker_token_id=wt.id,
                 cred_token="expired-token",
                 cred_token_expires_at=datetime.now(UTC) - timedelta(minutes=1),
             )
@@ -150,7 +158,15 @@ class TestScheduleAndPoll:
             await session.flush()
             svc = CrawlerTaskService(session)
             with pytest.raises(CredTokenInvalid):
-                await svc.exchange_credential(task.id, "expired-token")
+                await svc.exchange_credential(task.id, "expired-token", wt)
+
+            # 下次 poll 会回收过期 assigned 租约并重新签发一次性令牌。
+            assignment = await svc.poll_next_task(wt)
+            assert assignment is not None
+            assert assignment.task_id == task.id
+            assert assignment.cred_token != "expired-token"
+            await session.refresh(task)
+            assert task.attempt == 1
         finally:
             tenant_id_ctx.reset(token)
 
@@ -230,26 +246,87 @@ class TestHuitunUpsert:
 
 class TestReportResult:
     async def test_result_failed_triggers_report_failure(
-        self, session: AsyncSession, tenant_a: Any
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
     ) -> None:
         token = tenant_id_ctx.set(tenant_a.id)
         try:
+            user = await factory.user(tenant_a, roles=[admin_role])
+            wt, _ = await WorkerTokenService(session).issue(
+                "vm-result", ["1.1.1.1"], user
+            )
+            other_wt, _ = await WorkerTokenService(session).issue(
+                "vm-other", ["1.1.1.2"], user
+            )
             cred = await _make_credential(session, tenant_a)
+            lease_token = "current-lease-token"
             task = CrawlerTask(
                 tenant_id=tenant_a.id,
                 platform="千牛",
                 credential_id=cred.id,
                 target_date=datetime.now(UTC).date(),
                 status="exchanged",
+                worker_token_id=wt.id,
+                cred_token=lease_token,
             )
             session.add(task)
             await session.flush()
             svc = CrawlerTaskService(session)
-            result = await svc.report_result(task.id, "failed", error="登录失败")
+            with pytest.raises(CrawlerTaskResultInvalid):
+                await svc.report_result(
+                    task.id, "success", wt, lease_token=lease_token
+                )
+            with pytest.raises(CrawlerTaskNotFound):
+                await svc.report_result(
+                    task.id,
+                    "failed",
+                    other_wt,
+                    lease_token=lease_token,
+                    error="越权回传",
+                )
+            with pytest.raises(CrawlerTaskResultConflict):
+                await svc.report_result(
+                    task.id,
+                    "failed",
+                    wt,
+                    lease_token="stale-lease-token",
+                    error="旧租约回传",
+                )
+            result = await svc.report_result(
+                task.id,
+                "failed",
+                wt,
+                lease_token=lease_token,
+                error="登录失败",
+            )
             assert result["ok"] is True
             await session.refresh(task)
             assert task.status == "failed"
             await session.refresh(cred)
             assert cred.consecutive_failures == 1
+
+            # 同租约同终态重试幂等，不重复累计凭据失败；相反终态不可覆盖。
+            repeated = await svc.report_result(
+                task.id,
+                "failed",
+                wt,
+                lease_token=lease_token,
+                error="重复回传",
+            )
+            assert repeated["ok"] is True
+            await session.refresh(cred)
+            assert cred.consecutive_failures == 1
+            with pytest.raises(CrawlerTaskResultConflict) as conflict:
+                await svc.report_result(
+                    task.id,
+                    "success",
+                    wt,
+                    lease_token=lease_token,
+                    content=b"x",
+                )
+            assert conflict.value.status_code == 409
         finally:
             tenant_id_ctx.reset(token)
