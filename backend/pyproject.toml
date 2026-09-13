@@ -30,6 +30,11 @@ ignore = [
     "E501",  # line length handled by formatter
     "B008",  # function call in default argument (FastAPI Depends pattern)
     "S101",  # assert allowed in tests
+    # 本项目注释与文档字符串一律用中文，全角标点（），：；是正确写法。
+    # RUF001/002/003 是为防同形字符伪装设计的，在中文语境下全是误报（5906 处）。
+    "RUF001",  # ambiguous-unicode-character-string
+    "RUF002",  # ambiguous-unicode-character-docstring
+    "RUF003",  # ambiguous-unicode-character-comment
 ]
 
 [tool.ruff.lint.per-file-ignores]
