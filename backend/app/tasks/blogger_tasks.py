@@ -7,12 +7,11 @@
 - 单 tenant 失败 catch+log+继续；单 blogger 失败在 BloggerTagService 内部已 catch。
 - autoretry_for=(OperationalError,) max_retries=2（DB 抖动重试）。
 
-Celery 任务入口用 asyncio.run（同 U06a/U07 runner）。
+Celery 任务入口统一用 ``app.tasks.runner.run_async_task``（新事件循环 + 引擎回收）。
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Any
 from uuid import UUID
@@ -25,6 +24,7 @@ from app.core.celery_app import celery_app
 from app.core.db import AsyncSessionApp, AsyncSessionBypass
 from app.core.tenancy import system_context, tenant_id_ctx
 from app.modules.blogger.tag_service import BloggerTagService
+from app.tasks.runner import run_async_task
 
 log = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ log = logging.getLogger(__name__)
     default_retry_delay=10,
 )
 def recompute_all_blogger_tags(self) -> dict[str, Any]:  # noqa: ANN001
-    return asyncio.run(_recompute_impl())
+    return run_async_task(_recompute_impl())
 
 
 async def _recompute_impl() -> dict[str, Any]:

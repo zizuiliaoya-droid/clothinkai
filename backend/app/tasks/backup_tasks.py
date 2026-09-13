@@ -9,7 +9,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import gzip
 import hashlib
 import json
@@ -41,6 +40,7 @@ from app.modules.auth.models import (
 from app.modules.importer.models import FieldMapping
 from app.modules.product.dict_models import DictItem
 from app.modules.report.user_preference_models import UserPreference
+from app.tasks.runner import run_async_task
 
 log = logging.getLogger(__name__)
 
@@ -73,7 +73,7 @@ def backup_database(self: Task) -> dict[str, Any]:
     7. backup_record.status = success
     8. 失败：retry 2 次后 capture_exception
     """
-    return asyncio.run(_run_backup_database(self))
+    return run_async_task(_run_backup_database(self))
 
 
 async def _run_backup_database(task: Task) -> dict[str, Any]:
@@ -301,7 +301,7 @@ def _sha256_of_file(path: Path) -> str:
     queue="backup",
 )
 def cleanup_expired_backups(self: Task) -> dict[str, Any]:
-    return asyncio.run(_run_cleanup_expired_backups())
+    return run_async_task(_run_cleanup_expired_backups())
 
 
 async def _run_cleanup_expired_backups() -> dict[str, Any]:

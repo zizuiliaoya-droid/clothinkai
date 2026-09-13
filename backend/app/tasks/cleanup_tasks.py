@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import gzip
 import json
 import logging
@@ -20,6 +19,7 @@ from app.core.celery_app import celery_app
 from app.core.config import settings
 from app.core.db import AsyncSessionBypass
 from app.modules.auth.models import AuditLog, RefreshToken
+from app.tasks.runner import run_async_task
 
 log = logging.getLogger(__name__)
 
@@ -30,7 +30,7 @@ log = logging.getLogger(__name__)
 )
 def cleanup_expired_refresh_tokens() -> dict[str, Any]:
     """删除已过期的 refresh_token（每日 04:30）。"""
-    return asyncio.run(_run_cleanup_refresh_tokens())
+    return run_async_task(_run_cleanup_refresh_tokens())
 
 
 async def _run_cleanup_refresh_tokens() -> dict[str, Any]:
@@ -51,7 +51,7 @@ async def _run_cleanup_refresh_tokens() -> dict[str, Any]:
 )
 def archive_audit_logs() -> dict[str, Any]:
     """归档超过 AUDIT_RETAIN_MONTHS 的 audit_log 到 R2，再从 DB 删除（每月 1 日 04:30）。"""
-    return asyncio.run(_run_archive_audit_logs())
+    return run_async_task(_run_archive_audit_logs())
 
 
 async def _run_archive_audit_logs() -> dict[str, Any]:

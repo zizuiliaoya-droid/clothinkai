@@ -12,7 +12,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import io
 import logging
 import time
@@ -36,6 +35,7 @@ from app.core.tenancy import tenant_id_ctx
 from app.modules.importer.exceptions import RowValidationError
 from app.modules.importer.models import ImportBatch, ImportJob
 from app.modules.importer.registry import ImportAdapterRegistry
+from app.tasks.runner import run_async_task
 
 log = logging.getLogger(__name__)
 
@@ -81,26 +81,7 @@ def run_import_batch(
         batch_id: ImportBatch.id（字符串，Celery JSON 序列化）。
         only_failed: True = 仅重跑 import_job.failed 行（FB-E partial 重试）。
     """
-    return asyncio.run(_run_with_engine_dispose(UUID(batch_id), only_failed))
-
-
-async def _run_with_engine_dispose(
-    batch_id: UUID, only_failed: bool = False
-) -> dict[str, Any]:
-    """包裹任务执行：结束时 dispose 异步引擎。
-
-    Celery worker 每个任务用独立 ``asyncio.run()``（新事件循环）。异步引擎的连接池
-    会缓存绑定到上一个（已关闭）事件循环的 asyncpg 连接，下个任务复用时会挂起/报错
-    （表现为批次卡在 processing）。每个任务结束 dispose 引擎，保证下个任务拿到新循环
-    的新连接。
-    """
-    from app.core.db import engine_app, engine_bypass
-
-    try:
-        return await _run_import_batch(batch_id, only_failed)
-    finally:
-        await engine_app.dispose()
-        await engine_bypass.dispose()
+    return run_async_task(_run_import_batch(UUID(batch_id), only_failed))
 
 
 # ---------------------------------------------------------------------------

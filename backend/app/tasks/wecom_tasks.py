@@ -4,12 +4,11 @@
 - execute_wecom_message：每消息独立事务 + 频控降级
 
 按 P-U07-03/04：bypass 读元数据 + AsyncSessionApp set_config（NF-1）+ system_context audit。
-Celery 任务入口用 asyncio.run（同 U06a runner）。
+Celery 任务入口统一用 ``app.tasks.runner.run_async_task``（新事件循环 + 引擎回收）。
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Any
 from uuid import UUID
@@ -27,13 +26,14 @@ from app.modules.wecom.anomaly_service import AnomalyAlertService
 from app.modules.wecom.group_notify_service import GroupNotifyService
 from app.modules.wecom.scan_service import WecomScanService
 from app.modules.wecom.send_service import WecomSendService
+from app.tasks.runner import run_async_task
 
 log = logging.getLogger(__name__)
 
 
 @celery_app.task(name="app.tasks.wecom_tasks.scan_and_dispatch_urge", queue="default")
 def scan_and_dispatch_urge() -> dict[str, Any]:
-    return asyncio.run(_scan_and_dispatch())
+    return run_async_task(_scan_and_dispatch())
 
 
 async def _scan_and_dispatch() -> dict[str, Any]:
@@ -84,7 +84,7 @@ async def _scan_and_dispatch() -> dict[str, Any]:
 def execute_wecom_message(
     self: Task, message_id: str, tenant_id: str
 ) -> dict[str, Any]:
-    return asyncio.run(_execute_one(UUID(message_id), UUID(tenant_id)))
+    return run_async_task(_execute_one(UUID(message_id), UUID(tenant_id)))
 
 
 async def _execute_one(message_id: UUID, tenant_id: UUID) -> dict[str, Any]:
@@ -119,7 +119,7 @@ async def _execute_one(message_id: UUID, tenant_id: UUID) -> dict[str, Any]:
 def notify_control_group(
     self: Task, promotion_id: str, tenant_id: str
 ) -> dict[str, Any]:
-    return asyncio.run(_notify_control_group(UUID(promotion_id), UUID(tenant_id)))
+    return run_async_task(_notify_control_group(UUID(promotion_id), UUID(tenant_id)))
 
 
 async def _notify_control_group(promotion_id: UUID, tenant_id: UUID) -> dict[str, Any]:
@@ -144,7 +144,7 @@ async def _notify_control_group(promotion_id: UUID, tenant_id: UUID) -> dict[str
     name="app.tasks.wecom_tasks.check_anomaly_and_alert", queue="default"
 )
 def check_anomaly_and_alert() -> dict[str, Any]:
-    return asyncio.run(_check_anomaly_all())
+    return run_async_task(_check_anomaly_all())
 
 
 async def _check_anomaly_all() -> dict[str, Any]:

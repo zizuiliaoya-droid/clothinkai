@@ -6,7 +6,6 @@ Beat 每天 02:00（crawler 队列）逐租户生成 pending crawler_task。
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -20,6 +19,7 @@ from app.core.celery_app import celery_app
 from app.core.db import AsyncSessionApp, AsyncSessionBypass
 from app.core.tenancy import system_context, tenant_id_ctx
 from app.modules.collect.crawler_task_service import CrawlerTaskService
+from app.tasks.runner import run_async_task
 
 log = logging.getLogger(__name__)
 
@@ -33,7 +33,7 @@ log = logging.getLogger(__name__)
     default_retry_delay=10,
 )
 def schedule_daily_tasks(self) -> dict[str, Any]:  # noqa: ANN001
-    return asyncio.run(_schedule_impl())
+    return run_async_task(_schedule_impl())
 
 
 async def _schedule_impl() -> dict[str, Any]:
@@ -74,7 +74,7 @@ async def _schedule_one_tenant(tenant_id: UUID) -> int:
 )
 def recover_stalled_crawler_imports() -> dict[str, Any]:
     """重新投递已提交成功但长时间未开始处理的采集导入批次。"""
-    return asyncio.run(_recover_stalled_imports_impl())
+    return run_async_task(_recover_stalled_imports_impl())
 
 
 async def _recover_stalled_imports_impl() -> dict[str, Any]:
