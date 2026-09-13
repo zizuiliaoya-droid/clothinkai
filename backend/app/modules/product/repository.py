@@ -20,6 +20,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.product.brand_repository import BrandRepository  # 再导出，见 __all__
 from app.modules.product.models import Brand, Sku, Style
 
 # ---------------------------------------------------------------------------
@@ -380,6 +381,3 @@ __all__ = [
     "StyleRepository",
     "StyleSearchResult",
 ]
-
-
-from app.modules.product.brand_repository import BrandRepository  # re-export

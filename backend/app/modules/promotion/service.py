@@ -993,7 +993,7 @@ class PromotionService:
                     import sentry_sdk
 
                     sentry_sdk.capture_exception(exc)
-                except Exception:
+                except Exception:  # noqa: S110 Sentry 上报是 best-effort，其失败不得掩盖原始异常（下方 raise 会保留）
                     pass
                 await self._log_event_dispatch_failure(event, exc, user, blocking=True)
                 raise

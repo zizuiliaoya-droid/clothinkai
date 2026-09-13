@@ -187,7 +187,7 @@ def _serialize(value: Any) -> Any:
 
     if value is None:
         return None
-    if isinstance(value, (datetime, date)):
+    if isinstance(value, datetime | date):
         return value.isoformat()
     if isinstance(value, Decimal):
         return str(value)

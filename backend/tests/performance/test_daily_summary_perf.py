@@ -69,7 +69,7 @@ async def test_daily_summary_activity_smoke_perf(
     try:
         style = await product_factory.style()
         blogger = await blogger_factory.blogger()
-        for i in range(2000):
+        for _i in range(2000):
             await settlement_factory.settlement(
                 style=style,
                 blogger=blogger,

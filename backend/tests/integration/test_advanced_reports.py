@@ -432,7 +432,7 @@ class TestProduction:
             other_style = await product_factory.style()
             style.qianniu_product_id = "LEGACY-ID"
             pp1 = await _platform_product(session, tenant_a, style)
-            pp2 = await _platform_product(session, tenant_a, style)
+            await _platform_product(session, tenant_a, style)
             conflicting_q = PlatformProduct(
                 tenant_id=tenant_a.id,
                 platform="千牛",

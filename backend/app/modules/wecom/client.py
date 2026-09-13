@@ -171,8 +171,10 @@ class WecomCrypto:
         self._iv = self._key[:16]
 
     def signature(self, timestamp: str, nonce: str, encrypt: str) -> str:
-        parts = sorted([self._token, timestamp, nonce, encrypt])
-        return hashlib.sha1("".join(parts).encode()).hexdigest()
+        # SHA1 由企业微信回调协议规定（非本项目可选），不是安全强度选择
+        return hashlib.sha1(  # noqa: S324
+            "".join(sorted([self._token, timestamp, nonce, encrypt])).encode()
+        ).hexdigest()
 
     def verify(self, msg_signature: str, timestamp: str, nonce: str, encrypt: str) -> bool:
         return hmac.compare_digest(self.signature(timestamp, nonce, encrypt), msg_signature or "")

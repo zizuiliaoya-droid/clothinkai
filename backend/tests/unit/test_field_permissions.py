@@ -9,6 +9,8 @@
 
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
+
 import pytest
 
 from app.core.security.field_permissions import (
@@ -55,7 +57,8 @@ class TestRegistryValues:
         assert FIELD_PERMISSION_REGISTRY["settlement"]["amount"].writable_roles == frozenset()
 
     def test_rule_is_frozen(self) -> None:
-        with pytest.raises(Exception):
+        # FieldRule 是 @dataclass(frozen=True)，改属性抛 FrozenInstanceError
+        with pytest.raises(FrozenInstanceError):
             FieldRule(frozenset()).visible_roles = frozenset({"x"})  # type: ignore[misc]
 
 

@@ -332,7 +332,7 @@ class SettlementService:
                 import sentry_sdk
 
                 sentry_sdk.capture_exception(exc)
-            except Exception:
+            except Exception:  # noqa: S110 Sentry 上报是 best-effort，其失败不得掩盖原始异常（上一行已 log.exception）
                 pass
             await self._log_event_dispatch_failure(event, exc, user, blocking=False)
             # 不重新 raise — 让 commit 继续（mark_paid 主流程已成功）

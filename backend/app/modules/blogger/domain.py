@@ -90,7 +90,7 @@ def _serialize(value: Any) -> Any:
         return None
     if isinstance(value, Enum):
         return value.value
-    if isinstance(value, (datetime, date)):
+    if isinstance(value, datetime | date):
         return value.isoformat()
     if isinstance(value, Decimal):
         return str(value)

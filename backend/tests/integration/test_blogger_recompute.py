@@ -150,7 +150,7 @@ class TestRecomputeForTenant:
                 like_count=2000,
                 platform="小红书",
             )
-            user = await factory.user(tenant_a, roles=[admin_role])
+            await factory.user(tenant_a, roles=[admin_role])
             svc = BloggerService(session)
             result = await svc.recompute_tags_for_current_tenant(tenant_a.id)
             assert result["updated"] >= 1

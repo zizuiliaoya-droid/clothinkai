@@ -98,9 +98,9 @@ async def restore_main(
                     raise ValueError(f"checksum mismatch: {actual} != {record.checksum}")
                 log.info("checksum_ok")
 
-            # 2c. 解压
+            # 2c. 解压。filter="data" 拒绝绝对路径 / ../ 逃逸 / 特殊文件（防路径穿越）
             with tarfile.open(archive, "r:gz") as tar:
-                tar.extractall(tmp)
+                tar.extractall(tmp, filter="data")
             pg_dump_files = list(tmp.glob("pg-*.sql.gz"))
             if not pg_dump_files:
                 raise FileNotFoundError("解压后未找到 pg-*.sql.gz")
@@ -218,7 +218,8 @@ def _sha256(path: Path) -> str:
 
 def _run_psql_restore(target_db_url: str, sql_file: Path) -> None:
     cmd = ["psql", "--dbname", target_db_url, "--file", str(sql_file)]
-    result = subprocess.run(cmd, capture_output=True, check=False)
+    # 参数为固定列表 + 运维显式传入的目标库 URL，且未走 shell
+    result = subprocess.run(cmd, capture_output=True, check=False)  # noqa: S603
     if result.returncode != 0:
         raise RuntimeError(
             f"psql restore failed (rc={result.returncode}): "

@@ -154,8 +154,8 @@ class TestRoiIsolation:
             svc = ProductionService(session)
             excl = await svc.get_report(tenant_a.id, (day, day), exclude_brushing=True)
             incl = await svc.get_report(tenant_a.id, (day, day), exclude_brushing=False)
-            excl_row = [r for r in excl.items if r.style_id == style.id][0]
-            incl_row = [r for r in incl.items if r.style_id == style.id][0]
+            excl_row = next(r for r in excl.items if r.style_id == style.id)
+            incl_row = next(r for r in incl.items if r.style_id == style.id)
             assert excl_row.pay_amount == Decimal("800.00")  # 1000 - 200
             assert incl_row.pay_amount == Decimal("1000.00")
         finally:

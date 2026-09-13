@@ -32,7 +32,8 @@ def merge_permissions(
 # 密码生成
 # ---------------------------------------------------------------------------
 
-_PASSWORD_SPECIAL = "!@#$%^&*-_=+"
+# 随机密码生成用的特殊字符集，不是密码本身
+_PASSWORD_SPECIAL = "!@#$%^&*-_=+"  # noqa: S105
 
 
 def generate_random_password(length: int = 16) -> str:

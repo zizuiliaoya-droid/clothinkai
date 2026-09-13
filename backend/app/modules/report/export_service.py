@@ -84,7 +84,7 @@ def _cell(v: Any) -> Any:
 
 def _numeric_extra(v: Any) -> Any:
     """服务层 extra 为十进制字符串；导出时恢复为 Excel 数值。"""
-    if v is None or isinstance(v, (Decimal, int, float)):
+    if v is None or isinstance(v, Decimal | int | float):
         return v
     try:
         return Decimal(str(v).replace(",", "").strip())

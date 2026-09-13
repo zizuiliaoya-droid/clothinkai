@@ -27,7 +27,6 @@ def test_last_7d():
 
 
 def test_last_30d():
-    today = get_today()
     f, t = resolve_time_range("last_30d")
     assert (t - f).days == 29
 

@@ -14,7 +14,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.attachment import attachment_service
 from app.core.metrics import report_query_duration_seconds
 from app.modules.report.advanced_repository import ProductionRepository
-from app.modules.report.advanced_schemas import ProductionReport, ProductionRow
+from app.modules.report.advanced_schemas import (
+    ProductionReport,
+    ProductionRow,
+    ProductionTrend,
+    ProductionTrendPoint,
+)
 from app.services.metric import style_roi
 
 # 投产报表 extra 汇总跳过的非指标列（ID/文本/日期类）
@@ -86,11 +91,6 @@ class ProductionService:
         granularity: str = "day",
         exclude_brushing: bool = True,
     ) -> ProductionTrend:
-        from app.modules.report.advanced_schemas import (
-            ProductionTrend,
-            ProductionTrendPoint,
-        )
-
         rows = await self._repo.daily_trend_by_style(
             tenant_id=tenant_id,
             style_id=style_id,

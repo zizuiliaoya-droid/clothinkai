@@ -35,11 +35,28 @@ ignore = [
     "RUF001",  # ambiguous-unicode-character-string
     "RUF002",  # ambiguous-unicode-character-docstring
     "RUF003",  # ambiguous-unicode-character-comment
+    # 异常类名不强制 Error 后缀。现有命名（CredentialNotFound / WecomRateLimited 等）
+    # 语义清晰，重命名 13 个类需连带改动全部 raise/except/import/测试引用，
+    # 属高风险零收益的纯风格改动。
+    "N818",  # error-suffix-on-exception-name
+    # 允许 `DesignStatus as DS` 这类短别名。DS 在状态机转换表中被引用约 60 次，
+    # 用全名会让转换表显著变宽、可读性下降。
+    "N817",  # camelcase-imported-as-acronym
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S", "N802"]
+# 测试与运维脚本里 Session / Maker / AppSession 是 sessionmaker 工厂，
+# CapWords 是 SQLAlchemy 官方文档的惯用写法；SENSITIVE_MSG 是测试常量。
+"tests/**" = ["S", "N802", "N803", "N806"]
+"scripts/**" = ["N806"]
 "alembic/**" = ["E402", "F401"]
+# 这三个仓储用 f-string 拼接 SQL，但插值部分只有代码控制的片段
+# （模块常量、按布尔开关选择的子句），所有用户输入一律走绑定参数（:tenant_id/:kw/...）。
+# 多行 f-string 上挂 inline noqa 很脆弱，故按文件豁免。
+# 新增拼接逻辑时务必确认：用户可控值只能进 params，不能进 f-string。
+"app/modules/promotion/repository.py" = ["S608"]
+"app/modules/report/advanced_repository.py" = ["S608"]
+"app/modules/report/repository.py" = ["S608"]
 
 [tool.ruff.format]
 quote-style = "double"

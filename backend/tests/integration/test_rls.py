@@ -11,7 +11,7 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.core.security.auth import hash_password
 from app.modules.auth.models import Tenant, User
@@ -56,9 +56,9 @@ class TestRowLevelSecurity:
             session.add(u)
         await session.flush()
 
-        # 用 clothing_app 角色重新连接（RLS 启用）
+        # 用 clothing_app 角色重新连接（RLS 启用）。
+        # 本测试直接用 engine.connect() + SET LOCAL 验证，不经过 sessionmaker。
         app_engine = create_async_engine(APP_DATABASE_URL, future=True)
-        AppSession = async_sessionmaker(app_engine, expire_on_commit=False, class_=AsyncSession)
 
         try:
             async with app_engine.connect() as conn:

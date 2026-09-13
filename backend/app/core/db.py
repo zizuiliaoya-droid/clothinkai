@@ -16,7 +16,8 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, ForeignKey, MetaData, event, text
+from sqlalchemy import DateTime, ForeignKey, MetaData, event, func, text
+from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import (
     DeclarativeBase,
@@ -55,9 +56,6 @@ class Base(DeclarativeBase):
 # ---------------------------------------------------------------------------
 # 通用字段 mixin
 # ---------------------------------------------------------------------------
-
-from sqlalchemy import func
-from sqlalchemy.dialects.postgresql import UUID as PGUUID
 
 
 class TimestampMixin:

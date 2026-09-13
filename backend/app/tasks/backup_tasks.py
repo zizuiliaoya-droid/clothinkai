@@ -177,7 +177,8 @@ def _run_pg_dump(out_path: Path) -> None:
         settings.DATABASE_URL_SYNC,
     ]
     with gzip.open(out_path, "wb") as fout:
-        result = subprocess.run(
+        # 参数为固定列表 + 配置项（非用户输入），且未走 shell
+        result = subprocess.run(  # noqa: S603
             cmd,
             stdout=fout,
             stderr=subprocess.PIPE,
@@ -261,11 +262,11 @@ def _is_sensitive_config_name(name: str) -> bool:
 
 def _serialize_config_value(value: Any) -> Any:
     """将配置字段转换为稳定 JSON 值，显式覆盖常见数据库类型。"""
-    if value is None or isinstance(value, (str, int, float, bool)):
+    if value is None or isinstance(value, str | int | float | bool):
         return value
     if isinstance(value, UUID):
         return str(value)
-    if isinstance(value, (datetime, date)):
+    if isinstance(value, datetime | date):
         return value.isoformat()
     if isinstance(value, Decimal):
         return str(value)
@@ -275,7 +276,7 @@ def _serialize_config_value(value: Any) -> Any:
             for key, item in value.items()
             if not _is_sensitive_config_name(str(key))
         }
-    if isinstance(value, (list, tuple)):
+    if isinstance(value, list | tuple):
         return [_serialize_config_value(item) for item in value]
     raise TypeError(f"不支持的配置字段类型: {type(value).__name__}")
 

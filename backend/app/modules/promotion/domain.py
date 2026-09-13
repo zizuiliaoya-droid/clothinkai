@@ -149,7 +149,7 @@ def _serialize(value: Any) -> Any:
         return None
     if isinstance(value, Enum):
         return value.value
-    if isinstance(value, (_datetime, _date)):
+    if isinstance(value, _datetime | _date):
         return value.isoformat()
     if isinstance(value, Decimal):
         return str(value)

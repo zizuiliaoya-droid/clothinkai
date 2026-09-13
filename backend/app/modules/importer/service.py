@@ -164,9 +164,9 @@ class ImportService:
                         extra={"batch_id": str(batch_id), "source": source},
                     )
                     raise ImportStorageError() from exc
-        except IntegrityError:
+        except IntegrityError as exc:
             existing = await self._repo.find_by_hash(tenant_id, source, file_hash)
-            raise ImportDuplicateFileError(batch_id=existing.id if existing else None)
+            raise ImportDuplicateFileError(batch_id=existing.id if existing else None) from exc
 
         await self._audit.log(
             action="import.upload",
@@ -248,10 +248,10 @@ class ImportService:
                         extra={"batch_id": str(batch_id), "source": source},
                     )
                     raise ImportStorageError() from exc
-        except IntegrityError:
+        except IntegrityError as exc:
             existing = await self._repo.find_by_hash(tenant_id, source, file_hash)
             if existing is None:
-                raise ImportDuplicateFileError()
+                raise ImportDuplicateFileError() from exc
             should_enqueue = False
             if existing.status == "failed":
                 # 仅允许观察到该 failed generation 的请求原子 claim。updated_at

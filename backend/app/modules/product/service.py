@@ -150,7 +150,7 @@ class StyleService:
             return await self._to_response(style, user)
 
         # 应用变更
-        for field, diff in changes.items():
+        for field, _diff in changes.items():
             new_value = getattr(payload, field)
             if field in {"gender", "design_status"}:
                 # Enum → str 存储

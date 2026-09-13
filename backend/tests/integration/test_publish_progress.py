@@ -24,13 +24,13 @@ async def _seed_dataset(product_factory, blogger_factory, promotion_factory, fac
     style = await product_factory.style(style_name="连衣裙X", short_name="裙X", tenant=tenant)
     blogger = await blogger_factory.blogger(nickname="小美", tenant=tenant)
     pr = await factory.user(tenant)
-    common = dict(
-        style=style,
-        blogger=blogger,
-        pr=pr,
-        tenant=tenant,
-        cooperation_date=today,
-    )
+    common = {
+        "style": style,
+        "blogger": blogger,
+        "pr": pr,
+        "tenant": tenant,
+        "cooperation_date": today,
+    }
     # 已发布，小红书 like 500（折算 500）
     await promotion_factory.promotion(
         **common,
