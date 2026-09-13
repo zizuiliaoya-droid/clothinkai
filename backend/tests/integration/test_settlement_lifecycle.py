@@ -268,7 +268,7 @@ class TestFillPaymentAndResubmit:
         finally:
             tenant_id_ctx.reset(token)
 
-    async def test_fill_payment_denied_for_finance(
+    async def test_fill_payment_allowed_for_finance(
         self,
         session: AsyncSession,
         tenant_a: Any,
@@ -278,7 +278,7 @@ class TestFillPaymentAndResubmit:
         blogger_factory: Any,
         settlement_factory: Any,
     ) -> None:
-        """财务可见金额但不可写 payment_amount。"""
+        """财务角色可写 payment_amount（9d5e0c5：财务账号需能走完整结款流程）。"""
         token = tenant_id_ctx.set(tenant_a.id)
         try:
             user = await factory.user(tenant_a, roles=[finance_role])
@@ -290,12 +290,13 @@ class TestFillPaymentAndResubmit:
                 settlement_status="待付款",
             )
             svc = SettlementService(session)
-            with pytest.raises(FieldPermissionDenied):
-                await svc.fill_payment_amount(
-                    s.id,
-                    SettlementPaymentAmountRequest(payment_amount=Decimal("480.00")),
-                    user,
-                )
+            resp = await svc.fill_payment_amount(
+                s.id,
+                SettlementPaymentAmountRequest(payment_amount=Decimal("480.00")),
+                user,
+            )
+            assert resp.settlement_status == "待财务付款"
+            assert resp.payment_amount == Decimal("480.00")
         finally:
             tenant_id_ctx.reset(token)
 

@@ -15,6 +15,7 @@ from app.core.security.crypto import encrypt_credential
 from app.core.tenancy import tenant_id_ctx
 from app.modules.collect.models import QianniuDaily
 from app.modules.product.platform_product_models import PlatformProduct
+from app.modules.promotion.urge_calculator import get_today
 from app.modules.wecom.alert_config_service import AlertConfigService
 from app.modules.wecom.alert_models import WecomAlertConfig, WecomAlertLog
 from app.modules.wecom.alert_schemas import AlertConfigUpdate
@@ -45,7 +46,11 @@ async def _high_return_style(
     *,
     pay="1000.00",
     refund="500.00",
+    day: date | None = None,
 ) -> Any:
+    # AnomalyAlertService 的统计窗口是 last_7d（相对当天），日期必须落在窗口内，
+    # 不能硬编码固定日期，否则测试会随时间推移失效。
+    day = day or get_today()
     style = await product_factory.style(tenant=tenant)
     pp = PlatformProduct(
         tenant_id=tenant.id,
@@ -60,7 +65,7 @@ async def _high_return_style(
             tenant_id=tenant.id,
             platform_product_id=pp.id,
             platform_id_snapshot=pp.platform_id,
-            date=date(2026, 6, 8),
+            date=day,
             visitors=100,
             pay_amount=Decimal(pay),
             pay_orders=10,

@@ -191,17 +191,18 @@ class TestQianniuUpsert:
             parsed = adapter.parse_row(
                 {
                     "商品ID": "P123",
-                    "日期": "2026-06-08",
-                    "访客数": "100",
+                    "统计日期": "2026-06-08",
+                    "商品访客数": "100",
                     "支付金额": "50.00",
-                    "支付订单数": "3",
+                    "支付件数": "3",
                 },
                 None,
             )
             await adapter.upsert(parsed, session=session, tenant_id=tenant_a.id, actor_id=None)
             # 未匹配 → dq issue
             parsed2 = adapter.parse_row(
-                {"商品ID": "UNKNOWN", "日期": "2026-06-08", "访客数": "5"}, None
+                {"商品ID": "UNKNOWN", "统计日期": "2026-06-08", "商品访客数": "5"},
+                None,
             )
             await adapter.upsert(parsed2, session=session, tenant_id=tenant_a.id, actor_id=None)
             await session.flush()

@@ -85,6 +85,31 @@ async def session(engine: Any) -> AsyncIterator[AsyncSession]:
         await connection.close()
 
 
+@pytest_asyncio.fixture(autouse=True)
+async def _dispose_global_engines() -> AsyncIterator[None]:
+    """每个测试结束后 dispose ``app.core.db`` 的全局引擎。
+
+    上面的 ``engine`` fixture 用 NullPool 规避了跨事件循环复用连接的问题，但
+    **只覆盖走 fixture 的测试**。通过 ASGITransport 直接打 ``app.main.app`` 的
+    API 测试走的是模块级 ``engine_app`` / ``engine_bypass``，两者带真实连接池且
+    跨测试常驻。pytest-asyncio 每个测试新建事件循环（``asyncio_default_fixture_loop_scope
+    = "function"``），池中残留的 asyncpg 连接仍绑定在上一个已关闭的循环上，
+    下个测试复用即报::
+
+        RuntimeError: Task ... got Future ... attached to a different loop
+
+    表现为单跑通过、全量套件里失败的诡异用例。故每个测试结束统一回收全局池。
+    """
+    yield
+    from app.core.db import engine_app, engine_bypass
+
+    for eng in (engine_app, engine_bypass):
+        try:
+            await eng.dispose()
+        except Exception:  # teardown 阶段的清理失败不应掩盖用例本身的结果
+            pass
+
+
 # ---------------------------------------------------------------------------
 # 业务 fixtures
 # ---------------------------------------------------------------------------

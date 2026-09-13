@@ -120,11 +120,11 @@ def test_validate_missing_required():
 
 
 def test_validate_each_required_field():
+    # category 自 1821779 起不再必填（缺失时回落到 _DEFAULT_CATEGORY="未分类"）
     adapter = _adapter()
     for field, label in [
         ("style_code", "款式编码"),
         ("style_name", "款式名称"),
-        ("category", "类目"),
         ("sku_code", "SKU编码"),
         ("color", "颜色"),
         ("size", "尺码"),
