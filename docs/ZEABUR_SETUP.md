@@ -67,6 +67,9 @@
 > ⚠️ 若通过 API 的 `deployFromSpecification` 部署，它会覆盖 spec 中的 `command`/`args`。
 > 必须在部署**之后**重新下发 `updateServiceStartup`，再 `redeployService` 才生效。
 > 否则容器退回 Dockerfile 默认 CMD —— backend 不会跑迁移，两个 celery 服务会错误地起 uvicorn。
+>
+> 好消息：**git trigger 触发的自动部署会保留 `command`/`args`**（2026-09-13 实测验证）。
+> 所以这个坑只在用 API 手工下 spec 时出现，日常 push main 的自动部署不受影响。
 
 ## 域名绑定
 
