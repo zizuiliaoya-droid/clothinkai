@@ -82,10 +82,11 @@ class Style(TenantScopedModel):
     style_name: Mapped[str] = mapped_column(String(255), nullable=False)
     short_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
     qianniu_product_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    """千牛（生意参谋）商品ID：用于把投产/BI 的千牛日报数据按此 ID 关联到款式。"""
-    qianniu_product_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    """千牛（生意参谋）平台商品ID。用于投产报表/BI 按此 ID 关联千牛支付数据。
-    一个货号（款式）对应一个千牛商品ID，其下可有多个 SKU。"""
+    """千牛（生意参谋）平台商品ID。
+
+    用于把投产报表 / BI 的千牛日报数据按此 ID 关联到款式。
+    一个货号（款式）对应一个千牛商品ID，其下可有多个 SKU。
+    """
     brand_id: Mapped[UUID | None] = mapped_column(
         PGUUID(as_uuid=True),
         ForeignKey("brand.id", ondelete="SET NULL"),
