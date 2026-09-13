@@ -27,9 +27,7 @@ class NotificationService:
         for uid in user_ids:
             if uid is None:
                 continue
-            self._repo.add(
-                Notification(user_id=uid, type=type, content=content, link=link)
-            )
+            self._repo.add(Notification(user_id=uid, type=type, content=content, link=link))
         await self._s.flush()
 
     async def list_for_user(

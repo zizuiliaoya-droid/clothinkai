@@ -13,9 +13,7 @@ from app.modules.report.exceptions import (
 
 _MAX_SPAN_DAYS = 366
 
-VALID_PRESETS = frozenset(
-    {"last_7d", "last_30d", "this_month", "last_month", "custom"}
-)
+VALID_PRESETS = frozenset({"last_7d", "last_30d", "this_month", "last_month", "custom"})
 
 
 def resolve_time_range(

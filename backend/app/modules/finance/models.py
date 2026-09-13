@@ -43,7 +43,6 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import TenantScopedModel
 
-
 # ---------------------------------------------------------------------------
 # Settlement（结算单）
 # ---------------------------------------------------------------------------
@@ -101,9 +100,7 @@ class Settlement(TenantScopedModel):
     # --- 金额字段 ---
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     total_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
-    payment_amount: Mapped[Decimal | None] = mapped_column(
-        Numeric(12, 2), nullable=True
-    )
+    payment_amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
 
     # --- 业务字段 ---
     payment_date: Mapped[date | None] = mapped_column(Date, nullable=True)
@@ -116,26 +113,18 @@ class Settlement(TenantScopedModel):
     )
 
     # --- 审核 / 驳回 ---
-    reviewed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     review_action: Mapped[str | None] = mapped_column(String(16), nullable=True)
     review_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # --- 事件溯源（永久 UNIQUE）---
-    request_event_id: Mapped[UUID] = mapped_column(
-        PGUUID(as_uuid=True), nullable=False
-    )
+    request_event_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
 
     __table_args__ = (
         # 业务键 + 永久幂等键（FB3 无 partial WHERE）
         Index("uq_settlement_no", "tenant_id", "settlement_no", unique=True),
-        Index(
-            "uq_settlement_promotion", "tenant_id", "promotion_id", unique=True
-        ),
-        Index(
-            "uq_settlement_request_event_id", "request_event_id", unique=True
-        ),
+        Index("uq_settlement_promotion", "tenant_id", "promotion_id", unique=True),
+        Index("uq_settlement_request_event_id", "request_event_id", unique=True),
         # 列表过滤 + as_of 汇总
         Index(
             "idx_settlement_tenant_status",
@@ -151,9 +140,7 @@ class Settlement(TenantScopedModel):
         Index("idx_settlement_paid_by", "tenant_id", "paid_by"),
         # CHECK 约束
         CheckConstraint("amount >= 0", name="ck_settlement_amount_nonneg"),
-        CheckConstraint(
-            "total_amount >= 0", name="ck_settlement_total_amount_nonneg"
-        ),
+        CheckConstraint("total_amount >= 0", name="ck_settlement_total_amount_nonneg"),
         CheckConstraint(
             "payment_amount IS NULL OR payment_amount >= 0",
             name="ck_settlement_payment_amount_nonneg",
@@ -194,9 +181,7 @@ class SettlementExtraItem(TenantScopedModel):
     )
 
     __table_args__ = (
-        Index(
-            "idx_extra_item_settlement", "tenant_id", "settlement_id"
-        ),
+        Index("idx_extra_item_settlement", "tenant_id", "settlement_id"),
         CheckConstraint("amount > 0", name="ck_extra_item_amount_pos"),
     )
 
@@ -219,9 +204,7 @@ class SettlementSequence(TenantScopedModel):
     __tablename__ = "settlement_sequence"
 
     date_key: Mapped[date] = mapped_column(Date, nullable=False)
-    last_seq: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default=text("0")
-    )
+    last_seq: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
 
     __table_args__ = (
         Index(

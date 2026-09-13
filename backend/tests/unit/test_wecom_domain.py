@@ -41,24 +41,18 @@ def test_render_missing_value_empty():
 
 def test_is_important_within_3_days():
     today = date(2026, 6, 1)
-    assert is_important(
-        scheduled_publish_date=date(2026, 6, 3), today=today
-    ) is True
+    assert is_important(scheduled_publish_date=date(2026, 6, 3), today=today) is True
 
 
 def test_is_important_overdue():
     today = date(2026, 6, 10)
-    assert is_important(
-        scheduled_publish_date=date(2026, 6, 1), today=today
-    ) is True
+    assert is_important(scheduled_publish_date=date(2026, 6, 1), today=today) is True
 
 
 def test_not_important_urge_range():
     today = date(2026, 6, 1)
     # 剩余 7 天 → 催发（非重要）
-    assert is_important(
-        scheduled_publish_date=date(2026, 6, 8), today=today
-    ) is False
+    assert is_important(scheduled_publish_date=date(2026, 6, 8), today=today) is False
 
 
 def test_build_render_ctx():

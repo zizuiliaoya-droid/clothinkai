@@ -41,15 +41,11 @@ class WorkerToken(TenantScopedModel):
     ip_allowlist: Mapped[list] = mapped_column(
         JSONB, nullable=False, server_default=text("'[]'::jsonb")
     )
-    is_active: Mapped[bool] = mapped_column(
-        nullable=False, server_default=text("true")
-    )
+    is_active: Mapped[bool] = mapped_column(nullable=False, server_default=text("true"))
     consecutive_auth_failures: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default=text("0")
     )
-    last_seen_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
         Index("uq_worker_token_hash", "tenant_id", "token_hash", unique=True),
@@ -81,21 +77,18 @@ class CrawlerTask(TenantScopedModel):
     cred_token_expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    assigned_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    import_batch_id: Mapped[UUID | None] = mapped_column(
-        PGUUID(as_uuid=True), nullable=True
-    )
+    assigned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    import_batch_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True)
     error_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-    attempt: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default=text("0")
-    )
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
 
     __table_args__ = (
         Index(
             "uq_crawler_task_tenant_plat_cred_date",
-            "tenant_id", "platform", "credential_id", "target_date",
+            "tenant_id",
+            "platform",
+            "credential_id",
+            "target_date",
             unique=True,
         ),
         Index("idx_crawler_task_status", "tenant_id", "status"),
@@ -113,9 +106,7 @@ class DataQualityIssue(TenantScopedModel):
 
     source: Mapped[str] = mapped_column(String(32), nullable=False)
     severity: Mapped[str] = mapped_column(String(8), nullable=False)
-    status: Mapped[str] = mapped_column(
-        String(8), nullable=False, server_default=text("'open'")
-    )
+    status: Mapped[str] = mapped_column(String(8), nullable=False, server_default=text("'open'"))
     entity_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
     entity_ref: Mapped[str | None] = mapped_column(String(128), nullable=True)
     message: Mapped[str] = mapped_column(Text, nullable=False)
@@ -123,12 +114,8 @@ class DataQualityIssue(TenantScopedModel):
     __table_args__ = (
         Index("idx_dq_tenant_source_sev", "tenant_id", "source", "severity"),
         Index("idx_dq_tenant_status", "tenant_id", "status"),
-        CheckConstraint(
-            "severity IN ('info','warning','error')", name="ck_dq_severity"
-        ),
-        CheckConstraint(
-            "status IN ('open','fixed','ignored')", name="ck_dq_status"
-        ),
+        CheckConstraint("severity IN ('info','warning','error')", name="ck_dq_severity"),
+        CheckConstraint("status IN ('open','fixed','ignored')", name="ck_dq_status"),
     )
 
 
@@ -145,16 +132,16 @@ class QianniuDaily(TenantScopedModel):
     platform_id_snapshot: Mapped[str] = mapped_column(String(64), nullable=False)
     date: Mapped[date] = mapped_column(Date, nullable=False)
     visitors: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    pay_amount: Mapped[Decimal | None] = mapped_column(
-        Numeric(12, 2), nullable=True
-    )
+    pay_amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     pay_orders: Mapped[int | None] = mapped_column(Integer, nullable=True)
     extra: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     __table_args__ = (
         Index(
             "uq_qianniu_daily_tenant_pid_date",
-            "tenant_id", "platform_id_snapshot", "date",
+            "tenant_id",
+            "platform_id_snapshot",
+            "date",
             unique=True,
         ),
         Index("idx_qianniu_daily_date", "tenant_id", "date"),
@@ -182,7 +169,9 @@ class AdDaily(TenantScopedModel):
     __table_args__ = (
         Index(
             "uq_ad_daily_tenant_pid_date",
-            "tenant_id", "platform_id_snapshot", "date",
+            "tenant_id",
+            "platform_id_snapshot",
+            "date",
             unique=True,
         ),
         Index("idx_ad_daily_date", "tenant_id", "date"),

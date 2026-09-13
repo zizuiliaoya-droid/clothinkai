@@ -17,28 +17,20 @@ from app.modules.finance.domain import (
 @pytest.mark.unit
 class TestFormatSettlementNo:
     def test_basic_format(self) -> None:
-        no = format_settlement_no(
-            tenant_code="demo", date_key=date(2026, 5, 26), sequence=1
-        )
+        no = format_settlement_no(tenant_code="demo", date_key=date(2026, 5, 26), sequence=1)
         # <prefix 2 大写>S<yyMMdd><0001>
         assert no == "DES2605260001"
 
     def test_prefix_padding_when_short(self) -> None:
-        no = format_settlement_no(
-            tenant_code="a", date_key=date(2026, 5, 26), sequence=42
-        )
+        no = format_settlement_no(tenant_code="a", date_key=date(2026, 5, 26), sequence=42)
         assert no == "AXS2605260042"
 
     def test_prefix_padding_when_empty(self) -> None:
-        no = format_settlement_no(
-            tenant_code="", date_key=date(2026, 1, 1), sequence=9999
-        )
+        no = format_settlement_no(tenant_code="", date_key=date(2026, 1, 1), sequence=9999)
         assert no == "XXS2601019999"
 
     def test_sequence_zero_padded_to_4(self) -> None:
-        no = format_settlement_no(
-            tenant_code="TT", date_key=date(2026, 12, 31), sequence=7
-        )
+        no = format_settlement_no(tenant_code="TT", date_key=date(2026, 12, 31), sequence=7)
         assert no.endswith("0007")
         assert no == "TTS2612310007"
 
@@ -98,17 +90,11 @@ class TestBuildSettlementAuditChanges:
 @pytest.mark.unit
 class TestComputeStateChange:
     def test_records_change(self) -> None:
-        diff = compute_state_change(
-            field="settlement_status", before="待核查", after="待付款"
-        )
-        assert diff == {
-            "settlement_status": {"before": "待核查", "after": "待付款"}
-        }
+        diff = compute_state_change(field="settlement_status", before="待核查", after="待付款")
+        assert diff == {"settlement_status": {"before": "待核查", "after": "待付款"}}
 
     def test_no_change_returns_empty(self) -> None:
-        diff = compute_state_change(
-            field="settlement_status", before="待付款", after="待付款"
-        )
+        diff = compute_state_change(field="settlement_status", before="待付款", after="待付款")
         assert diff == {}
 
 

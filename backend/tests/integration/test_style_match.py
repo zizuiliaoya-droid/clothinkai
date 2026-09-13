@@ -68,9 +68,7 @@ class TestExactMatch:
         """停用的 style 不会被 match 命中."""
         token = tenant_id_ctx.set(tenant_a.id)
         try:
-            await product_factory.style(
-                style_code="W002", is_active=False
-            )
+            await product_factory.style(style_code="W002", is_active=False)
             svc = StyleService(session)
             response = await svc.match_by_code("W002")
             assert response.matched is False
@@ -178,11 +176,14 @@ class TestSystemFailureNotMaskedAsEmpty:
             # mock repository 层抛系统异常
             from app.modules.product.repository import StyleRepository
 
-            with patch.object(
-                StyleRepository,
-                "search_by_keyword",
-                new=AsyncMock(side_effect=RuntimeError("simulated DB outage")),
-            ), pytest.raises(RuntimeError, match="simulated DB outage"):
+            with (
+                patch.object(
+                    StyleRepository,
+                    "search_by_keyword",
+                    new=AsyncMock(side_effect=RuntimeError("simulated DB outage")),
+                ),
+                pytest.raises(RuntimeError, match="simulated DB outage"),
+            ):
                 await svc.match_by_keyword("anything")
         finally:
             tenant_id_ctx.reset(token)
@@ -197,11 +198,14 @@ class TestSystemFailureNotMaskedAsEmpty:
             svc = StyleService(session)
             from app.modules.product.repository import StyleRepository
 
-            with patch.object(
-                StyleRepository,
-                "get_by_code",
-                new=AsyncMock(side_effect=RuntimeError("simulated DB outage")),
-            ), pytest.raises(RuntimeError, match="simulated DB outage"):
+            with (
+                patch.object(
+                    StyleRepository,
+                    "get_by_code",
+                    new=AsyncMock(side_effect=RuntimeError("simulated DB outage")),
+                ),
+                pytest.raises(RuntimeError, match="simulated DB outage"),
+            ):
                 await svc.match_by_code("W001")
         finally:
             tenant_id_ctx.reset(token)

@@ -12,27 +12,21 @@ class TestWecomAlertApiContract:
     async def test_get_alert_config_requires_auth(self) -> None:
         from app.main import app
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.get("/api/wecom/alert-config")
         assert resp.status_code == 401
 
     async def test_put_alert_config_requires_auth(self) -> None:
         from app.main import app
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.put("/api/wecom/alert-config", json={})
         assert resp.status_code == 401
 
     async def test_openapi_exposes_alert_config_endpoint(self) -> None:
         from app.main import app
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.get("/api/openapi.json")
         assert resp.status_code == 200
         paths = resp.json().get("paths", {})

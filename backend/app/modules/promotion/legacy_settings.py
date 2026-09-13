@@ -17,10 +17,9 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-
 PLATFORM_LIKE_COEFFICIENT: dict[str, Decimal] = {
     "小红书": Decimal("1.0"),
-    "抖音": Decimal("0.1"),    # 抖音点赞 ÷ 10
+    "抖音": Decimal("0.1"),  # 抖音点赞 ÷ 10
     "快手": Decimal("0.1"),
     "B站": Decimal("1.0"),
 }

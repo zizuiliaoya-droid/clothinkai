@@ -39,7 +39,8 @@ async def test_list_smoke_perf(
         statuses = ["待核查", "待付款", "待财务付款", "已付款", "已驳回"]
         for i in range(1000):
             await settlement_factory.settlement(
-                style=style, blogger=blogger,
+                style=style,
+                blogger=blogger,
                 settlement_status=statuses[i % 5],
                 total_amount=Decimal("100.00") + Decimal(i),
             )
@@ -82,7 +83,8 @@ async def test_list_keyword_search_smoke_perf(
         blogger = await blogger_factory.blogger()
         for i in range(500):
             await settlement_factory.settlement(
-                style=style, blogger=blogger,
+                style=style,
+                blogger=blogger,
                 settlement_no=f"DES260526{i:04d}",
                 total_amount=Decimal("100.00"),
             )

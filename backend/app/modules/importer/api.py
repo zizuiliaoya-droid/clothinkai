@@ -82,9 +82,7 @@ async def upload_import_file(
         user=user,
         mapping_version=mapping_version,
     )
-    return ImportUploadResponse(
-        batch_id=batch.id, status=batch.status, source=batch.source
-    )
+    return ImportUploadResponse(batch_id=batch.id, status=batch.status, source=batch.source)
 
 
 # ---------------------------------------------------------------------------

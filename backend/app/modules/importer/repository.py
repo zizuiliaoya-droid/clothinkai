@@ -21,7 +21,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.importer.models import FieldMapping, ImportBatch, ImportJob
 
-
 # ---------------------------------------------------------------------------
 # Filters
 # ---------------------------------------------------------------------------
@@ -61,9 +60,7 @@ class ImportBatchRepository:
         )
         return (await self._session.execute(stmt)).scalar_one_or_none()
 
-    async def claim_for_retry(
-        self, batch_id: UUID, tenant_id: UUID
-    ) -> ImportBatch | None:
+    async def claim_for_retry(self, batch_id: UUID, tenant_id: UUID) -> ImportBatch | None:
         """NF-3 原子领取：仅 partial/failed 且 retry_count<3 可领，置 processing + retry_count+1。
 
         0 行 = 已在跑 / 已耗尽 / 状态不符 → service 转 409（区分 busy vs exhausted）。
@@ -135,9 +132,7 @@ class ImportBatchRepository:
         if filters.created_at_from:
             stmt = stmt.where(ImportBatch.created_at >= filters.created_at_from)
         if filters.created_at_to:
-            stmt = stmt.where(
-                ImportBatch.created_at < filters.created_at_to + timedelta(days=1)
-            )
+            stmt = stmt.where(ImportBatch.created_at < filters.created_at_to + timedelta(days=1))
 
         total_stmt = select(func.count()).select_from(stmt.subquery())
         total = int((await self._session.execute(total_stmt)).scalar_one())
@@ -175,9 +170,7 @@ class ImportJobRepository:
         )
         return (await self._session.execute(stmt)).scalars().all()
 
-    async def get_by_batch_row(
-        self, batch_id: UUID, row_number: int
-    ) -> ImportJob | None:
+    async def get_by_batch_row(self, batch_id: UUID, row_number: int) -> ImportJob | None:
         stmt = select(ImportJob).where(
             ImportJob.batch_id == batch_id,
             ImportJob.row_number == row_number,
@@ -203,9 +196,7 @@ class FieldMappingRepository:
     def add(self, mapping: FieldMapping) -> None:
         self._session.add(mapping)
 
-    async def get_active(
-        self, tenant_id: UUID, source: str
-    ) -> FieldMapping | None:
+    async def get_active(self, tenant_id: UUID, source: str) -> FieldMapping | None:
         stmt = (
             select(FieldMapping)
             .where(
@@ -231,9 +222,7 @@ class FieldMappingRepository:
         )
         return (await self._session.execute(stmt)).scalar_one_or_none()
 
-    async def list_versions(
-        self, tenant_id: UUID, source: str
-    ) -> Sequence[FieldMapping]:
+    async def list_versions(self, tenant_id: UUID, source: str) -> Sequence[FieldMapping]:
         stmt = (
             select(FieldMapping)
             .where(

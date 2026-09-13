@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
-from typing import Any
 
 import pytest
 from freezegun import freeze_time
@@ -18,7 +17,6 @@ from app.modules.promotion.urge_calculator import (
     calculate_urge_status,
     get_today,
 )
-
 
 _PUBLISH_STATES = ["未发布", "已发布", "已取消", "异常", "已删除"]
 
@@ -41,7 +39,7 @@ def _generate_scenarios() -> list[tuple[str, date | None, int]]:
             scenarios.append((status, sched, 0))
     # 凑满 100 + 重复几组
     while len(scenarios) < 100:
-        scenarios.append((scenarios[len(scenarios) % len(scenarios)]))
+        scenarios.append(scenarios[len(scenarios) % len(scenarios)])
     return scenarios[:100]
 
 
@@ -87,9 +85,7 @@ async def test_urge_calculator_python_vs_sql_consistency(
         )
         sql = result.scalar_one()
         if py != sql:
-            mismatches.append(
-                f"#{i} status={status!r} sched={sched!r}: py={py!r} sql={sql!r}"
-            )
+            mismatches.append(f"#{i} status={status!r} sched={sched!r}: py={py!r} sql={sql!r}")
 
     assert not mismatches, "Python/SQL 不一致：\n" + "\n".join(mismatches)
 

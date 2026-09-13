@@ -23,9 +23,7 @@ async def _seed(Maker, suffix: str, batch_id):
     """committed seed：tenant + style(ST<suffix>A) + blogger(xhs<suffix>A) + processing batch。"""
     async with Maker() as s:
         tenant_id = (
-            await s.execute(
-                text("SELECT id FROM tenant ORDER BY created_at ASC LIMIT 1")
-            )
+            await s.execute(text("SELECT id FROM tenant ORDER BY created_at ASC LIMIT 1"))
         ).first()[0]
         await s.execute(
             text(
@@ -66,17 +64,11 @@ async def _seed(Maker, suffix: str, batch_id):
 
 async def _cleanup(Maker, suffix: str, batch_id):
     async with Maker() as c:
-        await c.execute(
-            text("DELETE FROM import_job WHERE batch_id = :id"), {"id": batch_id}
-        )
-        await c.execute(
-            text("DELETE FROM import_batch WHERE id = :id"), {"id": batch_id}
-        )
+        await c.execute(text("DELETE FROM import_job WHERE batch_id = :id"), {"id": batch_id})
+        await c.execute(text("DELETE FROM import_batch WHERE id = :id"), {"id": batch_id})
         # promotion 引用 style/blogger，先删 promotion
         await c.execute(
-            text(
-                "DELETE FROM promotion WHERE style_code_snapshot = :code"
-            ),
+            text("DELETE FROM promotion WHERE style_code_snapshot = :code"),
             {"code": f"ST{suffix}A"},
         )
         await c.execute(
@@ -100,13 +92,9 @@ async def _cleanup(Maker, suffix: str, batch_id):
 @pytest.mark.integration
 @pytest.mark.asyncio
 class TestPromotionImportEndToEnd:
-    async def test_end_to_end_fk_resolution_and_sequence(
-        self, engine: Any, monkeypatch
-    ) -> None:
+    async def test_end_to_end_fk_resolution_and_sequence(self, engine: Any, monkeypatch) -> None:
         """2 成功（FK 解析 + internal_code 连续）+ 2 失败（缺 style / 缺 xhs）→ partial。"""
-        Maker = async_sessionmaker(
-            engine, expire_on_commit=False, class_=AsyncSession
-        )
+        Maker = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
         monkeypatch.setattr(tasks, "AsyncSessionApp", Maker)
         monkeypatch.setattr(tasks, "AsyncSessionBypass", Maker)
         ImportAdapterRegistry.clear()
@@ -119,7 +107,7 @@ class TestPromotionImportEndToEnd:
             f"ST{suffix}A,xhs{suffix}A,600,小红书,2026-06-01\n"
             f"ST{suffix}X,xhs{suffix}A,100,小红书,2026-06-01\n"
             f"ST{suffix}A,,100,小红书,2026-06-01\n"
-        ).encode("utf-8")
+        ).encode()
 
         import app.core.attachment as att_mod
 
@@ -183,9 +171,7 @@ class TestPromotionImportEndToEnd:
 
     async def test_missing_blogger_fails(self, engine: Any, monkeypatch) -> None:
         """style 存在但 blogger 不存在 → 行失败（FK 解析）。"""
-        Maker = async_sessionmaker(
-            engine, expire_on_commit=False, class_=AsyncSession
-        )
+        Maker = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
         monkeypatch.setattr(tasks, "AsyncSessionApp", Maker)
         monkeypatch.setattr(tasks, "AsyncSessionBypass", Maker)
         ImportAdapterRegistry.clear()
@@ -195,7 +181,7 @@ class TestPromotionImportEndToEnd:
         csv_bytes = (
             "款式编码,小红书ID,报价金额,平台,合作日期\n"
             f"ST{suffix}A,xhs{suffix}MISSING,500,小红书,2026-06-01\n"
-        ).encode("utf-8")
+        ).encode()
 
         import app.core.attachment as att_mod
 
@@ -214,9 +200,7 @@ class TestPromotionImportEndToEnd:
             async with Maker() as check:
                 err = (
                     await check.execute(
-                        text(
-                            "SELECT error_detail FROM import_job WHERE batch_id = :b"
-                        ),
+                        text("SELECT error_detail FROM import_job WHERE batch_id = :b"),
                         {"b": batch_id},
                     )
                 ).scalar_one()

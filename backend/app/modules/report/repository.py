@@ -29,13 +29,23 @@ class PublishProgressRepository:
         self._s = session
 
     def _params(
-        self, tenant_id: UUID, date_from: date, date_to: date, today: date,
-        urge_days: int, important_days: int, **extra: Any
+        self,
+        tenant_id: UUID,
+        date_from: date,
+        date_to: date,
+        today: date,
+        urge_days: int,
+        important_days: int,
+        **extra: Any,
     ) -> dict[str, Any]:
         return {
-            "tenant_id": tenant_id, "date_from": date_from, "date_to": date_to,
-            "today": today, "urge_days": urge_days,
-            "important_days": important_days, **extra,
+            "tenant_id": tenant_id,
+            "date_from": date_from,
+            "date_to": date_to,
+            "today": today,
+            "urge_days": urge_days,
+            "important_days": important_days,
+            **extra,
         }
 
     async def aggregate_summary(
@@ -60,17 +70,27 @@ class PublishProgressRepository:
             """
         )
         return (
-            await self._s.execute(
-                sql,
-                self._params(
-                    tenant_id, date_from, date_to, today, urge_days, important_days
-                ),
+            (
+                await self._s.execute(
+                    sql,
+                    self._params(tenant_id, date_from, date_to, today, urge_days, important_days),
+                )
             )
-        ).mappings().one()
+            .mappings()
+            .one()
+        )
 
     async def aggregate_cards(
-        self, *, tenant_id, date_from, date_to, today, urge_days, important_days,
-        page: int, page_size: int
+        self,
+        *,
+        tenant_id,
+        date_from,
+        date_to,
+        today,
+        urge_days,
+        important_days,
+        page: int,
+        page_size: int,
     ) -> tuple[list[Mapping[str, Any]], int]:
         where = (
             "WHERE p.tenant_id = :tenant_id "
@@ -78,12 +98,8 @@ class PublishProgressRepository:
             "AND p.cooperation_date BETWEEN :date_from AND :date_to"
         )
         # total = 不同 style 数
-        total_sql = text(
-            f"SELECT COUNT(DISTINCT p.style_id) FROM promotion p {where}"
-        )
-        params = self._params(
-            tenant_id, date_from, date_to, today, urge_days, important_days
-        )
+        total_sql = text(f"SELECT COUNT(DISTINCT p.style_id) FROM promotion p {where}")
+        params = self._params(tenant_id, date_from, date_to, today, urge_days, important_days)
         total = int((await self._s.execute(total_sql, params)).scalar_one())
 
         data_sql = text(
@@ -118,8 +134,15 @@ class PublishProgressRepository:
         return list(rows), total
 
     async def aggregate_by_pr(
-        self, *, tenant_id: UUID, style_id: UUID, date_from, date_to,
-        today, urge_days, important_days
+        self,
+        *,
+        tenant_id: UUID,
+        style_id: UUID,
+        date_from,
+        date_to,
+        today,
+        urge_days,
+        important_days,
     ) -> list[Mapping[str, Any]]:
         sql = text(
             f"""
@@ -141,7 +164,12 @@ class PublishProgressRepository:
             """
         )
         params = self._params(
-            tenant_id, date_from, date_to, today, urge_days, important_days,
+            tenant_id,
+            date_from,
+            date_to,
+            today,
+            urge_days,
+            important_days,
             style_id=style_id,
         )
         return list((await self._s.execute(sql, params)).mappings().all())
@@ -179,13 +207,13 @@ class PublishProgressRepository:
                         "date_to": date_to,
                     },
                 )
-            ).mappings().all()
+            )
+            .mappings()
+            .all()
         )
 
     async def style_exists(self, tenant_id: UUID, style_id: UUID) -> bool:
-        sql = text(
-            "SELECT 1 FROM style WHERE id = :sid AND tenant_id = :tid LIMIT 1"
-        )
+        sql = text("SELECT 1 FROM style WHERE id = :sid AND tenant_id = :tid LIMIT 1")
         return (
             await self._s.execute(sql, {"sid": style_id, "tid": tenant_id})
         ).scalar_one_or_none() is not None

@@ -81,9 +81,7 @@ def validate_mapping_config(columns: list[dict[str, Any]]) -> dict[str, Any]:
         transform = col.get("transform")
 
         if not source_col or not target_field:
-            raise ImportMappingInvalidError(
-                f"第 {i + 1} 列 source_col / target_field 不能为空"
-            )
+            raise ImportMappingInvalidError(f"第 {i + 1} 列 source_col / target_field 不能为空")
         if col_type not in _ALLOWED_TYPES:
             raise ImportMappingInvalidError(
                 f"第 {i + 1} 列 type '{col_type}' 不在白名单 {sorted(_ALLOWED_TYPES)}"
@@ -93,9 +91,7 @@ def validate_mapping_config(columns: list[dict[str, Any]]) -> dict[str, Any]:
                 f"第 {i + 1} 列 type={col_type} 必须提供 transform（strptime 格式）"
             )
         if target_field in seen_targets:
-            raise ImportMappingInvalidError(
-                f"target_field '{target_field}' 重复"
-            )
+            raise ImportMappingInvalidError(f"target_field '{target_field}' 重复")
         seen_targets.add(target_field)
 
         normalized.append(

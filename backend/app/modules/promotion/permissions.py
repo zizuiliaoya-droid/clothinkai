@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 PROMOTION_PERMISSIONS: list[tuple[str, str, str]] = [
     # (scope, action, description)
     ("promotion", "read", "查询推广合作"),

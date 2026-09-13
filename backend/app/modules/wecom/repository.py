@@ -28,9 +28,7 @@ class WecomConfigRepository:
         self._s = session
 
     async def get(self) -> WecomConfig | None:
-        return (
-            await self._s.execute(select(WecomConfig).limit(1))
-        ).scalar_one_or_none()
+        return (await self._s.execute(select(WecomConfig).limit(1))).scalar_one_or_none()
 
     def add(self, cfg: WecomConfig) -> None:
         self._s.add(cfg)
@@ -53,9 +51,7 @@ class MessageTemplateRepository:
         self._s = session
 
     async def get(self, template_type: str) -> MessageTemplate | None:
-        stmt = select(MessageTemplate).where(
-            MessageTemplate.template_type == template_type
-        )
+        stmt = select(MessageTemplate).where(MessageTemplate.template_type == template_type)
         return (await self._s.execute(stmt)).scalar_one_or_none()
 
     async def get_all(self) -> dict[str, MessageTemplate]:
@@ -77,9 +73,7 @@ class WecomMessageRepository:
         return await self._s.get(WecomMessage, message_id)
 
     async def find_by_msgid(self, wecom_msgid: str) -> WecomMessage | None:
-        stmt = select(WecomMessage).where(
-            WecomMessage.wecom_msgid == wecom_msgid
-        )
+        stmt = select(WecomMessage).where(WecomMessage.wecom_msgid == wecom_msgid)
         return (await self._s.execute(stmt)).scalar_one_or_none()
 
     async def exists_today_non_failed(
@@ -93,15 +87,10 @@ class WecomMessageRepository:
                 WecomMessage.blogger_id == blogger_id,
                 WecomMessage.pr_id == pr_id,
                 WecomMessage.status != "failed",
-                text(
-                    "(wecom_message.created_at AT TIME ZONE 'Asia/Shanghai')::date "
-                    "= :today"
-                ),
+                text("(wecom_message.created_at AT TIME ZONE 'Asia/Shanghai')::date " "= :today"),
             )
         )
-        n = int(
-            (await self._s.execute(stmt, {"today": today})).scalar_one()
-        )
+        n = int((await self._s.execute(stmt, {"today": today})).scalar_one())
         return n > 0
 
     async def count_today_active(
@@ -117,10 +106,7 @@ class WecomMessageRepository:
             .select_from(WecomMessage)
             .where(
                 WecomMessage.status.in_(("created", "sent")),
-                text(
-                    "(wecom_message.created_at AT TIME ZONE 'Asia/Shanghai')::date "
-                    "= :today"
-                ),
+                text("(wecom_message.created_at AT TIME ZONE 'Asia/Shanghai')::date " "= :today"),
             )
         )
         if blogger_id is not None:
@@ -129,9 +115,7 @@ class WecomMessageRepository:
             stmt = stmt.where(WecomMessage.pr_id == pr_id)
         return int((await self._s.execute(stmt, {"today": today})).scalar_one())
 
-    async def list_recent(
-        self, *, limit: int = 50, offset: int = 0
-    ) -> Sequence[WecomMessage]:
+    async def list_recent(self, *, limit: int = 50, offset: int = 0) -> Sequence[WecomMessage]:
         stmt = (
             select(WecomMessage)
             .order_by(WecomMessage.created_at.desc())
@@ -162,18 +146,14 @@ class NotificationRepository:
         stmt = select(Notification).where(Notification.user_id == user_id)
         if unread_only:
             stmt = stmt.where(Notification.is_read.is_(False))
-        stmt = (
-            stmt.order_by(Notification.created_at.desc()).limit(limit).offset(offset)
-        )
+        stmt = stmt.order_by(Notification.created_at.desc()).limit(limit).offset(offset)
         return (await self._s.execute(stmt)).scalars().all()
 
     async def unread_count(self, *, user_id: UUID) -> int:
         stmt = (
             select(func.count())
             .select_from(Notification)
-            .where(
-                Notification.user_id == user_id, Notification.is_read.is_(False)
-            )
+            .where(Notification.user_id == user_id, Notification.is_read.is_(False))
         )
         return int((await self._s.execute(stmt)).scalar_one())
 
@@ -183,9 +163,7 @@ class WecomAlertConfigRepository:
         self._s = session
 
     async def get(self) -> WecomAlertConfig | None:
-        return (
-            await self._s.execute(select(WecomAlertConfig).limit(1))
-        ).scalar_one_or_none()
+        return (await self._s.execute(select(WecomAlertConfig).limit(1))).scalar_one_or_none()
 
 
 class WecomAlertLogRepository:
@@ -195,9 +173,7 @@ class WecomAlertLogRepository:
     def add(self, row: WecomAlertLog) -> None:
         self._s.add(row)
 
-    async def exists(
-        self, *, alert_type: str, entity_ref: str, period_key: str
-    ) -> bool:
+    async def exists(self, *, alert_type: str, entity_ref: str, period_key: str) -> bool:
         stmt = (
             select(func.count())
             .select_from(WecomAlertLog)

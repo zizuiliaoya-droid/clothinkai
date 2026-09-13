@@ -27,9 +27,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.metrics import promotion_sequence_lock_duration_seconds
 from app.modules.promotion.exceptions import SequenceOverflowError
-from app.modules.promotion.models import Promotion, PromotionSequence
+from app.modules.promotion.models import Promotion
 from app.modules.promotion.urge_calculator import URGE_STATUS_SQL_EXPR
-
 
 # ---------------------------------------------------------------------------
 # Filters dataclass
@@ -90,20 +89,12 @@ class PromotionRepository:
 
     async def count_by_sku(self, sku_id: UUID) -> int:
         """统计 SKU 的全部历史推广引用；租户隔离由 RLS 保证。"""
-        stmt = (
-            select(func.count())
-            .select_from(Promotion)
-            .where(Promotion.sku_id == sku_id)
-        )
+        stmt = select(func.count()).select_from(Promotion).where(Promotion.sku_id == sku_id)
         return int((await self._session.execute(stmt)).scalar_one())
 
     async def count_by_blogger(self, blogger_id: UUID) -> int:
         """统计博主的全部历史推广引用；租户隔离由 RLS 保证。"""
-        stmt = (
-            select(func.count())
-            .select_from(Promotion)
-            .where(Promotion.blogger_id == blogger_id)
-        )
+        stmt = select(func.count()).select_from(Promotion).where(Promotion.blogger_id == blogger_id)
         return int((await self._session.execute(stmt)).scalar_one())
 
     async def get_by_id(
@@ -160,9 +151,7 @@ class PromotionRepository:
             for row in result.mappings().all()
         }
 
-    async def get_by_internal_code(
-        self, internal_code: str
-    ) -> Promotion | None:
+    async def get_by_internal_code(self, internal_code: str) -> Promotion | None:
         stmt = (
             select(Promotion)
             .where(
@@ -280,7 +269,6 @@ class PromotionRepository:
     def add(self, promotion: Promotion) -> None:
         self._session.add(promotion)
 
-
     # ----------------------- next_internal_sequence (FB2) ----------------------- #
 
     async def next_internal_sequence(
@@ -314,14 +302,10 @@ class PromotionRepository:
                 RETURNING last_seq
                 """
             )
-            result = await self._session.execute(
-                stmt, {"tid": tenant_id, "dk": date_key}
-            )
+            result = await self._session.execute(stmt, {"tid": tenant_id, "dk": date_key})
             next_seq = int(result.scalar_one())
         finally:
-            promotion_sequence_lock_duration_seconds.observe(
-                time.perf_counter() - start
-            )
+            promotion_sequence_lock_duration_seconds.observe(time.perf_counter() - start)
 
         if next_seq > 9999:
             raise SequenceOverflowError(
@@ -365,9 +349,7 @@ class PromotionRepository:
             "recall_status",
             "settlement_status",
         }:
-            raise ValueError(
-                f"unsupported state field: {from_state_field}"
-            )
+            raise ValueError(f"unsupported state field: {from_state_field}")
 
         state_col = getattr(Promotion, from_state_field)
         values: dict[str, Any] = dict(extra_fields or {})
@@ -445,7 +427,6 @@ class PromotionRepository:
         result = await self._session.execute(stmt)
         row = result.fetchone()
         return row[0] if row else None
-
 
     # ----------------------- list_with_cte (FB8 + Pattern P-U04-04) ----------------------- #
 
@@ -542,9 +523,7 @@ class PromotionRepository:
             clauses.append("(like_count IS NOT NULL AND like_count >= :hit_th)")
             params["hit_th"] = filters.hit_threshold
         elif filters.is_hit is False:
-            clauses.append(
-                "(like_count IS NULL OR like_count < :hit_th)"
-            )
+            clauses.append("(like_count IS NULL OR like_count < :hit_th)")
             params["hit_th"] = filters.hit_threshold
         if filters.keyword:
             # 命中 GIN trgm 索引（idx_promotion_internal_code_trgm 等）
@@ -560,12 +539,8 @@ class PromotionRepository:
             where_extra = " AND " + " AND ".join(clauses)
 
         # ------ 1. count ------
-        count_sql = (
-            f"SELECT COUNT(*) FROM ({base_sql}{where_extra}) AS c"
-        )
-        total = int(
-            (await self._session.execute(text(count_sql), params)).scalar_one()
-        )
+        count_sql = f"SELECT COUNT(*) FROM ({base_sql}{where_extra}) AS c"
+        total = int((await self._session.execute(text(count_sql), params)).scalar_one())
 
         # ------ 2. data ------
         data_sql = (
@@ -583,21 +558,47 @@ class PromotionRepository:
         # 将 raw row 重组为 ORM 实例（共享同一 session）
         # 注意：ORM 重组时 do_orm_execute 不触发，需要手动构造
         for row in result.mappings().all():
-            promotion = Promotion(**{
-                col: row[col] for col in (
-                    "id", "tenant_id", "style_id", "sku_id", "blogger_id",
-                    "pr_id", "internal_code", "style_code_snapshot",
-                    "style_short_name_snapshot", "quote_amount",
-                    "cost_snapshot", "platform", "cooperation_date",
-                    "scheduled_publish_date", "actual_publish_date",
-                    "publish_url", "cancel_reason", "recall_reason",
-                    "like_count", "note_title", "remark",
-                    "publish_status", "recall_status", "settlement_status",
-                    "reviewed_by", "reviewed_at", "review_action",
-                    "review_reason", "is_active", "created_at", "updated_at",
-                    "source_extra", "payment_qr_attachment_id",
-                ) if col in row
-            })
+            promotion = Promotion(
+                **{
+                    col: row[col]
+                    for col in (
+                        "id",
+                        "tenant_id",
+                        "style_id",
+                        "sku_id",
+                        "blogger_id",
+                        "pr_id",
+                        "internal_code",
+                        "style_code_snapshot",
+                        "style_short_name_snapshot",
+                        "quote_amount",
+                        "cost_snapshot",
+                        "platform",
+                        "cooperation_date",
+                        "scheduled_publish_date",
+                        "actual_publish_date",
+                        "publish_url",
+                        "cancel_reason",
+                        "recall_reason",
+                        "like_count",
+                        "note_title",
+                        "remark",
+                        "publish_status",
+                        "recall_status",
+                        "settlement_status",
+                        "reviewed_by",
+                        "reviewed_at",
+                        "review_action",
+                        "review_reason",
+                        "is_active",
+                        "created_at",
+                        "updated_at",
+                        "source_extra",
+                        "payment_qr_attachment_id",
+                    )
+                    if col in row
+                }
+            )
             # 防止重组的 ORM 实例污染 session unit of work
             if promotion in self._session:
                 self._session.expunge(promotion)

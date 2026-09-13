@@ -84,9 +84,7 @@ def test_parse_row_custom_mapping():
             {"source_col": "成本", "target_field": "cost_price", "type": "decimal"},
         ]
     )
-    parsed = _adapter().parse_row(
-        {"商品货号": "ST9", "规格编码": "SK9", "成本": "10.5"}, mapping
-    )
+    parsed = _adapter().parse_row({"商品货号": "ST9", "规格编码": "SK9", "成本": "10.5"}, mapping)
     assert parsed["style_code"] == "ST9"
     assert parsed["sku_code"] == "SK9"
     assert parsed["cost_price"] == Decimal("10.5")

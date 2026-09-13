@@ -31,19 +31,13 @@ class Credential(TenantScopedModel):
     platform: Mapped[str] = mapped_column(String(16), nullable=False)
     username: Mapped[str] = mapped_column(String(128), nullable=False)
     password_ciphertext: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
-    status: Mapped[str] = mapped_column(
-        String(16), nullable=False, server_default=text("'paused'")
-    )
+    status: Mapped[str] = mapped_column(String(16), nullable=False, server_default=text("'paused'"))
     consecutive_failures: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default=text("0")
     )
     last_failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-    last_failure_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    privacy_consent_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
-    )
+    last_failure_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    privacy_consent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     remark: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     __table_args__ = (

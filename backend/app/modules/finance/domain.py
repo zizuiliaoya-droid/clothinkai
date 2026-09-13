@@ -53,9 +53,7 @@ SETTLEMENT_SENSITIVE_VALUE_FIELDS: frozenset[str] = frozenset(
 与 U02 BR-U02-31 / U04 BR-U04-40 同模式（金额字段仅记 changed 标记）。
 """
 
-ATTACHMENT_ID_AUDIT_FIELDS: frozenset[str] = frozenset(
-    {"payment_proof_attachment_id"}
-)
+ATTACHMENT_ID_AUDIT_FIELDS: frozenset[str] = frozenset({"payment_proof_attachment_id"})
 """payment_proof_attachment_id 写 audit 时仅记 ``attachment_id_changed: true``
 （避免暴露 attachment 内部 ID 与 R2 路径关联，FB3+FB4 强化）。"""
 

@@ -92,9 +92,7 @@ class TestRetry:
         token = tenant_id_ctx.set(tenant_a.id)
         try:
             user = await factory.user(tenant_a, roles=[pr_role])
-            batch = await import_batch_factory.batch(
-                status="failed", retry_count=3
-            )
+            batch = await import_batch_factory.batch(status="failed", retry_count=3)
             svc = ImportService(session)
             with pytest.raises(ImportRetryExhaustedError):
                 await svc.retry(batch.id, user)

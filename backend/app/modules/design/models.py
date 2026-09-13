@@ -30,14 +30,10 @@ class StyleFabric(TenantScopedModel):
     accessories: Mapped[list] = mapped_column(  # type: ignore[type-arg]
         JSONB, nullable=False, server_default=text("'[]'::jsonb")
     )
-    is_completed: Mapped[bool] = mapped_column(
-        nullable=False, server_default=text("false")
-    )
+    is_completed: Mapped[bool] = mapped_column(nullable=False, server_default=text("false"))
     remark: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    __table_args__ = (
-        Index("uq_style_fabric_style", "style_id", unique=True),
-    )
+    __table_args__ = (Index("uq_style_fabric_style", "style_id", unique=True),)
 
 
 class StylePattern(TenantScopedModel):
@@ -52,9 +48,7 @@ class StylePattern(TenantScopedModel):
     pattern_file_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
     grading_data: Mapped[dict | None] = mapped_column(JSONB, nullable=True)  # type: ignore[type-arg]
 
-    __table_args__ = (
-        Index("uq_style_pattern_style", "style_id", unique=True),
-    )
+    __table_args__ = (Index("uq_style_pattern_style", "style_id", unique=True),)
 
 
 class StyleCraft(TenantScopedModel):
@@ -69,9 +63,7 @@ class StyleCraft(TenantScopedModel):
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )
 
-    __table_args__ = (
-        Index("uq_style_craft_style", "style_id", unique=True),
-    )
+    __table_args__ = (Index("uq_style_craft_style", "style_id", unique=True),)
 
 
 class DesignWorkflowLog(TenantScopedModel):
@@ -89,9 +81,7 @@ class DesignWorkflowLog(TenantScopedModel):
     actor_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True)
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    __table_args__ = (
-        Index("idx_design_wf_log_style", "tenant_id", "style_id", "created_at"),
-    )
+    __table_args__ = (Index("idx_design_wf_log_style", "tenant_id", "style_id", "created_at"),)
 
 
 __all__ = [

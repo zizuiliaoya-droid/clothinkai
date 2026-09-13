@@ -164,9 +164,7 @@ class TestUpdateAndPause:
             user = await factory.user(tenant_a, roles=[admin_role])
             svc = CredentialService(session)
             resp = await svc.create(_payload(), user)
-            await svc.update(
-                resp.id, CredentialUpdate(password="new-pass-456"), user
-            )
+            await svc.update(resp.id, CredentialUpdate(password="new-pass-456"), user)
             plaintext = await svc.decrypt_for_purpose(resp.id, purpose="test")
             assert plaintext == "new-pass-456"
         finally:

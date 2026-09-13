@@ -28,7 +28,7 @@ from app.modules.collect.exceptions import (
     CrawlerTaskResultInvalid,
     CredTokenInvalid,
 )
-from app.modules.collect.models import CrawlerTask, WorkerToken
+from app.modules.collect.models import WorkerToken
 from app.modules.collect.repository import CrawlerTaskRepository
 from app.modules.collect.schemas import (
     CrawlerTaskAssignment,
@@ -57,13 +57,17 @@ class CrawlerTaskService:
         """为单租户全部 active 凭据生成 pending 任务（UNIQUE 幂等）。调用方负责 commit。"""
         td = (target_date or (datetime.now(UTC) - timedelta(days=1))).date()
         creds = (
-            await self._session.execute(
-                select(Credential).where(
-                    Credential.tenant_id == tenant_id,
-                    Credential.status == "active",
+            (
+                await self._session.execute(
+                    select(Credential).where(
+                        Credential.tenant_id == tenant_id,
+                        Credential.status == "active",
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         created = 0
         for c in creds:
             inserted_id = (
@@ -91,9 +95,7 @@ class CrawlerTaskService:
     # ------------------------------------------------------------------ #
     # poll（FOR UPDATE SKIP LOCKED 原子领取）
     # ------------------------------------------------------------------ #
-    async def poll_next_task(
-        self, wt: WorkerToken
-    ) -> CrawlerTaskAssignment | None:
+    async def poll_next_task(self, wt: WorkerToken) -> CrawlerTaskAssignment | None:
         # 回收响应丢失或 Worker 异常退出留下的租约：assigned 等待一次性令牌
         # 过期即可重领；exchanged 给本地采集器 30 分钟硬超时外加 10 分钟余量。
         await self._session.execute(
@@ -159,9 +161,7 @@ class CrawlerTaskService:
         cred_token: str,
         worker: WorkerToken,
     ) -> CredExchangeResponse:
-        task = await self._repo.get_for_worker(
-            task_id, worker, for_update=True
-        )
+        task = await self._repo.get_for_worker(task_id, worker, for_update=True)
         if task is None:
             raise CrawlerTaskNotFound()
         now = datetime.now(UTC)
@@ -220,14 +220,10 @@ class CrawlerTaskService:
             CrawlerStatus.FAILED.value,
         }:
             raise CrawlerTaskResultInvalid("采集结果状态无效")
-        task = await self._repo.get_for_worker(
-            task_id, worker, for_update=True
-        )
+        task = await self._repo.get_for_worker(task_id, worker, for_update=True)
         if task is None:
             raise CrawlerTaskNotFound()
-        if not task.cred_token or not secrets.compare_digest(
-            task.cred_token, lease_token
-        ):
+        if not task.cred_token or not secrets.compare_digest(task.cred_token, lease_token):
             raise CrawlerTaskResultConflict("采集任务租约已失效")
         terminal_statuses = {
             CrawlerStatus.SUCCESS.value,
@@ -237,15 +233,11 @@ class CrawlerTaskService:
             if task.status == status:
                 return {
                     "ok": True,
-                    "batch_id": str(task.import_batch_id)
-                    if task.import_batch_id
-                    else None,
+                    "batch_id": str(task.import_batch_id) if task.import_batch_id else None,
                 }
             raise CrawlerTaskResultConflict()
         if task.status != CrawlerStatus.EXCHANGED.value:
-            raise CrawlerTaskResultConflict(
-                "采集任务尚未完成凭据交换，不能回传结果"
-            )
+            raise CrawlerTaskResultConflict("采集任务尚未完成凭据交换，不能回传结果")
 
         enqueue_batch_id: UUID | None = None
         notify_failure = False
@@ -254,9 +246,7 @@ class CrawlerTaskService:
             if not content or not filename:
                 raise CrawlerTaskResultInvalid()
             source = PLATFORM_SOURCE.get(task.platform, task.platform)
-            batch, should_enqueue = await ImportService(
-                self._session
-            ).upload_for_crawler(
+            batch, should_enqueue = await ImportService(self._session).upload_for_crawler(
                 content=content,
                 source=source,
                 tenant_id=task.tenant_id,
@@ -292,7 +282,7 @@ class CrawlerTaskService:
                 from app.tasks.import_tasks import run_import_batch
 
                 run_import_batch.delay(str(enqueue_batch_id))
-            except Exception:  # noqa: BLE001 已提交结果不允许改报 failed
+            except Exception:
                 log.exception(
                     "crawler_import_enqueue_failed batch_id=%s",
                     str(enqueue_batch_id),
@@ -301,9 +291,7 @@ class CrawlerTaskService:
             await self._cred.notify_failure(task.credential_id, failure_reason)
         return {
             "ok": True,
-            "batch_id": str(task.import_batch_id)
-            if task.import_batch_id
-            else None,
+            "batch_id": str(task.import_batch_id) if task.import_batch_id else None,
         }
 
 

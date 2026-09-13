@@ -61,9 +61,13 @@ class WorkProgressRepository:
             """
         )
         params = {
-            "tenant_id": tenant_id, "date_from": date_from, "date_to": date_to,
-            "today": today, "urge_days": _URGE_DAYS,
-            "important_days": _IMPORTANT_DAYS, "hit_stat": HIT_STAT_THRESHOLD,
+            "tenant_id": tenant_id,
+            "date_from": date_from,
+            "date_to": date_to,
+            "today": today,
+            "urge_days": _URGE_DAYS,
+            "important_days": _IMPORTANT_DAYS,
+            "hit_stat": HIT_STAT_THRESHOLD,
         }
         return list((await self._s.execute(sql, params)).mappings().all())
 
@@ -72,9 +76,7 @@ class TargetPlanningRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._s = session
 
-    async def list_with_actuals(
-        self, *, tenant_id: UUID, month: str
-    ) -> list[Mapping[str, Any]]:
+    async def list_with_actuals(self, *, tenant_id: UUID, month: str) -> list[Mapping[str, Any]]:
         sql = text(
             """
             SELECT
@@ -97,9 +99,7 @@ class TargetPlanningRepository:
             """
         )
         return list(
-            (
-                await self._s.execute(sql, {"tenant_id": tenant_id, "month": month})
-            ).mappings().all()
+            (await self._s.execute(sql, {"tenant_id": tenant_id, "month": month})).mappings().all()
         )
 
 
@@ -134,7 +134,9 @@ class StoreDailyRepository:
                     sql,
                     {"tenant_id": tenant_id, "date_from": date_from, "date_to": date_to},
                 )
-            ).mappings().all()
+            )
+            .mappings()
+            .all()
         )
 
 
@@ -423,7 +425,9 @@ class ProductionRepository:
                         "exclude_brushing": exclude_brushing,
                     },
                 )
-            ).mappings().all()
+            )
+            .mappings()
+            .all()
         )
 
     async def fetch_extra_by_style(
@@ -493,7 +497,9 @@ class ProductionRepository:
                     sql,
                     {"tenant_id": tenant_id, "date_from": date_from, "date_to": date_to},
                 )
-            ).mappings().all()
+            )
+            .mappings()
+            .all()
         )
 
 
@@ -539,11 +545,15 @@ class BiRepository:
             """
         )
         return (
-            await self._s.execute(
-                sql,
-                {"tenant_id": tenant_id, "date_from": date_from, "date_to": date_to},
+            (
+                await self._s.execute(
+                    sql,
+                    {"tenant_id": tenant_id, "date_from": date_from, "date_to": date_to},
+                )
             )
-        ).mappings().one()
+            .mappings()
+            .one()
+        )
 
     async def aggregate_promotion_summary(
         self, *, tenant_id: UUID, date_from: date, date_to: date
@@ -568,11 +578,15 @@ class BiRepository:
             """
         )
         return (
-            await self._s.execute(
-                sql,
-                {"tenant_id": tenant_id, "date_from": date_from, "date_to": date_to},
+            (
+                await self._s.execute(
+                    sql,
+                    {"tenant_id": tenant_id, "date_from": date_from, "date_to": date_to},
+                )
             )
-        ).mappings().one()
+            .mappings()
+            .one()
+        )
 
     async def aggregate_workload(
         self,
@@ -692,7 +706,9 @@ class BiRepository:
                     sql,
                     {"tenant_id": tenant_id, "date_from": date_from, "date_to": date_to},
                 )
-            ).mappings().all()
+            )
+            .mappings()
+            .all()
         )
 
     async def published_spend_by_style(
@@ -714,7 +730,9 @@ class BiRepository:
                     sql,
                     {"tenant_id": tenant_id, "date_from": date_from, "date_to": date_to},
                 )
-            ).mappings().all()
+            )
+            .mappings()
+            .all()
         )
 
 

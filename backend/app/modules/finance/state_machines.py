@@ -26,9 +26,7 @@ from typing import ClassVar
 
 from app.core.exceptions import IllegalStateTransitionError
 from app.core.state_machine import TransitionRule
-
 from app.modules.finance.enums import SettlementStatus
-
 
 # 角色常量（与 legacy_field_permissions 一致；U09 后切到 Permission 体系）
 _ROLE_PR_MANAGER = "pr_manager"
@@ -98,14 +96,8 @@ class SettlementStatusMachine:
         action: str,
     ) -> None:
         """业务前置校验：抛 IllegalStateTransitionError 含 from/to/action."""
-        from_v = (
-            from_state.value
-            if isinstance(from_state, SettlementStatus)
-            else from_state
-        )
-        to_v = (
-            to_state.value if isinstance(to_state, SettlementStatus) else to_state
-        )
+        from_v = from_state.value if isinstance(from_state, SettlementStatus) else from_state
+        to_v = to_state.value if isinstance(to_state, SettlementStatus) else to_state
         for t in cls.transitions:
             if t.from_state == from_v and t.to_state == to_v and t.action == action:
                 return
@@ -120,20 +112,10 @@ class SettlementStatusMachine:
         )
 
     @classmethod
-    def get_allowed_transitions(
-        cls, from_state: str | SettlementStatus
-    ) -> list[tuple[str, str]]:
+    def get_allowed_transitions(cls, from_state: str | SettlementStatus) -> list[tuple[str, str]]:
         """返回从某状态可达的所有 (action, to_state)，供前端展示按钮。"""
-        from_v = (
-            from_state.value
-            if isinstance(from_state, SettlementStatus)
-            else from_state
-        )
-        return [
-            (t.action, t.to_state)
-            for t in cls.transitions
-            if t.from_state == from_v
-        ]
+        from_v = from_state.value if isinstance(from_state, SettlementStatus) else from_state
+        return [(t.action, t.to_state) for t in cls.transitions if t.from_state == from_v]
 
 
 __all__ = ["SettlementStatusMachine"]

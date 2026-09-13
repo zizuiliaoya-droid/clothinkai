@@ -16,9 +16,7 @@ class UserPreferenceService:
     def __init__(self, session: AsyncSession) -> None:
         self._s = session
 
-    async def get_or_default(
-        self, user_id: UUID, key: str, default: dict
-    ) -> dict:
+    async def get_or_default(self, user_id: UUID, key: str, default: dict) -> dict:
         stmt = select(UserPreference).where(
             UserPreference.user_id == user_id,
             UserPreference.pref_key == key,

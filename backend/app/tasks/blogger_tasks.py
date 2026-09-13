@@ -37,15 +37,13 @@ log = logging.getLogger(__name__)
     max_retries=2,
     default_retry_delay=10,
 )
-def recompute_all_blogger_tags(self) -> dict[str, Any]:  # noqa: ANN001
+def recompute_all_blogger_tags(self) -> dict[str, Any]:
     return run_async_task(_recompute_impl())
 
 
 async def _recompute_impl() -> dict[str, Any]:
     async with AsyncSessionBypass() as meta:
-        tenant_ids = list(
-            (await meta.execute(text("SELECT id FROM tenant"))).scalars().all()
-        )
+        tenant_ids = list((await meta.execute(text("SELECT id FROM tenant"))).scalars().all())
 
     total_updated = 0
     total_failed = 0
@@ -79,7 +77,7 @@ async def _recompute_one_tenant(tenant_id: UUID) -> dict[str, int]:
                     result["failed"],
                 )
                 return result
-    except Exception as exc:  # noqa: BLE001 单 tenant 失败不影响其余
+    except Exception as exc:
         log.exception("recompute_tenant_failed tenant=%s", str(tenant_id))
         sentry_sdk.capture_exception(exc)
         return {"updated": 0, "failed": 0}

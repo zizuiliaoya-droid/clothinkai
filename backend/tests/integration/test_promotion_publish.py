@@ -33,9 +33,7 @@ class TestPublish:
             user = await factory.user(tenant_a, roles=[admin_role])
             style = await product_factory.style()
             blogger = await blogger_factory.blogger()
-            promotion = await promotion_factory.promotion(
-                style=style, blogger=blogger, pr=user
-            )
+            promotion = await promotion_factory.promotion(style=style, blogger=blogger, pr=user)
             svc = PromotionService(session)
             response = await svc.publish(
                 promotion.id,
@@ -68,9 +66,7 @@ class TestPublish:
             user = await factory.user(tenant_a, roles=[admin_role])
             style = await product_factory.style()
             blogger = await blogger_factory.blogger()
-            promotion = await promotion_factory.promotion(
-                style=style, blogger=blogger, pr=user
-            )
+            promotion = await promotion_factory.promotion(style=style, blogger=blogger, pr=user)
             svc = PromotionService(session)
             await svc.publish(
                 promotion.id,
@@ -101,11 +97,14 @@ class TestPublish:
             style = await product_factory.style()
             blogger = await blogger_factory.blogger()
             promotion = await promotion_factory.promotion(
-                style=style, blogger=blogger, pr=user,
+                style=style,
+                blogger=blogger,
+                pr=user,
                 publish_status="已发布",
             )
             svc = PromotionService(session)
             from app.core.exceptions import IllegalStateTransitionError
+
             with pytest.raises(IllegalStateTransitionError):
                 await svc.publish(
                     promotion.id,

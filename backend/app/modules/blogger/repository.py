@@ -44,9 +44,7 @@ class BloggerRepository:
 
     # ----------------------- get / count ----------------------- #
 
-    async def get_by_id(
-        self, blogger_id: UUID, *, include_deleted: bool = False
-    ) -> Blogger | None:
+    async def get_by_id(self, blogger_id: UUID, *, include_deleted: bool = False) -> Blogger | None:
         blogger = await self._session.get(Blogger, blogger_id)
         if blogger is None:
             return None
@@ -127,16 +125,10 @@ class BloggerRepository:
         # BR-U03-52: JSONB tag 包含查询（命中 GIN JSONB）
         if filters.category_tag:
             stmt = stmt.where(
-                Blogger.category_tags.contains(
-                    sa.cast([filters.category_tag], JSONB)
-                )
+                Blogger.category_tags.contains(sa.cast([filters.category_tag], JSONB))
             )
         if filters.quality_tag:
-            stmt = stmt.where(
-                Blogger.quality_tags.contains(
-                    sa.cast([filters.quality_tag], JSONB)
-                )
-            )
+            stmt = stmt.where(Blogger.quality_tags.contains(sa.cast([filters.quality_tag], JSONB)))
 
         # 普通筛选
         if filters.blogger_type is not None:
@@ -147,9 +139,7 @@ class BloggerRepository:
         if filters.platform is not None:
             stmt = stmt.where(Blogger.platform == filters.platform)
         if filters.is_suspected_fake is not None:
-            stmt = stmt.where(
-                Blogger.is_suspected_fake.is_(filters.is_suspected_fake)
-            )
+            stmt = stmt.where(Blogger.is_suspected_fake.is_(filters.is_suspected_fake))
 
         if filters.recent_growth_only:
             growth_json = Blogger.crawler_metrics["近期数据涨的博主"]

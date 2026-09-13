@@ -25,6 +25,8 @@ from app.modules.design.enums import (
     NOTIFY_ROLE,
     REJECT_PREVIOUS,
     TERMINAL_STATUSES,
+)
+from app.modules.design.enums import (
     DesignStatus as DS,
 )
 from app.modules.design.exceptions import (
@@ -110,11 +112,11 @@ class DesignService:
                 )
         return rule
 
-    async def _advance(self, style: Style, action: str, roles: list[str], payload: dict, user: User):
+    async def _advance(
+        self, style: Style, action: str, roles: list[str], payload: dict, user: User
+    ):
         rule = self._validate_rule(style, action, roles, payload)
-        ok = await self._repo.update_design_status(
-            style.id, rule.from_state, rule.to_state
-        )
+        ok = await self._repo.update_design_status(style.id, rule.from_state, rule.to_state)
         if not ok:
             raise DesignStateConflictError()
         style.design_status = rule.to_state  # 同步内存对象（已守卫推进成功）
@@ -166,8 +168,11 @@ class DesignService:
             style.id, None, DS.DESIGNING.value, action="create", actor_id=user.id
         )
         await self._audit.log(
-            action="design.create", resource="style", resource_id=style.id,
-            after={"style_code": style.style_code}, user_id=user.id,
+            action="design.create",
+            resource="style",
+            resource_id=style.id,
+            after={"style_code": style.style_code},
+            user_id=user.id,
         )
         await self._session.commit()
         return await self.get_detail(style.id, user)
@@ -175,11 +180,15 @@ class DesignService:
     # ------------------------------------------------------------------ #
     # 推进动作（advance + side effects）
     # ------------------------------------------------------------------ #
-    async def submit_fabric(self, style_id: UUID, payload: FabricSubmit, user: User) -> DesignDetailResponse:
+    async def submit_fabric(
+        self, style_id: UUID, payload: FabricSubmit, user: User
+    ) -> DesignDetailResponse:
         style = await self._require_style(style_id)
         roles = await self._roles.list_codes_for_user(user.id)
         await self._repo.upsert_fabric(
-            style_id, fabrics=payload.fabrics, accessories=payload.accessories,
+            style_id,
+            fabrics=payload.fabrics,
+            accessories=payload.accessories,
             remark=payload.remark,
         )
         await self._advance(style, "submit_fabric", roles, {"fabrics": payload.fabrics}, user)
@@ -187,7 +196,9 @@ class DesignService:
         await self._session.commit()
         return await self.get_detail(style_id, user)
 
-    async def submit_grading(self, style_id: UUID, payload: GradingSubmit, user: User) -> DesignDetailResponse:
+    async def submit_grading(
+        self, style_id: UUID, payload: GradingSubmit, user: User
+    ) -> DesignDetailResponse:
         style = await self._require_style(style_id)
         roles = await self._roles.list_codes_for_user(user.id)
         pattern = await self._repo.get_pattern(style_id)
@@ -199,7 +210,9 @@ class DesignService:
         await self._session.commit()
         return await self.get_detail(style_id, user)
 
-    async def submit_craft(self, style_id: UUID, payload: CraftSubmit, user: User) -> DesignDetailResponse:
+    async def submit_craft(
+        self, style_id: UUID, payload: CraftSubmit, user: User
+    ) -> DesignDetailResponse:
         style = await self._require_style(style_id)
         roles = await self._roles.list_codes_for_user(user.id)
         await self._repo.upsert_craft(style_id, craft_info=payload.craft_info)
@@ -208,16 +221,23 @@ class DesignService:
         await self._session.commit()
         return await self.get_detail(style_id, user)
 
-    async def submit_costing(self, style_id: UUID, payload: CostingSubmit, user: User) -> DesignDetailResponse:
+    async def submit_costing(
+        self, style_id: UUID, payload: CostingSubmit, user: User
+    ) -> DesignDetailResponse:
         style = await self._require_style(style_id)
         roles = await self._roles.list_codes_for_user(user.id)
         cb = payload.cost_breakdown
         total = compute_total_cost(cb.fabric_cost, cb.accessory_cost, cb.craft_cost)
         n = await self._repo.bulk_update_sku_cost_price(style_id, total)  # 系统口径绕过 U09
-        await self._advance(style, "submit_costing", roles, {"cost_breakdown": cb.model_dump()}, user)
+        await self._advance(
+            style, "submit_costing", roles, {"cost_breakdown": cb.model_dump()}, user
+        )
         await self._audit.log(
-            action="design.auto_costing", resource="style", resource_id=style_id,
-            after={"cost_price_changed": True, "sku_count": n}, user_id=user.id,
+            action="design.auto_costing",
+            resource="style",
+            resource_id=style_id,
+            after={"cost_price_changed": True, "sku_count": n},
+            user_id=user.id,
         )
         await self._notify_role("submit_costing", style)
         await self._session.commit()
@@ -234,7 +254,9 @@ class DesignService:
     # ------------------------------------------------------------------ #
     # 原地动作（无状态推进，不通知）
     # ------------------------------------------------------------------ #
-    async def submit_pattern(self, style_id: UUID, payload: PatternSubmit, user: User) -> DesignDetailResponse:
+    async def submit_pattern(
+        self, style_id: UUID, payload: PatternSubmit, user: User
+    ) -> DesignDetailResponse:
         style = await self._require_style(style_id)
         self._assert_status(style, DS.PATTERNING.value)
         await self._repo.upsert_pattern(
@@ -243,17 +265,24 @@ class DesignService:
         await self._session.commit()
         return await self.get_detail(style_id, user)
 
-    async def complete_fabric(self, style_id: UUID, payload: FabricComplete, user: User) -> DesignDetailResponse:
+    async def complete_fabric(
+        self, style_id: UUID, payload: FabricComplete, user: User
+    ) -> DesignDetailResponse:
         style = await self._require_style(style_id)
         self._assert_status(style, DS.COMPLETING.value)
         await self._repo.upsert_fabric(
-            style_id, fabrics=payload.fabrics, accessories=payload.accessories,
-            remark=payload.remark, is_completed=True,
+            style_id,
+            fabrics=payload.fabrics,
+            accessories=payload.accessories,
+            remark=payload.remark,
+            is_completed=True,
         )
         await self._session.commit()
         return await self.get_detail(style_id, user)
 
-    async def set_tag_price(self, style_id: UUID, payload: TagPriceSubmit, user: User) -> DesignDetailResponse:
+    async def set_tag_price(
+        self, style_id: UUID, payload: TagPriceSubmit, user: User
+    ) -> DesignDetailResponse:
         style = await self._require_style(style_id)
         self._assert_status(style, DS.PRICING.value)
         await self._repo.bulk_update_sku_tag_price(style_id, payload.tag_price)
@@ -278,24 +307,36 @@ class DesignService:
             raise DesignStateConflictError()
         style.design_status = prev
         self._repo.add_workflow_log(
-            style_id, cur, prev, action="reject",
-            driven_by=DRIVEN_BY.get(cur), actor_id=user.id, reason=reason,
+            style_id,
+            cur,
+            prev,
+            action="reject",
+            driven_by=DRIVEN_BY.get(cur),
+            actor_id=user.id,
+            reason=reason,
         )
         await self._audit.log(
-            action="design.reject", resource="style", resource_id=style_id,
-            after={"from": cur, "to": prev, "reason_provided": True}, user_id=user.id,
+            action="design.reject",
+            resource="style",
+            resource_id=style_id,
+            after={"from": cur, "to": prev, "reason_provided": True},
+            user_id=user.id,
         )
         # 通知上游（回退后 style.design_status=prev → 通知该环节负责角色）
         upstream = {
-            DS.DESIGNING.value: "designer", DS.PATTERNING.value: "pattern_maker",
-            DS.CRAFTING.value: "merchandiser", DS.COMPLETING.value: "design_assistant",
+            DS.DESIGNING.value: "designer",
+            DS.PATTERNING.value: "pattern_maker",
+            DS.CRAFTING.value: "merchandiser",
+            DS.COMPLETING.value: "design_assistant",
         }.get(prev)
         if upstream:
             user_ids = await self._roles.list_user_ids_by_role_code(upstream)
             if user_ids:
                 await self._notifier.notify(
-                    user_ids, f"款式 {style.style_code} 被驳回（原因：{reason}）",
-                    link=f"/designs/{style_id}", type=NotificationType.DESIGN_REJECT.value,
+                    user_ids,
+                    f"款式 {style.style_code} 被驳回（原因：{reason}）",
+                    link=f"/designs/{style_id}",
+                    type=NotificationType.DESIGN_REJECT.value,
                 )
         await self._session.commit()
         return await self.get_detail(style_id, user)
@@ -317,12 +358,20 @@ class DesignService:
             raise DesignStateConflictError()
         style.design_status = DS.CANCELLED.value
         self._repo.add_workflow_log(
-            style_id, cur, DS.CANCELLED.value, action="cancel",
-            driven_by="admin", actor_id=user.id, reason=reason,
+            style_id,
+            cur,
+            DS.CANCELLED.value,
+            action="cancel",
+            driven_by="admin",
+            actor_id=user.id,
+            reason=reason,
         )
         await self._audit.log(
-            action="design.cancel", resource="style", resource_id=style_id,
-            after={"from": cur, "reason_provided": True}, user_id=user.id,
+            action="design.cancel",
+            resource="style",
+            resource_id=style_id,
+            after={"from": cur, "reason_provided": True},
+            user_id=user.id,
         )
         await self._session.commit()
         return await self.get_detail(style_id, user)
@@ -336,8 +385,13 @@ class DesignService:
         groups: list[DesignStatusGroup] = []
         total = 0
         for status in (
-            DS.DESIGNING, DS.PATTERNING, DS.CRAFTING, DS.COMPLETING,
-            DS.PRICING, DS.MASS_PRODUCTION, DS.CANCELLED,
+            DS.DESIGNING,
+            DS.PATTERNING,
+            DS.CRAFTING,
+            DS.COMPLETING,
+            DS.PRICING,
+            DS.MASS_PRODUCTION,
+            DS.CANCELLED,
         ):
             cnt = count_map.get(status.value, 0)
             total += cnt
@@ -350,8 +404,11 @@ class DesignService:
                     count=cnt,
                     items=[
                         DesignListItem(
-                            id=s.id, style_code=s.style_code, style_name=s.style_name,
-                            design_status=s.design_status, main_image_key=s.main_image_key,
+                            id=s.id,
+                            style_code=s.style_code,
+                            style_name=s.style_name,
+                            design_status=s.design_status,
+                            main_image_key=s.main_image_key,
                         )
                         for s in items
                     ],
@@ -373,14 +430,23 @@ class DesignService:
             design_status=style.design_status,
             main_image_key=style.main_image_key,
             fabric=(
-                {"fabrics": fabric.fabrics, "accessories": fabric.accessories,
-                 "is_completed": fabric.is_completed, "remark": fabric.remark}
-                if fabric else None
+                {
+                    "fabrics": fabric.fabrics,
+                    "accessories": fabric.accessories,
+                    "is_completed": fabric.is_completed,
+                    "remark": fabric.remark,
+                }
+                if fabric
+                else None
             ),
             pattern=(
-                {"pattern_no": pattern.pattern_no, "pattern_file_key": pattern.pattern_file_key,
-                 "grading_data": pattern.grading_data}
-                if pattern else None
+                {
+                    "pattern_no": pattern.pattern_no,
+                    "pattern_file_key": pattern.pattern_file_key,
+                    "grading_data": pattern.grading_data,
+                }
+                if pattern
+                else None
             ),
             craft={"craft_info": craft.craft_info} if craft else None,
             workflow_log=[WorkflowLogEntry.model_validate(log) for log in logs],

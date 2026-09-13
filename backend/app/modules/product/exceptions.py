@@ -9,11 +9,9 @@ from app.core.exceptions import (
     AppException,
     DuplicateResourceError,
     FieldPermissionDenied,
-    PermissionDeniedError,
     ResourceNotFoundError,
     ValidationError,
 )
-
 
 # ---------------------------------------------------------------------------
 # 唯一约束冲突

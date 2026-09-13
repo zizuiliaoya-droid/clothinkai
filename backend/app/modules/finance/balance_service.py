@@ -31,18 +31,13 @@ class BalanceService:
         self._session = session
         self._repo = BalanceRecordRepository(session)
 
-    async def add_record(
-        self, payload: BalanceRecordCreate, user: Any
-    ) -> BalanceRecord:
+    async def add_record(self, payload: BalanceRecordCreate, user: Any) -> BalanceRecord:
         self._validate_type_field(payload)
         prev = await self._repo.last_balance(user.tenant_id)
         income = payload.income or Decimal("0")
         expense = payload.expense or Decimal("0")
         balance_after = prev + income - expense
-        if (
-            payload.expected_balance is not None
-            and payload.expected_balance != balance_after
-        ):
+        if payload.expected_balance is not None and payload.expected_balance != balance_after:
             raise BalanceMismatchError(
                 f"余额不一致：计算={balance_after} 填写={payload.expected_balance}"
             )
@@ -76,9 +71,7 @@ class BalanceService:
                 raise BalanceTypeFieldMismatchError("支出类仅可填支出(expense)")
         else:  # 其他：且仅填一项 > 0
             if bool(p.income) == bool(p.expense):
-                raise BalanceTypeFieldMismatchError(
-                    "income/expense 须且仅填一项"
-                )
+                raise BalanceTypeFieldMismatchError("income/expense 须且仅填一项")
 
     async def list(
         self,

@@ -63,25 +63,24 @@ class AnomalyAlertService:
     @staticmethod
     def _evaluate_row(row: Any, cfg: Any) -> list[tuple[str, dict]]:
         out: list[tuple[str, dict]] = []
-        if (
-            row.return_rate is not None
-            and row.return_rate > cfg.return_rate_threshold
-        ):
-            out.append((
-                AlertType.RETURN_RATE_HIGH.value,
-                {"value": str(row.return_rate),
-                 "threshold": str(cfg.return_rate_threshold)},
-            ))
+        if row.return_rate is not None and row.return_rate > cfg.return_rate_threshold:
+            out.append(
+                (
+                    AlertType.RETURN_RATE_HIGH.value,
+                    {"value": str(row.return_rate), "threshold": str(cfg.return_rate_threshold)},
+                )
+            )
         if (
             cfg.low_roi_threshold is not None
             and row.net_roi is not None
             and row.net_roi < cfg.low_roi_threshold
         ):
-            out.append((
-                AlertType.ROI_LOW.value,
-                {"value": str(row.net_roi),
-                 "threshold": str(cfg.low_roi_threshold)},
-            ))
+            out.append(
+                (
+                    AlertType.ROI_LOW.value,
+                    {"value": str(row.net_roi), "threshold": str(cfg.low_roi_threshold)},
+                )
+            )
         # conversion_low：V1 口径缺失占位，不检（BR-U15-23）
         return out
 
@@ -93,27 +92,23 @@ class AnomalyAlertService:
         if await self._log_repo.exists(
             alert_type=alert_type, entity_ref=entity_ref, period_key=period_key
         ):
-            wecom_anomaly_alert_total.labels(
-                alert_type=alert_type, status="deduped"
-            ).inc()
+            wecom_anomaly_alert_total.labels(alert_type=alert_type, status="deduped").inc()
             return 0
         if not cfg.alert_recipients:
-            wecom_anomaly_alert_total.labels(
-                alert_type=alert_type, status="no_recipient"
-            ).inc()
+            wecom_anomaly_alert_total.labels(alert_type=alert_type, status="no_recipient").inc()
             return 0  # 不落 log（配置补齐后可补推）
 
         markdown = self._render(alert_type, row, detail)
         wecom_cfg = await self._wecom_cfg.get()
         if wecom_cfg is None or not wecom_cfg.is_active:
-            wecom_anomaly_alert_total.labels(
-                alert_type=alert_type, status="failed"
-            ).inc()
+            wecom_anomaly_alert_total.labels(alert_type=alert_type, status="failed").inc()
             return 0
 
         def _secret() -> str:
             return decrypt_credential(
-                tenant_id, wecom_cfg.id, wecom_cfg.secret_ciphertext,
+                tenant_id,
+                wecom_cfg.id,
+                wecom_cfg.secret_ciphertext,
                 purpose="wecom_alert",
             )
 
@@ -122,33 +117,29 @@ class AnomalyAlertService:
 
         http = build_http_client()
         try:
-            client = WecomClient(
-                tenant_id, wecom_cfg, http=http, secret_provider=_secret_provider
-            )
+            client = WecomClient(tenant_id, wecom_cfg, http=http, secret_provider=_secret_provider)
             await client.send_app_message(list(cfg.alert_recipients), markdown)
-            self._log_repo.add(WecomAlertLog(
-                alert_type=alert_type, entity_type="style", entity_ref=entity_ref,
-                period_key=period_key,
-                detail={**detail, "style_code": row.style_code},
-            ))
+            self._log_repo.add(
+                WecomAlertLog(
+                    alert_type=alert_type,
+                    entity_type="style",
+                    entity_ref=entity_ref,
+                    period_key=period_key,
+                    detail={**detail, "style_code": row.style_code},
+                )
+            )
             await self._s.flush()  # 成功才落 log（IntegrityError 并发 → deduped）
-            wecom_anomaly_alert_total.labels(
-                alert_type=alert_type, status="sent"
-            ).inc()
+            wecom_anomaly_alert_total.labels(alert_type=alert_type, status="sent").inc()
             return 1
         except IntegrityError:
-            wecom_anomaly_alert_total.labels(
-                alert_type=alert_type, status="deduped"
-            ).inc()
+            wecom_anomaly_alert_total.labels(alert_type=alert_type, status="deduped").inc()
             return 0
         except (WecomApiError, WecomRateLimited, httpx.HTTPError) as exc:
             log.warning(
                 "anomaly_alert_send_failed",
                 extra={"tenant_id": str(tenant_id), "err": str(exc)},
             )
-            wecom_anomaly_alert_total.labels(
-                alert_type=alert_type, status="failed"
-            ).inc()
+            wecom_anomaly_alert_total.labels(alert_type=alert_type, status="failed").inc()
             return 0
         finally:
             await http.aclose()

@@ -59,9 +59,7 @@ _DEFAULT_COLUMNS: list[dict[str, Any]] = [
     {"source_col": "备注", "target_field": "remark", "type": "str"},
 ]
 
-_REQUIRED: tuple[tuple[str, str], ...] = (
-    ("promotion_internal_code", "推广编号"),
-)
+_REQUIRED: tuple[tuple[str, str], ...] = (("promotion_internal_code", "推广编号"),)
 
 
 def _to_date(raw: Any) -> date | str | None:
@@ -96,9 +94,7 @@ class SettlementImportAdapter:
 
     # ----------------------- parse_row（纯函数）----------------------- #
 
-    def parse_row(
-        self, row: dict[str, Any], mapping: "FieldMapping | None"
-    ) -> dict[str, Any]:
+    def parse_row(self, row: dict[str, Any], mapping: FieldMapping | None) -> dict[str, Any]:
         """按 mapping（或内置默认）映射表头 + 类型转换。"""
         if mapping is not None:
             columns = mapping.mapping_config.get("columns", _DEFAULT_COLUMNS)
@@ -115,9 +111,7 @@ class SettlementImportAdapter:
             elif col_type == "date":
                 parsed[target] = _to_date(raw)
             else:
-                parsed[target] = (
-                    str(raw).strip() if raw not in (None, "") else None
-                )
+                parsed[target] = str(raw).strip() if raw not in (None, "") else None
         return parsed
 
     # ----------------------- validate（纯函数，不查 FK）----------------------- #
@@ -157,9 +151,7 @@ class SettlementImportAdapter:
         # settlement_status 可选，但若提供须 ∈ 5 枚举
         status = parsed.get("settlement_status")
         if status and status not in _VALID_STATUS:
-            errs.append(
-                "结算状态必须为 待核查/待付款/待财务付款/已付款/已驳回 之一"
-            )
+            errs.append("结算状态必须为 待核查/待付款/待财务付款/已付款/已驳回 之一")
 
         note_title = parsed.get("note_title")
         if note_title and isinstance(note_title, str) and len(note_title) > 255:
@@ -186,13 +178,9 @@ class SettlementImportAdapter:
         settlements = SettlementRepository(session)
 
         # 1) promotion 派生（不让文件提供 blogger/style/pr）
-        promo = await promotions.get_by_internal_code(
-            parsed["promotion_internal_code"]
-        )
+        promo = await promotions.get_by_internal_code(parsed["promotion_internal_code"])
         if promo is None:
-            raise RowValidationError(
-                f"推广编号 {parsed['promotion_internal_code']} 不存在"
-            )
+            raise RowValidationError(f"推广编号 {parsed['promotion_internal_code']} 不存在")
 
         # 2) settlement_no（tenant_code 缓存 + FB2 原子序列）+ 合成 event_id
         tenant_code = await self._get_tenant_code(session, tenant_id)
@@ -226,20 +214,14 @@ class SettlementImportAdapter:
             await session.flush()
         except IntegrityError as exc:
             # UNIQUE(tenant_id, promotion_id) 冲突 → 该 promotion 已有 settlement（FB3 不覆盖）
-            raise RowValidationError(
-                "该推广已有结算单（不可重复，FB3）"
-            ) from exc
+            raise RowValidationError("该推广已有结算单（不可重复，FB3）") from exc
         return settlement.id, True  # INSERT-only → is_inserted 恒 True
 
-    async def _get_tenant_code(
-        self, session: AsyncSession, tenant_id: UUID
-    ) -> str:
+    async def _get_tenant_code(self, session: AsyncSession, tenant_id: UUID) -> str:
         """tenant.code（实例级缓存；tenant.code 不可变，缓存安全）。"""
         if tenant_id not in self._tenant_code_cache:
             code = (
-                await session.execute(
-                    select(Tenant.code).where(Tenant.id == tenant_id)
-                )
+                await session.execute(select(Tenant.code).where(Tenant.id == tenant_id))
             ).scalar_one_or_none() or ""
             self._tenant_code_cache[tenant_id] = code
         return self._tenant_code_cache[tenant_id]

@@ -43,7 +43,10 @@ class TargetPlanning(TenantScopedModel):
     __table_args__ = (
         Index(
             "uq_target_planning",
-            "tenant_id", "pr_id", "style_id", "period_month",
+            "tenant_id",
+            "pr_id",
+            "style_id",
+            "period_month",
             unique=True,
         ),
         Index("idx_target_planning_month", "tenant_id", "period_month"),
@@ -57,20 +60,12 @@ class StoreDaily(TenantScopedModel):
     __tablename__ = "store_daily"
 
     date: Mapped[date] = mapped_column(Date, nullable=False)
-    ad_spend_total: Mapped[Decimal | None] = mapped_column(
-        Numeric(12, 2), nullable=True
-    )
-    zhitongche_spend: Mapped[Decimal | None] = mapped_column(
-        Numeric(12, 2), nullable=True
-    )
-    yinli_spend: Mapped[Decimal | None] = mapped_column(
-        Numeric(12, 2), nullable=True
-    )
+    ad_spend_total: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    zhitongche_spend: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    yinli_spend: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     remark: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    __table_args__ = (
-        Index("uq_store_daily_date", "tenant_id", "date", unique=True),
-    )
+    __table_args__ = (Index("uq_store_daily_date", "tenant_id", "date", unique=True),)
 
 
 __all__ = ["StoreDaily", "TargetPlanning"]

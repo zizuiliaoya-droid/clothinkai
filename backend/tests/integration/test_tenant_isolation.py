@@ -11,7 +11,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import (
     TenantContextMismatchError,
-    TenantContextMissingError,
 )
 from app.core.tenancy import tenant_id_ctx
 from app.modules.auth.models import Tenant, User
@@ -59,8 +58,9 @@ class TestTenantIsolation:
         tenant_a: Tenant,
     ) -> None:
         """INSERT 时未填 tenant_id，自动从 context 填充。"""
-        from app.core.security.auth import hash_password
         from uuid import uuid4
+
+        from app.core.security.auth import hash_password
 
         token = tenant_id_ctx.set(tenant_a.id)
         try:
@@ -84,8 +84,9 @@ class TestTenantIsolation:
         tenant_b: Tenant,
     ) -> None:
         """显式 tenant_id 与 ctx 不匹配 → 抛 TenantContextMismatchError。"""
-        from app.core.security.auth import hash_password
         from uuid import uuid4
+
+        from app.core.security.auth import hash_password
 
         token = tenant_id_ctx.set(tenant_a.id)
         try:

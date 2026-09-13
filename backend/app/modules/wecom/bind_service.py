@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import UUID
 
 from app.core.security.crypto import decrypt_credential
@@ -38,18 +38,12 @@ class WecomBindService:
             raise WecomBloggerNoWechatError()
 
         async def _secret() -> str:
-            return decrypt_credential(
-                tenant_id, cfg.id, cfg.secret_ciphertext, purpose="bind"
-            )
+            return decrypt_credential(tenant_id, cfg.id, cfg.secret_ciphertext, purpose="bind")
 
         http = build_http_client()
         try:
-            client = WecomClient(
-                tenant_id, cfg, http=http, secret_provider=_secret
-            )
-            external_userid = await client.find_external_userid_by_wechat(
-                blogger.wechat
-            )
+            client = WecomClient(tenant_id, cfg, http=http, secret_provider=_secret)
+            external_userid = await client.find_external_userid_by_wechat(blogger.wechat)
         finally:
             await http.aclose()
 
@@ -57,7 +51,7 @@ class WecomBindService:
             raise WecomContactNotFoundError()
 
         contact = await self._contacts.get_by_blogger(blogger_id)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         if contact is None:
             contact = WecomContact(
                 blogger_id=blogger_id,

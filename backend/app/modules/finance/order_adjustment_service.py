@@ -46,9 +46,7 @@ class OrderAdjustmentService:
         self._session = session
         self._repo = OrderAdjustmentRepository(session)
 
-    async def auto_create_from_promotion(
-        self, promo: Any
-    ) -> OrderAdjustment | None:
+    async def auto_create_from_promotion(self, promo: Any) -> OrderAdjustment | None:
         """EP06-S09：promotion.in_store_order=true 时自动生成拍单（幂等）。"""
         existing = await self._repo.get_by_promotion(promo.id)
         if existing is not None:
@@ -74,9 +72,7 @@ class OrderAdjustmentService:
         order_adjustment_auto_created_total.labels(result="created").inc()
         return row
 
-    async def create_brushing(
-        self, payload: BrushingCreate, user: Any
-    ) -> dict:
+    async def create_brushing(self, payload: BrushingCreate, user: Any) -> dict:
         """EP06-S10：刷单录入，exclude_from_roi 默认 true，金额表达式解析。"""
         amount = parse_amount_expr(payload.amount_expr)
         duplicate = False
@@ -113,12 +109,8 @@ class OrderAdjustmentService:
             "duplicate": duplicate,
         }
 
-    async def list(
-        self, *, order_type: str | None = None, limit: int = 50, offset: int = 0
-    ):
-        rows = await self._repo.list(
-            order_type=order_type, limit=limit, offset=offset
-        )
+    async def list(self, *, order_type: str | None = None, limit: int = 50, offset: int = 0):
+        rows = await self._repo.list(order_type=order_type, limit=limit, offset=offset)
         # 反范式富化：批量取款式编码/名称（对齐 final.xlsx 拍单/刷单的「款式/款号」）
         from sqlalchemy import select as _select
 

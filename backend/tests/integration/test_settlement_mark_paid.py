@@ -10,7 +10,6 @@
 
 from __future__ import annotations
 
-from datetime import date
 from decimal import Decimal
 from typing import Any
 from uuid import uuid4
@@ -51,7 +50,8 @@ class TestMarkPaidHappyPath:
             style = await product_factory.style()
             blogger = await blogger_factory.blogger()
             s = await settlement_factory.settlement(
-                style=style, blogger=blogger,
+                style=style,
+                blogger=blogger,
                 settlement_status="待财务付款",
                 payment_amount=Decimal("480.00"),
             )
@@ -69,9 +69,7 @@ class TestMarkPaidHappyPath:
             assert resp.payment_proof_attachment_id == att.id
 
             # FB5：发了 SettlementPaid
-            paid_events = [
-                e for e in event_capture if e.event_type == "SettlementPaid"
-            ]
+            paid_events = [e for e in event_capture if e.event_type == "SettlementPaid"]
             assert len(paid_events) == 1
             assert paid_events[0].settlement_id == s.id
         finally:
@@ -100,7 +98,8 @@ class TestMarkPaidAttachmentValidation:
             style = await product_factory.style()
             blogger = await blogger_factory.blogger()
             s = await settlement_factory.settlement(
-                style=style, blogger=blogger,
+                style=style,
+                blogger=blogger,
                 settlement_status="待财务付款",
                 payment_amount=Decimal("480.00"),
             )
@@ -140,7 +139,8 @@ class TestMarkPaidAttachmentValidation:
             style = await product_factory.style()
             blogger = await blogger_factory.blogger()
             s = await settlement_factory.settlement(
-                style=style, blogger=blogger,
+                style=style,
+                blogger=blogger,
                 settlement_status="待财务付款",
             )
             att = await attachment_factory.attachment(status="uploading")
@@ -154,9 +154,10 @@ class TestMarkPaidAttachmentValidation:
                     ),
                     finance,
                 )
-            assert "ATTACHMENT" in str(
-                getattr(exc_info.value, "code", "")
-            ) or exc_info.type.__name__ == "AttachmentNotReadyError"
+            assert (
+                "ATTACHMENT" in str(getattr(exc_info.value, "code", ""))
+                or exc_info.type.__name__ == "AttachmentNotReadyError"
+            )
         finally:
             tenant_id_ctx.reset(token)
 
@@ -177,7 +178,8 @@ class TestMarkPaidAttachmentValidation:
             style = await product_factory.style()
             blogger = await blogger_factory.blogger()
             s = await settlement_factory.settlement(
-                style=style, blogger=blogger,
+                style=style,
+                blogger=blogger,
                 settlement_status="待财务付款",
             )
             svc = SettlementService(session)
@@ -219,12 +221,17 @@ class TestSettlementPaidReverseListener:
             style = await product_factory.style()
             blogger = await blogger_factory.blogger()
             promotion = await promotion_factory.promotion(
-                style=style, blogger=blogger,
-                publish_status="已发布", settlement_status="待付款",
+                style=style,
+                blogger=blogger,
+                publish_status="已发布",
+                settlement_status="待付款",
             )
             s = await settlement_factory.settlement(
-                style=style, blogger=blogger, promotion=promotion,
-                settlement_status="待财务付款", payment_amount=Decimal("480.00"),
+                style=style,
+                blogger=blogger,
+                promotion=promotion,
+                settlement_status="待财务付款",
+                payment_amount=Decimal("480.00"),
             )
             att = await attachment_factory.attachment()
             svc = SettlementService(session)
@@ -260,8 +267,10 @@ class TestSettlementPaidReverseListener:
             style = await product_factory.style()
             blogger = await blogger_factory.blogger()
             s = await settlement_factory.settlement(
-                style=style, blogger=blogger,
-                settlement_status="待财务付款", payment_amount=Decimal("480.00"),
+                style=style,
+                blogger=blogger,
+                settlement_status="待财务付款",
+                payment_amount=Decimal("480.00"),
             )
             att = await attachment_factory.attachment()
             svc = SettlementService(session)
@@ -302,8 +311,10 @@ class TestSettlementPaidReverseListener:
             style = await product_factory.style()
             blogger = await blogger_factory.blogger()
             s = await settlement_factory.settlement(
-                style=style, blogger=blogger,
-                settlement_status="待财务付款", payment_amount=Decimal("480.00"),
+                style=style,
+                blogger=blogger,
+                settlement_status="待财务付款",
+                payment_amount=Decimal("480.00"),
             )
             att = await attachment_factory.attachment()
             svc = SettlementService(session)
@@ -318,9 +329,7 @@ class TestSettlementPaidReverseListener:
             # 不对称：通知类失败不重新 raise，主流程已付款成功
             assert resp.settlement_status == "已付款"
             row = (
-                await session.execute(
-                    select(Settlement).where(Settlement.id == s.id)
-                )
+                await session.execute(select(Settlement).where(Settlement.id == s.id))
             ).scalar_one()
             assert row.settlement_status == SettlementStatus.PAID.value
         finally:

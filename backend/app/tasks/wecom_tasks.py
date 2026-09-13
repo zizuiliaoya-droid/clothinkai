@@ -40,11 +40,9 @@ async def _scan_and_dispatch() -> dict[str, Any]:
     today = get_today()
     async with AsyncSessionBypass() as meta:
         tenant_ids = list(
-            (
-                await meta.execute(
-                    text("SELECT tenant_id FROM wecom_config WHERE is_active = true")
-                )
-            ).scalars().all()
+            (await meta.execute(text("SELECT tenant_id FROM wecom_config WHERE is_active = true")))
+            .scalars()
+            .all()
         )
 
     total = 0
@@ -60,7 +58,7 @@ async def _scan_and_dispatch() -> dict[str, Any]:
                     )
                     created = await WecomScanService(s).scan_tenant(today)
                     await s.commit()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.exception("wecom_scan_tenant_failed", extra={"tenant_id": str(tid)})
             sentry_sdk.capture_exception(exc)
         finally:
@@ -81,9 +79,7 @@ async def _scan_and_dispatch() -> dict[str, Any]:
     max_retries=1,
     default_retry_delay=5,
 )
-def execute_wecom_message(
-    self: Task, message_id: str, tenant_id: str
-) -> dict[str, Any]:
+def execute_wecom_message(self: Task, message_id: str, tenant_id: str) -> dict[str, Any]:
     return run_async_task(_execute_one(UUID(message_id), UUID(tenant_id)))
 
 
@@ -116,9 +112,7 @@ async def _execute_one(message_id: UUID, tenant_id: UUID) -> dict[str, Any]:
     max_retries=1,
     default_retry_delay=5,
 )
-def notify_control_group(
-    self: Task, promotion_id: str, tenant_id: str
-) -> dict[str, Any]:
+def notify_control_group(self: Task, promotion_id: str, tenant_id: str) -> dict[str, Any]:
     return run_async_task(_notify_control_group(UUID(promotion_id), UUID(tenant_id)))
 
 
@@ -131,18 +125,14 @@ async def _notify_control_group(promotion_id: UUID, tenant_id: UUID) -> dict[str
                     text("SELECT set_config('app.tenant_id', :t, true)"),
                     {"t": str(tenant_id)},
                 )
-                result = await GroupNotifyService(s).notify_publish(
-                    promotion_id, tenant_id
-                )
+                result = await GroupNotifyService(s).notify_publish(promotion_id, tenant_id)
                 await s.commit()
         return result
     finally:
         tenant_id_ctx.reset(tok)
 
 
-@celery_app.task(
-    name="app.tasks.wecom_tasks.check_anomaly_and_alert", queue="default"
-)
+@celery_app.task(name="app.tasks.wecom_tasks.check_anomaly_and_alert", queue="default")
 def check_anomaly_and_alert() -> dict[str, Any]:
     return run_async_task(_check_anomaly_all())
 
@@ -152,12 +142,11 @@ async def _check_anomaly_all() -> dict[str, Any]:
         tenant_ids = list(
             (
                 await meta.execute(
-                    text(
-                        "SELECT tenant_id FROM wecom_alert_config "
-                        "WHERE is_enabled = true"
-                    )
+                    text("SELECT tenant_id FROM wecom_alert_config " "WHERE is_enabled = true")
                 )
-            ).scalars().all()
+            )
+            .scalars()
+            .all()
         )
 
     total = 0
@@ -172,7 +161,7 @@ async def _check_anomaly_all() -> dict[str, Any]:
                     )
                     total += await AnomalyAlertService(s).check_and_alert(tid)
                     await s.commit()
-        except Exception as exc:  # noqa: BLE001 — 单租户失败不中止其余
+        except Exception as exc:
             log.exception("anomaly_check_failed", extra={"tenant_id": str(tid)})
             sentry_sdk.capture_exception(exc)
         finally:

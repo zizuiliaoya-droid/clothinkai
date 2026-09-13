@@ -47,9 +47,7 @@ class WecomConfigService:
             cfg.callback_aes_key = payload.callback_aes_key
             cfg.default_sender_userid = payload.default_sender_userid
             cfg.is_active = payload.is_active
-        await AuditService(self._s).log(
-            "wecom.config.update", resource="wecom_config"
-        )
+        await AuditService(self._s).log("wecom.config.update", resource="wecom_config")
         await self._s.flush()
         return cfg
 
@@ -73,8 +71,10 @@ class WecomConfigService:
 
         async def _secret() -> str:
             await AuditService(self._s).log(
-                "wecom.secret.decrypt", resource="wecom_config",
-                actor_type="system", purpose="test_connection",
+                "wecom.secret.decrypt",
+                resource="wecom_config",
+                actor_type="system",
+                purpose="test_connection",
             )
             return decrypt_credential(
                 tenant_id, cfg.id, cfg.secret_ciphertext, purpose="test_connection"
@@ -85,7 +85,7 @@ class WecomConfigService:
             client = WecomClient(tenant_id, cfg, http=http, secret_provider=_secret)
             await client.get_access_token(force_refresh=True)
             return WecomTestResult(ok=True)
-        except Exception as exc:  # noqa: BLE001 — 连接性测试属业务结果
+        except Exception as exc:
             return WecomTestResult(ok=False, reason=str(exc))
         finally:
             await http.aclose()

@@ -99,9 +99,7 @@ async def list_bloggers(
         include_inactive=include_inactive,
         recent_growth_only=recent_growth_only,
     )
-    return await service.list_bloggers(
-        filters=filters, page=page, page_size=page_size, user=user
-    )
+    return await service.list_bloggers(filters=filters, page=page, page_size=page_size, user=user)
 
 
 @router.get(

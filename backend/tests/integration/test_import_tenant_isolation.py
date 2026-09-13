@@ -21,15 +21,11 @@ from app.tasks.import_tasks import _run_import_batch
 @pytest.mark.integration
 @pytest.mark.asyncio
 class TestRunnerTenantIsolation:
-    async def test_upserted_records_carry_batch_tenant(
-        self, engine: Any, monkeypatch
-    ) -> None:
+    async def test_upserted_records_carry_batch_tenant(self, engine: Any, monkeypatch) -> None:
         """runner 写入的 brand 行 tenant_id == batch.tenant_id（NF-1 per-row SET LOCAL）。"""
         from tests.conftest import FakeImportAdapter
 
-        Maker = async_sessionmaker(
-            engine, expire_on_commit=False, class_=AsyncSession
-        )
+        Maker = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
         monkeypatch.setattr(tasks, "AsyncSessionApp", Maker)
         monkeypatch.setattr(tasks, "AsyncSessionBypass", Maker)
 
@@ -37,9 +33,7 @@ class TestRunnerTenantIsolation:
         ImportAdapterRegistry.register(FakeImportAdapter())
 
         suffix = uuid4().hex[:8]
-        csv_bytes = (
-            f"brand_code,brand_name\nBR{suffix}X,品牌X\nBR{suffix}Y,品牌Y\n"
-        ).encode("utf-8")
+        csv_bytes = (f"brand_code,brand_name\nBR{suffix}X,品牌X\nBR{suffix}Y,品牌Y\n").encode()
 
         import app.core.attachment as attachment_mod
 
@@ -52,9 +46,7 @@ class TestRunnerTenantIsolation:
         batch_id = uuid4()
         async with Maker() as seed:
             tenant_id = (
-                await seed.execute(
-                    text("SELECT id FROM tenant ORDER BY created_at ASC LIMIT 1")
-                )
+                await seed.execute(text("SELECT id FROM tenant ORDER BY created_at ASC LIMIT 1"))
             ).first()[0]
             await seed.execute(
                 text(
@@ -81,9 +73,7 @@ class TestRunnerTenantIsolation:
             async with Maker() as check:
                 rows = (
                     await check.execute(
-                        text(
-                            "SELECT tenant_id FROM brand WHERE brand_code LIKE :p"
-                        ),
+                        text("SELECT tenant_id FROM brand WHERE brand_code LIKE :p"),
                         {"p": f"BR{suffix}%"},
                     )
                 ).fetchall()

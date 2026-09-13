@@ -10,15 +10,17 @@ import asyncio
 import os
 from logging.config import fileConfig
 
-from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
+from alembic import context
+
 # 引入应用 Base 元数据
-from app.core.db import Base  # noqa: E402
+from app.core.db import Base
+
 # 引入所有模块的 models 以便 Base.metadata 收集
-from app.modules.auth import models as auth_models  # noqa: F401, E402
+from app.modules.auth import models as auth_models
 
 config = context.config
 

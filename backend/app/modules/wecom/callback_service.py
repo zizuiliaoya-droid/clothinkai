@@ -5,8 +5,6 @@
 
 from __future__ import annotations
 
-from uuid import UUID
-
 from sqlalchemy import func
 
 from app.core.audit import AuditService
@@ -61,9 +59,7 @@ class WecomCallbackService:
         msgid = payload.get("msgid")
         result = str(payload.get("result", "")).lower()
 
-        msg = (
-            await self._messages.find_by_msgid(msgid) if msgid else None
-        )
+        msg = await self._messages.find_by_msgid(msgid) if msgid else None
         if msg is None or msg.status != "created":
             wecom_callback_total.labels(result="ignored").inc()
             return "ignored"

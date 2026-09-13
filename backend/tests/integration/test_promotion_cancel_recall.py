@@ -36,9 +36,7 @@ class TestCancel:
             user = await factory.user(tenant_a, roles=[admin_role])
             style = await product_factory.style()
             blogger = await blogger_factory.blogger()
-            promotion = await promotion_factory.promotion(
-                style=style, blogger=blogger, pr=user
-            )
+            promotion = await promotion_factory.promotion(style=style, blogger=blogger, pr=user)
             svc = PromotionService(session)
             response = await svc.cancel(
                 promotion.id,
@@ -67,7 +65,9 @@ class TestCancel:
             style = await product_factory.style()
             blogger = await blogger_factory.blogger()
             promotion = await promotion_factory.promotion(
-                style=style, blogger=blogger, pr=user,
+                style=style,
+                blogger=blogger,
+                pr=user,
                 publish_status="已发布",
             )
             svc = PromotionService(session)
@@ -101,7 +101,9 @@ class TestRecall:
             style = await product_factory.style()
             blogger = await blogger_factory.blogger()
             promotion = await promotion_factory.promotion(
-                style=style, blogger=blogger, pr=user,
+                style=style,
+                blogger=blogger,
+                pr=user,
                 publish_status="已发布",
             )
             svc = PromotionService(session)
@@ -131,9 +133,7 @@ class TestRecall:
             user = await factory.user(tenant_a, roles=[admin_role])
             style = await product_factory.style()
             blogger = await blogger_factory.blogger()
-            promotion = await promotion_factory.promotion(
-                style=style, blogger=blogger, pr=user
-            )
+            promotion = await promotion_factory.promotion(style=style, blogger=blogger, pr=user)
             svc = PromotionService(session)
             with pytest.raises(StateTransitionConflictError):
                 await svc.start_recall(
@@ -161,20 +161,18 @@ class TestRecall:
             style = await product_factory.style()
             blogger = await blogger_factory.blogger()
             promotion = await promotion_factory.promotion(
-                style=style, blogger=blogger, pr=user,
+                style=style,
+                blogger=blogger,
+                pr=user,
                 publish_status="已发布",
             )
             svc = PromotionService(session)
 
-            await svc.start_recall(
-                promotion.id, PromotionRecallStartRequest(), user
-            )
+            await svc.start_recall(promotion.id, PromotionRecallStartRequest(), user)
             r2 = await svc.recall_failure(promotion.id, user)
             assert r2.recall_status == "召回失败"
 
-            await svc.start_recall(
-                promotion.id, PromotionRecallStartRequest(), user
-            )
+            await svc.start_recall(promotion.id, PromotionRecallStartRequest(), user)
             r4 = await svc.recall_success(promotion.id, user)
             assert r4.recall_status == "召回成功"
         finally:

@@ -36,16 +36,10 @@ class WecomSendService:
             return {"status": "skipped"}
 
         today = get_today()
-        if (
-            await self._messages.count_today_active(
-                today=today, blogger_id=msg.blogger_id
-            )
-            >= 1
-        ):
+        if await self._messages.count_today_active(today=today, blogger_id=msg.blogger_id) >= 1:
             return await self._degrade(msg, "blogger")
         if msg.pr_id is not None and (
-            await self._messages.count_today_active(today=today, pr_id=msg.pr_id)
-            >= 1
+            await self._messages.count_today_active(today=today, pr_id=msg.pr_id) >= 1
         ):
             return await self._degrade(msg, "pr")
 
@@ -63,9 +57,7 @@ class WecomSendService:
 
         http = build_http_client()
         try:
-            client = WecomClient(
-                tenant_id, cfg, http=http, secret_provider=_secret
-            )
+            client = WecomClient(tenant_id, cfg, http=http, secret_provider=_secret)
             resp = await client.send_external_msg_template(
                 sender=cfg.default_sender_userid or "",
                 recipients=[msg.external_userid] if msg.external_userid else [],
@@ -90,9 +82,7 @@ class WecomSendService:
         msg.error_detail = f"频控降级:{reason}"
         nickname = await self._blogger_name(msg.blogger_id)
         if msg.pr_id is not None:
-            await self._notify.notify(
-                [msg.pr_id], f"请手动催发 {nickname}"
-            )
+            await self._notify.notify([msg.pr_id], f"请手动催发 {nickname}")
         wecom_rate_limited_total.labels(reason=reason).inc()
         wecom_message_total.labels(status="rate_limited").inc()
         return {"status": "rate_limited"}

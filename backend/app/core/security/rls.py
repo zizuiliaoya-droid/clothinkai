@@ -11,7 +11,6 @@
 
 from __future__ import annotations
 
-
 # RLS 策略谓词（USING / WITH CHECK 共用）
 _POLICY_PREDICATE = (
     "tenant_id = current_setting('app.tenant_id', true)::uuid "

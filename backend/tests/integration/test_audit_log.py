@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import AuditService
@@ -14,9 +14,7 @@ from app.modules.auth.models import AuditLog, Tenant
 @pytest.mark.integration
 @pytest.mark.asyncio
 class TestAuditLog:
-    async def test_log_writes_record(
-        self, session: AsyncSession, tenant_a: Tenant
-    ) -> None:
+    async def test_log_writes_record(self, session: AsyncSession, tenant_a: Tenant) -> None:
         token = tenant_id_ctx.set(tenant_a.id)
         try:
             audit = AuditService(session)
@@ -64,9 +62,7 @@ class TestAuditLog:
             user_id_ctx.reset(u_token)
             actor_type_ctx.reset(a_token)
 
-    async def test_query_filters_combined(
-        self, session: AsyncSession, tenant_a: Tenant
-    ) -> None:
+    async def test_query_filters_combined(self, session: AsyncSession, tenant_a: Tenant) -> None:
         from app.modules.auth.repository import AuditLogRepository
 
         token = tenant_id_ctx.set(tenant_a.id)

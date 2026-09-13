@@ -106,9 +106,7 @@ async def dispatch(event: Any, *, session: Any) -> None:
 
     event_type = getattr(event, "event_type", None)
     if not event_type:
-        raise ValueError(
-            f"Event {type(event).__name__} missing event_type ClassVar"
-        )
+        raise ValueError(f"Event {type(event).__name__} missing event_type ClassVar")
 
     handlers = _handlers.get(event_type, [])
     if not handlers:

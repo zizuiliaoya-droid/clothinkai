@@ -9,7 +9,6 @@ from typing import Any
 
 from app.core.exceptions import AppException
 
-
 # ---------------------------------------------------------------------------
 # 上传校验（422）
 # ---------------------------------------------------------------------------
@@ -23,9 +22,7 @@ class ImportSourceUnknownError(AppException):
     message = "未知导入来源（source 未注册）"
 
     def __init__(self, source: str) -> None:
-        super().__init__(
-            f"导入来源 '{source}' 未注册", details={"source": source}
-        )
+        super().__init__(f"导入来源 '{source}' 未注册", details={"source": source})
 
 
 class ImportFormatUnsupportedError(AppException):
@@ -85,9 +82,7 @@ class ImportRetryExhaustedError(AppException):
     message = "重试次数已达上限（3 次）"
 
     def __init__(self, batch_id: Any) -> None:
-        super().__init__(
-            "重试次数已达上限（3 次）", details={"batch_id": str(batch_id)}
-        )
+        super().__init__("重试次数已达上限（3 次）", details={"batch_id": str(batch_id)})
 
 
 class ImportBatchBusyError(AppException):
@@ -98,9 +93,7 @@ class ImportBatchBusyError(AppException):
     message = "批次正在处理中，请稍后重试"
 
     def __init__(self, batch_id: Any) -> None:
-        super().__init__(
-            "批次正在处理中，请稍后重试", details={"batch_id": str(batch_id)}
-        )
+        super().__init__("批次正在处理中，请稍后重试", details={"batch_id": str(batch_id)})
 
 
 # ---------------------------------------------------------------------------
@@ -114,9 +107,7 @@ class ImportBatchNotFoundError(AppException):
     message = "导入批次不存在"
 
     def __init__(self, batch_id: Any) -> None:
-        super().__init__(
-            f"导入批次 {batch_id} 不存在", details={"batch_id": str(batch_id)}
-        )
+        super().__init__(f"导入批次 {batch_id} 不存在", details={"batch_id": str(batch_id)})
 
 
 # ---------------------------------------------------------------------------

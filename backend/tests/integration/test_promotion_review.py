@@ -9,24 +9,20 @@
 
 from __future__ import annotations
 
-from datetime import date
 from decimal import Decimal
 from typing import Any
 
 import pytest
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.events import subscribe
 from app.core.exceptions import MissingRequiredHandlerError
 from app.core.tenancy import tenant_id_ctx
-from app.modules.auth.models import AuditLog
 from app.modules.promotion.enums import ReviewAction
 from app.modules.promotion.exceptions import (
     ReviewReasonRequiredError,
     SelfReviewForbiddenError,
 )
-from app.modules.promotion.models import Promotion
 from app.modules.promotion.schemas import PromotionReviewRequest
 from app.modules.promotion.service import PromotionService
 
@@ -54,7 +50,9 @@ class TestReviewApprove:
             style = await product_factory.style()
             blogger = await blogger_factory.blogger()
             promotion = await promotion_factory.promotion(
-                style=style, blogger=blogger, pr=pr,
+                style=style,
+                blogger=blogger,
+                pr=pr,
                 publish_status="已发布",
                 settlement_status="待核查",
                 quote_amount=Decimal("500.00"),
@@ -70,10 +68,7 @@ class TestReviewApprove:
             assert response.reviewed_by == reviewer.id
 
             # 验证事件
-            settlement_events = [
-                e for e in event_capture
-                if e.event_type == "SettlementRequested"
-            ]
+            settlement_events = [e for e in event_capture if e.event_type == "SettlementRequested"]
             assert len(settlement_events) == 1
             assert settlement_events[0].promotion_id == promotion.id
             assert settlement_events[0].amount == Decimal("500.00")
@@ -97,7 +92,9 @@ class TestReviewApprove:
             style = await product_factory.style()
             blogger = await blogger_factory.blogger()
             promotion = await promotion_factory.promotion(
-                style=style, blogger=blogger, pr=user,
+                style=style,
+                blogger=blogger,
+                pr=user,
                 publish_status="已发布",
                 settlement_status="待核查",
             )
@@ -133,7 +130,9 @@ class TestReviewReject:
             style = await product_factory.style()
             blogger = await blogger_factory.blogger()
             promotion = await promotion_factory.promotion(
-                style=style, blogger=blogger, pr=pr,
+                style=style,
+                blogger=blogger,
+                pr=pr,
                 publish_status="已发布",
                 settlement_status="待核查",
             )
@@ -167,16 +166,16 @@ class TestReviewReject:
             style = await product_factory.style()
             blogger = await blogger_factory.blogger()
             promotion = await promotion_factory.promotion(
-                style=style, blogger=blogger, pr=pr,
+                style=style,
+                blogger=blogger,
+                pr=pr,
                 publish_status="已发布",
                 settlement_status="待核查",
             )
             svc = PromotionService(session)
             response = await svc.review(
                 promotion.id,
-                PromotionReviewRequest(
-                    action=ReviewAction.REJECT, review_reason="链接无法访问"
-                ),
+                PromotionReviewRequest(action=ReviewAction.REJECT, review_reason="链接无法访问"),
                 reviewer,
             )
             assert response.settlement_status == "已驳回"
@@ -209,7 +208,9 @@ class TestEventFailureRollback:
             style = await product_factory.style()
             blogger = await blogger_factory.blogger()
             promotion = await promotion_factory.promotion(
-                style=style, blogger=blogger, pr=pr,
+                style=style,
+                blogger=blogger,
+                pr=pr,
                 publish_status="已发布",
                 settlement_status="待核查",
             )
@@ -253,7 +254,9 @@ class TestEventFailureRollback:
             style = await product_factory.style()
             blogger = await blogger_factory.blogger()
             promotion = await promotion_factory.promotion(
-                style=style, blogger=blogger, pr=pr,
+                style=style,
+                blogger=blogger,
+                pr=pr,
                 publish_status="已发布",
                 settlement_status="待核查",
             )

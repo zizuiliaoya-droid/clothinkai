@@ -65,9 +65,7 @@ class TestWanxiangtaiAdapter:
 class TestHuitunAdapter:
     def test_build_profile(self) -> None:
         a = HuitunImportAdapter()
-        parsed = a.parse_row(
-            {"小红书ID": "xhs1", "平均点赞": "50", "平均阅读": "1000"}, None
-        )
+        parsed = a.parse_row({"小红书ID": "xhs1", "平均点赞": "50", "平均阅读": "1000"}, None)
         assert parsed["xiaohongshu_id"] == "xhs1"
         profile = a._build_profile(parsed)
         assert profile["note_stats"]["avg_likes"] == 50
@@ -101,9 +99,7 @@ class TestWorkerTokenHash:
         from app.modules.collect.schemas import WorkerTokenCreate
         from app.modules.collect.worker_token_service import ip_is_allowed
 
-        payload = WorkerTokenCreate(
-            name="worker", ip_allowlist=["10.0.0.10", "10.0.1.7/24"]
-        )
+        payload = WorkerTokenCreate(name="worker", ip_allowlist=["10.0.0.10", "10.0.1.7/24"])
         assert payload.ip_allowlist == ["10.0.0.10", "10.0.1.0/24"]
         assert ip_is_allowed("10.0.0.10", payload.ip_allowlist)
         assert ip_is_allowed("10.0.1.99", payload.ip_allowlist)

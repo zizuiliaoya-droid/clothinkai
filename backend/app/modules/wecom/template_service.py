@@ -31,9 +31,7 @@ class MessageTemplateService:
             raise WecomTemplateInvalidVarError(invalid)
         tpl = await self._repo.get(template_type)
         if tpl is None:
-            tpl = MessageTemplate(
-                template_type=template_type, content=content, updated_by=actor_id
-            )
+            tpl = MessageTemplate(template_type=template_type, content=content, updated_by=actor_id)
             self._repo.add(tpl)
         else:
             tpl.content = content
@@ -49,9 +47,7 @@ class MessageTemplateService:
         existing = await self._repo.get_all()
         for ttype, content in _DEFAULTS.items():
             if ttype not in existing:
-                self._repo.add(
-                    MessageTemplate(template_type=ttype, content=content)
-                )
+                self._repo.add(MessageTemplate(template_type=ttype, content=content))
         await self._s.flush()
 
     async def load_rendered_map(self) -> dict[str, str]:

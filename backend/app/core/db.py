@@ -11,8 +11,9 @@ ORM 层多租户注入（before_compile 事件 + before_insert 事件）：
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import DateTime, ForeignKey, MetaData, event, text
@@ -71,15 +72,15 @@ class TimestampMixin:
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-        default=lambda: datetime.now(timezone.utc),
+        default=lambda: datetime.now(UTC),
         server_default=func.now(),
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-        default=lambda: datetime.now(timezone.utc),
+        default=lambda: datetime.now(UTC),
         server_default=func.now(),
-        onupdate=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(UTC),
     )
 
 
@@ -207,9 +208,7 @@ def _apply_tenant_guc(session: Session, _transaction: Any, connection: Any) -> N
     tid = tenant_id_ctx.get()
     if tid is not None:
         # tid 为 UUID 实例，str 化后为标准 UUID 文本，无注入风险
-        connection.exec_driver_sql(
-            f"SELECT set_config('app.tenant_id', '{tid}', true)"
-        )
+        connection.exec_driver_sql(f"SELECT set_config('app.tenant_id', '{tid}', true)")
 
 
 @event.listens_for(Session, "do_orm_execute")
@@ -276,7 +275,7 @@ async def check_db_health() -> bool:
         async with engine_app.connect() as conn:
             await conn.execute(text("SELECT 1"))
         return True
-    except Exception:  # noqa: BLE001
+    except Exception:
         return False
 
 

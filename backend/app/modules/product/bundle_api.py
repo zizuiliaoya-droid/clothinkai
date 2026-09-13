@@ -25,10 +25,7 @@ def _to_response(bundle, items) -> BundleResponse:
         bundle_name=bundle.bundle_name,
         remark=bundle.remark,
         is_active=bundle.is_active,
-        items=[
-            BundleItemResponse(sku_id=it.sku_id, quantity=it.quantity)
-            for it in items
-        ],
+        items=[BundleItemResponse(sku_id=it.sku_id, quantity=it.quantity) for it in items],
     )
 
 

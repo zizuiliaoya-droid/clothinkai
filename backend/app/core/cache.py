@@ -7,12 +7,9 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from redis.asyncio import Redis, from_url
 
 from app.core.config import settings
-
 
 # ---------------------------------------------------------------------------
 # 单例 Redis 客户端（默认 db=0 / cache）
@@ -85,7 +82,7 @@ class CacheClient:
     async def ping(self) -> bool:
         try:
             return bool(await self._redis.ping())
-        except Exception:  # noqa: BLE001
+        except Exception:
             return False
 
 

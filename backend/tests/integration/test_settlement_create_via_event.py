@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 from uuid import uuid4
@@ -27,7 +27,7 @@ from app.modules.promotion.events import SettlementRequested
 def _make_event(*, tenant_id, promotion_id, blogger_id, style_id, pr_id, **kw):
     return SettlementRequested(
         event_id=kw.get("event_id", uuid4()),
-        timestamp=datetime.now(timezone.utc),
+        timestamp=datetime.now(UTC),
         tenant_id=tenant_id,
         promotion_id=promotion_id,
         promotion_internal_code=kw.get("internal_code", "DE2605260AAA"),
@@ -36,7 +36,7 @@ def _make_event(*, tenant_id, promotion_id, blogger_id, style_id, pr_id, **kw):
         amount=kw.get("amount", Decimal("500.00")),
         pr_id=kw.get("event_pr_id", pr_id),
         requested_by=pr_id,
-        requested_at=datetime.now(timezone.utc),
+        requested_at=datetime.now(UTC),
     )
 
 
@@ -60,21 +60,25 @@ class TestCreateViaEvent:
             style = await product_factory.style()
             blogger = await blogger_factory.blogger()
             promotion = await promotion_factory.promotion(
-                style=style, blogger=blogger, pr=pr,
-                publish_status="已发布", settlement_status="待付款",
+                style=style,
+                blogger=blogger,
+                pr=pr,
+                publish_status="已发布",
+                settlement_status="待付款",
             )
             event = _make_event(
-                tenant_id=tenant_a.id, promotion_id=promotion.id,
-                blogger_id=blogger.id, style_id=style.id, pr_id=pr.id,
+                tenant_id=tenant_a.id,
+                promotion_id=promotion.id,
+                blogger_id=blogger.id,
+                style_id=style.id,
+                pr_id=pr.id,
                 amount=Decimal("500.00"),
             )
             await on_settlement_requested(event, session)
 
             row = (
                 await session.execute(
-                    select(Settlement).where(
-                        Settlement.promotion_id == promotion.id
-                    )
+                    select(Settlement).where(Settlement.promotion_id == promotion.id)
                 )
             ).scalar_one()
             assert row.settlement_status == "待核查"  # FB1 起点
@@ -104,30 +108,41 @@ class TestCreateViaEvent:
             style = await product_factory.style()
             blogger = await blogger_factory.blogger()
             promotion = await promotion_factory.promotion(
-                style=style, blogger=blogger, pr=pr,
-                publish_status="已发布", settlement_status="待付款",
+                style=style,
+                blogger=blogger,
+                pr=pr,
+                publish_status="已发布",
+                settlement_status="待付款",
             )
             event1 = _make_event(
-                tenant_id=tenant_a.id, promotion_id=promotion.id,
-                blogger_id=blogger.id, style_id=style.id, pr_id=pr.id,
+                tenant_id=tenant_a.id,
+                promotion_id=promotion.id,
+                blogger_id=blogger.id,
+                style_id=style.id,
+                pr_id=pr.id,
             )
             await on_settlement_requested(event1, session)
             await session.flush()
 
             # 第二次（不同 event_id，同 promotion）→ 幂等跳过
             event2 = _make_event(
-                tenant_id=tenant_a.id, promotion_id=promotion.id,
-                blogger_id=blogger.id, style_id=style.id, pr_id=pr.id,
+                tenant_id=tenant_a.id,
+                promotion_id=promotion.id,
+                blogger_id=blogger.id,
+                style_id=style.id,
+                pr_id=pr.id,
             )
             await on_settlement_requested(event2, session)
 
             rows = (
-                await session.execute(
-                    select(Settlement).where(
-                        Settlement.promotion_id == promotion.id
+                (
+                    await session.execute(
+                        select(Settlement).where(Settlement.promotion_id == promotion.id)
                     )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             assert len(rows) == 1  # 永久 UNIQUE + service SELECT 兜底
         finally:
             tenant_id_ctx.reset(token)
@@ -152,20 +167,24 @@ class TestCreateViaEvent:
             seq_tails = []
             for _ in range(5):
                 promotion = await promotion_factory.promotion(
-                    style=style, blogger=blogger, pr=pr,
-                    publish_status="已发布", settlement_status="待付款",
+                    style=style,
+                    blogger=blogger,
+                    pr=pr,
+                    publish_status="已发布",
+                    settlement_status="待付款",
                 )
                 event = _make_event(
-                    tenant_id=tenant_a.id, promotion_id=promotion.id,
-                    blogger_id=blogger.id, style_id=style.id, pr_id=pr.id,
+                    tenant_id=tenant_a.id,
+                    promotion_id=promotion.id,
+                    blogger_id=blogger.id,
+                    style_id=style.id,
+                    pr_id=pr.id,
                 )
                 await on_settlement_requested(event, session)
                 await session.flush()
                 row = (
                     await session.execute(
-                        select(Settlement).where(
-                            Settlement.promotion_id == promotion.id
-                        )
+                        select(Settlement).where(Settlement.promotion_id == promotion.id)
                     )
                 ).scalar_one()
                 seq_tails.append(row.settlement_no[-4:])

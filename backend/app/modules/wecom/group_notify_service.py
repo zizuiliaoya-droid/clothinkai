@@ -53,9 +53,7 @@ class GroupNotifyService:
         )
         http = build_http_client()
         try:
-            client = WecomClient(
-                tenant_id, None, http=http, secret_provider=None
-            )
+            client = WecomClient(tenant_id, None, http=http, secret_provider=None)
             await client.send_group_robot(cfg.control_group_webhook, markdown)
             wecom_group_notify_total.labels(status="sent").inc()
             return {"status": "sent"}

@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import Depends, Header
+from fastapi import Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,9 +28,7 @@ _bearer_scheme = HTTPBearer(auto_error=False)
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 BypassSessionDep = Annotated[AsyncSession, Depends(get_bypass_session)]
-BearerDep = Annotated[
-    HTTPAuthorizationCredentials | None, Depends(_bearer_scheme)
-]
+BearerDep = Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer_scheme)]
 
 
 async def get_current_user(

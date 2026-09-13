@@ -102,9 +102,7 @@ class BloggerImportAdapter:
 
     # ----------------------- parse_row（纯函数）----------------------- #
 
-    def parse_row(
-        self, row: dict[str, Any], mapping: "FieldMapping | None"
-    ) -> dict[str, Any]:
+    def parse_row(self, row: dict[str, Any], mapping: FieldMapping | None) -> dict[str, Any]:
         """按 mapping（或内置默认）映射表头 + 多类型转换。"""
         if mapping is not None:
             columns = mapping.mapping_config.get("columns", _DEFAULT_COLUMNS)
@@ -123,9 +121,7 @@ class BloggerImportAdapter:
             elif col_type == "decimal":
                 parsed[target] = _to_decimal(raw)
             else:
-                parsed[target] = (
-                    str(raw).strip() if raw not in (None, "") else None
-                )
+                parsed[target] = str(raw).strip() if raw not in (None, "") else None
         return parsed
 
     # ----------------------- validate（纯函数）----------------------- #
@@ -137,9 +133,7 @@ class BloggerImportAdapter:
             if not parsed.get(field):
                 errs.append(f"{label}不能为空")
         follower = parsed.get("follower_count")
-        if follower is not None and (
-            not isinstance(follower, int) or follower < 0
-        ):
+        if follower is not None and (not isinstance(follower, int) or follower < 0):
             errs.append("粉丝数必须为非负整数")
         quote = parsed.get("quote")
         if quote is not None and (not isinstance(quote, Decimal) or quote < 0):
@@ -149,7 +143,6 @@ class BloggerImportAdapter:
             if value and isinstance(value, str) and len(value) > max_len:
                 errs.append(f"{field} 超过长度上限 {max_len}")
         return errs
-
 
     # ----------------------- upsert（复用 runner session，不 commit）----------------------- #
 
@@ -183,9 +176,7 @@ class BloggerImportAdapter:
             "cooperation_history": parsed.get("cooperation_history"),
             "remark": parsed.get("remark"),
         }
-        blogger, is_inserted = await repo.upsert_atomic(
-            tenant_id=tenant_id, values=values
-        )
+        blogger, is_inserted = await repo.upsert_atomic(tenant_id=tenant_id, values=values)
         return blogger.id, is_inserted
 
 

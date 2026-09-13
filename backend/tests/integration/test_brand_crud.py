@@ -28,9 +28,7 @@ class TestBrandCrud:
         token = tenant_id_ctx.set(tenant_a.id)
         try:
             svc = BrandService(session)
-            response = await svc.create_brand(
-                BrandCreate(brand_code="NIKE", brand_name="耐克")
-            )
+            response = await svc.create_brand(BrandCreate(brand_code="NIKE", brand_name="耐克"))
             assert response.brand_code == "NIKE"
             assert response.is_active is True
         finally:
@@ -47,9 +45,7 @@ class TestBrandCrud:
             await product_factory.brand(brand_code="NIKE")
             svc = BrandService(session)
             with pytest.raises(BrandCodeConflictError):
-                await svc.create_brand(
-                    BrandCreate(brand_code="NIKE", brand_name="另一个")
-                )
+                await svc.create_brand(BrandCreate(brand_code="NIKE", brand_name="另一个"))
         finally:
             tenant_id_ctx.reset(token)
 
@@ -68,9 +64,7 @@ class TestBrandCrud:
         finally:
             tenant_id_ctx.reset(token)
 
-    async def test_get_nonexistent_raises(
-        self, session: AsyncSession, tenant_a: Any
-    ) -> None:
+    async def test_get_nonexistent_raises(self, session: AsyncSession, tenant_a: Any) -> None:
         token = tenant_id_ctx.set(tenant_a.id)
         try:
             svc = BrandService(session)
@@ -89,9 +83,7 @@ class TestBrandCrud:
         try:
             brand = await product_factory.brand(brand_name="原名")
             svc = BrandService(session)
-            response = await svc.update_brand(
-                brand.id, BrandUpdate(brand_name="新名")
-            )
+            response = await svc.update_brand(brand.id, BrandUpdate(brand_name="新名"))
             assert response.brand_name == "新名"
         finally:
             tenant_id_ctx.reset(token)

@@ -15,7 +15,6 @@ from __future__ import annotations
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
-
 DEFAULT_TENANT_TZ: ZoneInfo = ZoneInfo("Asia/Shanghai")
 """默认租户时区。MVP 阶段全部硬编码；V1+ 按 tenant.timezone 切换。"""
 

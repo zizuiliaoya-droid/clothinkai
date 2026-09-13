@@ -21,22 +21,26 @@ from app.modules.ai.service import AiAdvisoryService
 pytestmark = pytest.mark.asyncio
 
 
-async def _ok_chat(self, messages, *, model=None):  # noqa: ANN001
+async def _ok_chat(self, messages, *, model=None):
     return {"content": "建议扩大投放", "model": "deepseek-chat", "latency_ms": 12}
 
 
-async def _fail_chat(self, messages, *, model=None):  # noqa: ANN001
+async def _fail_chat(self, messages, *, model=None):
     raise AiServiceUnavailableError()
 
 
 class TestStrategy:
     async def test_data_insufficient(
-        self, session: AsyncSession, tenant_a: Any, factory: Any,
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
         pr_manager_role: Any,
     ) -> None:
         tok = tenant_id_ctx.set(tenant_a.id)
         try:
             from datetime import date
+
             user = await factory.user(tenant_a, roles=[pr_manager_role])
             # 无推广数据 → months=0 < 6 → 422，不调 AI
             with pytest.raises(AiDataInsufficientError):
@@ -49,8 +53,14 @@ class TestStrategy:
 
 class TestBloggerSuggest:
     async def test_success_logs_and_returns(
-        self, session: AsyncSession, tenant_a: Any, factory: Any, pr_role: Any,
-        product_factory: Any, blogger_factory: Any, monkeypatch: Any,
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        pr_role: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        monkeypatch: Any,
     ) -> None:
         tok = tenant_id_ctx.set(tenant_a.id)
         try:
@@ -61,24 +71,32 @@ class TestBloggerSuggest:
             await blogger_factory.blogger(nickname="博主B", follower_count=500)
             await session.commit()
 
-            out = await AiAdvisoryService(session).blogger_suggest(
-                style.id, 2, user
-            )
+            out = await AiAdvisoryService(session).blogger_suggest(style.id, 2, user)
             assert len(out) == 2
             assert out[0].match_score >= out[1].match_score
-            cnt = (await session.execute(
-                select(func.count()).select_from(AiAdviceLog).where(
-                    AiAdviceLog.tenant_id == tenant_a.id,
-                    AiAdviceLog.status == "success",
+            cnt = (
+                await session.execute(
+                    select(func.count())
+                    .select_from(AiAdviceLog)
+                    .where(
+                        AiAdviceLog.tenant_id == tenant_a.id,
+                        AiAdviceLog.status == "success",
+                    )
                 )
-            )).scalar_one()
+            ).scalar_one()
             assert cnt == 1
         finally:
             tenant_id_ctx.reset(tok)
 
     async def test_degraded_logs_and_raises(
-        self, session: AsyncSession, tenant_a: Any, factory: Any, pr_role: Any,
-        product_factory: Any, blogger_factory: Any, monkeypatch: Any,
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        pr_role: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        monkeypatch: Any,
     ) -> None:
         tok = tenant_id_ctx.set(tenant_a.id)
         try:
@@ -90,18 +108,26 @@ class TestBloggerSuggest:
 
             with pytest.raises(AiServiceUnavailableError):
                 await AiAdvisoryService(session).blogger_suggest(style.id, 5, user)
-            cnt = (await session.execute(
-                select(func.count()).select_from(AiAdviceLog).where(
-                    AiAdviceLog.tenant_id == tenant_a.id,
-                    AiAdviceLog.status == "degraded",
+            cnt = (
+                await session.execute(
+                    select(func.count())
+                    .select_from(AiAdviceLog)
+                    .where(
+                        AiAdviceLog.tenant_id == tenant_a.id,
+                        AiAdviceLog.status == "degraded",
+                    )
                 )
-            )).scalar_one()
+            ).scalar_one()
             assert cnt == 1
         finally:
             tenant_id_ctx.reset(tok)
 
     async def test_style_not_found(
-        self, session: AsyncSession, tenant_a: Any, factory: Any, pr_role: Any,
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        pr_role: Any,
     ) -> None:
         from uuid import uuid4
 
@@ -116,7 +142,10 @@ class TestBloggerSuggest:
 
 class TestAnomaly:
     async def test_alert_not_found(
-        self, session: AsyncSession, tenant_a: Any, factory: Any,
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
         operations_role: Any,
     ) -> None:
         from uuid import uuid4

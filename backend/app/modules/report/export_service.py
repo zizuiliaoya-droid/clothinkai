@@ -18,24 +18,56 @@ from app.modules.report.production_service import ProductionService
 from app.modules.report.store_daily_service import StoreDailyService
 from app.modules.report.work_progress_service import WorkProgressService
 
-_XLSX_MEDIA = (
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-)
+_XLSX_MEDIA = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 _REPORT_TYPES = {"work-progress", "production", "store-daily"}
 _GRANULARITIES = {"day", "week", "month", "year"}
 
 _WORK_HEADERS = [
-    "PR", "约篇量", "档期内", "催发", "重要催发", "超时", "发布量",
-    "信息完整数", "信息完整率", "取消量", "待召回", "召回成功", "召回完成率",
-    "超时率", "月度完成率", "爆文数", "爆文率", "点赞数", "成本", "CPL",
+    "PR",
+    "约篇量",
+    "档期内",
+    "催发",
+    "重要催发",
+    "超时",
+    "发布量",
+    "信息完整数",
+    "信息完整率",
+    "取消量",
+    "待召回",
+    "召回成功",
+    "召回完成率",
+    "超时率",
+    "月度完成率",
+    "爆文数",
+    "爆文率",
+    "点赞数",
+    "成本",
+    "CPL",
 ]
 _PRODUCTION_HEADERS = [
-    "货号", "款名", "支付额", "退款额", "退货率", "确认金额", "站外花费",
-    "站内花费", "总花费", "加购数", "加购成本", "净投产比", "单件成交成本",
+    "货号",
+    "款名",
+    "支付额",
+    "退款额",
+    "退货率",
+    "确认金额",
+    "站外花费",
+    "站内花费",
+    "总花费",
+    "加购数",
+    "加购成本",
+    "净投产比",
+    "单件成交成本",
 ]
 _STORE_HEADERS = [
-    "日期", "访客数", "支付额", "支付订单", "广告花费", "直通车花费", "引力魔方花费",
+    "日期",
+    "访客数",
+    "支付额",
+    "支付订单",
+    "广告花费",
+    "直通车花费",
+    "引力魔方花费",
 ]
 
 
@@ -70,9 +102,7 @@ def _bucket_date(value: date, granularity: str) -> date:
     return value
 
 
-def _sum_optional(
-    current: Decimal | None, value: Decimal | None
-) -> Decimal | None:
+def _sum_optional(current: Decimal | None, value: Decimal | None) -> Decimal | None:
     if value is None:
         return current
     return (current or Decimal("0")) + value
@@ -93,16 +123,10 @@ class ReportExportService:
         granularity: str = "day",
     ) -> StreamingResponse:
         if report_type not in _REPORT_TYPES:
-            report_export_total.labels(
-                report_type=report_type, result="invalid"
-            ).inc()
-            raise ReportExportTypeInvalidError(
-                f"不支持的报表类型: {report_type}"
-            )
+            report_export_total.labels(report_type=report_type, result="invalid").inc()
+            raise ReportExportTypeInvalidError(f"不支持的报表类型: {report_type}")
         if granularity not in _GRANULARITIES:
-            raise ReportExportTypeInvalidError(
-                f"不支持的时间粒度: {granularity}"
-            )
+            raise ReportExportTypeInvalidError(f"不支持的时间粒度: {granularity}")
         headers, rows = await self._fetch_rows(
             tenant_id,
             report_type,
@@ -119,9 +143,7 @@ class ReportExportService:
         buf = io.BytesIO()
         wb.save(buf)
         buf.seek(0)
-        report_export_total.labels(
-            report_type=report_type, result="success"
-        ).inc()
+        report_export_total.labels(report_type=report_type, result="success").inc()
         fname = f"{report_type}_{time_range[0]}_{time_range[1]}.xlsx"
         return StreamingResponse(
             buf,
@@ -146,9 +168,7 @@ class ReportExportService:
                 exclude_brushing=exclude_brushing,
                 season=season,
             )
-            extra_keys = sorted(
-                {key for row in report.items for key in row.extra}
-            )
+            extra_keys = sorted({key for row in report.items for key in row.extra})
             rows = [
                 [
                     row.style_code,
@@ -171,12 +191,8 @@ class ReportExportService:
             return [*_PRODUCTION_HEADERS, *extra_keys], rows
 
         if report_type == "store-daily":
-            source_rows = await StoreDailyService(self._s).get_dashboard(
-                tenant_id, time_range
-            )
-            extra_keys = sorted(
-                {key for row in source_rows for key in row.extra}
-            )
+            source_rows = await StoreDailyService(self._s).get_dashboard(tenant_id, time_range)
+            extra_keys = sorted({key for row in source_rows for key in row.extra})
             if granularity == "day":
                 rows = [
                     [
@@ -216,15 +232,12 @@ class ReportExportService:
                     "zhitongche_spend",
                     "yinli_spend",
                 ):
-                    values[field] = _sum_optional(
-                        values[field], getattr(row, field)
-                    )
+                    values[field] = _sum_optional(values[field], getattr(row, field))
                 for extra_key, raw_value in row.extra.items():
                     numeric = _numeric_extra(raw_value)
                     if isinstance(numeric, Decimal):
                         values["extra"][extra_key] = (
-                            values["extra"].get(extra_key, Decimal("0"))
-                            + numeric
+                            values["extra"].get(extra_key, Decimal("0")) + numeric
                         )
             rows = []
             for key in sorted(grouped):
@@ -244,9 +257,7 @@ class ReportExportService:
             return [*_STORE_HEADERS, *extra_keys], rows
 
         month = f"{time_range[0]:%Y-%m}"
-        work_rows = await WorkProgressService(self._s).get_for_month(
-            tenant_id, month
-        )
+        work_rows = await WorkProgressService(self._s).get_for_month(tenant_id, month)
         rows = [
             [
                 row.pr_name,

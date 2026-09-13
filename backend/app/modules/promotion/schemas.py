@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Annotated, Any
+from typing import Annotated
 from uuid import UUID
 
 from pydantic import (
@@ -35,7 +35,6 @@ from app.modules.promotion.enums import (
     ReviewAction,
     SettlementStatus,
 )
-
 
 _QuoteField = Annotated[
     Decimal,
@@ -178,7 +177,7 @@ class PromotionReviewRequest(BaseModel):
     review_reason: str | None = Field(default=None, max_length=2000)
 
     @model_validator(mode="after")
-    def _require_reason_on_reject(self) -> "PromotionReviewRequest":
+    def _require_reason_on_reject(self) -> PromotionReviewRequest:
         if self.action == ReviewAction.REJECT and not self.review_reason:
             raise ValueError("驳回时 review_reason 必填")
         return self
@@ -277,9 +276,7 @@ class PromotionResponse(BaseModel):
     settlement_payment_proof_signed_url: str | None = None
 
     # 重复警告（仅 create / detail 视图填入）
-    duplicate_warnings: list[PromotionDuplicateWarning] = Field(
-        default_factory=list
-    )
+    duplicate_warnings: list[PromotionDuplicateWarning] = Field(default_factory=list)
 
 
 class PromotionPage(BaseModel):

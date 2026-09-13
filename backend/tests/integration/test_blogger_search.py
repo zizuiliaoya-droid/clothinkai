@@ -264,9 +264,7 @@ class TestRangeAndTagFilters:
             user = await factory.user(tenant_a, roles=[admin_role])
             svc = BloggerService(session)
             page = await svc.list_bloggers(
-                filters=BloggerListFilters(
-                    follower_count_min=1000, follower_count_max=10000
-                ),
+                filters=BloggerListFilters(follower_count_min=1000, follower_count_max=10000),
                 page=1,
                 page_size=20,
                 user=user,
@@ -319,11 +317,14 @@ class TestSystemFailureNotMaskedAsEmpty:
             svc = BloggerService(session)
             from app.modules.blogger.repository import BloggerRepository
 
-            with patch.object(
-                BloggerRepository,
-                "list",
-                new=AsyncMock(side_effect=RuntimeError("simulated DB outage")),
-            ), pytest.raises(RuntimeError, match="simulated DB outage"):
+            with (
+                patch.object(
+                    BloggerRepository,
+                    "list",
+                    new=AsyncMock(side_effect=RuntimeError("simulated DB outage")),
+                ),
+                pytest.raises(RuntimeError, match="simulated DB outage"),
+            ):
                 await svc.list_bloggers(
                     filters=BloggerListFilters(keyword="anything"),
                     page=1,

@@ -22,7 +22,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.product.models import Brand, Sku, Style
 
-
 # ---------------------------------------------------------------------------
 # StyleRepository
 # ---------------------------------------------------------------------------
@@ -58,9 +57,7 @@ class StyleRepository:
 
     # ----------------------- get / count ----------------------- #
 
-    async def get_by_id(
-        self, style_id: UUID, *, include_deleted: bool = False
-    ) -> Style | None:
+    async def get_by_id(self, style_id: UUID, *, include_deleted: bool = False) -> Style | None:
         style = await self._session.get(Style, style_id)
         if style is None:
             return None
@@ -68,9 +65,7 @@ class StyleRepository:
             return None
         return style
 
-    async def get_by_code(
-        self, style_code: str, *, include_deleted: bool = False
-    ) -> Style | None:
+    async def get_by_code(self, style_code: str, *, include_deleted: bool = False) -> Style | None:
         stmt = select(Style).where(Style.style_code == style_code)
         if not include_deleted:
             stmt = stmt.where(Style.is_deleted.is_(False))
@@ -126,18 +121,14 @@ class StyleRepository:
         total = int((await self._session.execute(total_stmt)).scalar_one())
 
         stmt = (
-            stmt.order_by(Style.created_at.desc())
-            .limit(page_size)
-            .offset((page - 1) * page_size)
+            stmt.order_by(Style.created_at.desc()).limit(page_size).offset((page - 1) * page_size)
         )
         items = (await self._session.execute(stmt)).scalars().all()
         return items, total
 
     # ----------------------- match (BR-U02-50/51) ----------------------- #
 
-    async def search_by_keyword(
-        self, keyword: str, *, limit: int = 20
-    ) -> list[StyleSearchResult]:
+    async def search_by_keyword(self, keyword: str, *, limit: int = 20) -> list[StyleSearchResult]:
         """模糊搜索（拼接表达式 ILIKE，命中 ``idx_style_search_trgm`` GIN 索引）。
 
         查询表达式必须与索引表达式严格一致，否则不命中：
@@ -203,9 +194,7 @@ class SkuRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def get_by_id(
-        self, sku_id: UUID, *, include_deleted: bool = False
-    ) -> Sku | None:
+    async def get_by_id(self, sku_id: UUID, *, include_deleted: bool = False) -> Sku | None:
         sku = await self._session.get(Sku, sku_id)
         if sku is None:
             return None
@@ -213,9 +202,7 @@ class SkuRepository:
             return None
         return sku
 
-    async def get_by_code(
-        self, sku_code: str, *, include_deleted: bool = False
-    ) -> Sku | None:
+    async def get_by_code(self, sku_code: str, *, include_deleted: bool = False) -> Sku | None:
         stmt = select(Sku).where(Sku.sku_code == sku_code)
         if not include_deleted:
             stmt = stmt.where(Sku.is_deleted.is_(False))

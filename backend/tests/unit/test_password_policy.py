@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 
 import pytest
-from pydantic import ValidationError
 
 from app.modules.auth.domain import generate_random_password
 from app.modules.auth.exceptions import WeakPasswordError

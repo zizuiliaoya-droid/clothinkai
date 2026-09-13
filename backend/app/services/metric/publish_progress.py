@@ -14,9 +14,7 @@ def like_sum_expr(column: str = "like_count") -> str:
 
     系数 < 1 的平台（抖音/快手 ×0.1）走 CASE 折算，其余按原值；NULL 视作 0。
     """
-    discount = {
-        p: c for p, c in PLATFORM_LIKE_COEFFICIENT.items() if c < 1
-    }
+    discount = {p: c for p, c in PLATFORM_LIKE_COEFFICIENT.items() if c < 1}
     if not discount:
         return f"COALESCE(SUM({column}), 0)"
     # 同系数平台合并到一个 IN 列表（MVP 抖音/快手 同为 0.1）

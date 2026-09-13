@@ -28,7 +28,6 @@ from app.modules.product.enums import (
     SourcingType,
 )
 
-
 # ---------------------------------------------------------------------------
 # 通用
 # ---------------------------------------------------------------------------
@@ -80,9 +79,7 @@ class StyleBase(BaseModel):
 
 
 class StyleCreate(StyleBase):
-    style_code: str = Field(
-        min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_\-]+$"
-    )
+    style_code: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_\-]+$")
 
     @field_validator("tags", "tag_color")
     @classmethod
@@ -159,9 +156,7 @@ class SkuBase(BaseModel):
 
 class SkuCreate(SkuBase):
     style_id: UUID
-    sku_code: str = Field(
-        min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_\-]+$"
-    )
+    sku_code: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_\-]+$")
 
 
 class SkuUpdate(BaseModel):

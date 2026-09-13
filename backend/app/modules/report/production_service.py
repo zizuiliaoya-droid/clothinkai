@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Mapping
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
-from typing import Any, Mapping
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,8 +19,19 @@ from app.services.metric import style_roi
 
 # 投产报表 extra 汇总跳过的非指标列（ID/文本/日期类）
 _EXTRA_SKIP = {
-    "统计日期", "日期", "商品ID", "主商品ID", "主体ID", "主体类型", "主体名称",
-    "货号", "商品名称", "商品简称", "商品类型", "商品状态", "商品标签",
+    "统计日期",
+    "日期",
+    "商品ID",
+    "主商品ID",
+    "主体ID",
+    "主体类型",
+    "主体名称",
+    "货号",
+    "商品名称",
+    "商品简称",
+    "商品类型",
+    "商品状态",
+    "商品标签",
 }
 
 
@@ -41,16 +53,20 @@ class ProductionService:
         prev_from = prev_to - span
         with report_query_duration_seconds.labels("production").time():
             cur_rows = await self._repo.aggregate_by_style(
-                tenant_id=tenant_id, date_from=cur_from, date_to=cur_to,
-                exclude_brushing=exclude_brushing, season=season,
+                tenant_id=tenant_id,
+                date_from=cur_from,
+                date_to=cur_to,
+                exclude_brushing=exclude_brushing,
+                season=season,
             )
             prev_rows = await self._repo.aggregate_by_style(
-                tenant_id=tenant_id, date_from=prev_from, date_to=prev_to,
-                exclude_brushing=exclude_brushing, season=season,
+                tenant_id=tenant_id,
+                date_from=prev_from,
+                date_to=prev_to,
+                exclude_brushing=exclude_brushing,
+                season=season,
             )
-            extra_by_style = await self._aggregate_extra(
-                tenant_id, cur_from, cur_to
-            )
+            extra_by_style = await self._aggregate_extra(tenant_id, cur_from, cur_to)
         items = []
         for r in cur_rows:
             row = self._to_row(r, exclude_brushing)
@@ -69,7 +85,7 @@ class ProductionService:
         *,
         granularity: str = "day",
         exclude_brushing: bool = True,
-    ) -> "ProductionTrend":
+    ) -> ProductionTrend:
         from app.modules.report.advanced_schemas import (
             ProductionTrend,
             ProductionTrendPoint,
@@ -132,8 +148,7 @@ class ProductionService:
                     continue
                 agg[key][k] += num
         return {
-            sid: {k: format(val, "f") for k, val in fields.items()}
-            for sid, fields in agg.items()
+            sid: {k: format(val, "f") for k, val in fields.items()} for sid, fields in agg.items()
         }
 
     @staticmethod
@@ -150,7 +165,7 @@ class ProductionService:
                 main_image_url = attachment_service.get_signed_url(
                     "private", main_image_key, expires_in=3600
                 )
-            except Exception:  # noqa: BLE001
+            except Exception:
                 main_image_url = None
         return ProductionRow(
             style_id=r["style_id"],
@@ -165,12 +180,8 @@ class ProductionService:
             ad_spend=r["ad_spend"],
             total_spend=total_spend,
             add_cart_count=int(r["add_cart_count"]),
-            add_cart_cost=style_roi.add_to_cart_cost(
-                total_spend, r["add_cart_count"]
-            ),
-            net_roi=style_roi.net_roi(
-                confirmed, total_spend, exclude_brushing=exclude_brushing
-            ),
+            add_cart_cost=style_roi.add_to_cart_cost(total_spend, r["add_cart_count"]),
+            net_roi=style_roi.net_roi(confirmed, total_spend, exclude_brushing=exclude_brushing),
             # 加购转化率字段 V1 基础口径缺失 → unit_deal_cost 多为 null
             unit_deal_cost=style_roi.unit_deal_cost(
                 style_roi.add_to_cart_cost(total_spend, r["add_cart_count"]),

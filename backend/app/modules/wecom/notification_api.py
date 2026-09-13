@@ -52,9 +52,7 @@ async def mark_read(
     service: NotificationServiceDep,
     notification_id: Annotated[UUID, Path()],
 ) -> dict[str, bool]:
-    ok = await service.mark_read(
-        notification_id=notification_id, user_id=user.id
-    )
+    ok = await service.mark_read(notification_id=notification_id, user_id=user.id)
     if not ok:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "通知不存在")
     return {"ok": True}

@@ -16,7 +16,7 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Query, UploadFile, status
+from fastapi import APIRouter, File, Query, UploadFile, status
 from fastapi.responses import Response
 
 from app.core.exceptions import ValidationError
@@ -76,7 +76,7 @@ async def create_style(
     dependencies=[require_permission("product", "read")],
 )
 async def match_styles(
-    user: CurrentActiveUser,  # noqa: ARG001
+    user: CurrentActiveUser,
     service: StyleServiceDep,
     style_code: Annotated[str | None, Query(min_length=1, max_length=64)] = None,
     keyword: Annotated[str | None, Query(min_length=1, max_length=128)] = None,
@@ -127,9 +127,7 @@ async def list_styles(
         is_active=is_active,
         include_inactive=include_inactive,
     )
-    return await service.list_styles(
-        filters=filters, page=page, page_size=page_size, user=user
-    )
+    return await service.list_styles(filters=filters, page=page, page_size=page_size, user=user)
 
 
 @router.get(
@@ -297,9 +295,7 @@ async def list_skus_by_style(
     include_inactive: bool = False,
 ) -> list[SkuResponse]:
     """EP02-S05 按款式查询 SKU."""
-    return await service.list_by_style(
-        style_id, include_inactive=include_inactive, user=user
-    )
+    return await service.list_by_style(style_id, include_inactive=include_inactive, user=user)
 
 
 @router.get(
@@ -357,7 +353,7 @@ async def delete_sku(
 )
 async def create_brand(
     payload: BrandCreate,
-    user: CurrentActiveUser,  # noqa: ARG001
+    user: CurrentActiveUser,
     service: BrandServiceDep,
 ) -> BrandResponse:
     return await service.create_brand(payload)
@@ -369,15 +365,13 @@ async def create_brand(
     dependencies=[require_permission("brand", "read")],
 )
 async def list_brands(
-    user: CurrentActiveUser,  # noqa: ARG001
+    user: CurrentActiveUser,
     service: BrandServiceDep,
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 50,
     is_active: bool | None = None,
 ) -> dict:
-    items, total = await service.list_brands(
-        is_active=is_active, page=page, page_size=page_size
-    )
+    items, total = await service.list_brands(is_active=is_active, page=page, page_size=page_size)
     return {
         "items": [b.model_dump(mode="json") for b in items],
         "total": total,
@@ -393,7 +387,7 @@ async def list_brands(
 )
 async def get_brand(
     brand_id: UUID,
-    user: CurrentActiveUser,  # noqa: ARG001
+    user: CurrentActiveUser,
     service: BrandServiceDep,
 ) -> BrandResponse:
     return await service.get_brand(brand_id)
@@ -407,7 +401,7 @@ async def get_brand(
 async def update_brand(
     brand_id: UUID,
     payload: BrandUpdate,
-    user: CurrentActiveUser,  # noqa: ARG001
+    user: CurrentActiveUser,
     service: BrandServiceDep,
 ) -> BrandResponse:
     return await service.update_brand(brand_id, payload)
@@ -420,7 +414,7 @@ async def update_brand(
 )
 async def disable_brand(
     brand_id: UUID,
-    user: CurrentActiveUser,  # noqa: ARG001
+    user: CurrentActiveUser,
     service: BrandServiceDep,
 ) -> BrandResponse:
     """BR-U02-... 软停用品牌（不硬删）."""

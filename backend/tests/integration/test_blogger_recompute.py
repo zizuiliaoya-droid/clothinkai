@@ -62,9 +62,7 @@ class TestBloggerQualityAggregation:
         try:
             style = await product_factory.style()
             blogger = await blogger_factory.blogger(follower_count=50_000)
-            await promotion_factory.promotion(
-                style=style, blogger=blogger, like_count=None
-            )
+            await promotion_factory.promotion(style=style, blogger=blogger, like_count=None)
             assert await avg_cpl_for_blogger(blogger.id, session, tenant_a.id) is None
         finally:
             tenant_id_ctx.reset(token)
@@ -83,9 +81,7 @@ class TestBloggerQualityAggregation:
             blogger = await blogger_factory.blogger(follower_count=50_000)
             # 2 篇爆文(>=1000) + 2 篇普通 → hit_rate=0.5
             for lc in (2000, 1500, 100, 50):
-                await promotion_factory.promotion(
-                    style=style, blogger=blogger, like_count=lc
-                )
+                await promotion_factory.promotion(style=style, blogger=blogger, like_count=lc)
             rate = await hit_rate_for_blogger(blogger.id, session, tenant_a.id)
             assert rate == Decimal("0.5000")
         finally:
@@ -146,9 +142,7 @@ class TestRecomputeForTenant:
         try:
             style = await product_factory.style()
             # KOL（粉丝量），手动 blogger_type 故意错置为素人 → 重算应纠正
-            blogger = await blogger_factory.blogger(
-                follower_count=200_000, blogger_type="素人"
-            )
+            blogger = await blogger_factory.blogger(follower_count=200_000, blogger_type="素人")
             await promotion_factory.promotion(
                 style=style,
                 blogger=blogger,
@@ -182,9 +176,7 @@ class TestRecomputeForTenant:
             # 低互动 audience_profile → 假号嫌疑
             blogger = await blogger_factory.blogger(
                 follower_count=50_000,
-                audience_profile={
-                    "note_stats": {"avg_likes": 5, "avg_reads": 10_000}
-                },
+                audience_profile={"note_stats": {"avg_likes": 5, "avg_reads": 10_000}},
             )
             svc = BloggerService(session)
             await svc.recompute_tags_for_current_tenant(tenant_a.id)

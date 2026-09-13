@@ -19,7 +19,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -34,18 +34,17 @@ from app.core.metrics import (
     promotion_search_results_count,
     promotion_state_transitions_total,
 )
-from app.core.tenancy import bypass_rls_ctx, request_id_ctx
 from app.core.security.field_permissions import (
     build_field_perm_context,
     can_read_field,
     can_write_field,
 )
+from app.core.tenancy import bypass_rls_ctx, request_id_ctx
 from app.modules.auth.models import Tenant, User
 from app.modules.auth.repository import PermissionRepository, RoleRepository
 from app.modules.blogger.repository import BloggerRepository
 from app.modules.product.models import Sku
 from app.modules.product.repository import SkuRepository, StyleRepository
-
 from app.modules.promotion.domain import (
     build_promotion_audit_changes,
     compute_promotion_changes,
@@ -87,25 +86,28 @@ from app.modules.promotion.metrics_calculator import (
 from app.modules.promotion.models import Promotion
 from app.modules.promotion.repository import (
     PromotionAttachmentRefs,
+    PromotionRepository,
+)
+from app.modules.promotion.repository import (
     PromotionListFilters as RepoPromotionListFilters,
 )
-from app.modules.promotion.repository import PromotionRepository
 from app.modules.promotion.schemas import (
     PromotionCancelRequest,
     PromotionCreate,
     PromotionDuplicateWarning,
-    PromotionListFilters as ApiPromotionListFilters,
     PromotionPage,
     PromotionPaymentQrBindRequest,
     PromotionPaymentQrUploadInitRequest,
     PromotionPaymentQrUploadInitResponse,
     PromotionPublishRequest,
-    PromotionRecallResultRequest,
     PromotionRecallStartRequest,
     PromotionResponse,
     PromotionReviewRequest,
     PromotionUpdate,
     PromotionWarehouseWaybillRequest,
+)
+from app.modules.promotion.schemas import (
+    PromotionListFilters as ApiPromotionListFilters,
 )
 from app.modules.promotion.state_machines import (
     PublishStatusMachine,
@@ -117,12 +119,11 @@ from app.modules.promotion.urge_calculator import (
     get_today,
 )
 
-
 log = logging.getLogger(__name__)
 
 
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class PromotionService:
@@ -143,24 +144,18 @@ class PromotionService:
     # CRUD: create
     # ============================================================
 
-    async def create_promotion(
-        self, payload: PromotionCreate, user: User
-    ) -> PromotionResponse:
+    async def create_promotion(self, payload: PromotionCreate, user: User) -> PromotionResponse:
         """EP05-S02 创建推广 + 自动 internal_code + 重复检测."""
         # 1. 引用完整性
         style = await self._style_repo.get_by_id(payload.style_id)
         if style is None:
-            raise InvalidStyleReferenceError(
-                f"款式 {payload.style_id} 不存在或已删除"
-            )
+            raise InvalidStyleReferenceError(f"款式 {payload.style_id} 不存在或已删除")
 
         sku: Sku | None = None
         if payload.sku_id is not None:
             sku = await self._sku_repo.get_by_id(payload.sku_id)
             if sku is None:
-                raise InvalidSkuReferenceError(
-                    f"SKU {payload.sku_id} 不存在或已删除"
-                )
+                raise InvalidSkuReferenceError(f"SKU {payload.sku_id} 不存在或已删除")
             if sku.style_id != payload.style_id:
                 raise InvalidSkuReferenceError(
                     f"SKU {payload.sku_id} 不属于款式 {payload.style_id}",
@@ -172,9 +167,7 @@ class PromotionService:
 
         blogger = await self._blogger_repo.get_by_id(payload.blogger_id)
         if blogger is None:
-            raise InvalidBloggerReferenceError(
-                f"博主 {payload.blogger_id} 不存在或已删除"
-            )
+            raise InvalidBloggerReferenceError(f"博主 {payload.blogger_id} 不存在或已删除")
 
         # 2. 字段写权限（quote_amount 可写）
         await self._check_amount_write_permission(payload, user)
@@ -361,9 +354,7 @@ class PromotionService:
             size_bytes=payload.size_bytes,
         )
         await self._session.commit()
-        return PromotionPaymentQrUploadInitResponse(
-            attachment_id=attachment.id, presigned_url=url
-        )
+        return PromotionPaymentQrUploadInitResponse(attachment_id=attachment.id, presigned_url=url)
 
     async def upload_payment_qr(
         self,
@@ -455,7 +446,7 @@ class PromotionService:
                         "private",
                         attachment_key,
                     )
-                except Exception:  # noqa: BLE001
+                except Exception:
                     log.warning(
                         "promotion_payment_qr_compensation_delete_failed",
                         extra={"attachment_id": str(attachment_id)},
@@ -529,14 +520,11 @@ class PromotionService:
         await self._session.commit()
         return await self._to_response(promotion, user)
 
-
     # ============================================================
     # Read
     # ============================================================
 
-    async def get_promotion(
-        self, promotion_id: UUID, user: User
-    ) -> PromotionResponse:
+    async def get_promotion(self, promotion_id: UUID, user: User) -> PromotionResponse:
         promotion = await self._repo.get_by_id(promotion_id)
         if promotion is None:
             raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
@@ -558,16 +546,10 @@ class PromotionService:
 
         repo_filters = RepoPromotionListFilters(
             keyword=filters.keyword,
-            publish_status=(
-                filters.publish_status.value if filters.publish_status else None
-            ),
-            recall_status=(
-                filters.recall_status.value if filters.recall_status else None
-            ),
+            publish_status=(filters.publish_status.value if filters.publish_status else None),
+            recall_status=(filters.recall_status.value if filters.recall_status else None),
             settlement_status=(
-                filters.settlement_status.value
-                if filters.settlement_status
-                else None
+                filters.settlement_status.value if filters.settlement_status else None
             ),
             platform=filters.platform,
             blogger_id=filters.blogger_id,
@@ -614,9 +596,7 @@ class PromotionService:
             )
             for row in rows
         ]
-        return PromotionPage(
-            items=items, total=total, page=page, page_size=page_size
-        )
+        return PromotionPage(items=items, total=total, page=page, page_size=page_size)
 
     # ============================================================
     # 状态推进（6 个）
@@ -705,12 +685,10 @@ class PromotionService:
         )
         try:
             await event_bus.dispatch(published_event, session=self._session)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             # 通知类事件失败不阻塞主流程；记一条降级 audit
             log.exception("promotion_published_event_dispatch_failed")
-            await self._log_event_dispatch_failure(
-                published_event, exc, user, blocking=False
-            )
+            await self._log_event_dispatch_failure(published_event, exc, user, blocking=False)
 
         await self._session.commit()
         return await self._to_response(updated, user)
@@ -765,7 +743,6 @@ class PromotionService:
         await self._session.commit()
         return await self._to_response(updated, user)
 
-
     async def start_recall(
         self,
         promotion_id: UUID,
@@ -814,9 +791,7 @@ class PromotionService:
             from_state_value=from_value,
             to_state_value=RecallStatus.RECALLING.value,
             extra_fields=(
-                {"recall_reason": payload.recall_reason}
-                if payload.recall_reason
-                else None
+                {"recall_reason": payload.recall_reason} if payload.recall_reason else None
             ),
         )
         if updated is None:
@@ -841,9 +816,7 @@ class PromotionService:
         await self._session.commit()
         return await self._to_response(updated, user)
 
-    async def recall_success(
-        self, promotion_id: UUID, user: User
-    ) -> PromotionResponse:
+    async def recall_success(self, promotion_id: UUID, user: User) -> PromotionResponse:
         """EP05-S09: 召回成功（终态）."""
         return await self._recall_finish(
             promotion_id=promotion_id,
@@ -852,9 +825,7 @@ class PromotionService:
             action_log="promotion.recall_success",
         )
 
-    async def recall_failure(
-        self, promotion_id: UUID, user: User
-    ) -> PromotionResponse:
+    async def recall_failure(self, promotion_id: UUID, user: User) -> PromotionResponse:
         """EP05-S09: 召回失败（可重试）."""
         return await self._recall_finish(
             promotion_id=promotion_id,
@@ -1022,11 +993,9 @@ class PromotionService:
                     import sentry_sdk
 
                     sentry_sdk.capture_exception(exc)
-                except Exception:  # noqa: BLE001
+                except Exception:
                     pass
-                await self._log_event_dispatch_failure(
-                    event, exc, user, blocking=True
-                )
+                await self._log_event_dispatch_failure(event, exc, user, blocking=True)
                 raise
 
         await self._session.commit()
@@ -1036,9 +1005,7 @@ class PromotionService:
     # 软停用 / 内部 API
     # ============================================================
 
-    async def soft_delete_promotion(
-        self, promotion_id: UUID, user: User
-    ) -> None:
+    async def soft_delete_promotion(self, promotion_id: UUID, user: User) -> None:
         """通用软停用：is_active=false（与状态机正交）."""
         promotion = await self._repo.get_by_id(promotion_id)
         if promotion is None:
@@ -1091,7 +1058,6 @@ class PromotionService:
         )
         await self._session.commit()
         return updated
-
 
     # ============================================================
     # Private helpers
@@ -1169,7 +1135,7 @@ class PromotionService:
                         settlement_proof_url = self._attachment_service.get_signed_url(
                             "private", attachment_refs.settlement_proof_r2_key, expires_in=900
                         )
-                except Exception:  # noqa: BLE001
+                except Exception:
                     log.warning("promotion_payment_attachment_signed_url_failed")
 
         resolved_style_image_key = style_main_image_key
@@ -1182,7 +1148,7 @@ class PromotionService:
                 style_main_image_url = self._attachment_service.get_signed_url(
                     "private", resolved_style_image_key, expires_in=3600
                 )
-            except Exception:  # noqa: BLE001
+            except Exception:
                 log.warning(
                     "promotion_style_main_image_url_failed",
                     extra={"promotion_id": str(promotion.id)},
@@ -1232,12 +1198,8 @@ class PromotionService:
             style_code_snapshot=promotion.style_code_snapshot,
             style_short_name_snapshot=promotion.style_short_name_snapshot,
             style_main_image_url=style_main_image_url,
-            quote_amount=(
-                promotion.quote_amount if can_see_quote else None
-            ),
-            cost_snapshot=(
-                promotion.cost_snapshot if can_see_cost else None
-            ),
+            quote_amount=(promotion.quote_amount if can_see_quote else None),
+            cost_snapshot=(promotion.cost_snapshot if can_see_cost else None),
             platform=promotion.platform,
             cooperation_date=promotion.cooperation_date,
             scheduled_publish_date=promotion.scheduled_publish_date,
@@ -1312,7 +1274,7 @@ class PromotionService:
                         user_id=user.id,
                     )
                     await audit_session.commit()
-            except Exception as audit_exc:  # noqa: BLE001
+            except Exception as audit_exc:
                 # 兜底：audit 写失败仅 log，不覆盖原异常
                 log.exception(
                     "audit_for_event_failure_itself_failed",
@@ -1327,9 +1289,7 @@ class PromotionService:
 
     async def _get_tenant_code(self, tenant_id: UUID) -> str:
         """取 tenant.code 用于 internal_code 前缀."""
-        result = await self._session.execute(
-            select(Tenant.code).where(Tenant.id == tenant_id)
-        )
+        result = await self._session.execute(select(Tenant.code).where(Tenant.id == tenant_id))
         code = result.scalar_one_or_none()
         return str(code or "")
 

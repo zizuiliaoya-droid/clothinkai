@@ -82,9 +82,7 @@ class TestCreatePromotion:
         token = tenant_id_ctx.set(tenant_a.id)
         try:
             user = await factory.user(tenant_a, roles=[admin_role])
-            style = await product_factory.style(
-                style_name="完整款名", short_name=None
-            )
+            style = await product_factory.style(style_name="完整款名", short_name=None)
             blogger = await blogger_factory.blogger()
             svc = PromotionService(session)
             response = await svc.create_promotion(
@@ -208,9 +206,7 @@ class TestDuplicateWarning:
             blogger = await blogger_factory.blogger()
 
             # 已存在 1 条活跃推广
-            existing = await promotion_factory.promotion(
-                style=style, blogger=blogger, pr=user
-            )
+            existing = await promotion_factory.promotion(style=style, blogger=blogger, pr=user)
 
             svc = PromotionService(session)
             response = await svc.create_promotion(
@@ -311,7 +307,6 @@ class TestSequenceGeneration:
             assert r1.internal_code.endswith("0001")
             assert r2.internal_code.endswith("0001")
 
-
         finally:
             tenant_id_ctx.reset(token)
 
@@ -335,7 +330,9 @@ class TestUpdatePromotion:
             style = await product_factory.style()
             blogger = await blogger_factory.blogger()
             promotion = await promotion_factory.promotion(
-                style=style, blogger=blogger, pr=user,
+                style=style,
+                blogger=blogger,
+                pr=user,
                 quote_amount=Decimal("100.00"),
             )
             svc = PromotionService(session)

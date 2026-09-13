@@ -24,18 +24,16 @@ def _csv(suffix: str) -> bytes:
     """样本 CSV：新建 / 同 ID UPDATE / 缺 ID 失败。"""
     return (
         "小红书ID,昵称,粉丝数,报价,类目标签,质量标签\n"
-        f"xhs{suffix}A,小美,\"12,500\",500.00,美妆;护肤,优质\n"
+        f'xhs{suffix}A,小美,"12,500",500.00,美妆;护肤,优质\n'
         f"xhs{suffix}A,小美改名,13000,600,美妆,\n"
         f",无ID博主,1000,100,,\n"
-    ).encode("utf-8")
+    ).encode()
 
 
 async def _seed_batch(Maker, suffix: str, batch_id) -> Any:
     async with Maker() as seed:
         tenant_id = (
-            await seed.execute(
-                text("SELECT id FROM tenant ORDER BY created_at ASC LIMIT 1")
-            )
+            await seed.execute(text("SELECT id FROM tenant ORDER BY created_at ASC LIMIT 1"))
         ).first()[0]
         await seed.execute(
             text(
@@ -58,12 +56,8 @@ async def _seed_batch(Maker, suffix: str, batch_id) -> Any:
 
 async def _cleanup(Maker, suffix: str, batch_id) -> None:
     async with Maker() as c:
-        await c.execute(
-            text("DELETE FROM import_job WHERE batch_id = :id"), {"id": batch_id}
-        )
-        await c.execute(
-            text("DELETE FROM import_batch WHERE id = :id"), {"id": batch_id}
-        )
+        await c.execute(text("DELETE FROM import_job WHERE batch_id = :id"), {"id": batch_id})
+        await c.execute(text("DELETE FROM import_batch WHERE id = :id"), {"id": batch_id})
         await c.execute(
             text("DELETE FROM blogger WHERE xiaohongshu_id LIKE :p"),
             {"p": f"xhs{suffix}%"},
@@ -74,13 +68,9 @@ async def _cleanup(Maker, suffix: str, batch_id) -> None:
 @pytest.mark.integration
 @pytest.mark.asyncio
 class TestBloggerImportEndToEnd:
-    async def test_end_to_end_partial_and_update(
-        self, engine: Any, monkeypatch
-    ) -> None:
+    async def test_end_to_end_partial_and_update(self, engine: Any, monkeypatch) -> None:
         """新建 + 同 ID UPDATE + 缺 ID failed → partial；标签 JSONB + int + Decimal。"""
-        Maker = async_sessionmaker(
-            engine, expire_on_commit=False, class_=AsyncSession
-        )
+        Maker = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
         monkeypatch.setattr(tasks, "AsyncSessionApp", Maker)
         monkeypatch.setattr(tasks, "AsyncSessionBypass", Maker)
         ImportAdapterRegistry.clear()
@@ -145,9 +135,7 @@ class TestBloggerImportEndToEnd:
 
     async def test_tags_jsonb_first_row(self, engine: Any, monkeypatch) -> None:
         """验证多标签解析为 JSONB 数组（单行隔离，不被第 2 行 UPDATE 覆盖）。"""
-        Maker = async_sessionmaker(
-            engine, expire_on_commit=False, class_=AsyncSession
-        )
+        Maker = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
         monkeypatch.setattr(tasks, "AsyncSessionApp", Maker)
         monkeypatch.setattr(tasks, "AsyncSessionBypass", Maker)
         ImportAdapterRegistry.clear()
@@ -155,9 +143,8 @@ class TestBloggerImportEndToEnd:
 
         suffix = uuid4().hex[:8]
         csv_bytes = (
-            "小红书ID,昵称,类目标签\n"
-            f"xhs{suffix}T,标签博主,\"美妆;护肤,穿搭\"\n"
-        ).encode("utf-8")
+            "小红书ID,昵称,类目标签\n" f'xhs{suffix}T,标签博主,"美妆;护肤,穿搭"\n'
+        ).encode()
         import app.core.attachment as att_mod
 
         monkeypatch.setattr(
@@ -174,10 +161,7 @@ class TestBloggerImportEndToEnd:
             async with Maker() as check:
                 tags = (
                     await check.execute(
-                        text(
-                            "SELECT category_tags FROM blogger "
-                            "WHERE xiaohongshu_id = :x"
-                        ),
+                        text("SELECT category_tags FROM blogger " "WHERE xiaohongshu_id = :x"),
                         {"x": f"xhs{suffix}T"},
                     )
                 ).scalar_one()

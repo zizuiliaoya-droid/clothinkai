@@ -29,9 +29,7 @@ from app.modules.promotion.repository import PromotionRepository
 log = logging.getLogger(__name__)
 
 
-async def on_settlement_paid(
-    event: SettlementPaid, session: AsyncSession
-) -> None:
+async def on_settlement_paid(event: SettlementPaid, session: AsyncSession) -> None:
     """U05 → U04 反向同步：promotion.settlement_status='已付款'（通知类 FB5）。
 
     UPDATE WHERE id + tenant_id + 旧 settlement_status='待付款'（FB7 模式）。

@@ -31,20 +31,14 @@ from app.modules.promotion.service import PromotionService
 class TestSequenceConcurrent:
     """FB2: 首次创建 race 也无重复（INSERT ON CONFLICT DO UPDATE RETURNING）."""
 
-    async def test_concurrent_first_create_no_duplicates(
-        self, engine: Any
-    ) -> None:
+    async def test_concurrent_first_create_no_duplicates(self, engine: Any) -> None:
         """30 并发同 (tenant_id, date_key) 首次序号 → 1..30 全部互不重复."""
-        Session = async_sessionmaker(
-            engine, expire_on_commit=False, class_=AsyncSession
-        )
+        Session = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
         date_key = date(2026, 5, 27)
 
         async with Session() as s0:
             tenant_row = (
-                await s0.execute(
-                    text("SELECT id FROM tenant ORDER BY created_at ASC LIMIT 1")
-                )
+                await s0.execute(text("SELECT id FROM tenant ORDER BY created_at ASC LIMIT 1"))
             ).first()
             assert tenant_row is not None, "默认 tenant 缺失（003 seed 未跑）"
             tenant_id = tenant_row[0]
@@ -52,10 +46,7 @@ class TestSequenceConcurrent:
         # 前置清理（防上一轮残留导致起点 != 1）
         async with Session() as pre:
             await pre.execute(
-                text(
-                    "DELETE FROM promotion_sequence "
-                    "WHERE tenant_id = :tid AND date_key = :dk"
-                ),
+                text("DELETE FROM promotion_sequence " "WHERE tenant_id = :tid AND date_key = :dk"),
                 {"tid": tenant_id, "dk": date_key},
             )
             await pre.commit()
@@ -65,9 +56,7 @@ class TestSequenceConcurrent:
                 token = tenant_id_ctx.set(tenant_id)
                 try:
                     repo = PromotionRepository(s)
-                    seq = await repo.next_internal_sequence(
-                        tenant_id=tenant_id, date_key=date_key
-                    )
+                    seq = await repo.next_internal_sequence(tenant_id=tenant_id, date_key=date_key)
                     await s.commit()
                     return seq
                 finally:
@@ -102,9 +91,7 @@ class TestPublishConcurrent:
 
         全自包含 committed 数据（用 003 seed 的默认 tenant）+ finally 清理。
         """
-        Session = async_sessionmaker(
-            engine, expire_on_commit=False, class_=AsyncSession
-        )
+        Session = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
         promotion_id = uuid4()
         style_id = uuid4()
         blogger_id = uuid4()
@@ -113,23 +100,19 @@ class TestPublishConcurrent:
 
         async with Session() as seed:
             tenant_row = (
-                await seed.execute(
-                    text("SELECT id FROM tenant ORDER BY created_at ASC LIMIT 1")
-                )
+                await seed.execute(text("SELECT id FROM tenant ORDER BY created_at ASC LIMIT 1"))
             ).first()
             assert tenant_row is not None
             tenant_id = tenant_row[0]
             role_row = (
-                await seed.execute(
-                    text("SELECT id FROM role WHERE code = 'admin' LIMIT 1")
-                )
+                await seed.execute(text("SELECT id FROM role WHERE code = 'admin' LIMIT 1"))
             ).first()
 
             from app.core.security.auth import hash_password
 
             await seed.execute(
                 text(
-                    "INSERT INTO \"user\" (id, tenant_id, username, password_hash, "
+                    'INSERT INTO "user" (id, tenant_id, username, password_hash, '
                     "status, password_must_change, created_at, updated_at) "
                     "VALUES (:id, :tid, :un, :ph, 'active', false, NOW(), NOW())"
                 ),
@@ -206,7 +189,7 @@ class TestPublishConcurrent:
                         return "ok"
                     except StateTransitionConflictError:
                         return "conflict"
-                    except Exception as e:  # noqa: BLE001
+                    except Exception as e:
                         return f"other:{type(e).__name__}"
                 finally:
                     tenant_id_ctx.reset(tok)
@@ -214,9 +197,7 @@ class TestPublishConcurrent:
         try:
             results = await asyncio.gather(*[attempt_publish() for _ in range(30)])
             ok_count = sum(1 for r in results if r == "ok")
-            assert ok_count == 1, (
-                f"expected exactly 1 success, got {ok_count}; results: {results}"
-            )
+            assert ok_count == 1, f"expected exactly 1 success, got {ok_count}; results: {results}"
         finally:
             async with Session() as cleanup:
                 await cleanup.execute(

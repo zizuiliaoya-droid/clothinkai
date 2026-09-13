@@ -24,18 +24,16 @@ def _csv(suffix: str) -> bytes:
     """样本 CSV：新建 / 复用 style / 缺 SKU编码 失败。"""
     return (
         "款式编码,款式名称,类目,品牌编码,SKU编码,颜色,尺码,成本价,货源类型\n"
-        f"ST{suffix}A,连衣裙A,连衣裙,,SK{suffix}A-红-M,红,M,\"1,299.00\",自产\n"
+        f'ST{suffix}A,连衣裙A,连衣裙,,SK{suffix}A-红-M,红,M,"1,299.00",自产\n'
         f"ST{suffix}A,连衣裙A,连衣裙,,SK{suffix}A-红-L,红,L,39.90,自产\n"
         f"ST{suffix}B,上衣B,上衣,,,蓝,M,20.00,采购\n"
-    ).encode("utf-8")
+    ).encode()
 
 
 async def _seed_batch(Maker, suffix: str, batch_id) -> Any:
     async with Maker() as seed:
         tenant_id = (
-            await seed.execute(
-                text("SELECT id FROM tenant ORDER BY created_at ASC LIMIT 1")
-            )
+            await seed.execute(text("SELECT id FROM tenant ORDER BY created_at ASC LIMIT 1"))
         ).first()[0]
         await seed.execute(
             text(
@@ -58,16 +56,10 @@ async def _seed_batch(Maker, suffix: str, batch_id) -> Any:
 
 async def _cleanup(Maker, suffix: str, batch_id) -> None:
     async with Maker() as c:
+        await c.execute(text("DELETE FROM import_job WHERE batch_id = :id"), {"id": batch_id})
+        await c.execute(text("DELETE FROM import_batch WHERE id = :id"), {"id": batch_id})
         await c.execute(
-            text("DELETE FROM import_job WHERE batch_id = :id"), {"id": batch_id}
-        )
-        await c.execute(
-            text("DELETE FROM import_batch WHERE id = :id"), {"id": batch_id}
-        )
-        await c.execute(
-            text(
-                "DELETE FROM sku WHERE sku_code LIKE :p"
-            ),
+            text("DELETE FROM sku WHERE sku_code LIKE :p"),
             {"p": f"SK{suffix}%"},
         )
         await c.execute(
@@ -82,9 +74,7 @@ async def _cleanup(Maker, suffix: str, batch_id) -> None:
 class TestStyleSkuImportEndToEnd:
     async def test_end_to_end_partial(self, engine: Any, monkeypatch) -> None:
         """2 成功（新建 + 复用 style）+ 1 失败（缺 SKU编码）→ partial。"""
-        Maker = async_sessionmaker(
-            engine, expire_on_commit=False, class_=AsyncSession
-        )
+        Maker = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
         monkeypatch.setattr(tasks, "AsyncSessionApp", Maker)
         monkeypatch.setattr(tasks, "AsyncSessionBypass", Maker)
         ImportAdapterRegistry.clear()
@@ -155,13 +145,9 @@ class TestStyleSkuImportEndToEnd:
             ImportAdapterRegistry.clear()
             await _cleanup(Maker, suffix, batch_id)
 
-    async def test_retry_only_failed_idempotent(
-        self, engine: Any, monkeypatch
-    ) -> None:
+    async def test_retry_only_failed_idempotent(self, engine: Any, monkeypatch) -> None:
         """retry only_failed：缺字段行重跑仍 failed，不产生重复 sku（幂等）。"""
-        Maker = async_sessionmaker(
-            engine, expire_on_commit=False, class_=AsyncSession
-        )
+        Maker = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
         monkeypatch.setattr(tasks, "AsyncSessionApp", Maker)
         monkeypatch.setattr(tasks, "AsyncSessionBypass", Maker)
         ImportAdapterRegistry.clear()
@@ -200,9 +186,7 @@ class TestStyleSkuImportEndToEnd:
                 # sku 仍是 2 个（重跑未重复创建）
                 count = (
                     await check.execute(
-                        text(
-                            "SELECT count(*) FROM sku WHERE sku_code LIKE :p"
-                        ),
+                        text("SELECT count(*) FROM sku WHERE sku_code LIKE :p"),
                         {"p": f"SK{suffix}%"},
                     )
                 ).scalar_one()

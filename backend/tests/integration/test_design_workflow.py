@@ -37,9 +37,15 @@ async def _role(session: AsyncSession, code: str, name: str) -> Role:
 async def _users(session: AsyncSession, factory: Any, tenant: Any) -> dict[str, Any]:
     return {
         "designer": await factory.user(tenant, roles=[await _role(session, "designer", "设计师")]),
-        "pattern_maker": await factory.user(tenant, roles=[await _role(session, "pattern_maker", "版师")]),
-        "merchandiser": await factory.user(tenant, roles=[await _role(session, "merchandiser", "跟单")]),
-        "design_assistant": await factory.user(tenant, roles=[await _role(session, "design_assistant", "设计助理")]),
+        "pattern_maker": await factory.user(
+            tenant, roles=[await _role(session, "pattern_maker", "版师")]
+        ),
+        "merchandiser": await factory.user(
+            tenant, roles=[await _role(session, "merchandiser", "跟单")]
+        ),
+        "design_assistant": await factory.user(
+            tenant, roles=[await _role(session, "design_assistant", "设计助理")]
+        ),
         "admin": await factory.user(tenant, roles=[await _role(session, "admin", "管理员")]),
     }
 
@@ -65,7 +71,9 @@ class TestDesignWorkflow:
             assert d.design_status == "制版中"
 
             await svc.submit_pattern(sid, PatternSubmit(pattern_no="V001"), u["pattern_maker"])
-            d = await svc.submit_grading(sid, GradingSubmit(grading_data={"S": 1}), u["pattern_maker"])
+            d = await svc.submit_grading(
+                sid, GradingSubmit(grading_data={"S": 1}), u["pattern_maker"]
+            )
             assert d.design_status == "工艺录入"
 
             d = await svc.submit_craft(sid, CraftSubmit(craft_info={"sew": "x"}), u["merchandiser"])
@@ -73,8 +81,13 @@ class TestDesignWorkflow:
 
             d = await svc.submit_costing(
                 sid,
-                CostingSubmit(cost_breakdown=CostBreakdown(
-                    fabric_cost=Decimal("10"), accessory_cost=Decimal("5"), craft_cost=Decimal("5"))),
+                CostingSubmit(
+                    cost_breakdown=CostBreakdown(
+                        fabric_cost=Decimal("10"),
+                        accessory_cost=Decimal("5"),
+                        craft_cost=Decimal("5"),
+                    )
+                ),
                 u["design_assistant"],
             )
             assert d.design_status == "待核价"
@@ -92,7 +105,9 @@ class TestDesignWorkflow:
         try:
             u = await _users(session, factory, tenant_a)
             svc = DesignService(session)
-            d = await svc.create_design(DesignCreate(style_code="DSG2", style_name="款2"), u["designer"])
+            d = await svc.create_design(
+                DesignCreate(style_code="DSG2", style_name="款2"), u["designer"]
+            )
             await svc.submit_fabric(d.id, FabricSubmit(fabrics=[{"name": "棉"}]), u["designer"])
             # 制版中 reject → 设计中
             d = await svc.reject(d.id, "设计稿不全", u["pattern_maker"])
@@ -109,7 +124,9 @@ class TestDesignWorkflow:
         try:
             u = await _users(session, factory, tenant_a)
             svc = DesignService(session)
-            d = await svc.create_design(DesignCreate(style_code="DSG3", style_name="款3"), u["designer"])
+            d = await svc.create_design(
+                DesignCreate(style_code="DSG3", style_name="款3"), u["designer"]
+            )
             await svc.submit_fabric(d.id, FabricSubmit(fabrics=[{"name": "棉"}]), u["designer"])
             with pytest.raises(RejectReasonRequiredError):
                 await svc.reject(d.id, "  ", u["pattern_maker"])
@@ -123,7 +140,9 @@ class TestDesignWorkflow:
         try:
             u = await _users(session, factory, tenant_a)
             svc = DesignService(session)
-            d = await svc.create_design(DesignCreate(style_code="DSG4", style_name="款4"), u["designer"])
+            d = await svc.create_design(
+                DesignCreate(style_code="DSG4", style_name="款4"), u["designer"]
+            )
             d = await svc.cancel(d.id, "不再开发", u["admin"])
             assert d.design_status == "已取消"
             # 已取消后推进 → 422
@@ -139,7 +158,9 @@ class TestDesignWorkflow:
         try:
             u = await _users(session, factory, tenant_a)
             svc = DesignService(session)
-            d = await svc.create_design(DesignCreate(style_code="DSG5", style_name="款5"), u["designer"])
+            d = await svc.create_design(
+                DesignCreate(style_code="DSG5", style_name="款5"), u["designer"]
+            )
             with pytest.raises(PermissionDeniedError):
                 await svc.cancel(d.id, "x", u["designer"])
         finally:
@@ -152,7 +173,9 @@ class TestDesignWorkflow:
         try:
             u = await _users(session, factory, tenant_a)
             svc = DesignService(session)
-            d = await svc.create_design(DesignCreate(style_code="DSG6", style_name="款6"), u["designer"])
+            d = await svc.create_design(
+                DesignCreate(style_code="DSG6", style_name="款6"), u["designer"]
+            )
             # 设计中直接 confirm_price → 非法
             with pytest.raises(IllegalStateTransitionError):
                 await svc.confirm_price(d.id, u["merchandiser"])

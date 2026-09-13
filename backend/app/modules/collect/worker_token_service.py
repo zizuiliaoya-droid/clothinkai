@@ -102,9 +102,7 @@ class WorkerTokenService:
         await self._session.commit()
 
     async def authenticate(self, raw_token: str, client_ip: str) -> WorkerToken:
-        wt = await self._repo.get_active_by_hash(
-            hash_token(raw_token), for_update=True
-        )
+        wt = await self._repo.get_active_by_hash(hash_token(raw_token), for_update=True)
         if wt is None:
             worker_token_auth_failures_total.inc()
             raise WorkerTokenInvalid()
@@ -144,10 +142,8 @@ class WorkerTokenService:
                         type=NotificationType.SYSTEM.value,
                     )
                     await notification_session.commit()
-            except Exception:  # noqa: BLE001
-                log.warning(
-                    "worker_token_revoke_notify_failed id=%s", str(token_id)
-                )
+            except Exception:
+                log.warning("worker_token_revoke_notify_failed id=%s", str(token_id))
             finally:
                 bypass_rls_ctx.reset(bypass_token)
                 tenant_id_ctx.reset(tenant_token)

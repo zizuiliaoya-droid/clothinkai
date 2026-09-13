@@ -14,41 +14,29 @@ class TestReportApiAuth:
     async def test_summary_requires_auth(self) -> None:
         from app.main import app
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.get("/api/reports/publish-progress/summary")
         assert resp.status_code == 401
 
     async def test_cards_requires_auth(self) -> None:
         from app.main import app
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.get("/api/reports/publish-progress/cards")
         assert resp.status_code == 401
 
     async def test_by_pr_requires_auth(self) -> None:
         from app.main import app
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
-            resp = await ac.get(
-                f"/api/reports/publish-progress/styles/{uuid4()}/by-pr"
-            )
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            resp = await ac.get(f"/api/reports/publish-progress/styles/{uuid4()}/by-pr")
         assert resp.status_code == 401
 
     async def test_by_time_requires_auth(self) -> None:
         from app.main import app
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
-            resp = await ac.get(
-                f"/api/reports/publish-progress/styles/{uuid4()}/by-time"
-            )
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            resp = await ac.get(f"/api/reports/publish-progress/styles/{uuid4()}/by-time")
         assert resp.status_code == 401
 
 
@@ -58,17 +46,11 @@ class TestReportOpenApi:
     async def test_openapi_exposes_report_endpoints(self) -> None:
         from app.main import app
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.get("/api/openapi.json")
         assert resp.status_code == 200
         paths = resp.json()["paths"]
         assert "/api/reports/publish-progress/summary" in paths
         assert "/api/reports/publish-progress/cards" in paths
-        assert (
-            "/api/reports/publish-progress/styles/{style_id}/by-pr" in paths
-        )
-        assert (
-            "/api/reports/publish-progress/styles/{style_id}/by-time" in paths
-        )
+        assert "/api/reports/publish-progress/styles/{style_id}/by-pr" in paths
+        assert "/api/reports/publish-progress/styles/{style_id}/by-time" in paths

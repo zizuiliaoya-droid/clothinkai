@@ -15,9 +15,9 @@ from app.core.exceptions import (
     ResourceNotFoundError,
     ValidationError,
 )
+
 # Re-export 复用的字段权限异常
 from app.modules.product.exceptions import FieldPermissionDenied
-
 
 # ---------------------------------------------------------------------------
 # 资源未找到

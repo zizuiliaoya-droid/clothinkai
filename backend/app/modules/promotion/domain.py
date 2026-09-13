@@ -39,9 +39,7 @@ PROMOTION_SENSITIVE_FIELDS: frozenset[str] = frozenset(
 """Promotion 表写 audit_log 的字段白名单。"""
 
 
-PROMOTION_SENSITIVE_VALUE_FIELDS: frozenset[str] = frozenset(
-    {"quote_amount", "cost_snapshot"}
-)
+PROMOTION_SENSITIVE_VALUE_FIELDS: frozenset[str] = frozenset({"quote_amount", "cost_snapshot"})
 """Promotion 表 audit_log 不存历史值的字段（仅记 ``*_changed: true`` 标记）。
 
 与 U02 BR-U02-31 同模式（cost_price / purchase_price 仅记 changed 标记）。

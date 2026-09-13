@@ -120,9 +120,7 @@ def field_filter(entity: str, data: dict, ctx: FieldPermissionContext) -> dict:
     return data
 
 
-async def build_field_perm_context(
-    user_id, role_repo, perm_repo
-) -> FieldPermissionContext:
+async def build_field_perm_context(user_id, role_repo, perm_repo) -> FieldPermissionContext:
     """构造 FieldPermissionContext（4 模块 service 共用，单一构建器）。
 
     Args:

@@ -23,12 +23,8 @@ class DictItem(TenantScopedModel):
 
     dict_type: Mapped[str] = mapped_column(String(32), nullable=False)
     value: Mapped[str] = mapped_column(String(64), nullable=False)
-    sort_order: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default=text("0")
-    )
-    is_active: Mapped[bool] = mapped_column(
-        nullable=False, server_default=text("true")
-    )
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    is_active: Mapped[bool] = mapped_column(nullable=False, server_default=text("true"))
 
     __table_args__ = (
         Index(

@@ -10,7 +10,6 @@
 
 from __future__ import annotations
 
-
 WECOM_PERMISSIONS: list[tuple[str, str, str]] = [
     # (scope, name/description, category)
     ("wecom.config:write", "配置企微自建应用", "function"),

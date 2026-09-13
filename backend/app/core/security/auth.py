@@ -8,7 +8,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -37,7 +37,7 @@ def hash_password(plain: str) -> str:
 def verify_password(plain: str, hashed: str) -> bool:
     try:
         return bool(pwd_context.verify(plain, hashed))
-    except Exception:  # noqa: BLE001
+    except Exception:
         return False
 
 
@@ -51,7 +51,7 @@ _REFRESH_EXPIRE = timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def encode_access_token(
@@ -82,9 +82,7 @@ def encode_access_token(
     return token, jti
 
 
-def encode_refresh_token(
-    *, user_id: UUID, tenant_id: UUID | None
-) -> tuple[str, str, datetime]:
+def encode_refresh_token(*, user_id: UUID, tenant_id: UUID | None) -> tuple[str, str, datetime]:
     """签发 refresh_token。返回 (token, jti, expires_at)。"""
     jti = uuid4().hex
     now = _now()
@@ -123,7 +121,7 @@ def decode_token_unverified(token: str) -> dict[str, Any] | None:
     """不验签解码（仅用于中间件提取上下文，真正鉴权仍走 decode_token）。"""
     try:
         return jwt.decode(token, options={"verify_signature": False})  # type: ignore[no-any-return]
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
 
 

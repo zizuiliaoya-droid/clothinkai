@@ -34,7 +34,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base, SoftDeleteMixin, TenantScopedModel, TimestampMixin
 
@@ -159,9 +159,7 @@ class UserRole(TenantScopedModel):
     )
 
     __table_args__ = (
-        UniqueConstraint(
-            "tenant_id", "user_id", "role_id", name="uq_user_role_tenant_user_role"
-        ),
+        UniqueConstraint("tenant_id", "user_id", "role_id", name="uq_user_role_tenant_user_role"),
     )
 
 
@@ -271,7 +269,9 @@ class BackupRecord(Base, TimestampMixin):
     __tablename__ = "backup_record"
 
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
-    backup_type: Mapped[str] = mapped_column(String(16), nullable=False)  # daily/monthly/manual/restore_drill
+    backup_type: Mapped[str] = mapped_column(
+        String(16), nullable=False
+    )  # daily/monthly/manual/restore_drill
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="running")

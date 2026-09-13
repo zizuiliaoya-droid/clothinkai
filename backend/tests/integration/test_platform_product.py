@@ -21,8 +21,12 @@ from app.modules.product.platform_product_service import (
 @pytest.mark.asyncio
 class TestPlatformProduct:
     async def test_create_success(
-        self, session: AsyncSession, tenant_a: Any, factory: Any,
-        admin_role: Any, product_factory: Any,
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
     ) -> None:
         token = tenant_id_ctx.set(tenant_a.id)
         try:
@@ -30,9 +34,7 @@ class TestPlatformProduct:
             user = await factory.user(tenant_a, roles=[admin_role])
             svc = PlatformProductService(session)
             resp = await svc.create(
-                PlatformProductCreate(
-                    platform="qianniu", platform_id="123456", style_id=style.id
-                ),
+                PlatformProductCreate(platform="qianniu", platform_id="123456", style_id=style.id),
                 user.id,
             )
             assert resp.platform == "qianniu"
@@ -42,8 +44,12 @@ class TestPlatformProduct:
             tenant_id_ctx.reset(token)
 
     async def test_create_duplicate_409(
-        self, session: AsyncSession, tenant_a: Any, factory: Any,
-        admin_role: Any, product_factory: Any,
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
     ) -> None:
         token = tenant_id_ctx.set(tenant_a.id)
         try:
@@ -51,9 +57,7 @@ class TestPlatformProduct:
             user = await factory.user(tenant_a, roles=[admin_role])
             svc = PlatformProductService(session)
             await svc.create(
-                PlatformProductCreate(
-                    platform="qianniu", platform_id="DUP1", style_id=style.id
-                ),
+                PlatformProductCreate(platform="qianniu", platform_id="DUP1", style_id=style.id),
                 user.id,
             )
             with pytest.raises(PlatformProductConflictError):
@@ -67,8 +71,12 @@ class TestPlatformProduct:
             tenant_id_ctx.reset(token)
 
     async def test_create_or_update_idempotent(
-        self, session: AsyncSession, tenant_a: Any, factory: Any,
-        admin_role: Any, product_factory: Any,
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
     ) -> None:
         token = tenant_id_ctx.set(tenant_a.id)
         try:
@@ -77,12 +85,17 @@ class TestPlatformProduct:
             user = await factory.user(tenant_a, roles=[admin_role])
             svc = PlatformProductService(session)
             pp1 = await svc.create_or_update(
-                platform="taobao", platform_id="T1",
-                style_id=style.id, user_id=user.id,
+                platform="taobao",
+                platform_id="T1",
+                style_id=style.id,
+                user_id=user.id,
             )
             pp2 = await svc.create_or_update(
-                platform="taobao", platform_id="T1",
-                style_id=style2.id, title="新标题", user_id=user.id,
+                platform="taobao",
+                platform_id="T1",
+                style_id=style2.id,
+                title="新标题",
+                user_id=user.id,
             )
             assert pp1.id == pp2.id  # 同行 upsert
             assert pp2.style_id == style2.id
@@ -91,8 +104,12 @@ class TestPlatformProduct:
             tenant_id_ctx.reset(token)
 
     async def test_find_hit_and_miss(
-        self, session: AsyncSession, tenant_a: Any, factory: Any,
-        admin_role: Any, product_factory: Any,
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
     ) -> None:
         token = tenant_id_ctx.set(tenant_a.id)
         try:
@@ -100,9 +117,7 @@ class TestPlatformProduct:
             user = await factory.user(tenant_a, roles=[admin_role])
             svc = PlatformProductService(session)
             await svc.create(
-                PlatformProductCreate(
-                    platform="douyin", platform_id="D1", style_id=style.id
-                ),
+                PlatformProductCreate(platform="douyin", platform_id="D1", style_id=style.id),
                 user.id,
             )
             assert await svc.find_by_platform_id("douyin", "D1") is not None
@@ -111,7 +126,11 @@ class TestPlatformProduct:
             tenant_id_ctx.reset(token)
 
     async def test_invalid_style_422(
-        self, session: AsyncSession, tenant_a: Any, factory: Any, admin_role: Any,
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
     ) -> None:
         token = tenant_id_ctx.set(tenant_a.id)
         try:
@@ -119,17 +138,19 @@ class TestPlatformProduct:
             svc = PlatformProductService(session)
             with pytest.raises(ValidationError):
                 await svc.create(
-                    PlatformProductCreate(
-                        platform="qianniu", platform_id="X1", style_id=uuid4()
-                    ),
+                    PlatformProductCreate(platform="qianniu", platform_id="X1", style_id=uuid4()),
                     user.id,
                 )
         finally:
             tenant_id_ctx.reset(token)
 
     async def test_delete(
-        self, session: AsyncSession, tenant_a: Any, factory: Any,
-        admin_role: Any, product_factory: Any,
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
     ) -> None:
         token = tenant_id_ctx.set(tenant_a.id)
         try:
@@ -137,9 +158,7 @@ class TestPlatformProduct:
             user = await factory.user(tenant_a, roles=[admin_role])
             svc = PlatformProductService(session)
             resp = await svc.create(
-                PlatformProductCreate(
-                    platform="qianniu", platform_id="DEL1", style_id=style.id
-                ),
+                PlatformProductCreate(platform="qianniu", platform_id="DEL1", style_id=style.id),
                 user.id,
             )
             await svc.delete(resp.id, user.id)

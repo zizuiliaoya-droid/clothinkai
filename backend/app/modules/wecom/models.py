@@ -42,16 +42,10 @@ class WecomConfig(TenantScopedModel):
     secret_ciphertext: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     callback_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
     callback_aes_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    default_sender_userid: Mapped[str | None] = mapped_column(
-        String(64), nullable=True
-    )
-    is_active: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default=text("true")
-    )
+    default_sender_userid: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
 
-    __table_args__ = (
-        Index("uq_wecom_config_tenant", "tenant_id", unique=True),
-    )
+    __table_args__ = (Index("uq_wecom_config_tenant", "tenant_id", unique=True),)
 
 
 class WecomContact(TenantScopedModel):
@@ -94,11 +88,7 @@ class MessageTemplate(TenantScopedModel):
         nullable=True,
     )
 
-    __table_args__ = (
-        Index(
-            "uq_message_template_type", "tenant_id", "template_type", unique=True
-        ),
-    )
+    __table_args__ = (Index("uq_message_template_type", "tenant_id", "template_type", unique=True),)
 
 
 class WecomMessage(TenantScopedModel):
@@ -127,14 +117,10 @@ class WecomMessage(TenantScopedModel):
     )
     wecom_msgid: Mapped[str | None] = mapped_column(String(128), nullable=True)
     error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
-    sent_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
-        Index(
-            "idx_wecom_message_blogger", "tenant_id", "blogger_id", "created_at"
-        ),
+        Index("idx_wecom_message_blogger", "tenant_id", "blogger_id", "created_at"),
         Index("idx_wecom_message_pr", "tenant_id", "pr_id", "created_at"),
         Index("idx_wecom_message_status", "tenant_id", "status"),
         Index("idx_wecom_message_msgid", "wecom_msgid"),
@@ -154,9 +140,7 @@ class Notification(TenantScopedModel):
     type: Mapped[str] = mapped_column(String(32), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     link: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    is_read: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default=text("false")
-    )
+    is_read: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
 
     __table_args__ = (
         Index(

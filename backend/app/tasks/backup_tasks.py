@@ -13,11 +13,10 @@ import gzip
 import hashlib
 import json
 import logging
-import shutil
 import subprocess
 import tarfile
 import tempfile
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -25,7 +24,7 @@ from uuid import UUID
 
 import sentry_sdk
 from celery import Task
-from sqlalchemy import delete, select
+from sqlalchemy import select
 
 from app.core.attachment import attachment_service
 from app.core.celery_app import celery_app
@@ -80,7 +79,7 @@ async def _run_backup_database(task: Task) -> dict[str, Any]:
     today = date.today()
     is_first_of_month = today.day == 1
     backup_type = "monthly" if is_first_of_month else "daily"
-    started_at = datetime.now(timezone.utc)
+    started_at = datetime.now(UTC)
 
     record_id = None
     out_path: Path | None = None
@@ -132,7 +131,7 @@ async def _run_backup_database(task: Task) -> dict[str, Any]:
         async with AsyncSessionBypass() as session:
             record = await session.get(BackupRecord, record_id)
             if record is not None:
-                record.completed_at = datetime.now(timezone.utc)
+                record.completed_at = datetime.now(UTC)
                 record.status = "success"
                 record.r2_key = r2_key
                 record.size_bytes = size_bytes
@@ -150,7 +149,7 @@ async def _run_backup_database(task: Task) -> dict[str, Any]:
         )
         return {"status": "success", "r2_key": r2_key, "size_bytes": size_bytes}
 
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         if task.request.retries >= task.max_retries:
             # 最后一次失败：写 record + Sentry
             async with AsyncSessionBypass() as session:
@@ -159,7 +158,7 @@ async def _run_backup_database(task: Task) -> dict[str, Any]:
                     if record is not None:
                         record.status = "failed"
                         record.error_message = str(exc)[:2000]
-                        record.completed_at = datetime.now(timezone.utc)
+                        record.completed_at = datetime.now(UTC)
                         await session.commit()
             sentry_sdk.capture_exception(exc)
             log.exception("backup_failed_terminal")
@@ -168,7 +167,6 @@ async def _run_backup_database(task: Task) -> dict[str, Any]:
 
 def _run_pg_dump(out_path: Path) -> None:
     """通过 subprocess 调用 pg_dump 输出 gzip 归档。"""
-    import os
 
     cmd = [
         "pg_dump",
@@ -193,30 +191,65 @@ def _run_pg_dump(out_path: Path) -> None:
 
 _CONFIG_EXPORT_FIELDS: dict[type[Any], tuple[str, ...]] = {
     Role: (
-        "id", "code", "name", "description", "is_system",
-        "created_at", "updated_at",
+        "id",
+        "code",
+        "name",
+        "description",
+        "is_system",
+        "created_at",
+        "updated_at",
     ),
     Permission: (
-        "id", "scope", "name", "category", "created_at", "updated_at",
+        "id",
+        "scope",
+        "name",
+        "category",
+        "created_at",
+        "updated_at",
     ),
     RolePermission: ("id", "role_id", "permission_id"),
     FieldMapping: (
-        "id", "tenant_id", "source", "version", "mapping_config",
-        "is_active", "created_by", "created_at", "updated_at",
+        "id",
+        "tenant_id",
+        "source",
+        "version",
+        "mapping_config",
+        "is_active",
+        "created_by",
+        "created_at",
+        "updated_at",
     ),
     DictItem: (
-        "id", "tenant_id", "dict_type", "value", "sort_order",
-        "is_active", "created_at", "updated_at",
+        "id",
+        "tenant_id",
+        "dict_type",
+        "value",
+        "sort_order",
+        "is_active",
+        "created_at",
+        "updated_at",
     ),
     UserPreference: (
-        "id", "tenant_id", "user_id", "pref_key", "pref_value",
-        "created_at", "updated_at",
+        "id",
+        "tenant_id",
+        "user_id",
+        "pref_key",
+        "pref_value",
+        "created_at",
+        "updated_at",
     ),
 }
 
 _SENSITIVE_CONFIG_NAMES = (
-    "password", "passwd", "secret", "token", "hash", "credential",
-    "private_key", "api_key", "access_key",
+    "password",
+    "passwd",
+    "secret",
+    "token",
+    "hash",
+    "credential",
+    "private_key",
+    "api_key",
+    "access_key",
 )
 _SAFE_USER_PREFERENCE_KEYS = {"bi_layout"}
 
@@ -247,14 +280,9 @@ def _serialize_config_value(value: Any) -> Any:
     raise TypeError(f"不支持的配置字段类型: {type(value).__name__}")
 
 
-def _serialize_config_row(
-    row: Any, fields: tuple[str, ...]
-) -> dict[str, Any]:
+def _serialize_config_row(row: Any, fields: tuple[str, ...]) -> dict[str, Any]:
     """仅序列化审核过的字段，模型未来新增列不会自动进入备份。"""
-    return {
-        field: _serialize_config_value(getattr(row, field))
-        for field in fields
-    }
+    return {field: _serialize_config_value(getattr(row, field)) for field in fields}
 
 
 async def _export_config(out_path: Path) -> None:
@@ -265,17 +293,12 @@ async def _export_config(out_path: Path) -> None:
             stmt = select(model).order_by(*model.__table__.primary_key.columns)
             rows = (await session.execute(stmt)).scalars().all()
             if model is UserPreference:
-                rows = [
-                    row for row in rows
-                    if row.pref_key in _SAFE_USER_PREFERENCE_KEYS
-                ]
-            tables[model.__tablename__] = [
-                _serialize_config_row(row, fields) for row in rows
-            ]
+                rows = [row for row in rows if row.pref_key in _SAFE_USER_PREFERENCE_KEYS]
+            tables[model.__tablename__] = [_serialize_config_row(row, fields) for row in rows]
 
     payload: dict[str, Any] = {
         "schema_version": 1,
-        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "exported_at": datetime.now(UTC).isoformat(),
         "tables": tables,
     }
     with gzip.open(out_path, "wt", encoding="utf-8") as f:
@@ -320,7 +343,7 @@ async def _run_cleanup_expired_backups() -> dict[str, Any]:
                     attachment_service.delete("backups", record.r2_key)
                 await session.delete(record)
                 deleted_count += 1
-            except Exception:  # noqa: BLE001
+            except Exception:
                 log.exception(
                     "cleanup_backup_failed",
                     extra={"backup_id": str(record.id), "r2_key": record.r2_key},

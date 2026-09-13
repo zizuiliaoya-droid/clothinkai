@@ -8,7 +8,6 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-
 # ----------------------------- 工作进度 ----------------------------- #
 
 

@@ -33,9 +33,7 @@ class WorkerTokenRepository:
             stmt = stmt.with_for_update()
         return (await self._session.execute(stmt)).scalar_one_or_none()
 
-    async def get_by_id(
-        self, token_id: UUID, tenant_id: UUID
-    ) -> WorkerToken | None:
+    async def get_by_id(self, token_id: UUID, tenant_id: UUID) -> WorkerToken | None:
         stmt = select(WorkerToken).where(
             WorkerToken.id == token_id,
             WorkerToken.tenant_id == tenant_id,
@@ -97,9 +95,7 @@ class DataQualityRepository:
         page: int = 1,
         page_size: int = 20,
     ) -> tuple[Sequence[DataQualityIssue], int]:
-        stmt = select(DataQualityIssue).where(
-            DataQualityIssue.tenant_id == tenant_id
-        )
+        stmt = select(DataQualityIssue).where(DataQualityIssue.tenant_id == tenant_id)
         count_stmt = (
             select(func.count())
             .select_from(DataQualityIssue)
@@ -136,10 +132,7 @@ class DataQualityRepository:
             .group_by(DataQualityIssue.source, DataQualityIssue.severity)
         )
         rows = (await self._session.execute(stmt)).all()
-        return [
-            {"source": r.source, "severity": r.severity, "count": int(r.cnt)}
-            for r in rows
-        ]
+        return [{"source": r.source, "severity": r.severity, "count": int(r.cnt)} for r in rows]
 
 
 __all__ = [

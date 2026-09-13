@@ -30,7 +30,9 @@ class UserPreference(TenantScopedModel):
     __table_args__ = (
         Index(
             "uq_user_preference",
-            "tenant_id", "user_id", "pref_key",
+            "tenant_id",
+            "user_id",
+            "pref_key",
             unique=True,
         ),
     )

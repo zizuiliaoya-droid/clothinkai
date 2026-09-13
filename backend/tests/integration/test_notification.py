@@ -28,9 +28,7 @@ class TestNotification:
             assert len(rows) == 1
             assert rows[0].content == "请手动催发 小美"
 
-            ok = await svc.mark_read(
-                notification_id=rows[0].id, user_id=user.id
-            )
+            ok = await svc.mark_read(notification_id=rows[0].id, user_id=user.id)
             assert ok is True
             assert await svc.unread_count(user_id=user.id) == 0
         finally:
@@ -47,9 +45,7 @@ class TestNotification:
             await svc.notify([user_a.id], "私密通知")
             await session.flush()
             rows = await svc.list_for_user(user_id=user_a.id)
-            ok = await svc.mark_read(
-                notification_id=rows[0].id, user_id=user_b.id
-            )
+            ok = await svc.mark_read(notification_id=rows[0].id, user_id=user_b.id)
             assert ok is False
         finally:
             tenant_id_ctx.reset(tok)

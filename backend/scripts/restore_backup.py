@@ -29,7 +29,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -79,7 +79,7 @@ async def restore_main(
 
     # 2. 下载 + 校验 + 恢复
     drill_id = uuid4()
-    drill_started = datetime.now(timezone.utc)
+    drill_started = datetime.now(UTC)
     drill_result: dict[str, str] = {"status": "running"}
 
     try:
@@ -137,7 +137,7 @@ async def restore_main(
                     id=drill_id,
                     backup_type="restore_drill",
                     started_at=drill_started,
-                    completed_at=datetime.now(timezone.utc),
+                    completed_at=datetime.now(UTC),
                     status=drill_result["status"],
                     r2_key=record.r2_key,
                     error_message=drill_result.get("error"),
@@ -235,9 +235,7 @@ async def _smoke_test(target_db_url: str) -> dict[str, bool]:
     try:
         async with engine.connect() as conn:
             # 1. default tenant 存在
-            row = await conn.execute(
-                text("SELECT count(*) FROM tenant WHERE code = 'default'")
-            )
+            row = await conn.execute(text("SELECT count(*) FROM tenant WHERE code = 'default'"))
             results["has_default_tenant"] = row.scalar_one() >= 1
 
             # 2. 至少一个 admin 用户
@@ -305,9 +303,7 @@ def main() -> int:
     args = parser.parse_args()
 
     backup_id = UUID(args.backup_id) if args.backup_id else None
-    backup_date = (
-        datetime.strptime(args.date, "%Y-%m-%d").date() if args.date else None
-    )
+    backup_date = datetime.strptime(args.date, "%Y-%m-%d").date() if args.date else None
 
     return asyncio.run(
         restore_main(

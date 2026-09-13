@@ -34,28 +34,45 @@ log = logging.getLogger(__name__)
 # 内置默认映射（mapping=None 回退；中文表头 → 目标字段）
 # aliases：兼容 final.xlsx「商品成本表」/真实商品资料导入模板等不同平台导出的列名变体
 _DEFAULT_COLUMNS: list[dict[str, Any]] = [
-    {"source_col": "款式编码", "target_field": "style_code", "type": "str",
-     "aliases": ["款号", "货号"]},
-    {"source_col": "款式名称", "target_field": "style_name", "type": "str",
-     "aliases": ["商品名称", "款名", "品名"]},
-    {"source_col": "类目", "target_field": "category", "type": "str",
-     "aliases": ["品类", "分类"]},
-    {"source_col": "品牌编码", "target_field": "brand_code", "type": "str",
-     "aliases": ["品牌"]},
+    {
+        "source_col": "款式编码",
+        "target_field": "style_code",
+        "type": "str",
+        "aliases": ["款号", "货号"],
+    },
+    {
+        "source_col": "款式名称",
+        "target_field": "style_name",
+        "type": "str",
+        "aliases": ["商品名称", "款名", "品名"],
+    },
+    {"source_col": "类目", "target_field": "category", "type": "str", "aliases": ["品类", "分类"]},
+    {"source_col": "品牌编码", "target_field": "brand_code", "type": "str", "aliases": ["品牌"]},
     {"source_col": "季节", "target_field": "season", "type": "str"},
-    {"source_col": "SKU编码", "target_field": "sku_code", "type": "str",
-     "aliases": ["商品编码", "规格编码"]},
+    {
+        "source_col": "SKU编码",
+        "target_field": "sku_code",
+        "type": "str",
+        "aliases": ["商品编码", "规格编码"],
+    },
     {"source_col": "颜色", "target_field": "color", "type": "str"},
-    {"source_col": "尺码", "target_field": "size", "type": "str",
-     "aliases": ["规格"]},
+    {"source_col": "尺码", "target_field": "size", "type": "str", "aliases": ["规格"]},
     # 颜色及规格（如「深灰色;L」）：当 颜色/尺码 缺失时由它拆分
     {"source_col": "颜色及规格", "target_field": "color_size", "type": "str"},
     {"source_col": "成本价", "target_field": "cost_price", "type": "decimal"},
     {"source_col": "采购价", "target_field": "purchase_price", "type": "decimal"},
-    {"source_col": "基本售价", "target_field": "base_price", "type": "decimal",
-     "aliases": ["吊牌价"]},
-    {"source_col": "市场|吊牌价", "target_field": "tag_price", "type": "decimal",
-     "aliases": ["市场吊牌价", "市场吊牌"]},
+    {
+        "source_col": "基本售价",
+        "target_field": "base_price",
+        "type": "decimal",
+        "aliases": ["吊牌价"],
+    },
+    {
+        "source_col": "市场|吊牌价",
+        "target_field": "tag_price",
+        "type": "decimal",
+        "aliases": ["市场吊牌价", "市场吊牌"],
+    },
     {"source_col": "货源类型", "target_field": "sourcing_type", "type": "str"},
 ]
 
@@ -104,9 +121,7 @@ class StyleSkuImportAdapter:
 
     # ----------------------- parse_row（纯函数）----------------------- #
 
-    def parse_row(
-        self, row: dict[str, Any], mapping: "FieldMapping | None"
-    ) -> dict[str, Any]:
+    def parse_row(self, row: dict[str, Any], mapping: FieldMapping | None) -> dict[str, Any]:
         """按 mapping（或内置默认）把表头映射为目标字段 + 类型转换。"""
         if mapping is not None:
             columns = mapping.mapping_config.get("columns", _DEFAULT_COLUMNS)
@@ -126,9 +141,7 @@ class StyleSkuImportAdapter:
             if col.get("type") == "decimal":
                 parsed[target] = _to_decimal(raw)
             else:
-                parsed[target] = (
-                    str(raw).strip() if raw not in (None, "") else None
-                )
+                parsed[target] = str(raw).strip() if raw not in (None, "") else None
         # 颜色/尺码缺失时由「颜色及规格」拆分（如「深灰色;L」/「深灰色，L」）
         cs = parsed.get("color_size")
         if cs and (not parsed.get("color") or not parsed.get("size")):
@@ -155,9 +168,7 @@ class StyleSkuImportAdapter:
                 errs.append(f"{label}不能为空")
         for field, label in _DECIMAL_FIELDS:
             value = parsed.get(field)
-            if value is not None and (
-                not isinstance(value, Decimal) or value < 0
-            ):
+            if value is not None and (not isinstance(value, Decimal) or value < 0):
                 errs.append(f"{label}必须为非负数字")
         sourcing = parsed.get("sourcing_type")
         if sourcing and sourcing not in _SOURCING:
@@ -167,7 +178,6 @@ class StyleSkuImportAdapter:
             if value and len(value) > max_len:
                 errs.append(f"{field} 超过长度上限 {max_len}")
         return errs
-
 
     # ----------------------- upsert（复用 runner session，不 commit）----------------------- #
 
@@ -190,9 +200,7 @@ class StyleSkuImportAdapter:
         # 1) style 复用（不覆盖）/ 创建（BR-U06b-31）
         style = await styles.get_by_code(parsed["style_code"])
         if style is None:
-            brand_id = await self._resolve_brand(
-                session, tenant_id, parsed.get("brand_code")
-            )
+            brand_id = await self._resolve_brand(session, tenant_id, parsed.get("brand_code"))
             style = Style(
                 style_code=parsed["style_code"],
                 style_name=parsed["style_name"],

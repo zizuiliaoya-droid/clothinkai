@@ -188,9 +188,7 @@ class TestUpdateBlogger:
             user = await factory.user(tenant_a, roles=[admin_role])
             svc = BloggerService(session)
             with pytest.raises(BloggerNotFoundError):
-                await svc.update_blogger(
-                    uuid4(), BloggerUpdate(nickname="x"), user
-                )
+                await svc.update_blogger(uuid4(), BloggerUpdate(nickname="x"), user)
         finally:
             tenant_id_ctx.reset(token)
 
@@ -217,6 +215,7 @@ class TestSoftDeleteBlogger:
             assert blogger.is_deleted is True
         finally:
             tenant_id_ctx.reset(token)
+
     async def test_soft_delete_referenced_blogger_is_denied(
         self,
         session: AsyncSession,

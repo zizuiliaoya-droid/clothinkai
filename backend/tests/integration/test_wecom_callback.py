@@ -25,9 +25,13 @@ async def _seed_config(session, tenant_id):
     svc = WecomConfigService(session)
     await svc.configure(
         WecomConfigUpdate(
-            corp_id="c", agent_id="1", secret="s",
-            callback_token=_TOKEN, callback_aes_key=_AES_KEY,
-            default_sender_userid="zs", is_active=True,
+            corp_id="c",
+            agent_id="1",
+            secret="s",
+            callback_token=_TOKEN,
+            callback_aes_key=_AES_KEY,
+            default_sender_userid="zs",
+            is_active=True,
         ),
         tenant_id,
     )
@@ -54,9 +58,13 @@ class TestWecomCallback:
             cfg = await _seed_config(session, tenant_a.id)
             blogger = await blogger_factory.blogger()
             msg = WecomMessage(
-                tenant_id=tenant_a.id, blogger_id=blogger.id,
-                template_type="urge", rendered_content="x",
-                promotion_ids=[], status="created", wecom_msgid="MID-1",
+                tenant_id=tenant_a.id,
+                blogger_id=blogger.id,
+                template_type="urge",
+                rendered_content="x",
+                promotion_ids=[],
+                status="created",
+                wecom_msgid="MID-1",
             )
             session.add(msg)
             await session.flush()
@@ -72,24 +80,23 @@ class TestWecomCallback:
         finally:
             tenant_id_ctx.reset(tok)
 
-    async def test_bad_signature_403(
-        self, session: Any, tenant_a: Any
-    ) -> None:
+    async def test_bad_signature_403(self, session: Any, tenant_a: Any) -> None:
         tok = tenant_id_ctx.set(tenant_a.id)
         try:
             cfg = await _seed_config(session, tenant_a.id)
             _sig, ts, nonce, enc = _encrypt_payload("MID-2", "success")
             with pytest.raises(WecomCallbackBadSignatureError):
                 await WecomCallbackService(session).handle(
-                    cfg, msg_signature="deadbeef", timestamp=ts,
-                    nonce=nonce, encrypt=enc,
+                    cfg,
+                    msg_signature="deadbeef",
+                    timestamp=ts,
+                    nonce=nonce,
+                    encrypt=enc,
                 )
         finally:
             tenant_id_ctx.reset(tok)
 
-    async def test_unknown_msgid_ignored(
-        self, session: Any, tenant_a: Any
-    ) -> None:
+    async def test_unknown_msgid_ignored(self, session: Any, tenant_a: Any) -> None:
         tok = tenant_id_ctx.set(tenant_a.id)
         try:
             cfg = await _seed_config(session, tenant_a.id)

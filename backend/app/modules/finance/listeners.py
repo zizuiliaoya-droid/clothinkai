@@ -32,9 +32,7 @@ from app.modules.promotion.events import SettlementRequested
 log = logging.getLogger(__name__)
 
 
-async def on_settlement_requested(
-    event: SettlementRequested, session: AsyncSession
-) -> None:
+async def on_settlement_requested(event: SettlementRequested, session: AsyncSession) -> None:
     """同事务 handler：失败抛异常导致 U04 端事务回滚（FB1 强一致）。
 
     三重幂等（FB1+FB3）：
@@ -48,9 +46,7 @@ async def on_settlement_requested(
     # 1. 幂等检查（service 层 SELECT 兜底）
     existing = await repo.find_by_promotion_id(event.promotion_id)
     if existing is not None:
-        settlement_created_via_event_total.labels(
-            result="duplicate_skipped"
-        ).inc()
+        settlement_created_via_event_total.labels(result="duplicate_skipped").inc()
         await audit.log(
             action="settlement.create_skipped_duplicate",
             resource="settlement",
@@ -121,9 +117,7 @@ async def on_settlement_requested(
 
 async def _get_tenant_code(session: AsyncSession, tenant_id) -> str:
     """取 tenant.code 用于 settlement_no 前缀（与 U04 service._get_tenant_code 一致）。"""
-    result = await session.execute(
-        select(Tenant.code).where(Tenant.id == tenant_id)
-    )
+    result = await session.execute(select(Tenant.code).where(Tenant.id == tenant_id))
     code = result.scalar_one_or_none()
     return str(code or "")
 
@@ -147,7 +141,7 @@ async def on_settlement_requested_auto_order(
         if promo is None or not getattr(promo, "in_store_order", False):
             return
         await OrderAdjustmentService(session).auto_create_from_promotion(promo)
-    except Exception as exc:  # noqa: BLE001 — best-effort，不阻塞 settlement 创建
+    except Exception as exc:
         log.warning(
             "auto_order_create_failed",
             extra={"promotion_id": str(event.promotion_id), "err": str(exc)},

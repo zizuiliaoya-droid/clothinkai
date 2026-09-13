@@ -42,13 +42,9 @@ def get_alert_config_service(session: SessionDep) -> AlertConfigService:
 ConfigServiceDep = Annotated[WecomConfigService, Depends(get_config_service)]
 BindServiceDep = Annotated[WecomBindService, Depends(get_bind_service)]
 TemplateServiceDep = Annotated[MessageTemplateService, Depends(get_template_service)]
-NotificationServiceDep = Annotated[
-    NotificationService, Depends(get_notification_service)
-]
+NotificationServiceDep = Annotated[NotificationService, Depends(get_notification_service)]
 MessageRepoDep = Annotated[WecomMessageRepository, Depends(get_message_repo)]
-AlertConfigServiceDep = Annotated[
-    AlertConfigService, Depends(get_alert_config_service)
-]
+AlertConfigServiceDep = Annotated[AlertConfigService, Depends(get_alert_config_service)]
 
 
 __all__ = [

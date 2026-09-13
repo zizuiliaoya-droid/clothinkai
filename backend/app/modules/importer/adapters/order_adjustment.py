@@ -33,24 +33,46 @@ log = logging.getLogger(__name__)
 
 # 内置默认映射（中文表头 → 目标字段 + aliases 兼容平台导出变体）
 _DEFAULT_COLUMNS: list[dict[str, Any]] = [
-    {"source_col": "日期", "target_field": "order_date", "type": "date",
-     "aliases": ["拍单日期", "刷单日期", "下单日期", "订单日期"]},
-    {"source_col": "订单号", "target_field": "order_no", "type": "str",
-     "aliases": ["订单编号", "单号"]},
-    {"source_col": "博主ID", "target_field": "blogger_identifier", "type": "str",
-     "aliases": ["微信ID", "博主标识", "博主ID/微信ID", "博主"]},
-    {"source_col": "款号", "target_field": "style_code", "type": "str",
-     "aliases": ["款式编码", "货号", "商品编码"]},
-    {"source_col": "金额", "target_field": "amount", "type": "decimal",
-     "aliases": ["拍单金额", "刷单金额", "订单金额", "成交金额"]},
+    {
+        "source_col": "日期",
+        "target_field": "order_date",
+        "type": "date",
+        "aliases": ["拍单日期", "刷单日期", "下单日期", "订单日期"],
+    },
+    {
+        "source_col": "订单号",
+        "target_field": "order_no",
+        "type": "str",
+        "aliases": ["订单编号", "单号"],
+    },
+    {
+        "source_col": "博主ID",
+        "target_field": "blogger_identifier",
+        "type": "str",
+        "aliases": ["微信ID", "博主标识", "博主ID/微信ID", "博主"],
+    },
+    {
+        "source_col": "款号",
+        "target_field": "style_code",
+        "type": "str",
+        "aliases": ["款式编码", "货号", "商品编码"],
+    },
+    {
+        "source_col": "金额",
+        "target_field": "amount",
+        "type": "decimal",
+        "aliases": ["拍单金额", "刷单金额", "订单金额", "成交金额"],
+    },
     {"source_col": "备注", "target_field": "remark", "type": "str"},
-    {"source_col": "是否剔除ROI", "target_field": "exclude_from_roi", "type": "bool",
-     "aliases": ["ROI剔除", "剔除ROI", "是否剔除"]},
+    {
+        "source_col": "是否剔除ROI",
+        "target_field": "exclude_from_roi",
+        "type": "bool",
+        "aliases": ["ROI剔除", "剔除ROI", "是否剔除"],
+    },
 ]
 
-_TRUE_TOKENS = frozenset(
-    {"1", "true", "t", "y", "yes", "是", "剔除", "排除", "需剔除"}
-)
+_TRUE_TOKENS = frozenset({"1", "true", "t", "y", "yes", "是", "剔除", "排除", "需剔除"})
 
 
 def _to_date(raw: Any) -> date | str | None:
@@ -91,9 +113,7 @@ class OrderAdjustmentImportAdapter:
 
     # ----------------------- parse_row（纯函数）----------------------- #
 
-    def parse_row(
-        self, row: dict[str, Any], mapping: "FieldMapping | None"
-    ) -> dict[str, Any]:
+    def parse_row(self, row: dict[str, Any], mapping: FieldMapping | None) -> dict[str, Any]:
         columns = (
             mapping.mapping_config.get("columns", _DEFAULT_COLUMNS)
             if mapping is not None
@@ -150,9 +170,7 @@ class OrderAdjustmentImportAdapter:
         """
         style_id: UUID | None = None
         if parsed.get("style_code"):
-            style = await StyleRepository(session).get_by_code(
-                parsed["style_code"]
-            )
+            style = await StyleRepository(session).get_by_code(parsed["style_code"])
             if style is not None:
                 style_id = style.id
 
@@ -174,12 +192,8 @@ class OrderAdjustmentImportAdapter:
 
 def register() -> None:
     """注册拍单/刷单两个 source（双进程调用，NF-4）。"""
-    ImportAdapterRegistry.register(
-        OrderAdjustmentImportAdapter("manual_tao_order", "拍单")
-    )
-    ImportAdapterRegistry.register(
-        OrderAdjustmentImportAdapter("manual_brush_order", "刷单")
-    )
+    ImportAdapterRegistry.register(OrderAdjustmentImportAdapter("manual_tao_order", "拍单"))
+    ImportAdapterRegistry.register(OrderAdjustmentImportAdapter("manual_brush_order", "刷单"))
 
 
 __all__ = ["OrderAdjustmentImportAdapter", "register"]

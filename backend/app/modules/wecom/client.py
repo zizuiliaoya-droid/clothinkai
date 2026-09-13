@@ -73,16 +73,20 @@ class WecomClient:
         token = await self.get_access_token()
         data = (
             await self._http.request(
-                method, f"{settings.WECOM_API_BASE}{path}",
-                params={"access_token": token}, **kw,
+                method,
+                f"{settings.WECOM_API_BASE}{path}",
+                params={"access_token": token},
+                **kw,
             )
         ).json()
         if data.get("errcode") in _TOKEN_EXPIRED_ERRCODES:
             token = await self.get_access_token(force_refresh=True)
             data = (
                 await self._http.request(
-                    method, f"{settings.WECOM_API_BASE}{path}",
-                    params={"access_token": token}, **kw,
+                    method,
+                    f"{settings.WECOM_API_BASE}{path}",
+                    params={"access_token": token},
+                    **kw,
                 )
             ).json()
         if data.get("errcode") in _RATE_LIMIT_ERRCODES:
@@ -93,14 +97,20 @@ class WecomClient:
 
     async def find_external_userid_by_wechat(self, wechat: str) -> str | None:
         """按微信号匹配 external_userid（遍历客户列表，简化实现）。"""
-        data = await self._call(
-            "GET", "/cgi-bin/externalcontact/get_by_user",
-            params={"userid": self._cfg.default_sender_userid},
-        ) if self._cfg.default_sender_userid else {"external_userid": []}
+        data = (
+            await self._call(
+                "GET",
+                "/cgi-bin/externalcontact/get_by_user",
+                params={"userid": self._cfg.default_sender_userid},
+            )
+            if self._cfg.default_sender_userid
+            else {"external_userid": []}
+        )
         # MVP：外部联系人详情匹配 wechat（真实需调 get 详情；此处由 mock 提供）
         for euid in data.get("external_userid", []):
             detail = await self._call(
-                "GET", "/cgi-bin/externalcontact/get",
+                "GET",
+                "/cgi-bin/externalcontact/get",
                 params={"external_userid": euid},
             )
             contact = detail.get("external_contact", {})
@@ -113,7 +123,8 @@ class WecomClient:
     ) -> dict:
         with wecom_send_duration_seconds.time():
             return await self._call(
-                "POST", "/cgi-bin/externalcontact/add_msg_template",
+                "POST",
+                "/cgi-bin/externalcontact/add_msg_template",
                 json={
                     "chat_type": "single",
                     "external_userid": recipients,
@@ -138,7 +149,8 @@ class WecomClient:
         """U15 自建应用推送（异常预警管理群）：复用 _call（token 刷新 + 频控）+ 计时。"""
         with wecom_send_duration_seconds.time():
             return await self._call(
-                "POST", "/cgi-bin/message/send",
+                "POST",
+                "/cgi-bin/message/send",
                 json={
                     "touser": "|".join(touser),
                     "agentid": int(self._cfg.agent_id),
@@ -163,9 +175,7 @@ class WecomCrypto:
         return hashlib.sha1("".join(parts).encode()).hexdigest()
 
     def verify(self, msg_signature: str, timestamp: str, nonce: str, encrypt: str) -> bool:
-        return hmac.compare_digest(
-            self.signature(timestamp, nonce, encrypt), msg_signature or ""
-        )
+        return hmac.compare_digest(self.signature(timestamp, nonce, encrypt), msg_signature or "")
 
     def encrypt(self, plaintext: str) -> str:
         from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes

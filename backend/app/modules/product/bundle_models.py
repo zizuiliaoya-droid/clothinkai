@@ -28,13 +28,9 @@ class BundleProduct(TenantScopedModel):
     bundle_code: Mapped[str] = mapped_column(String(64), nullable=False)
     bundle_name: Mapped[str] = mapped_column(String(255), nullable=False)
     remark: Mapped[str | None] = mapped_column(Text, nullable=True)
-    is_active: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default=text("true")
-    )
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
 
-    __table_args__ = (
-        Index("uq_bundle_product_code", "tenant_id", "bundle_code", unique=True),
-    )
+    __table_args__ = (Index("uq_bundle_product_code", "tenant_id", "bundle_code", unique=True),)
 
 
 class BundleItem(TenantScopedModel):
@@ -57,7 +53,9 @@ class BundleItem(TenantScopedModel):
     __table_args__ = (
         Index(
             "uq_bundle_item_sku",
-            "tenant_id", "bundle_id", "sku_id",
+            "tenant_id",
+            "bundle_id",
+            "sku_id",
             unique=True,
         ),
         Index("idx_bundle_item_bundle", "tenant_id", "bundle_id"),

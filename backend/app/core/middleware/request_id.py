@@ -17,9 +17,7 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
 
     HEADER_NAME = "X-Request-ID"
 
-    async def dispatch(
-        self, request: Request, call_next: RequestResponseEndpoint
-    ) -> Response:
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         rid = request.headers.get(self.HEADER_NAME) or uuid.uuid4().hex
         token = request_id_ctx.set(rid)
         structlog.contextvars.bind_contextvars(request_id=rid)

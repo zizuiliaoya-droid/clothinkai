@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from sqlalchemy import text
 
 from app.core.tenancy import tenant_id_ctx
 from app.modules.wecom.client import WecomClient
@@ -18,8 +17,11 @@ from app.modules.wecom.send_service import WecomSendService
 async def _seed_config(session, tenant_id) -> None:
     await WecomConfigService(session).configure(
         WecomConfigUpdate(
-            corp_id="c", agent_id="1", secret="s",
-            default_sender_userid="zs", is_active=True,
+            corp_id="c",
+            agent_id="1",
+            secret="s",
+            default_sender_userid="zs",
+            is_active=True,
         ),
         tenant_id,
     )
@@ -56,9 +58,7 @@ class TestWecomSend:
             async def _fake_send(self, *, sender, recipients, content):
                 return {"msgid": "MSG-1"}
 
-            monkeypatch.setattr(
-                WecomClient, "send_external_msg_template", _fake_send
-            )
+            monkeypatch.setattr(WecomClient, "send_external_msg_template", _fake_send)
             result = await WecomSendService(session).send(msg.id, tenant_a.id)
             assert result["status"] == "created"
             await session.flush()
@@ -87,12 +87,8 @@ class TestWecomSend:
                 called["sent"] = True
                 return {"msgid": "X"}
 
-            monkeypatch.setattr(
-                WecomClient, "send_external_msg_template", _fake_send
-            )
-            result = await WecomSendService(session).send(
-                pending.id, tenant_a.id
-            )
+            monkeypatch.setattr(WecomClient, "send_external_msg_template", _fake_send)
+            result = await WecomSendService(session).send(pending.id, tenant_a.id)
             assert result["status"] == "rate_limited"
             assert called["sent"] is False  # 未调企微
             await session.flush()

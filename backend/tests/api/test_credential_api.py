@@ -12,18 +12,14 @@ class TestCredentialApiContract:
     async def test_list_requires_auth(self) -> None:
         from app.main import app
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.get("/api/credentials/")
         assert resp.status_code == 401
 
     async def test_create_requires_auth(self) -> None:
         from app.main import app
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.post(
                 "/api/credentials/",
                 json={
@@ -38,9 +34,7 @@ class TestCredentialApiContract:
     async def test_openapi_exposes_credential_endpoints(self) -> None:
         from app.main import app
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.get("/api/openapi.json")
         assert resp.status_code == 200
         paths = resp.json().get("paths", {})
@@ -53,9 +47,7 @@ class TestCredentialApiContract:
         """CredentialPublic 响应 schema 不含 password / password_ciphertext。"""
         from app.main import app
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.get("/api/openapi.json")
         schemas = resp.json().get("components", {}).get("schemas", {})
         public = schemas.get("CredentialPublic", {})

@@ -30,7 +30,9 @@ class PlatformProduct(TenantScopedModel):
     __table_args__ = (
         Index(
             "uq_platform_product_tenant_plat_platid",
-            "tenant_id", "platform", "platform_id",
+            "tenant_id",
+            "platform",
+            "platform_id",
             unique=True,
         ),
         Index("idx_platform_product_style", "tenant_id", "style_id"),
