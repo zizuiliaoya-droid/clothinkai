@@ -11,13 +11,14 @@ ORM 层多租户注入（before_compile 事件 + before_insert 事件）：
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping, Sequence
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 from sqlalchemy import DateTime, ForeignKey, MetaData, event, func, text
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
+from sqlalchemy.engine import RowMapping
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import (
     DeclarativeBase,
@@ -281,3 +282,28 @@ async def dispose_engines() -> None:
     """优雅关闭引擎（lifespan 退出时调用）。"""
     await engine_app.dispose()
     await engine_bypass.dispose()
+
+
+# ---------------------------------------------------------------------------
+# RowMapping 键类型收窄
+# ---------------------------------------------------------------------------
+
+
+def as_mappings(rows: Sequence[RowMapping]) -> list[Mapping[str, Any]]:
+    """把 ``.mappings().all()`` 的结果收窄为 ``list[Mapping[str, Any]]``。
+
+    SQLAlchemy 把 ``RowMapping`` 声明为 ``Mapping[_KeyType, Any]``（键可以是列对象
+    而不只是字符串），而 ``Mapping`` 的键类型是**不变的**（invariant），因此
+    ``Sequence[RowMapping]`` 不能直接当作 ``Iterable[Mapping[str, Any]]`` 使用。
+
+    对 ``text()`` 文本查询，``.mappings()`` 的键就是 SELECT 里的列名字符串，
+    所以这里做一次集中的显式收窄，避免在各仓储里散落十几个 ``cast``。
+
+    纯类型层面操作，无运行时开销（``list()`` 的拷贝与收窄前一致）。
+    """
+    return cast("list[Mapping[str, Any]]", list(rows))
+
+
+def as_mapping(row: RowMapping) -> Mapping[str, Any]:
+    """:func:`as_mappings` 的单行版本（``.mappings().one()`` / ``.first()``）。"""
+    return cast("Mapping[str, Any]", row)

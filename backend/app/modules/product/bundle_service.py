@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
 
@@ -74,7 +75,7 @@ class BundleService:
         items = list(await self._repo.list_items(bundle_id))
         return bundle, items
 
-    async def list_bundles(self, *, limit: int = 50, offset: int = 0):
+    async def list_bundles(self, *, limit: int = 50, offset: int = 0) -> Sequence[BundleProduct]:
         return await self._repo.list_bundles(limit=limit, offset=offset)
 
     async def split_quantities(self, bundle_id: UUID, sold_qty: int) -> list[tuple[UUID, int]]:

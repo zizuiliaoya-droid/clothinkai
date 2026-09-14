@@ -14,6 +14,7 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.db import as_mapping, as_mappings
 from app.modules.promotion.urge_calculator import URGE_STATUS_SQL_EXPR
 from app.services.metric.publish_progress import like_sum_expr
 from app.services.metric.work_progress import HIT_STAT_THRESHOLD
@@ -69,7 +70,7 @@ class WorkProgressRepository:
             "important_days": _IMPORTANT_DAYS,
             "hit_stat": HIT_STAT_THRESHOLD,
         }
-        return list((await self._s.execute(sql, params)).mappings().all())
+        return as_mappings((await self._s.execute(sql, params)).mappings().all())
 
 
 class TargetPlanningRepository:
@@ -98,7 +99,7 @@ class TargetPlanningRepository:
             ORDER BY s.style_code
             """
         )
-        return list(
+        return as_mappings(
             (await self._s.execute(sql, {"tenant_id": tenant_id, "month": month})).mappings().all()
         )
 
@@ -128,7 +129,7 @@ class StoreDailyRepository:
             ORDER BY q.date
             """
         )
-        return list(
+        return as_mappings(
             (
                 await self._s.execute(
                     sql,
@@ -254,7 +255,7 @@ class ProductionRepository:
         params = {"tenant_id": tenant_id, "date_from": date_from, "date_to": date_to}
         if season:
             params["season"] = season
-        return list((await self._s.execute(sql, params)).mappings().all())
+        return as_mappings((await self._s.execute(sql, params)).mappings().all())
 
     async def daily_trend_by_style(
         self,
@@ -413,7 +414,7 @@ class ProductionRepository:
             ORDER BY d
             """
         )
-        return list(
+        return as_mappings(
             (
                 await self._s.execute(
                     sql,
@@ -491,7 +492,7 @@ class ProductionRepository:
               AND a.extra IS NOT NULL
             """
         )
-        return list(
+        return as_mappings(
             (
                 await self._s.execute(
                     sql,
@@ -544,7 +545,7 @@ class BiRepository:
             FROM sales CROSS JOIN ads CROSS JOIN promos
             """
         )
-        return (
+        return as_mapping(
             (
                 await self._s.execute(
                     sql,
@@ -577,7 +578,7 @@ class BiRepository:
               AND p.cooperation_date BETWEEN :date_from AND :date_to
             """
         )
-        return (
+        return as_mapping(
             (
                 await self._s.execute(
                     sql,
@@ -634,7 +635,7 @@ class BiRepository:
             "urge_days": _URGE_DAYS,
             "important_days": _IMPORTANT_DAYS,
         }
-        return list((await self._s.execute(sql, params)).mappings().all())
+        return as_mappings((await self._s.execute(sql, params)).mappings().all())
 
     async def aggregate_trend(
         self,
@@ -700,7 +701,7 @@ class BiRepository:
             ORDER BY d
             """
         )
-        return list(
+        return as_mappings(
             (
                 await self._s.execute(
                     sql,
@@ -724,7 +725,7 @@ class BiRepository:
             GROUP BY p.style_id
             """
         )
-        return list(
+        return as_mappings(
             (
                 await self._s.execute(
                     sql,

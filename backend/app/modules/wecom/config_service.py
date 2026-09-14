@@ -7,6 +7,10 @@
 
 from __future__ import annotations
 
+from uuid import UUID
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.core.audit import AuditService
 from app.core.security.crypto import decrypt_credential, encrypt_credential
 from app.modules.wecom.client import WecomClient, build_http_client
@@ -21,11 +25,11 @@ from app.modules.wecom.schemas import (
 
 
 class WecomConfigService:
-    def __init__(self, session) -> None:
+    def __init__(self, session: AsyncSession) -> None:
         self._s = session
         self._repo = WecomConfigRepository(session)
 
-    async def configure(self, payload: WecomConfigUpdate, tenant_id) -> WecomConfig:
+    async def configure(self, payload: WecomConfigUpdate, tenant_id: UUID) -> WecomConfig:
         cfg = await self._repo.get()
         ciphertext = encrypt_credential(tenant_id, payload.secret)
         if cfg is None:
@@ -64,7 +68,7 @@ class WecomConfigService:
             is_active=cfg.is_active,
         )
 
-    async def test_connection(self, tenant_id) -> WecomTestResult:
+    async def test_connection(self, tenant_id: UUID) -> WecomTestResult:
         cfg = await self._repo.get()
         if cfg is None or not cfg.is_active:
             raise WecomNotConfiguredError()

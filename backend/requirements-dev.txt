@@ -17,6 +17,8 @@ freezegun==1.5.1
 # Lint / 类型 / 格式化
 ruff==0.6.9
 mypy==1.11.2
-types-redis==4.6.0.20240903
+# 不要加 types-redis：redis-py 5.x 自带 py.typed 内联类型，装了 stub 反而会被优先
+# 采用，而 types-redis 4.6 的接口落后于 pinned 的 redis 5.1（例如缺 aclose），
+# 会产出假错误。
 types-passlib==1.7.7.20240819
 types-python-jose==3.3.4.20240106

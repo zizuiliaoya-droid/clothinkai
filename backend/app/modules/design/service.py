@@ -17,6 +17,7 @@ from app.core.exceptions import (
     PermissionDeniedError,
     ValidationError,
 )
+from app.core.state_machine import TransitionRule
 from app.modules.auth.models import User
 from app.modules.auth.repository import RoleRepository
 from app.modules.design.domain import compute_available_actions, compute_total_cost
@@ -89,7 +90,9 @@ class DesignService:
                 details={"current_state": style.design_status, "expected": expected},
             )
 
-    def _validate_rule(self, style: Style, action: str, roles: list[str], payload: dict):
+    def _validate_rule(
+        self, style: Style, action: str, roles: list[str], payload: dict
+    ) -> TransitionRule:
         """状态机语义校验（不 setattr，避免 autoflush 抢先改 design_status）。"""
         sm = make_design_state_machine(style)
         rule = sm._find_rule(action)
@@ -114,7 +117,7 @@ class DesignService:
 
     async def _advance(
         self, style: Style, action: str, roles: list[str], payload: dict, user: User
-    ):
+    ) -> TransitionRule:
         rule = self._validate_rule(style, action, roles, payload)
         ok = await self._repo.update_design_status(style.id, rule.from_state, rule.to_state)
         if not ok:

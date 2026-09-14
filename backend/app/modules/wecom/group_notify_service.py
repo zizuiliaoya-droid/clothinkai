@@ -9,6 +9,7 @@ import logging
 from uuid import UUID
 
 import httpx
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.metrics import wecom_group_notify_total
 from app.modules.blogger.repository import BloggerRepository
@@ -21,7 +22,7 @@ log = logging.getLogger(__name__)
 
 
 class GroupNotifyService:
-    def __init__(self, session) -> None:
+    def __init__(self, session: AsyncSession) -> None:
         self._s = session
         self._promos = PromotionRepository(session)
         self._bloggers = BloggerRepository(session)

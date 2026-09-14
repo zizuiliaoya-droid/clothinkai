@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.modules.wecom.domain import validate_template_vars
 from app.modules.wecom.exceptions import WecomTemplateInvalidVarError
 from app.modules.wecom.models import MessageTemplate
@@ -19,7 +21,7 @@ _DEFAULTS: dict[str, str] = {
 
 
 class MessageTemplateService:
-    def __init__(self, session) -> None:
+    def __init__(self, session: AsyncSession) -> None:
         self._s = session
         self._repo = MessageTemplateRepository(session)
 

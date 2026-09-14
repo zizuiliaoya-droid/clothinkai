@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import date
 from decimal import Decimal
 from typing import Any
@@ -80,7 +81,7 @@ class BalanceService:
         date_to: date | None = None,
         limit: int = 100,
         offset: int = 0,
-    ):
+    ) -> Sequence[BalanceRecord]:
         return await self._repo.list(
             date_from=date_from, date_to=date_to, limit=limit, offset=offset
         )

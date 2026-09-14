@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 import logging
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -115,7 +115,7 @@ async def on_settlement_requested(event: SettlementRequested, session: AsyncSess
     settlement_created_via_event_total.labels(result="created").inc()
 
 
-async def _get_tenant_code(session: AsyncSession, tenant_id) -> str:
+async def _get_tenant_code(session: AsyncSession, tenant_id: UUID) -> str:
     """取 tenant.code 用于 settlement_no 前缀（与 U04 service._get_tenant_code 一致）。"""
     result = await session.execute(select(Tenant.code).where(Tenant.id == tenant_id))
     code = result.scalar_one_or_none()

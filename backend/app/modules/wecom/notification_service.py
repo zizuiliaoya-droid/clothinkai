@@ -5,13 +5,15 @@ from __future__ import annotations
 from collections.abc import Sequence
 from uuid import UUID
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.modules.wecom.enums import NotificationType
 from app.modules.wecom.models import Notification
 from app.modules.wecom.repository import NotificationRepository
 
 
 class NotificationService:
-    def __init__(self, session) -> None:
+    def __init__(self, session: AsyncSession) -> None:
         self._s = session
         self._repo = NotificationRepository(session)
 

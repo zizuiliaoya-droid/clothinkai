@@ -6,11 +6,13 @@
 from __future__ import annotations
 
 from sqlalchemy import func
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import AuditService
 from app.core.metrics import wecom_callback_total
 from app.modules.wecom.client import WecomCrypto
 from app.modules.wecom.exceptions import WecomCallbackBadSignatureError
+from app.modules.wecom.models import WecomConfig
 from app.modules.wecom.repository import WecomMessageRepository
 
 _RESULT_MAP = {
@@ -24,15 +26,15 @@ _RESULT_MAP = {
 
 
 class WecomCallbackService:
-    def __init__(self, session) -> None:
+    def __init__(self, session: AsyncSession) -> None:
         self._s = session
         self._messages = WecomMessageRepository(session)
 
-    def _crypto(self, cfg) -> WecomCrypto:
+    def _crypto(self, cfg: WecomConfig) -> WecomCrypto:
         return WecomCrypto(cfg.callback_token or "", cfg.callback_aes_key or "")
 
     async def verify_url(
-        self, cfg, *, msg_signature: str, timestamp: str, nonce: str, echostr: str
+        self, cfg: WecomConfig, *, msg_signature: str, timestamp: str, nonce: str, echostr: str
     ) -> str:
         crypto = self._crypto(cfg)
         if not crypto.verify(msg_signature, timestamp, nonce, echostr):
@@ -42,7 +44,7 @@ class WecomCallbackService:
 
     async def handle(
         self,
-        cfg,
+        cfg: WecomConfig,
         *,
         msg_signature: str,
         timestamp: str,

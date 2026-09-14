@@ -17,12 +17,13 @@ from sqlalchemy import text
 
 from app.core.db import AsyncSessionApp
 from app.modules.wecom.callback_service import WecomCallbackService
+from app.modules.wecom.models import WecomConfig
 from app.modules.wecom.repository import WecomConfigRepository
 
 router = APIRouter(prefix="/api/wecom", tags=["wecom-callback"])
 
 
-async def _load_config(tenant_id: UUID):
+async def _load_config(tenant_id: UUID) -> WecomConfig | None:
     """用 app 会话 + SET LOCAL 加载该租户配置（RLS 生效）。"""
     async with AsyncSessionApp() as s:
         await s.execute(

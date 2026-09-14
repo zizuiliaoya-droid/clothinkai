@@ -12,6 +12,7 @@ from typing import Any
 from uuid import UUID
 
 import sentry_sdk
+from celery import Task
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 
@@ -32,7 +33,7 @@ log = logging.getLogger(__name__)
     max_retries=2,
     default_retry_delay=10,
 )
-def schedule_daily_tasks(self) -> dict[str, Any]:
+def schedule_daily_tasks(self: Task) -> dict[str, Any]:
     return run_async_task(_schedule_impl())
 
 

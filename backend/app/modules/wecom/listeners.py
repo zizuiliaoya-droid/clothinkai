@@ -11,13 +11,15 @@ from __future__ import annotations
 
 import logging
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.core.events import subscribe
 from app.modules.promotion.events import PromotionPublished
 
 log = logging.getLogger(__name__)
 
 
-async def on_promotion_published(event: PromotionPublished, session) -> None:
+async def on_promotion_published(event: PromotionPublished, session: AsyncSession) -> None:
     """S09：笔记发布 → 入队控评群通知（事务内不 HTTP）。"""
     from app.tasks.wecom_tasks import notify_control_group
 

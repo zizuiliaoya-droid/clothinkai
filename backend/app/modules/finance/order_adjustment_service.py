@@ -109,7 +109,9 @@ class OrderAdjustmentService:
             "duplicate": duplicate,
         }
 
-    async def list(self, *, order_type: str | None = None, limit: int = 50, offset: int = 0):
+    async def list(
+        self, *, order_type: str | None = None, limit: int = 50, offset: int = 0
+    ) -> list[dict[str, Any]]:
         rows = await self._repo.list(order_type=order_type, limit=limit, offset=offset)
         # 反范式富化：批量取款式编码/名称（对齐 final.xlsx 拍单/刷单的「款式/款号」）
         from sqlalchemy import select as _select

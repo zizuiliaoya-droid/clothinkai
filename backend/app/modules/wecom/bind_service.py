@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import UUID
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.core.security.crypto import decrypt_credential
 from app.modules.blogger.repository import BloggerRepository
 from app.modules.wecom.client import WecomClient, build_http_client
@@ -21,7 +23,7 @@ from app.modules.wecom.repository import (
 
 
 class WecomBindService:
-    def __init__(self, session) -> None:
+    def __init__(self, session: AsyncSession) -> None:
         self._s = session
         self._contacts = WecomContactRepository(session)
         self._configs = WecomConfigRepository(session)

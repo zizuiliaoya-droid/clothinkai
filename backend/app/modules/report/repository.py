@@ -17,6 +17,7 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.db import as_mapping, as_mappings
 from app.modules.promotion.urge_calculator import URGE_STATUS_SQL_EXPR
 from app.services.metric.publish_progress import like_sum_expr
 
@@ -49,7 +50,14 @@ class PublishProgressRepository:
         }
 
     async def aggregate_summary(
-        self, *, tenant_id, date_from, date_to, today, urge_days, important_days
+        self,
+        *,
+        tenant_id: UUID,
+        date_from: date,
+        date_to: date,
+        today: date,
+        urge_days: int,
+        important_days: int,
     ) -> Mapping[str, Any]:
         # 显式 tenant_id 过滤（与 U04 list_with_cte 一致，RLS 之外的防御层）
         sql = text(
@@ -69,7 +77,7 @@ class PublishProgressRepository:
               AND cooperation_date BETWEEN :date_from AND :date_to
             """
         )
-        return (
+        return as_mapping(
             (
                 await self._s.execute(
                     sql,
@@ -83,12 +91,12 @@ class PublishProgressRepository:
     async def aggregate_cards(
         self,
         *,
-        tenant_id,
-        date_from,
-        date_to,
-        today,
-        urge_days,
-        important_days,
+        tenant_id: UUID,
+        date_from: date,
+        date_to: date,
+        today: date,
+        urge_days: int,
+        important_days: int,
         page: int,
         page_size: int,
     ) -> tuple[list[Mapping[str, Any]], int]:
@@ -131,18 +139,18 @@ class PublishProgressRepository:
         params2["limit"] = page_size
         params2["offset"] = (page - 1) * page_size
         rows = (await self._s.execute(data_sql, params2)).mappings().all()
-        return list(rows), total
+        return as_mappings(rows), total
 
     async def aggregate_by_pr(
         self,
         *,
         tenant_id: UUID,
         style_id: UUID,
-        date_from,
-        date_to,
-        today,
-        urge_days,
-        important_days,
+        date_from: date,
+        date_to: date,
+        today: date,
+        urge_days: int,
+        important_days: int,
     ) -> list[Mapping[str, Any]]:
         sql = text(
             f"""
@@ -172,10 +180,10 @@ class PublishProgressRepository:
             important_days,
             style_id=style_id,
         )
-        return list((await self._s.execute(sql, params)).mappings().all())
+        return as_mappings((await self._s.execute(sql, params)).mappings().all())
 
     async def aggregate_by_half_month(
-        self, *, tenant_id: UUID, style_id: UUID, date_from, date_to
+        self, *, tenant_id: UUID, style_id: UUID, date_from: date, date_to: date
     ) -> list[Mapping[str, Any]]:
         sql = text(
             """
@@ -196,7 +204,7 @@ class PublishProgressRepository:
             ORDER BY period_start ASC
             """
         )
-        return list(
+        return as_mappings(
             (
                 await self._s.execute(
                     sql,
