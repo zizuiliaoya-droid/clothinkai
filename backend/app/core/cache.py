@@ -22,7 +22,8 @@ def get_redis() -> Redis:
     """返回应用缓存 Redis 客户端单例。"""
     global _redis_client
     if _redis_client is None:
-        _redis_client = from_url(
+        # redis-py 的 from_url 自身缺少类型注解（其 py.typed 未覆盖该工厂函数）
+        _redis_client = from_url(  # type: ignore[no-untyped-call]
             settings.REDIS_URL_CACHE,
             decode_responses=True,
             max_connections=20,
@@ -52,7 +53,9 @@ class CacheClient:
         self._redis = redis or get_redis()
 
     async def get(self, key: str) -> str | None:
-        return await self._redis.get(key)
+        # 客户端建连时 decode_responses=True，故返回值是 str 而非 bytes
+        value: str | None = await self._redis.get(key)
+        return value
 
     async def set_with_ttl(self, key: str, value: str, ttl_seconds: int) -> None:
         await self._redis.set(key, value, ex=ttl_seconds)

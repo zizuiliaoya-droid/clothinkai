@@ -388,7 +388,7 @@ class AttachmentService:
                 f"attachment {attachment_id} 不存在或不属于本租户或非 uploading 状态"
             )
         await session.flush()
-        attachment = row[0]
+        attachment: Attachment = row[0]
         # RETURNING 可能命中 session 身份映射中的旧实例（status 仍为 uploading）；
         # 显式刷新以反映 DB 最新状态。
         await session.refresh(attachment)

@@ -102,7 +102,7 @@ def encode_refresh_token(*, user_id: UUID, tenant_id: UUID | None) -> tuple[str,
 def decode_token(token: str, *, expected_type: str | None = None) -> dict[str, Any]:
     """解码并验证 JWT。失败抛 TokenExpiredError / TokenInvalidError。"""
     try:
-        payload = jwt.decode(
+        payload: dict[str, Any] = jwt.decode(
             token,
             settings.JWT_SECRET.get_secret_value(),
             algorithms=[_ALG],

@@ -229,7 +229,7 @@ def _enforce_tenant_filter(orm_execute_state: Any) -> None:
         # 真正的业务安全由 PostgreSQL RLS 兜底
         return
 
-    def _make_criteria(cls: type) -> ColumnElement[bool]:
+    def _make_criteria(cls: type[TenantScopedModel]) -> ColumnElement[bool]:
         return cls.tenant_id == tid
 
     orm_execute_state.statement = orm_execute_state.statement.options(

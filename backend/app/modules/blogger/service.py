@@ -419,9 +419,13 @@ class BloggerService:
 
     async def bulk_recompute_tags(self) -> int:
         """U11: Celery 批量入口（按当前 tenant_id 上下文）。返回处理博主数."""
+        from app.core.exceptions import TenantContextMissingError
         from app.core.tenancy import tenant_id_ctx
 
         tid = tenant_id_ctx.get()
+        if tid is None:
+            # 与 auth/service.py 一致：缺租户上下文即显式失败，不把 None 往下传
+            raise TenantContextMissingError()
         result = await self._tags.recompute_for_tenant(tid)
         await self._session.commit()
         return result["updated"]

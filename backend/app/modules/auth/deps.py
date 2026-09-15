@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import Depends
+from fastapi import Depends, params
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -92,7 +92,7 @@ async def get_current_perms(
 CurrentPerms = Annotated[EffectivePermissions, Depends(get_current_perms)]
 
 
-def require_permission(scope: str, action: str = "read") -> Depends:  # type: ignore[valid-type]
+def require_permission(scope: str, action: str = "read") -> params.Depends:
     """生成"要求权限"的依赖。"""
 
     async def _checker(perms: CurrentPerms) -> EffectivePermissions:
@@ -103,4 +103,6 @@ def require_permission(scope: str, action: str = "read") -> Depends:  # type: ig
             )
         return perms
 
-    return Depends(_checker)
+    # 直接构造 params.Depends：fastapi.Depends() 的返回注解是 Any，
+    # 用它会让本函数变成「返回 Any」。两者等价（Depends() 内部就是这一句）。
+    return params.Depends(dependency=_checker)

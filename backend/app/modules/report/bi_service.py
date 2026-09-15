@@ -87,7 +87,7 @@ class BiService:
             reverse=True,
         )[:_TOP_N]
         sales_top = sorted(styles, key=lambda row: row.sales_amount, reverse=True)[:_TOP_N]
-        cards = [
+        cards: list[dict[str, Any]] = [
             {"key": "style_count", "label": "在投款式", "value": len(styles)},
             {"key": "pay_amount", "label": "支付额", "value": str(store.sales_amount)},
             {"key": "store_days", "label": "店铺天数", "value": len(trend)},

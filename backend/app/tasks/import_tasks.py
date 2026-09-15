@@ -15,14 +15,15 @@ from __future__ import annotations
 import io
 import logging
 import time
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 import sentry_sdk
 from celery import Task
 from celery.signals import worker_process_init
-from sqlalchemy import func, select, text, update
+from sqlalchemy import Table, func, select, text, update
 
+from app.core.attachment import BucketKind
 from app.core.celery_app import celery_app
 from app.core.config import settings
 from app.core.db import AsyncSessionApp, AsyncSessionBypass
@@ -150,7 +151,7 @@ async def _run_import_batch_claimed(batch_id: UUID, only_failed: bool = False) -
         else:
             from app.core.attachment import attachment_service
 
-            raw = attachment_service.get_object_bytes(file_bucket, file_r2_key)
+            raw = attachment_service.get_object_bytes(cast("BucketKind", file_bucket), file_r2_key)
             rows = _parse_rows(raw, original_filename)
     except Exception as exc:
         await _mark_batch_failed(batch_id, f"parse_error:{type(exc).__name__}")
@@ -280,7 +281,8 @@ async def _upsert_job(
     """
     from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-    stmt = pg_insert(ImportJob.__table__).values(
+    # ``__table__`` 静态类型是 FromClause，实际是 Table；insert() 需要 TableClause。
+    stmt = pg_insert(cast("Table", ImportJob.__table__)).values(
         tenant_id=tenant_id,
         batch_id=batch_id,
         row_number=row_number,

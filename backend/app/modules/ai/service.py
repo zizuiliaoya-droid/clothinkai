@@ -60,7 +60,16 @@ class AiAdvisoryService:
         ai_advice_total.labels(advice_type=advice_type, status="success").inc()
         return result
 
-    async def _log(self, advice_type, payload, text, status, model, latency, user):
+    async def _log(
+        self,
+        advice_type: str,
+        payload: dict[str, Any],
+        text: str | None,
+        status: str,
+        model: str | None,
+        latency: int | None,
+        user: Any,
+    ) -> None:
         self._log_repo.add(
             AiAdviceLog(
                 tenant_id=user.tenant_id,

@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import builtins
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -129,7 +130,11 @@ class StyleRepository:
 
     # ----------------------- match (BR-U02-50/51) ----------------------- #
 
-    async def search_by_keyword(self, keyword: str, *, limit: int = 20) -> list[StyleSearchResult]:
+    # 本类有名为 ``list`` 的方法，会在类作用域内遮蔽内置 ``list``，
+    # 故此处必须写 ``builtins.list``，否则注解会被解析成那个方法（类型检查静默失效）。
+    async def search_by_keyword(
+        self, keyword: str, *, limit: int = 20
+    ) -> builtins.list[StyleSearchResult]:
         """模糊搜索（拼接表达式 ILIKE，命中 ``idx_style_search_trgm`` GIN 索引）。
 
         查询表达式必须与索引表达式严格一致，否则不命中：
@@ -349,8 +354,10 @@ class SkuRepository:
 
         full_values = {"tenant_id": tenant_id, **values}
 
-        stmt = pg_insert(Sku).values(**full_values)
-        stmt = stmt.on_conflict_do_update(
+        # 分两个变量：.returning() 的结果是 ReturningInsert，与 Insert 不是同一类型，
+        # 复用同名变量会让 mypy 报不兼容赋值。
+        insert_stmt = pg_insert(Sku).values(**full_values)
+        stmt = insert_stmt.on_conflict_do_update(
             index_elements=[Sku.tenant_id, Sku.sku_code],
             # 谓词须与 partial UNIQUE 索引匹配（migration 用 ``is_deleted = false``）；
             # ``.is_(False)`` 生成 ``IS false`` 会导致 ON CONFLICT 无法匹配索引。

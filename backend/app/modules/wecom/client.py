@@ -62,16 +62,16 @@ class WecomClient:
             f"{settings.WECOM_API_BASE}/cgi-bin/gettoken",
             params={"corpid": self._cfg.corp_id, "corpsecret": secret},
         )
-        data = resp.json()
+        data: dict[str, Any] = resp.json()
         if data.get("errcode"):
             raise WecomApiError(data["errcode"], data.get("errmsg"))
-        token = data["access_token"]
+        token: str = data["access_token"]
         await cache.set_with_ttl(self._token_key, token, settings.WECOM_TOKEN_TTL)
         return token
 
     async def _call(self, method: str, path: str, **kw: Any) -> dict:
         token = await self.get_access_token()
-        data = (
+        data: dict[str, Any] = (
             await self._http.request(
                 method,
                 f"{settings.WECOM_API_BASE}{path}",
@@ -97,7 +97,7 @@ class WecomClient:
 
     async def find_external_userid_by_wechat(self, wechat: str) -> str | None:
         """按微信号匹配 external_userid（遍历客户列表，简化实现）。"""
-        data = (
+        data: dict[str, Any] = (
             await self._call(
                 "GET",
                 "/cgi-bin/externalcontact/get_by_user",
@@ -107,6 +107,7 @@ class WecomClient:
             else {"external_userid": []}
         )
         # MVP：外部联系人详情匹配 wechat（真实需调 get 详情；此处由 mock 提供）
+        euid: str
         for euid in data.get("external_userid", []):
             detail = await self._call(
                 "GET",
@@ -135,7 +136,7 @@ class WecomClient:
 
     async def send_group_robot(self, webhook_url: str, markdown: str) -> dict:
         """U15 群机器人（控评群）：直连完整 webhook URL（含 key），无需 access_token。"""
-        data = (
+        data: dict[str, Any] = (
             await self._http.post(
                 webhook_url,
                 json={"msgtype": "markdown", "markdown": {"content": markdown}},
@@ -203,9 +204,10 @@ class WecomCrypto:
     def parse_callback(plaintext: str) -> dict:
         """解析回调载荷为 {msgid, result}（MVP：JSON；V1 可扩展 XML）。"""
         try:
-            return json.loads(plaintext)
+            parsed: dict[str, Any] = json.loads(plaintext)
         except (ValueError, TypeError):
             return {}
+        return parsed
 
 
 def build_http_client() -> httpx.AsyncClient:

@@ -541,12 +541,13 @@ class SettlementService:
             ).all()
             style_map = {r.id: (r.style_code, r.style_name) for r in rows}
         if blogger_ids:
-            rows = (
+            # 与上面的 style 查询列数不同，用独立变量避免类型冲突
+            brows = (
                 await self._session.execute(
                     _select(Blogger.id, Blogger.nickname).where(Blogger.id.in_(blogger_ids))
                 )
             ).all()
-            blogger_map = {r.id: r.nickname for r in rows}
+            blogger_map = {r.id: r.nickname for r in brows}
         for s, resp in zip(items, responses, strict=False):
             sc = style_map.get(s.style_id)
             if sc:

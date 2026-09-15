@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import builtins
 from collections.abc import Sequence
 from uuid import UUID
 
@@ -118,7 +119,9 @@ class DataQualityRepository:
         total = int((await self._session.execute(count_stmt)).scalar_one())
         return items, total
 
-    async def summary(self, tenant_id: UUID) -> list[dict]:
+    # 本类有名为 ``list`` 的方法，会在类作用域内遮蔽内置 ``list``，
+    # 故此处必须写 ``builtins.list``，否则注解会被解析成那个方法（类型检查静默失效）。
+    async def summary(self, tenant_id: UUID) -> builtins.list[dict]:
         stmt = (
             select(
                 DataQualityIssue.source,

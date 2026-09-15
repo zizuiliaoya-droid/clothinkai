@@ -25,6 +25,7 @@ from fastapi.responses import JSONResponse
 from prometheus_fastapi_instrumentator import Instrumentator
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
+from sentry_sdk.types import Event, Hint
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
@@ -271,7 +272,7 @@ def register_import_adapters() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _strip_sensitive_for_sentry(event: dict, _hint: dict) -> dict:
+def _strip_sensitive_for_sentry(event: Event, _hint: Hint) -> Event:
     """过滤可能泄露的敏感字段。"""
     sensitive = (
         "password",
@@ -395,7 +396,9 @@ def create_app() -> FastAPI:
 
     # ----- Limiter（slowapi）-----
     app.state.limiter = limiter
-    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+    # slowapi 的处理器签名是 (Request, RateLimitExceeded)，Starlette 声明要
+    # (Request, Exception)：属第三方签名不匹配（逆变位置），运行时正确。
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
 
     # ----- 中间件（注册顺序与执行顺序相反）-----
     # 内层（最后注册 → 最先执行）

@@ -19,7 +19,7 @@ import tempfile
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import IO, Any, cast
 from uuid import UUID
 
 import sentry_sdk
@@ -129,14 +129,14 @@ async def _run_backup_database(task: Task) -> dict[str, Any]:
             else today + timedelta(days=settings.BACKUP_RETAIN_DAILY_DAYS)
         )
         async with AsyncSessionBypass() as session:
-            record = await session.get(BackupRecord, record_id)
-            if record is not None:
-                record.completed_at = datetime.now(UTC)
-                record.status = "success"
-                record.r2_key = r2_key
-                record.size_bytes = size_bytes
-                record.checksum = checksum
-                record.retention_until = retention_until
+            saved = await session.get(BackupRecord, record_id)
+            if saved is not None:
+                saved.completed_at = datetime.now(UTC)
+                saved.status = "success"
+                saved.r2_key = r2_key
+                saved.size_bytes = size_bytes
+                saved.checksum = checksum
+                saved.retention_until = retention_until
                 await session.commit()
 
         log.info(
@@ -154,11 +154,11 @@ async def _run_backup_database(task: Task) -> dict[str, Any]:
             # 最后一次失败：写 record + Sentry
             async with AsyncSessionBypass() as session:
                 if record_id is not None:
-                    record = await session.get(BackupRecord, record_id)
-                    if record is not None:
-                        record.status = "failed"
-                        record.error_message = str(exc)[:2000]
-                        record.completed_at = datetime.now(UTC)
+                    saved = await session.get(BackupRecord, record_id)
+                    if saved is not None:
+                        saved.status = "failed"
+                        saved.error_message = str(exc)[:2000]
+                        saved.completed_at = datetime.now(UTC)
                         await session.commit()
             sentry_sdk.capture_exception(exc)
             log.exception("backup_failed_terminal")
@@ -180,7 +180,8 @@ def _run_pg_dump(out_path: Path) -> None:
         # 参数为固定列表 + 配置项（非用户输入），且未走 shell
         result = subprocess.run(  # noqa: S603
             cmd,
-            stdout=fout,
+            # GzipFile 实为 BufferedIOBase，typeshed 里它不是 IO[Any] 的子类
+            stdout=cast("IO[bytes]", fout),
             stderr=subprocess.PIPE,
             check=False,
         )

@@ -209,8 +209,10 @@ class BloggerRepository:
 
         full_values = {"tenant_id": tenant_id, **values}
 
-        stmt = pg_insert(Blogger).values(**full_values)
-        stmt = stmt.on_conflict_do_update(
+        # 分两个变量：.returning() 的结果是 ReturningInsert，与 Insert 不是同一类型，
+        # 复用同名变量会让 mypy 报不兼容赋值。
+        insert_stmt = pg_insert(Blogger).values(**full_values)
+        stmt = insert_stmt.on_conflict_do_update(
             index_elements=[Blogger.tenant_id, Blogger.xiaohongshu_id],
             # 谓词必须与 partial UNIQUE 索引 uq_blogger_xiaohongshu_id 完全匹配
             # （migration 用 ``is_deleted = false``）；``.is_(False)`` 生成 ``IS false``
