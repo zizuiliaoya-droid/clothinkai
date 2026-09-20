@@ -161,9 +161,7 @@ def register_event_listeners() -> None:
     clear_handlers()
 
     try:
-        from app.modules.finance.listeners import (
-            register as register_finance,
-        )
+        from app.modules.finance.listeners import register as register_finance
     except ModuleNotFoundError:
         log.warning(
             "u05_finance_module_not_found_skipping_listener_registration. "
@@ -185,9 +183,7 @@ def register_event_listeners() -> None:
     # 第 2 步：U04 promotion 反向 listener（通知类 SettlementPaid，FB5）
     # 缺失不阻塞（required_handler=False）；存在但注册失败 fail fast
     try:
-        from app.modules.promotion.listeners import (
-            register as register_promotion_listeners,
-        )
+        from app.modules.promotion.listeners import register as register_promotion_listeners
     except ModuleNotFoundError:
         log.warning(
             "promotion_listeners_module_not_found_skipping. "
@@ -204,9 +200,7 @@ def register_event_listeners() -> None:
     # 第 3 步：U15 wecom 反向 listener（通知类 PromotionPublished，S09 控评通知）
     # 缺失不阻塞（required_handler=False）；存在但注册失败 fail fast
     try:
-        from app.modules.wecom.listeners import (
-            register as register_wecom_listeners,
-        )
+        from app.modules.wecom.listeners import register as register_wecom_listeners
     except ModuleNotFoundError:
         log.warning(
             "wecom_listeners_module_not_found_skipping. "

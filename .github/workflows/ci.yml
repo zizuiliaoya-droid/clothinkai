@@ -90,9 +90,19 @@ jobs:
       - name: Verify U05 finance listener registration in main.py (强一致正向)
         run: |
           # FB1：U04 部署后 SettlementRequested 必须有 listener（强一致，缺失则 review approve 失败）
-          if ! grep -rn "from app.modules.finance.listeners import register" backend/app/main.py; then
-            echo "::error::U05 finance.listeners not wired in main.py."
+          #
+          # 注意：不要把 grep 写成 "... import register" 这种依赖单行的形态 ——
+          # ruff format 会把过长的 import 重排成多行括号形式，register 就不在同一行了，
+          # 检查会在代码完全正确的情况下失败（这个坑真实发生过）。
+          # 这里分两步检：模块被导入 + register 确实被调用，与排版无关。
+          if ! grep -rnE "from app\.modules\.finance\.listeners import" backend/app/main.py; then
+            echo "::error::U05 finance.listeners not imported in main.py."
             echo "::error::U04+U05 必须同批部署，否则 review approve 将抛 MissingRequiredHandlerError"
+            exit 1
+          fi
+          if ! grep -rnE "register_finance\(\)" backend/app/main.py; then
+            echo "::error::register_finance() not invoked in main.py."
+            echo "::error::导入了但没调用，listener 实际未注册。"
             exit 1
           fi
           echo "OK: U05 finance listener registration present"
