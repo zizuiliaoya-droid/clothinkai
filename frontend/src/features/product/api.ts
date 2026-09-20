@@ -89,6 +89,16 @@ export async function disableStyle(styleId: string): Promise<Style> {
   return resp.data;
 }
 
+/** 重新启用被停用的款式（is_active=true）。与 disableStyle 对称。 */
+export async function enableStyle(styleId: string): Promise<Style> {
+  const resp = await apiClient.post<Style>(`/api/styles/${styleId}/enable`);
+  return resp.data;
+}
+
+/**
+ * 恢复**软删**的款式（is_deleted=false），需要 product:delete 权限。
+ * 注意：这不是「停用」的逆操作 —— 重新启用请用 {@link enableStyle}。
+ */
 export async function restoreStyle(styleId: string): Promise<Style> {
   const resp = await apiClient.post<Style>(`/api/styles/${styleId}/restore`);
   return resp.data;

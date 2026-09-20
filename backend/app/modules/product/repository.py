@@ -49,7 +49,7 @@ class StyleListFilters:
     season: str | None = None
     gender: str | None = None
     design_status: str | None = None
-    is_active: bool | None = True
+    is_active: bool | None = None
     include_inactive: bool = False
 
 
@@ -96,7 +96,13 @@ class StyleRepository:
     ) -> tuple[Sequence[Style], int]:
         stmt = select(Style).where(Style.is_deleted.is_(False))
 
-        if not filters.include_inactive:
+        # 状态过滤三态：
+        # - is_active 显式给值 → 只看该状态（用于「只看停用」）
+        # - is_active=None + include_inactive=True → 启用/停用都看
+        # - 两者都未给（默认）→ 只看启用，与历史行为一致
+        if filters.is_active is not None:
+            stmt = stmt.where(Style.is_active.is_(filters.is_active))
+        elif not filters.include_inactive:
             stmt = stmt.where(Style.is_active.is_(True))
 
         if filters.keyword:
@@ -122,8 +128,11 @@ class StyleRepository:
         total_stmt = select(func.count()).select_from(stmt.subquery())
         total = int((await self._session.execute(total_stmt)).scalar_one())
 
+        # 停用的排在最后（混合查看时不干扰在用款式），组内再按创建时间倒序
         stmt = (
-            stmt.order_by(Style.created_at.desc()).limit(page_size).offset((page - 1) * page_size)
+            stmt.order_by(Style.is_active.desc(), Style.created_at.desc())
+            .limit(page_size)
+            .offset((page - 1) * page_size)
         )
         items = (await self._session.execute(stmt)).scalars().all()
         return items, total

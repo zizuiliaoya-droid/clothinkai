@@ -211,6 +211,27 @@ class StyleService:
         await self._session.commit()
         return await self._to_response(style, user)
 
+    async def enable_style(self, style_id: UUID, user: User) -> StyleResponse:
+        """重新启用被停用的款式（``disable_style`` 的逆操作）。
+
+        与 ``restore_style`` 是两件不同的事：
+        - ``enable_style`` / ``disable_style`` 操作 ``is_active``（业务上的启用/停用）
+        - ``restore_style`` 操作 ``is_deleted``（软删的恢复）
+        """
+        style = await self._styles.get_by_id(style_id)
+        if style is None:
+            raise StyleNotFoundError(f"款式 {style_id} 不存在")
+        style.is_active = True
+        await self._session.flush()
+        await self._audit.log(
+            action="style.enable",
+            resource="style",
+            resource_id=style.id,
+            user_id=user.id,
+        )
+        await self._session.commit()
+        return await self._to_response(style, user)
+
     async def restore_style(self, style_id: UUID, user: User) -> StyleResponse:
         """BR-U02-22: 恢复软删的 style."""
         style = await self._styles.get_by_id(style_id, include_deleted=True)

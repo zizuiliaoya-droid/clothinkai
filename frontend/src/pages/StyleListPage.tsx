@@ -24,11 +24,11 @@ import type { ColumnsType } from "antd/es/table";
 import {
   createStyle,
   disableStyle,
+  enableStyle,
   listBrands,
   listDictItems,
   listStyles,
   removeStyleMainImage,
-  restoreStyle,
   updateStyle,
   uploadStyleMainImage,
 } from "@/features/product/api";
@@ -48,8 +48,21 @@ import { StyleImageThumbnail } from "@/components/StyleImageThumbnail/StyleImage
 
 const GENDERS = ["女", "男", "中性", "童"];
 
+type StatusFilter = "active" | "inactive" | "all";
+
+/** 状态下拉 → 后端三态参数。后端：都不传=仅启用，is_active=false=仅停用，include_inactive=true=全部。 */
+function statusParams(status: StatusFilter): Pick<
+  StyleListFilters,
+  "is_active" | "include_inactive"
+> {
+  if (status === "inactive") return { is_active: false, include_inactive: true };
+  if (status === "all") return { is_active: undefined, include_inactive: true };
+  return { is_active: undefined, include_inactive: undefined };
+}
+
 export function StyleListPage() {
   const qc = useQueryClient();
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("active");
   const [filters, setFilters] = useState<StyleListFilters>({
     page: 1,
     page_size: 10,
@@ -140,11 +153,13 @@ export function StyleListPage() {
     onError: (err) => message.error(extractErrorMessage(err)),
   });
 
+  // 停用 ↔ 启用 走 disable/enable（操作 is_active）。
+  // 不要用 restoreStyle —— 那个是恢复软删（is_deleted），对未软删的款式会直接报错。
   const toggleMutation = useMutation({
     mutationFn: (record: Style) =>
-      record.is_active ? disableStyle(record.id) : restoreStyle(record.id),
-    onSuccess: () => {
-      message.success("操作成功");
+      record.is_active ? disableStyle(record.id) : enableStyle(record.id),
+    onSuccess: (_data, record) => {
+      message.success(record.is_active ? "款式已停用" : "款式已启用");
       void qc.invalidateQueries({ queryKey: ["styles"] });
     },
     onError: (err) => message.error(extractErrorMessage(err)),
@@ -217,9 +232,10 @@ export function StyleListPage() {
             type="link"
             size="small"
             danger={record.is_active}
+            loading={toggleMutation.isPending}
             onClick={() => toggleMutation.mutate(record)}
           >
-            {record.is_active ? "停用" : "恢复"}
+            {record.is_active ? "停用" : "启用"}
           </Button>
         </Space>
       ),
@@ -256,11 +272,31 @@ export function StyleListPage() {
           onChange={(v) => setFilters((f) => ({ ...f, category: v, page: 1 }))}
         />
         <Select
+          placeholder="季节"
+          allowClear
+          style={{ width: 120 }}
+          options={seasonOptions}
+          onChange={(v) => setFilters((f) => ({ ...f, season: v, page: 1 }))}
+        />
+        <Select
           placeholder="品牌"
           allowClear
           style={{ width: 160 }}
           options={brandOptions}
           onChange={(v) => setFilters((f) => ({ ...f, brand_id: v, page: 1 }))}
+        />
+        <Select
+          value={statusFilter}
+          style={{ width: 120 }}
+          options={[
+            { label: "仅启用", value: "active" },
+            { label: "仅停用", value: "inactive" },
+            { label: "全部", value: "all" },
+          ]}
+          onChange={(v: StatusFilter) => {
+            setStatusFilter(v);
+            setFilters((f) => ({ ...f, ...statusParams(v), page: 1 }));
+          }}
         />
       </Space>
 

@@ -78,6 +78,19 @@ class StyleBase(BaseModel):
     design_status: _DesignStatusField = DesignStatus.BULK
 
 
+def _normalize_platform_id(v: str | None) -> str | None:
+    """规范化平台商品ID（千牛ID）。
+
+    从 Excel 复制粘贴时常带上文本标记前导单引号（如 ``'1074568657697``），
+    肉眼看不出来，却会让它匹配不上千牛日报里的 ID —— 表现为投产报表读不到数据、
+    按千牛ID 分组也分不到一起。这里统一剥掉前导 ``'`` 与两端空白，空串归一为 None。
+    """
+    if v is None:
+        return None
+    cleaned = v.strip().lstrip("'").strip()
+    return cleaned or None
+
+
 class StyleCreate(StyleBase):
     style_code: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_\-]+$")
 
@@ -87,6 +100,11 @@ class StyleCreate(StyleBase):
         if any(len(t) > 32 or not t.strip() for t in v):
             raise ValueError("每个 tag 长度需 1-32")
         return [t.strip() for t in v]
+
+    @field_validator("qianniu_product_id")
+    @classmethod
+    def _clean_qianniu_id(cls, v: str | None) -> str | None:
+        return _normalize_platform_id(v)
 
 
 class StyleUpdate(BaseModel):
@@ -111,6 +129,11 @@ class StyleUpdate(BaseModel):
     owner_id: UUID | None = None
     design_status: _DesignStatusField | None = None
     is_active: bool | None = None
+
+    @field_validator("qianniu_product_id")
+    @classmethod
+    def _clean_qianniu_id(cls, v: str | None) -> str | None:
+        return _normalize_platform_id(v)
 
 
 class StyleResponse(BaseModel):

@@ -113,10 +113,16 @@ async def list_styles(
     season: Annotated[str | None, Query(max_length=16)] = None,
     gender: Annotated[str | None, Query(max_length=8)] = None,
     design_status: Annotated[str | None, Query(max_length=16)] = None,
-    is_active: bool = True,
+    is_active: bool | None = None,
     include_inactive: bool = False,
 ) -> StylePage:
-    """款式列表（分页 + 筛选 + ILIKE 关键字搜索）."""
+    """款式列表（分页 + 筛选 + ILIKE 关键字搜索）.
+
+    状态筛选三态：
+    - 都不传（默认）→ 只看启用，与历史行为一致
+    - ``is_active=false`` → 只看停用
+    - ``include_inactive=true`` 且不传 ``is_active`` → 启用 + 停用都看（停用排在最后）
+    """
     filters = StyleListFilters(
         keyword=keyword,
         brand_id=brand_id,
@@ -222,6 +228,24 @@ async def disable_style(
     service: StyleServiceDep,
 ) -> StyleResponse:
     return await service.disable_style(style_id, user)
+
+
+@router.post(
+    "/styles/{style_id}/enable",
+    response_model=StyleResponse,
+    dependencies=[require_permission("product", "write")],
+)
+async def enable_style(
+    style_id: UUID,
+    user: CurrentActiveUser,
+    service: StyleServiceDep,
+) -> StyleResponse:
+    """重新启用被停用的款式（与 disable 对称，权限同为 product:write）。
+
+    注意与下面的 ``restore`` 区分：restore 恢复的是**软删**（is_deleted），
+    需要 product:delete 权限；本接口只改 is_active。
+    """
+    return await service.enable_style(style_id, user)
 
 
 @router.post(
