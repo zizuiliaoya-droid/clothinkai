@@ -23,7 +23,6 @@ from app.core.audit import AuditService
 from app.core.db import AsyncSessionBypass
 from app.core.metrics import attachment_validation_failures_total
 from app.core.tenancy import bypass_rls_ctx, user_id_ctx
-
 from app.modules.finance.exceptions import (
     AttachmentNotReadyError,
     AttachmentTooLargeError,
@@ -32,7 +31,6 @@ from app.modules.finance.exceptions import (
     InvalidAttachmentPurposeError,
     InvalidAttachmentReferenceError,
 )
-
 
 log = logging.getLogger(__name__)
 
@@ -75,9 +73,7 @@ class ProofAttachmentValidator:
         tenant_id: UUID,
     ) -> Attachment:
         """6 项校验全部通过返回 Attachment 实例；任一失败抛对应异常."""
-        attachment = await self._service.get_by_id(
-            session=session, attachment_id=attachment_id
-        )
+        attachment = await self._service.get_by_id(session=session, attachment_id=attachment_id)
         if attachment is None:
             self._record_failure("not_found")
             raise InvalidAttachmentReferenceError(
@@ -183,13 +179,11 @@ class ProofAttachmentValidator:
                     "attachment_id": str(attachment_id),
                     "expected_tenant_id": str(expected_tenant_id),
                     "actual_tenant_id": str(actual_tenant_id),
-                    "user_id": (
-                        str(user_id_ctx.get()) if user_id_ctx.get() else None
-                    ),
+                    "user_id": (str(user_id_ctx.get()) if user_id_ctx.get() else None),
                     "source_module": "finance",
                 },
             )
-        except Exception:  # noqa: BLE001
+        except Exception:
             log.exception("sentry_capture_cross_tenant_failed")
 
         # 3. 独立 bypass session 写 audit（防被原事务回滚带走）
@@ -211,7 +205,7 @@ class ProofAttachmentValidator:
                         },
                     )
                     await audit_session.commit()
-            except Exception as audit_exc:  # noqa: BLE001
+            except Exception as audit_exc:
                 # 兜底：audit 失败仅 log，不阻塞原异常上抛
                 log.exception(
                     "audit_for_cross_tenant_failed",

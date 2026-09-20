@@ -179,9 +179,7 @@ class TestUpdateSkuFieldPermission:
         token = tenant_id_ctx.set(tenant_a.id)
         try:
             style = await product_factory.style()
-            sku = await product_factory.sku(
-                style, cost_price=Decimal("100.00")
-            )
+            sku = await product_factory.sku(style, cost_price=Decimal("100.00"))
             user = await factory.user(tenant_a, roles=[pr_role])
             svc = SkuService(session)
             response = await svc.get_sku(sku.id, user)
@@ -204,9 +202,7 @@ class TestUpdateSkuFieldPermission:
         token = tenant_id_ctx.set(tenant_a.id)
         try:
             style = await product_factory.style()
-            sku = await product_factory.sku(
-                style, cost_price=Decimal("123.45")
-            )
+            sku = await product_factory.sku(style, cost_price=Decimal("123.45"))
             user = await factory.user(tenant_a, roles=[finance_role])
             svc = SkuService(session)
             response = await svc.get_sku(sku.id, user)
@@ -233,14 +229,14 @@ class TestListByStyle:
             for i, color in enumerate(["红", "蓝", "黑"]):
                 for size in ["S", "M"]:
                     await product_factory.sku(
-                        style, sku_code=f"K-{color}-{size}-{i}",
-                        color=color, size=size,
+                        style,
+                        sku_code=f"K-{color}-{size}-{i}",
+                        color=color,
+                        size=size,
                     )
             user = await factory.user(tenant_a, roles=[admin_role])
             svc = SkuService(session)
-            items = await svc.list_by_style(
-                style.id, include_inactive=False, user=user
-            )
+            items = await svc.list_by_style(style.id, include_inactive=False, user=user)
             assert len(items) == 6
         finally:
             tenant_id_ctx.reset(token)
@@ -259,9 +255,7 @@ class TestListByStyle:
             style = await product_factory.style()
             user = await factory.user(tenant_a, roles=[admin_role])
             svc = SkuService(session)
-            items = await svc.list_by_style(
-                style.id, include_inactive=False, user=user
-            )
+            items = await svc.list_by_style(style.id, include_inactive=False, user=user)
             assert items == []
         finally:
             tenant_id_ctx.reset(token)
@@ -306,6 +300,7 @@ class TestSoftDeleteSku:
             assert sku.is_deleted is True
         finally:
             tenant_id_ctx.reset(token)
+
     async def test_soft_delete_referenced_sku_is_denied(
         self,
         session: AsyncSession,

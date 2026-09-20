@@ -21,45 +21,35 @@ def get_publish_progress_service(session: SessionDep) -> PublishProgressService:
     return PublishProgressService(session)
 
 
-PublishProgressServiceDep = Annotated[
-    PublishProgressService, Depends(get_publish_progress_service)
-]
+PublishProgressServiceDep = Annotated[PublishProgressService, Depends(get_publish_progress_service)]
 
 
 def get_work_progress_service(session: SessionDep) -> WorkProgressService:
     return WorkProgressService(session)
 
 
-WorkProgressServiceDep = Annotated[
-    WorkProgressService, Depends(get_work_progress_service)
-]
+WorkProgressServiceDep = Annotated[WorkProgressService, Depends(get_work_progress_service)]
 
 
 def get_target_planning_service(session: SessionDep) -> TargetPlanningService:
     return TargetPlanningService(session)
 
 
-TargetPlanningServiceDep = Annotated[
-    TargetPlanningService, Depends(get_target_planning_service)
-]
+TargetPlanningServiceDep = Annotated[TargetPlanningService, Depends(get_target_planning_service)]
 
 
 def get_store_daily_service(session: SessionDep) -> StoreDailyService:
     return StoreDailyService(session)
 
 
-StoreDailyServiceDep = Annotated[
-    StoreDailyService, Depends(get_store_daily_service)
-]
+StoreDailyServiceDep = Annotated[StoreDailyService, Depends(get_store_daily_service)]
 
 
 def get_production_service(session: SessionDep) -> ProductionService:
     return ProductionService(session)
 
 
-ProductionServiceDep = Annotated[
-    ProductionService, Depends(get_production_service)
-]
+ProductionServiceDep = Annotated[ProductionService, Depends(get_production_service)]
 
 
 def get_bi_service(session: SessionDep) -> BiService:
@@ -73,18 +63,14 @@ def get_export_service(session: SessionDep) -> ReportExportService:
     return ReportExportService(session)
 
 
-ExportServiceDep = Annotated[
-    ReportExportService, Depends(get_export_service)
-]
+ExportServiceDep = Annotated[ReportExportService, Depends(get_export_service)]
 
 
 def get_user_preference_service(session: SessionDep) -> UserPreferenceService:
     return UserPreferenceService(session)
 
 
-UserPreferenceServiceDep = Annotated[
-    UserPreferenceService, Depends(get_user_preference_service)
-]
+UserPreferenceServiceDep = Annotated[UserPreferenceService, Depends(get_user_preference_service)]
 
 
 __all__ = [

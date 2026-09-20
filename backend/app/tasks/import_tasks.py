@@ -15,14 +15,15 @@ from __future__ import annotations
 import io
 import logging
 import time
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 import sentry_sdk
 from celery import Task
 from celery.signals import worker_process_init
-from sqlalchemy import func, select, text, update
+from sqlalchemy import Table, func, select, text, update
 
+from app.core.attachment import BucketKind
 from app.core.celery_app import celery_app
 from app.core.config import settings
 from app.core.db import AsyncSessionApp, AsyncSessionBypass
@@ -57,7 +58,7 @@ def _register_adapters_in_worker(**_kwargs: Any) -> None:
 
         register_import_adapters()
         log.info("import_adapters_registered_in_worker")
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         log.exception("import_adapter_worker_registration_failed")
         sentry_sdk.capture_exception(exc)
 
@@ -72,9 +73,7 @@ def _register_adapters_in_worker(**_kwargs: Any) -> None:
     name="app.tasks.import_tasks.run_import_batch",
     queue="default",
 )
-def run_import_batch(
-    self: Task, batch_id: str, only_failed: bool = False
-) -> dict[str, Any]:
+def run_import_batch(self: Task, batch_id: str, only_failed: bool = False) -> dict[str, Any]:
     """异步执行导入批次解析 + 行级 upsert。
 
     Args:
@@ -89,25 +88,13 @@ def run_import_batch(
 # ---------------------------------------------------------------------------
 
 
-async def _run_import_batch(
-    batch_id: UUID, only_failed: bool = False
-) -> dict[str, Any]:
+async def _run_import_batch(batch_id: UUID, only_failed: bool = False) -> dict[str, Any]:
     """原子 claim 一个批次；原始投递与恢复投递并发时只允许一个 runner。"""
-    lock_sql = text(
-        "SELECT pg_try_advisory_lock("
-        "hashtextextended(CAST(:batch_id AS text), 0))"
-    )
-    unlock_sql = text(
-        "SELECT pg_advisory_unlock("
-        "hashtextextended(CAST(:batch_id AS text), 0))"
-    )
+    lock_sql = text("SELECT pg_try_advisory_lock(" "hashtextextended(CAST(:batch_id AS text), 0))")
+    unlock_sql = text("SELECT pg_advisory_unlock(" "hashtextextended(CAST(:batch_id AS text), 0))")
     async with AsyncSessionBypass() as lock_session:
         acquired = bool(
-            (
-                await lock_session.execute(
-                    lock_sql, {"batch_id": str(batch_id)}
-                )
-            ).scalar_one()
+            (await lock_session.execute(lock_sql, {"batch_id": str(batch_id)})).scalar_one()
         )
         if not acquired:
             log.info(
@@ -119,10 +106,8 @@ async def _run_import_batch(
             return await _run_import_batch_claimed(batch_id, only_failed)
         finally:
             try:
-                await lock_session.execute(
-                    unlock_sql, {"batch_id": str(batch_id)}
-                )
-            except Exception as exc:  # noqa: BLE001 连接关闭也会释放会话锁
+                await lock_session.execute(unlock_sql, {"batch_id": str(batch_id)})
+            except Exception as exc:
                 log.warning(
                     "import_batch_advisory_unlock_failed",
                     extra={"batch_id": str(batch_id)},
@@ -130,9 +115,7 @@ async def _run_import_batch(
                 sentry_sdk.capture_exception(exc)
 
 
-async def _run_import_batch_claimed(
-    batch_id: UUID, only_failed: bool = False
-) -> dict[str, Any]:
+async def _run_import_batch_claimed(batch_id: UUID, only_failed: bool = False) -> dict[str, Any]:
     # ── 1. 元数据读取 + 状态守卫（bypass，系统级）──
     async with AsyncSessionBypass() as meta_s:
         batch = await meta_s.get(ImportBatch, batch_id)
@@ -168,9 +151,9 @@ async def _run_import_batch_claimed(
         else:
             from app.core.attachment import attachment_service
 
-            raw = attachment_service.get_object_bytes(file_bucket, file_r2_key)
+            raw = attachment_service.get_object_bytes(cast("BucketKind", file_bucket), file_r2_key)
             rows = _parse_rows(raw, original_filename)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         await _mark_batch_failed(batch_id, f"parse_error:{type(exc).__name__}")
         sentry_sdk.capture_exception(exc)
         import_batch_total.labels(source=source, status="failed").inc()
@@ -205,9 +188,7 @@ async def _run_import_batch_claimed(
                 import_rows_total.labels(source=source, result="failed").inc()
     finally:
         tenant_id_ctx.reset(tok)
-        import_batch_duration_seconds.labels(source=source).observe(
-            time.perf_counter() - start
-        )
+        import_batch_duration_seconds.labels(source=source).observe(time.perf_counter() - start)
 
     # ── 5. 汇总（bypass）──
     status = await _summarize_batch(batch_id, imported, failed, only_failed)
@@ -270,7 +251,7 @@ async def _process_one_row(
             )
             await app_s.commit()
         return True
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         # 失败行用独立 bypass session 写（不被业务回滚带走，FB-C + U05 模式）
         await _write_job_failed_bypass(
             batch_id=batch_id,
@@ -300,7 +281,8 @@ async def _upsert_job(
     """
     from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-    stmt = pg_insert(ImportJob.__table__).values(
+    # ``__table__`` 静态类型是 FromClause，实际是 Table；insert() 需要 TableClause。
+    stmt = pg_insert(cast("Table", ImportJob.__table__)).values(
         tenant_id=tenant_id,
         batch_id=batch_id,
         row_number=row_number,
@@ -391,18 +373,14 @@ def _parse_csv(raw: bytes) -> list[tuple[int, dict[str, Any]]]:
 def _parse_xlsx(raw: bytes) -> list[tuple[int, dict[str, Any]]]:
     from openpyxl import load_workbook
 
-    wb = load_workbook(
-        io.BytesIO(raw), read_only=True, data_only=True
-    )
+    wb = load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
     try:
         ws = wb.active
         rows: list[tuple[int, dict[str, Any]]] = []
         header: list[str] = []
         row_number = 0
         for excel_row in ws.iter_rows(values_only=True):
-            cells = [
-                str(c).strip() if c is not None else "" for c in excel_row
-            ]
+            cells = [str(c).strip() if c is not None else "" for c in excel_row]
             if not header:
                 # 平台导出常带前置空行/标题行（如生意参谋千牛表头在第 5 行）：
                 # 跳过完全空白的前置行，第一行非空行作为表头
@@ -467,9 +445,7 @@ async def _mark_batch_failed(batch_id: UUID, reason: str) -> None:
         await s.commit()
 
 
-async def _summarize_batch(
-    batch_id: UUID, imported: int, failed: int, only_failed: bool
-) -> str:
+async def _summarize_batch(batch_id: UUID, imported: int, failed: int, only_failed: bool) -> str:
     """汇总段：更新 batch 计数 + 终态（completed / partial / failed）。
 
     - only_failed=False（首跑 / 整文件重试）：total_rows = imported+failed，直接覆盖计数

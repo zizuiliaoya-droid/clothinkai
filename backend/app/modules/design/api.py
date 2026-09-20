@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, status
 
 from app.modules.auth.deps import CurrentActiveUser, require_permission
 from app.modules.design import permissions as scopes

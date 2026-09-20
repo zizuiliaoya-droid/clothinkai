@@ -44,9 +44,7 @@ def _register_fake_adapter(monkeypatch):
     import app.tasks.import_tasks as tasks
 
     calls: list[str] = []
-    monkeypatch.setattr(
-        tasks.run_import_batch, "delay", lambda batch_id: calls.append(batch_id)
-    )
+    monkeypatch.setattr(tasks.run_import_batch, "delay", lambda batch_id: calls.append(batch_id))
     yield calls
     ImportAdapterRegistry.clear()
 

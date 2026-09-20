@@ -54,8 +54,11 @@ class TestE2EReviewToPaid:
             style = await product_factory.style()
             blogger = await blogger_factory.blogger()
             promotion = await promotion_factory.promotion(
-                style=style, blogger=blogger, pr=pr,
-                publish_status="已发布", settlement_status="待核查",
+                style=style,
+                blogger=blogger,
+                pr=pr,
+                publish_status="已发布",
+                settlement_status="待核查",
                 quote_amount=Decimal("500.00"),
             )
 
@@ -70,9 +73,7 @@ class TestE2EReviewToPaid:
 
             settlement = (
                 await session.execute(
-                    select(Settlement).where(
-                        Settlement.promotion_id == promotion.id
-                    )
+                    select(Settlement).where(Settlement.promotion_id == promotion.id)
                 )
             ).scalar_one()
             assert settlement.settlement_status == "待核查"  # FB1 起点

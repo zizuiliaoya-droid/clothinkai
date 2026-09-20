@@ -61,15 +61,11 @@ class TestPromotionAuditChanges:
         assert "internal_code" not in PROMOTION_SENSITIVE_VALUE_FIELDS
 
     def test_compute_state_change(self) -> None:
-        result = compute_state_change(
-            field="publish_status", before="未发布", after="已发布"
-        )
+        result = compute_state_change(field="publish_status", before="未发布", after="已发布")
         assert result == {"publish_status": {"before": "未发布", "after": "已发布"}}
 
     def test_compute_state_change_unchanged(self) -> None:
-        assert compute_state_change(
-            field="publish_status", before="已发布", after="已发布"
-        ) == {}
+        assert compute_state_change(field="publish_status", before="已发布", after="已发布") == {}
 
 
 class TestComputePromotionChanges:
@@ -129,17 +125,18 @@ class TestFormatInternalCode:
         assert result == "AX2601010042"
 
     def test_empty_tenant_code(self) -> None:
-        result = format_internal_code(
-            tenant_code="", cooperation_date=date(2026, 1, 1), sequence=1
-        )
+        result = format_internal_code(tenant_code="", cooperation_date=date(2026, 1, 1), sequence=1)
         assert result == "XX2601010001"
 
     def test_sequence_padding(self) -> None:
-        assert format_internal_code(
-            tenant_code="DEMO",
-            cooperation_date=date(2026, 5, 26),
-            sequence=9999,
-        ) == "DE2605269999"
+        assert (
+            format_internal_code(
+                tenant_code="DEMO",
+                cooperation_date=date(2026, 5, 26),
+                sequence=9999,
+            )
+            == "DE2605269999"
+        )
 
     def test_uppercase(self) -> None:
         result = format_internal_code(

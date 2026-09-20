@@ -12,6 +12,7 @@ from typing import Any
 from uuid import UUID
 
 import sentry_sdk
+from celery import Task
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 
@@ -32,15 +33,13 @@ log = logging.getLogger(__name__)
     max_retries=2,
     default_retry_delay=10,
 )
-def schedule_daily_tasks(self) -> dict[str, Any]:  # noqa: ANN001
+def schedule_daily_tasks(self: Task) -> dict[str, Any]:
     return run_async_task(_schedule_impl())
 
 
 async def _schedule_impl() -> dict[str, Any]:
     async with AsyncSessionBypass() as meta:
-        tenant_ids = list(
-            (await meta.execute(text("SELECT id FROM tenant"))).scalars().all()
-        )
+        tenant_ids = list((await meta.execute(text("SELECT id FROM tenant"))).scalars().all())
 
     total = 0
     for tid in tenant_ids:
@@ -60,7 +59,7 @@ async def _schedule_one_tenant(tenant_id: UUID) -> int:
                 count = await CrawlerTaskService(s).schedule_for_tenant(tenant_id)
                 await s.commit()
                 return count
-    except Exception as exc:  # noqa: BLE001 单租户失败不中止
+    except Exception as exc:
         log.exception("crawler_schedule_tenant_failed tenant=%s", str(tenant_id))
         sentry_sdk.capture_exception(exc)
         return 0
@@ -108,7 +107,7 @@ async def _recover_stalled_imports_impl() -> dict[str, Any]:
     for batch_id in batch_ids:
         try:
             run_import_batch.delay(str(batch_id))
-        except Exception as exc:  # noqa: BLE001 单批投递失败不阻断其余恢复
+        except Exception as exc:
             enqueue_failed += 1
             log.exception(
                 "crawler_stalled_import_enqueue_failed batch_id=%s",

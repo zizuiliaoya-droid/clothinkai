@@ -11,7 +11,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.modules.collect.enums import CrawlerPlatform
 
-
 # ----------------------------- WorkerToken ----------------------------- #
 
 
@@ -29,7 +28,9 @@ class WorkerTokenCreate(BaseModel):
         for value in values:
             item = value.strip()
             try:
-                parsed = str(ip_network(item, strict=False)) if "/" in item else str(ip_address(item))
+                parsed = (
+                    str(ip_network(item, strict=False)) if "/" in item else str(ip_address(item))
+                )
             except ValueError as exc:
                 raise ValueError(f"无效的 IP 或 CIDR: {item}") from exc
             if parsed not in normalized:

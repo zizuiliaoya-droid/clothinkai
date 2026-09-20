@@ -12,36 +12,28 @@ class TestAiApiContract:
     async def test_strategy_requires_auth(self) -> None:
         from app.main import app
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.post("/api/ai/strategy-advice", json={})
         assert resp.status_code == 401
 
     async def test_anomaly_requires_auth(self) -> None:
         from app.main import app
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.post("/api/ai/anomaly-diagnosis", json={})
         assert resp.status_code == 401
 
     async def test_blogger_suggest_requires_auth(self) -> None:
         from app.main import app
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.post("/api/ai/blogger-suggest", json={})
         assert resp.status_code == 401
 
     async def test_openapi_exposes_ai_endpoints(self) -> None:
         from app.main import app
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.get("/api/openapi.json")
         assert resp.status_code == 200
         paths = resp.json().get("paths", {})

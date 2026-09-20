@@ -12,8 +12,8 @@ from app.modules.ai.deps import AiAdvisoryServiceDep
 from app.modules.ai.schemas import (
     AiAdviceResponse,
     AnomalyDiagnosisRequest,
-    BloggerSuggestRequest,
     BloggerSuggestion,
+    BloggerSuggestRequest,
     StrategyAdviceRequest,
 )
 from app.modules.auth.deps import CurrentActiveUser, require_permission

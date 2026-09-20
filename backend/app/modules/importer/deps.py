@@ -20,9 +20,7 @@ def get_field_mapping_service(session: SessionDep) -> FieldMappingService:
 
 
 ImportServiceDep = Annotated[ImportService, Depends(get_import_service)]
-FieldMappingServiceDep = Annotated[
-    FieldMappingService, Depends(get_field_mapping_service)
-]
+FieldMappingServiceDep = Annotated[FieldMappingService, Depends(get_field_mapping_service)]
 
 
 __all__ = [

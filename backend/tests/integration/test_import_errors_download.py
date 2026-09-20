@@ -100,9 +100,7 @@ class TestErrorsDownload:
         try:
             user = await factory.user(tenant_a, roles=[pr_role])
             batch = await import_batch_factory.batch(status="partial", failed=1)
-            await _add_failed_job(
-                session, tenant_a.id, batch.id, 1, {"a": "fail"}, "err"
-            )
+            await _add_failed_job(session, tenant_a.id, batch.id, 1, {"a": "fail"}, "err")
             # success 行（不应出现在下载中）
             session.add(
                 ImportJob(

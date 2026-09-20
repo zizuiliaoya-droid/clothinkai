@@ -84,9 +84,7 @@ def test_parse_row_custom_mapping():
             {"source_col": "成本", "target_field": "cost_price", "type": "decimal"},
         ]
     )
-    parsed = _adapter().parse_row(
-        {"商品货号": "ST9", "规格编码": "SK9", "成本": "10.5"}, mapping
-    )
+    parsed = _adapter().parse_row({"商品货号": "ST9", "规格编码": "SK9", "成本": "10.5"}, mapping)
     assert parsed["style_code"] == "ST9"
     assert parsed["sku_code"] == "SK9"
     assert parsed["cost_price"] == Decimal("10.5")
@@ -122,11 +120,11 @@ def test_validate_missing_required():
 
 
 def test_validate_each_required_field():
+    # category 自 1821779 起不再必填（缺失时回落到 _DEFAULT_CATEGORY="未分类"）
     adapter = _adapter()
     for field, label in [
         ("style_code", "款式编码"),
         ("style_name", "款式名称"),
-        ("category", "类目"),
         ("sku_code", "SKU编码"),
         ("color", "颜色"),
         ("size", "尺码"),

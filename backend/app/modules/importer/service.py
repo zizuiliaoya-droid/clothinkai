@@ -125,9 +125,7 @@ class ImportService:
         actor_id = user.id
 
         # 3. 解析 mapping_version（指定 → 校验存在；None → 用 active）
-        resolved_version = await self._resolve_mapping_version(
-            source, mapping_version, tenant_id
-        )
+        resolved_version = await self._resolve_mapping_version(source, mapping_version, tenant_id)
 
         # 4. NF-2 DB 先行：INSERT batch，靠 UNIQUE(tenant,source,hash) 原子拦并发
         batch_id = uuid4()
@@ -159,18 +157,16 @@ class ImportService:
                         key=r2_key,
                         content_type=content_type or "application/octet-stream",
                     )
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     # NF-2 补偿：R2 写失败 → 抛出触发 savepoint 回滚（batch 行被撤销，无孤儿）
                     log.exception(
                         "import_upload_r2_failed",
                         extra={"batch_id": str(batch_id), "source": source},
                     )
                     raise ImportStorageError() from exc
-        except IntegrityError:
+        except IntegrityError as exc:
             existing = await self._repo.find_by_hash(tenant_id, source, file_hash)
-            raise ImportDuplicateFileError(
-                batch_id=existing.id if existing else None
-            )
+            raise ImportDuplicateFileError(batch_id=existing.id if existing else None) from exc
 
         await self._audit.log(
             action="import.upload",
@@ -220,9 +216,7 @@ class ImportService:
         file_hash, _ = compute_sha256(io.BytesIO(content))
         import_file_size_bytes.labels(source=source).observe(size_bytes)
 
-        resolved_version = await self._resolve_mapping_version(
-            source, mapping_version, tenant_id
-        )
+        resolved_version = await self._resolve_mapping_version(source, mapping_version, tenant_id)
         batch_id = uuid4()
         r2_key = f"imports/{tenant_id}/{batch_id}/{safe_filename(filename)}"
         batch = ImportBatch(
@@ -248,16 +242,16 @@ class ImportService:
                         key=r2_key,
                         content_type=content_type,
                     )
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     log.exception(
                         "crawler_import_upload_r2_failed",
                         extra={"batch_id": str(batch_id), "source": source},
                     )
                     raise ImportStorageError() from exc
-        except IntegrityError:
+        except IntegrityError as exc:
             existing = await self._repo.find_by_hash(tenant_id, source, file_hash)
             if existing is None:
-                raise ImportDuplicateFileError()
+                raise ImportDuplicateFileError() from exc
             should_enqueue = False
             if existing.status == "failed":
                 # 仅允许观察到该 failed generation 的请求原子 claim。updated_at
@@ -303,7 +297,6 @@ class ImportService:
         # 由 CrawlerTaskService 与任务终态、凭据副作用在同一事务提交；
         # 提交后再投递导入任务，避免并发结果回传重复建批次。
         return batch, True
-
 
     # ============================================================
     # retry（原子 claim 互斥 NF-3 + 两类失败分流 FB-E）
@@ -409,7 +402,6 @@ class ImportService:
                 ]
             )
         return buf.getvalue().encode("utf-8")
-
 
     # ============================================================
     # Private helpers

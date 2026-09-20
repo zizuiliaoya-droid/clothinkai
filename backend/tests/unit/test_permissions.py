@@ -59,9 +59,7 @@ class TestMergePermissions:
 @pytest.mark.unit
 class TestEffectivePermissionsHas:
     def test_exact_match(self) -> None:
-        perms = EffectivePermissions(
-            user_id="u1", scopes=frozenset({"auth.user:read"})
-        )
+        perms = EffectivePermissions(user_id="u1", scopes=frozenset({"auth.user:read"}))
         assert perms.has("auth.user", "read") is True
         assert perms.has("auth.user", "write") is False
 
@@ -71,17 +69,13 @@ class TestEffectivePermissionsHas:
         assert perms.has("anything", "anyaction") is True
 
     def test_module_wildcard_all_actions(self) -> None:
-        perms = EffectivePermissions(
-            user_id="u1", scopes=frozenset({"product.*:*"})
-        )
+        perms = EffectivePermissions(user_id="u1", scopes=frozenset({"product.*:*"}))
         assert perms.has("product.style", "read") is True
         assert perms.has("product.sku", "write") is True
         assert perms.has("auth.user", "read") is False
 
     def test_module_wildcard_specific_action(self) -> None:
-        perms = EffectivePermissions(
-            user_id="u1", scopes=frozenset({"report.*:read"})
-        )
+        perms = EffectivePermissions(user_id="u1", scopes=frozenset({"report.*:read"}))
         assert perms.has("report.publish_progress", "read") is True
         assert perms.has("report.style_roi", "read") is True
         # 写权限不通过通配符

@@ -10,6 +10,8 @@ from collections import defaultdict
 from datetime import date
 from uuid import UUID
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.modules.promotion.repository import PromotionRepository
 from app.modules.wecom.domain import build_render_ctx, is_important, render_template
 from app.modules.wecom.enums import NotificationType
@@ -26,7 +28,7 @@ _IMPORTANT_DAYS = 3
 
 
 class WecomScanService:
-    def __init__(self, session) -> None:
+    def __init__(self, session: AsyncSession) -> None:
         self._s = session
         self._messages = WecomMessageRepository(session)
         self._contacts = WecomContactRepository(session)

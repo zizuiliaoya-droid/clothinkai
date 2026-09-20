@@ -99,9 +99,7 @@ class PromotionImportAdapter:
 
     # ----------------------- parse_row（纯函数）----------------------- #
 
-    def parse_row(
-        self, row: dict[str, Any], mapping: "FieldMapping | None"
-    ) -> dict[str, Any]:
+    def parse_row(self, row: dict[str, Any], mapping: FieldMapping | None) -> dict[str, Any]:
         """按 mapping（或内置默认）映射表头 + 类型转换。"""
         if mapping is not None:
             columns = mapping.mapping_config.get("columns", _DEFAULT_COLUMNS)
@@ -118,9 +116,7 @@ class PromotionImportAdapter:
             elif col_type == "date":
                 parsed[target] = _to_date(raw)
             else:
-                parsed[target] = (
-                    str(raw).strip() if raw not in (None, "") else None
-                )
+                parsed[target] = str(raw).strip() if raw not in (None, "") else None
         return parsed
 
     # ----------------------- validate（纯函数，不查 FK）----------------------- #
@@ -157,7 +153,6 @@ class PromotionImportAdapter:
             if value and isinstance(value, str) and len(value) > max_len:
                 errs.append(f"{field} 超过长度上限 {max_len}")
         return errs
-
 
     # ----------------------- upsert（INSERT-only，复用 runner session）----------------------- #
 
@@ -225,15 +220,11 @@ class PromotionImportAdapter:
         await session.flush()
         return promotion.id, True  # INSERT-only → is_inserted 恒 True
 
-    async def _get_tenant_code(
-        self, session: AsyncSession, tenant_id: UUID
-    ) -> str:
+    async def _get_tenant_code(self, session: AsyncSession, tenant_id: UUID) -> str:
         """tenant.code（实例级缓存；tenant.code 不可变，缓存安全）。"""
         if tenant_id not in self._tenant_code_cache:
             code = (
-                await session.execute(
-                    select(Tenant.code).where(Tenant.id == tenant_id)
-                )
+                await session.execute(select(Tenant.code).where(Tenant.id == tenant_id))
             ).scalar_one_or_none() or ""
             self._tenant_code_cache[tenant_id] = code
         return self._tenant_code_cache[tenant_id]

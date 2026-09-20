@@ -39,9 +39,7 @@ async def get_bi_dashboard(
     ] = "day",
 ) -> BiDashboard:
     tr = resolve_time_range(preset, date_from, date_to)
-    return await service.get_dashboard(
-        user.tenant_id, tr, granularity=granularity
-    )
+    return await service.get_dashboard(user.tenant_id, tr, granularity=granularity)
 
 
 @router.get(

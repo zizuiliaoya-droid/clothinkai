@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import builtins
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -20,8 +21,8 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.product.brand_repository import BrandRepository  # 再导出，见 __all__
 from app.modules.product.models import Brand, Sku, Style
-
 
 # ---------------------------------------------------------------------------
 # StyleRepository
@@ -48,7 +49,7 @@ class StyleListFilters:
     season: str | None = None
     gender: str | None = None
     design_status: str | None = None
-    is_active: bool | None = True
+    is_active: bool | None = None
     include_inactive: bool = False
 
 
@@ -58,9 +59,7 @@ class StyleRepository:
 
     # ----------------------- get / count ----------------------- #
 
-    async def get_by_id(
-        self, style_id: UUID, *, include_deleted: bool = False
-    ) -> Style | None:
+    async def get_by_id(self, style_id: UUID, *, include_deleted: bool = False) -> Style | None:
         style = await self._session.get(Style, style_id)
         if style is None:
             return None
@@ -68,9 +67,7 @@ class StyleRepository:
             return None
         return style
 
-    async def get_by_code(
-        self, style_code: str, *, include_deleted: bool = False
-    ) -> Style | None:
+    async def get_by_code(self, style_code: str, *, include_deleted: bool = False) -> Style | None:
         stmt = select(Style).where(Style.style_code == style_code)
         if not include_deleted:
             stmt = stmt.where(Style.is_deleted.is_(False))
@@ -99,7 +96,13 @@ class StyleRepository:
     ) -> tuple[Sequence[Style], int]:
         stmt = select(Style).where(Style.is_deleted.is_(False))
 
-        if not filters.include_inactive:
+        # 状态过滤三态：
+        # - is_active 显式给值 → 只看该状态（用于「只看停用」）
+        # - is_active=None + include_inactive=True → 启用/停用都看
+        # - 两者都未给（默认）→ 只看启用，与历史行为一致
+        if filters.is_active is not None:
+            stmt = stmt.where(Style.is_active.is_(filters.is_active))
+        elif not filters.include_inactive:
             stmt = stmt.where(Style.is_active.is_(True))
 
         if filters.keyword:
@@ -125,8 +128,9 @@ class StyleRepository:
         total_stmt = select(func.count()).select_from(stmt.subquery())
         total = int((await self._session.execute(total_stmt)).scalar_one())
 
+        # 停用的排在最后（混合查看时不干扰在用款式），组内再按创建时间倒序
         stmt = (
-            stmt.order_by(Style.created_at.desc())
+            stmt.order_by(Style.is_active.desc(), Style.created_at.desc())
             .limit(page_size)
             .offset((page - 1) * page_size)
         )
@@ -135,9 +139,11 @@ class StyleRepository:
 
     # ----------------------- match (BR-U02-50/51) ----------------------- #
 
+    # 本类有名为 ``list`` 的方法，会在类作用域内遮蔽内置 ``list``，
+    # 故此处必须写 ``builtins.list``，否则注解会被解析成那个方法（类型检查静默失效）。
     async def search_by_keyword(
         self, keyword: str, *, limit: int = 20
-    ) -> list[StyleSearchResult]:
+    ) -> builtins.list[StyleSearchResult]:
         """模糊搜索（拼接表达式 ILIKE，命中 ``idx_style_search_trgm`` GIN 索引）。
 
         查询表达式必须与索引表达式严格一致，否则不命中：
@@ -203,9 +209,7 @@ class SkuRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def get_by_id(
-        self, sku_id: UUID, *, include_deleted: bool = False
-    ) -> Sku | None:
+    async def get_by_id(self, sku_id: UUID, *, include_deleted: bool = False) -> Sku | None:
         sku = await self._session.get(Sku, sku_id)
         if sku is None:
             return None
@@ -213,9 +217,7 @@ class SkuRepository:
             return None
         return sku
 
-    async def get_by_code(
-        self, sku_code: str, *, include_deleted: bool = False
-    ) -> Sku | None:
+    async def get_by_code(self, sku_code: str, *, include_deleted: bool = False) -> Sku | None:
         stmt = select(Sku).where(Sku.sku_code == sku_code)
         if not include_deleted:
             stmt = stmt.where(Sku.is_deleted.is_(False))
@@ -361,8 +363,10 @@ class SkuRepository:
 
         full_values = {"tenant_id": tenant_id, **values}
 
-        stmt = pg_insert(Sku).values(**full_values)
-        stmt = stmt.on_conflict_do_update(
+        # 分两个变量：.returning() 的结果是 ReturningInsert，与 Insert 不是同一类型，
+        # 复用同名变量会让 mypy 报不兼容赋值。
+        insert_stmt = pg_insert(Sku).values(**full_values)
+        stmt = insert_stmt.on_conflict_do_update(
             index_elements=[Sku.tenant_id, Sku.sku_code],
             # 谓词须与 partial UNIQUE 索引匹配（migration 用 ``is_deleted = false``）；
             # ``.is_(False)`` 生成 ``IS false`` 会导致 ON CONFLICT 无法匹配索引。
@@ -393,6 +397,3 @@ __all__ = [
     "StyleRepository",
     "StyleSearchResult",
 ]
-
-
-from app.modules.product.brand_repository import BrandRepository  # re-export

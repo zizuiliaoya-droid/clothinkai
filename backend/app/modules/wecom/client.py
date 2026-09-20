@@ -62,27 +62,31 @@ class WecomClient:
             f"{settings.WECOM_API_BASE}/cgi-bin/gettoken",
             params={"corpid": self._cfg.corp_id, "corpsecret": secret},
         )
-        data = resp.json()
+        data: dict[str, Any] = resp.json()
         if data.get("errcode"):
             raise WecomApiError(data["errcode"], data.get("errmsg"))
-        token = data["access_token"]
+        token: str = data["access_token"]
         await cache.set_with_ttl(self._token_key, token, settings.WECOM_TOKEN_TTL)
         return token
 
     async def _call(self, method: str, path: str, **kw: Any) -> dict:
         token = await self.get_access_token()
-        data = (
+        data: dict[str, Any] = (
             await self._http.request(
-                method, f"{settings.WECOM_API_BASE}{path}",
-                params={"access_token": token}, **kw,
+                method,
+                f"{settings.WECOM_API_BASE}{path}",
+                params={"access_token": token},
+                **kw,
             )
         ).json()
         if data.get("errcode") in _TOKEN_EXPIRED_ERRCODES:
             token = await self.get_access_token(force_refresh=True)
             data = (
                 await self._http.request(
-                    method, f"{settings.WECOM_API_BASE}{path}",
-                    params={"access_token": token}, **kw,
+                    method,
+                    f"{settings.WECOM_API_BASE}{path}",
+                    params={"access_token": token},
+                    **kw,
                 )
             ).json()
         if data.get("errcode") in _RATE_LIMIT_ERRCODES:
@@ -93,14 +97,21 @@ class WecomClient:
 
     async def find_external_userid_by_wechat(self, wechat: str) -> str | None:
         """按微信号匹配 external_userid（遍历客户列表，简化实现）。"""
-        data = await self._call(
-            "GET", "/cgi-bin/externalcontact/get_by_user",
-            params={"userid": self._cfg.default_sender_userid},
-        ) if self._cfg.default_sender_userid else {"external_userid": []}
+        data: dict[str, Any] = (
+            await self._call(
+                "GET",
+                "/cgi-bin/externalcontact/get_by_user",
+                params={"userid": self._cfg.default_sender_userid},
+            )
+            if self._cfg.default_sender_userid
+            else {"external_userid": []}
+        )
         # MVP：外部联系人详情匹配 wechat（真实需调 get 详情；此处由 mock 提供）
+        euid: str
         for euid in data.get("external_userid", []):
             detail = await self._call(
-                "GET", "/cgi-bin/externalcontact/get",
+                "GET",
+                "/cgi-bin/externalcontact/get",
                 params={"external_userid": euid},
             )
             contact = detail.get("external_contact", {})
@@ -113,7 +124,8 @@ class WecomClient:
     ) -> dict:
         with wecom_send_duration_seconds.time():
             return await self._call(
-                "POST", "/cgi-bin/externalcontact/add_msg_template",
+                "POST",
+                "/cgi-bin/externalcontact/add_msg_template",
                 json={
                     "chat_type": "single",
                     "external_userid": recipients,
@@ -124,7 +136,7 @@ class WecomClient:
 
     async def send_group_robot(self, webhook_url: str, markdown: str) -> dict:
         """U15 群机器人（控评群）：直连完整 webhook URL（含 key），无需 access_token。"""
-        data = (
+        data: dict[str, Any] = (
             await self._http.post(
                 webhook_url,
                 json={"msgtype": "markdown", "markdown": {"content": markdown}},
@@ -138,7 +150,8 @@ class WecomClient:
         """U15 自建应用推送（异常预警管理群）：复用 _call（token 刷新 + 频控）+ 计时。"""
         with wecom_send_duration_seconds.time():
             return await self._call(
-                "POST", "/cgi-bin/message/send",
+                "POST",
+                "/cgi-bin/message/send",
                 json={
                     "touser": "|".join(touser),
                     "agentid": int(self._cfg.agent_id),
@@ -159,13 +172,13 @@ class WecomCrypto:
         self._iv = self._key[:16]
 
     def signature(self, timestamp: str, nonce: str, encrypt: str) -> str:
-        parts = sorted([self._token, timestamp, nonce, encrypt])
-        return hashlib.sha1("".join(parts).encode()).hexdigest()
+        # SHA1 由企业微信回调协议规定（非本项目可选），不是安全强度选择
+        return hashlib.sha1(  # noqa: S324
+            "".join(sorted([self._token, timestamp, nonce, encrypt])).encode()
+        ).hexdigest()
 
     def verify(self, msg_signature: str, timestamp: str, nonce: str, encrypt: str) -> bool:
-        return hmac.compare_digest(
-            self.signature(timestamp, nonce, encrypt), msg_signature or ""
-        )
+        return hmac.compare_digest(self.signature(timestamp, nonce, encrypt), msg_signature or "")
 
     def encrypt(self, plaintext: str) -> str:
         from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
@@ -191,9 +204,10 @@ class WecomCrypto:
     def parse_callback(plaintext: str) -> dict:
         """解析回调载荷为 {msgid, result}（MVP：JSON；V1 可扩展 XML）。"""
         try:
-            return json.loads(plaintext)
+            parsed: dict[str, Any] = json.loads(plaintext)
         except (ValueError, TypeError):
             return {}
+        return parsed
 
 
 def build_http_client() -> httpx.AsyncClient:

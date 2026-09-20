@@ -41,7 +41,6 @@ from app.modules.finance.schemas import (
     SettlementReviewRequest,
 )
 
-
 router = APIRouter(prefix="/api", tags=["finance"])
 
 
@@ -110,9 +109,7 @@ async def daily_summary_as_of(
     date: Annotated[str | None, Query()] = None,
 ) -> DailySummaryAsOfResponse:
     """EP06-S08 口径 B：截至当日各状态快照（FB7）。"""
-    return await service.get_daily_summary_as_of(
-        date_value=_parse_date(date), user=user
-    )
+    return await service.get_daily_summary_as_of(date_value=_parse_date(date), user=user)
 
 
 @router.get(
@@ -126,9 +123,7 @@ async def daily_summary_activity(
     date: Annotated[str | None, Query()] = None,
 ) -> DailySummaryActivityResponse:
     """EP06-S08 口径 A：当天发生的动作（FB7）。"""
-    return await service.get_daily_summary_activity(
-        date_value=_parse_date(date), user=user
-    )
+    return await service.get_daily_summary_activity(date_value=_parse_date(date), user=user)
 
 
 @router.get(

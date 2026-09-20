@@ -6,11 +6,11 @@ from decimal import Decimal
 
 import pytest
 
+from app.modules.finance.balance_service import BalanceService
 from app.modules.finance.exceptions import (
     AmountExpressionInvalidError,
     BalanceTypeFieldMismatchError,
 )
-from app.modules.finance.balance_service import BalanceService
 from app.modules.finance.order_adjustment_schemas import BalanceRecordCreate
 from app.modules.finance.order_adjustment_service import parse_amount_expr
 
@@ -47,15 +47,15 @@ class TestParseAmountExpr:
 def _payload(record_type, *, income=None, expense=None):
     return BalanceRecordCreate(
         record_date=__import__("datetime").date(2026, 6, 1),
-        record_type=record_type, income=income, expense=expense,
+        record_type=record_type,
+        income=income,
+        expense=expense,
     )
 
 
 class TestBalanceTypeFieldValidation:
     def test_topup_requires_income(self) -> None:
-        BalanceService._validate_type_field(
-            _payload("充值", income=Decimal("100"))
-        )  # 不抛
+        BalanceService._validate_type_field(_payload("充值", income=Decimal("100")))  # 不抛
 
     def test_topup_with_expense_invalid(self) -> None:
         with pytest.raises(BalanceTypeFieldMismatchError):
@@ -64,15 +64,11 @@ class TestBalanceTypeFieldValidation:
             )
 
     def test_expense_type_requires_expense(self) -> None:
-        BalanceService._validate_type_field(
-            _payload("推广支出", expense=Decimal("50"))
-        )
+        BalanceService._validate_type_field(_payload("推广支出", expense=Decimal("50")))
 
     def test_expense_type_with_income_invalid(self) -> None:
         with pytest.raises(BalanceTypeFieldMismatchError):
-            BalanceService._validate_type_field(
-                _payload("刷拍单支出", income=Decimal("50"))
-            )
+            BalanceService._validate_type_field(_payload("刷拍单支出", income=Decimal("50")))
 
     def test_topup_no_income_invalid(self) -> None:
         with pytest.raises(BalanceTypeFieldMismatchError):

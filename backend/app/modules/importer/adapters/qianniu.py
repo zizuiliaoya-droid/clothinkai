@@ -68,9 +68,7 @@ class QianniuImportAdapter:
     source: str = "qianniu"
     target_table: str = "qianniu_daily"
 
-    def parse_row(
-        self, row: dict[str, Any], mapping: "FieldMapping | None"
-    ) -> dict[str, Any]:
+    def parse_row(self, row: dict[str, Any], mapping: FieldMapping | None) -> dict[str, Any]:
         columns = (
             mapping.mapping_config.get("columns", _DEFAULT_COLUMNS)
             if mapping is not None
@@ -114,9 +112,7 @@ class QianniuImportAdapter:
         actor_id: UUID | None,
     ) -> tuple[UUID, bool]:
         platform_id = parsed["platform_id"]
-        pp = await PlatformProductService(session).find_by_platform_id(
-            _PLATFORM, platform_id
-        )
+        pp = await PlatformProductService(session).find_by_platform_id(_PLATFORM, platform_id)
         ppid = pp.id if pp else None
         if pp is None:
             await DataQualityService(session).record(

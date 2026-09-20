@@ -11,6 +11,7 @@ source 有效集合 = 已注册 adapter 的 source 键（upload 时白名单校�
 from __future__ import annotations
 
 import logging
+from typing import ClassVar
 
 from app.modules.importer.adapter import ImportAdapter
 
@@ -20,7 +21,7 @@ log = logging.getLogger(__name__)
 class ImportAdapterRegistry:
     """导入适配器注册中心。"""
 
-    _adapters: dict[str, ImportAdapter] = {}
+    _adapters: ClassVar[dict[str, ImportAdapter]] = {}
 
     @classmethod
     def register(cls, adapter: ImportAdapter) -> None:

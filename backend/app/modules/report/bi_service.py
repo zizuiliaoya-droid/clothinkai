@@ -67,16 +67,13 @@ class BiService:
         published_rows = await self._repo.published_spend_by_style(
             tenant_id=tenant_id, date_from=date_from, date_to=date_to
         )
-        production = await self._production.get_report(
-            tenant_id, time_range, exclude_brushing=True
-        )
+        production = await self._production.get_report(tenant_id, time_range, exclude_brushing=True)
 
         store = self._store_summary(store_row)
         promotion = self._promotion_summary(promotion_row)
         workload = [self._workload_row(row) for row in workload_rows]
         published_by_style = {
-            row["style_id"]: Decimal(str(row["external_spend"] or 0))
-            for row in published_rows
+            row["style_id"]: Decimal(str(row["external_spend"] or 0)) for row in published_rows
         }
         styles = [
             self._style_row(row, published_by_style.get(row.style_id, Decimal("0")))
@@ -90,7 +87,7 @@ class BiService:
             reverse=True,
         )[:_TOP_N]
         sales_top = sorted(styles, key=lambda row: row.sales_amount, reverse=True)[:_TOP_N]
-        cards = [
+        cards: list[dict[str, Any]] = [
             {"key": "style_count", "label": "在投款式", "value": len(styles)},
             {"key": "pay_amount", "label": "支付额", "value": str(store.sales_amount)},
             {"key": "store_days", "label": "店铺天数", "value": len(trend)},

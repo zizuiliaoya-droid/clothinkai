@@ -44,7 +44,6 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import TenantScopedModel
 
-
 # ---------------------------------------------------------------------------
 # Promotion（推广合作）
 # ---------------------------------------------------------------------------
@@ -90,25 +89,15 @@ class Promotion(TenantScopedModel):
 
     # --- 快照字段（创建时一次性写入，不再重算）---
     style_code_snapshot: Mapped[str] = mapped_column(String(64), nullable=False)
-    style_short_name_snapshot: Mapped[str] = mapped_column(
-        String(128), nullable=False
-    )
-    quote_amount: Mapped[Decimal] = mapped_column(
-        Numeric(10, 2), nullable=False
-    )
-    cost_snapshot: Mapped[Decimal | None] = mapped_column(
-        Numeric(10, 2), nullable=True
-    )
+    style_short_name_snapshot: Mapped[str] = mapped_column(String(128), nullable=False)
+    quote_amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    cost_snapshot: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
 
     # --- 业务字段 ---
     platform: Mapped[str] = mapped_column(String(16), nullable=False)
     cooperation_date: Mapped[date] = mapped_column(Date, nullable=False)
-    scheduled_publish_date: Mapped[date | None] = mapped_column(
-        Date, nullable=True
-    )
-    actual_publish_date: Mapped[date | None] = mapped_column(
-        Date, nullable=True
-    )
+    scheduled_publish_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    actual_publish_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     publish_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     cancel_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     recall_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -120,9 +109,7 @@ class Promotion(TenantScopedModel):
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )
     # --- U16 拍单 ---
-    in_store_order: Mapped[bool] = mapped_column(
-        nullable=False, server_default=text("false")
-    )
+    in_store_order: Mapped[bool] = mapped_column(nullable=False, server_default=text("false"))
 
     # --- 三个状态字段 ---
     publish_status: Mapped[str] = mapped_column(
@@ -141,16 +128,12 @@ class Promotion(TenantScopedModel):
         ForeignKey("user.id", ondelete="SET NULL"),
         nullable=True,
     )
-    reviewed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     review_action: Mapped[str | None] = mapped_column(String(16), nullable=True)
     review_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # --- 通用 ---
-    is_active: Mapped[bool] = mapped_column(
-        nullable=False, server_default=text("true")
-    )
+    is_active: Mapped[bool] = mapped_column(nullable=False, server_default=text("true"))
 
     __table_args__ = (
         # 业务键唯一（部分索引：仅 active 行参与唯一性）
@@ -253,9 +236,7 @@ class PromotionSequence(TenantScopedModel):
     __tablename__ = "promotion_sequence"
 
     date_key: Mapped[date] = mapped_column(Date, nullable=False)
-    last_seq: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default=text("0")
-    )
+    last_seq: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
 
     __table_args__ = (
         Index(

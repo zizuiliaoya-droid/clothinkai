@@ -57,9 +57,7 @@ class TestMarkUploaded:
 
         svc = AttachmentService()
         with pytest.raises(AttachmentError):
-            await svc.mark_uploaded(
-                session=session, attachment_id=att.id, tenant_id=tenant_b.id
-            )
+            await svc.mark_uploaded(session=session, attachment_id=att.id, tenant_id=tenant_b.id)
 
     async def test_double_mark_uploaded_rejected(
         self,
@@ -95,18 +93,14 @@ class TestGetById:
         try:
             att = await attachment_factory.attachment()
             svc = AttachmentService()
-            found = await svc.get_by_id(
-                session=session, attachment_id=att.id
-            )
+            found = await svc.get_by_id(session=session, attachment_id=att.id)
             assert found is not None
             assert found.id == att.id
             assert found.purpose == "settlement_proof"
         finally:
             tenant_id_ctx.reset(token)
 
-    async def test_get_missing_returns_none(
-        self, session: AsyncSession
-    ) -> None:
+    async def test_get_missing_returns_none(self, session: AsyncSession) -> None:
         svc = AttachmentService()
         found = await svc.get_by_id(session=session, attachment_id=uuid4())
         assert found is None

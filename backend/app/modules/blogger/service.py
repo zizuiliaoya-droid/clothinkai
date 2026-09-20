@@ -61,9 +61,7 @@ class BloggerService:
     # CRUD
     # ============================================================
 
-    async def create_blogger(
-        self, payload: BloggerCreate, user: User
-    ) -> BloggerResponse:
+    async def create_blogger(self, payload: BloggerCreate, user: User) -> BloggerResponse:
         # BR-U03-01: 唯一性
         existing = await self._repo.get_by_xiaohongshu_id(payload.xiaohongshu_id)
         if existing is not None:
@@ -92,9 +90,7 @@ class BloggerService:
             phone=payload.phone,
             follower_count=payload.follower_count,
             blogger_type=payload.blogger_type.value if payload.blogger_type else None,
-            gender_target=(
-                payload.gender_target.value if payload.gender_target else None
-            ),
+            gender_target=(payload.gender_target.value if payload.gender_target else None),
             category_tags=list(payload.category_tags),
             quality_tags=list(payload.quality_tags),
             quote=payload.quote,
@@ -104,9 +100,7 @@ class BloggerService:
         )
         # U11 BR-U11-01: follower_count 提供时自动按阈值分级 blogger_type
         if payload.follower_count is not None:
-            blogger.blogger_type = self._tags.compute_blogger_type(
-                payload.follower_count
-            )
+            blogger.blogger_type = self._tags.compute_blogger_type(payload.follower_count)
         self._repo.add(blogger)
         await self._session.flush()
 
@@ -171,9 +165,7 @@ class BloggerService:
 
         # U11 BR-U11-01: follower_count 变更时自动重算 blogger_type
         if "follower_count" in changes:
-            blogger.blogger_type = self._tags.compute_blogger_type(
-                blogger.follower_count
-            )
+            blogger.blogger_type = self._tags.compute_blogger_type(blogger.follower_count)
 
         await self._session.flush()
 
@@ -199,9 +191,7 @@ class BloggerService:
         await self._session.commit()
         return await self._to_response(blogger, user)
 
-    async def upsert_by_xiaohongshu_id(
-        self, payload: BloggerCreate, user: User
-    ) -> BloggerResponse:
+    async def upsert_by_xiaohongshu_id(self, payload: BloggerCreate, user: User) -> BloggerResponse:
         """U06c 导入路径：数据库原子 upsert.
 
         与 partial UNIQUE 严格对齐 + 不"恢复"软删行 + audit 区分入口。
@@ -217,12 +207,8 @@ class BloggerService:
             "wechat": payload.wechat,
             "phone": payload.phone,
             "follower_count": payload.follower_count,
-            "blogger_type": (
-                payload.blogger_type.value if payload.blogger_type else None
-            ),
-            "gender_target": (
-                payload.gender_target.value if payload.gender_target else None
-            ),
+            "blogger_type": (payload.blogger_type.value if payload.blogger_type else None),
+            "gender_target": (payload.gender_target.value if payload.gender_target else None),
             "category_tags": list(payload.category_tags),
             "quality_tags": list(payload.quality_tags),
             "quote": payload.quote,
@@ -238,11 +224,7 @@ class BloggerService:
         )
 
         # 审计区分入口
-        action = (
-            "blogger.create_via_import"
-            if is_inserted
-            else "blogger.update_via_import"
-        )
+        action = "blogger.create_via_import" if is_inserted else "blogger.update_via_import"
         after_marker: dict[str, Any] = {
             "xiaohongshu_id": blogger.xiaohongshu_id,
             "nickname": blogger.nickname,
@@ -287,9 +269,7 @@ class BloggerService:
         )
         await self._session.commit()
 
-    async def disable_blogger(
-        self, blogger_id: UUID, user: User
-    ) -> BloggerResponse:
+    async def disable_blogger(self, blogger_id: UUID, user: User) -> BloggerResponse:
         blogger = await self._repo.get_by_id(blogger_id)
         if blogger is None:
             raise BloggerNotFoundError(f"博主 {blogger_id} 不存在")
@@ -304,9 +284,7 @@ class BloggerService:
         await self._session.commit()
         return await self._to_response(blogger, user)
 
-    async def restore_blogger(
-        self, blogger_id: UUID, user: User
-    ) -> BloggerResponse:
+    async def restore_blogger(self, blogger_id: UUID, user: User) -> BloggerResponse:
         """BR-U03-21: 恢复软删."""
         blogger = await self._repo.get_by_id(blogger_id, include_deleted=True)
         if blogger is None or not blogger.is_deleted:
@@ -384,9 +362,7 @@ class BloggerService:
 
     async def check_references(self, blogger_id: UUID) -> dict[str, int]:
         """检查博主的全部历史推广引用；租户隔离由 RLS 保证。"""
-        return {
-            "promotion_count": await self._promotion_repo.count_by_blogger(blogger_id)
-        }
+        return {"promotion_count": await self._promotion_repo.count_by_blogger(blogger_id)}
 
     # ============================================================
     # U11 标签计算
@@ -397,9 +373,7 @@ class BloggerService:
         blogger = await self._repo.get_by_id(blogger_id)
         if blogger is None:
             raise BloggerNotFoundError(f"博主 {blogger_id} 不存在")
-        blogger.blogger_type = self._tags.compute_blogger_type(
-            blogger.follower_count
-        )
+        blogger.blogger_type = self._tags.compute_blogger_type(blogger.follower_count)
         await self._session.flush()
         await self._session.commit()
         return blogger
@@ -420,9 +394,7 @@ class BloggerService:
         await self._session.commit()
         return blogger
 
-    async def mark_suspected_fake(
-        self, blogger_id: UUID, reason: str
-    ) -> Blogger:
+    async def mark_suspected_fake(self, blogger_id: UUID, reason: str) -> Blogger:
         """U11: 按 read_like_ratio 判定假号嫌疑（reason 记审计）."""
         blogger = await self._repo.get_by_id(blogger_id)
         if blogger is None:
@@ -439,9 +411,7 @@ class BloggerService:
         await self._session.commit()
         return blogger
 
-    async def recompute_tags_for_current_tenant(
-        self, tenant_id: UUID
-    ) -> dict[str, int]:
+    async def recompute_tags_for_current_tenant(self, tenant_id: UUID) -> dict[str, int]:
         """U11: recompute 端点同步入口 —— 重算当前租户全部活跃博主标签."""
         result = await self._tags.recompute_for_tenant(tenant_id)
         await self._session.commit()
@@ -449,9 +419,13 @@ class BloggerService:
 
     async def bulk_recompute_tags(self) -> int:
         """U11: Celery 批量入口（按当前 tenant_id 上下文）。返回处理博主数."""
+        from app.core.exceptions import TenantContextMissingError
         from app.core.tenancy import tenant_id_ctx
 
         tid = tenant_id_ctx.get()
+        if tid is None:
+            # 与 auth/service.py 一致：缺租户上下文即显式失败，不把 None 往下传
+            raise TenantContextMissingError()
         result = await self._tags.recompute_for_tenant(tid)
         await self._session.commit()
         return result["updated"]
@@ -474,9 +448,7 @@ class BloggerService:
         for field_name in ("quote", "wechat", "phone"):
             if field_name in sensitive_set:
                 value = getattr(payload, field_name)
-                if value is not None and not can_write_field(
-                    "blogger", field_name, ctx
-                ):
+                if value is not None and not can_write_field("blogger", field_name, ctx):
                     raise FieldPermissionDenied(field=field_name, entity="blogger")
 
     async def _to_response(self, blogger: Blogger, user: User) -> BloggerResponse:
@@ -497,9 +469,7 @@ class BloggerService:
             contact_primary_added=blogger.contact_primary_added,
             contact_backup=blogger.contact_backup,
             contact_backup_added=blogger.contact_backup_added,
-            is_added_success=bool(
-                blogger.contact_primary_added or blogger.contact_backup_added
-            ),
+            is_added_success=bool(blogger.contact_primary_added or blogger.contact_backup_added),
             wechat=blogger.wechat if can_see_wechat else None,
             phone=blogger.phone if can_see_phone else None,
             follower_count=blogger.follower_count,
@@ -514,9 +484,7 @@ class BloggerService:
             is_active=blogger.is_active,
             is_deleted=blogger.is_deleted,
             audience_profile=blogger.audience_profile,
-            read_like_ratio=self._tags.compute_read_like_ratio(
-                blogger.audience_profile
-            ),
+            read_like_ratio=self._tags.compute_read_like_ratio(blogger.audience_profile),
             crawler_metrics=dict(blogger.crawler_metrics or {}),
             created_at=blogger.created_at,
             updated_at=blogger.updated_at,

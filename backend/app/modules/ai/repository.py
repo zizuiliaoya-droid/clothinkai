@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import date
 from uuid import UUID
 
 from sqlalchemy import func, select, text
@@ -37,9 +36,7 @@ class AiDataRepository:
         )
         return int((await self._s.execute(stmt, {"t": str(tenant_id)})).scalar_one())
 
-    async def get_alert(
-        self, alert_id: UUID, tenant_id: UUID
-    ) -> WecomAlertLog | None:
+    async def get_alert(self, alert_id: UUID, tenant_id: UUID) -> WecomAlertLog | None:
         stmt = select(WecomAlertLog).where(
             WecomAlertLog.id == alert_id,
             WecomAlertLog.tenant_id == tenant_id,
@@ -47,14 +44,10 @@ class AiDataRepository:
         return (await self._s.execute(stmt)).scalar_one_or_none()
 
     async def get_style(self, style_id: UUID, tenant_id: UUID) -> Style | None:
-        stmt = select(Style).where(
-            Style.id == style_id, Style.tenant_id == tenant_id
-        )
+        stmt = select(Style).where(Style.id == style_id, Style.tenant_id == tenant_id)
         return (await self._s.execute(stmt)).scalar_one_or_none()
 
-    async def candidate_bloggers(
-        self, tenant_id: UUID, *, limit: int = 20
-    ) -> Sequence[Blogger]:
+    async def candidate_bloggers(self, tenant_id: UUID, *, limit: int = 20) -> Sequence[Blogger]:
         """候选博主（V1 规则预筛：活跃博主按粉丝量 Top；后续可增强匹配）。"""
         stmt = (
             select(Blogger)

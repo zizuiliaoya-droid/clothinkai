@@ -21,7 +21,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
@@ -43,7 +43,6 @@ from app.core.tenancy import bypass_rls_ctx, request_id_ctx
 from app.modules.auth.domain import merge_permissions
 from app.modules.auth.models import User
 from app.modules.auth.repository import PermissionRepository, RoleRepository
-
 from app.modules.finance.attachment_validator import ProofAttachmentValidator
 from app.modules.finance.enums import SettlementStatus
 from app.modules.finance.events import SettlementPaid
@@ -62,30 +61,31 @@ from app.modules.finance.repository import (
 )
 from app.modules.finance.repository import SettlementRepository
 from app.modules.finance.schemas import (
+    AmountBucket,
     DailySummaryActivityBuckets,
     DailySummaryActivityResponse,
     DailySummaryAsOfBuckets,
     DailySummaryAsOfResponse,
-    AmountBucket,
     SettlementExtraItemCreateRequest,
     SettlementExtraItemResponse,
-    SettlementListFilters as ApiSettlementListFilters,
     SettlementPage,
     SettlementPaymentAmountRequest,
     SettlementPaymentProofRequest,
     SettlementResponse,
     SettlementReviewRequest,
 )
+from app.modules.finance.schemas import (
+    SettlementListFilters as ApiSettlementListFilters,
+)
 from app.modules.finance.state_machines import SettlementStatusMachine
 from app.modules.promotion.enums import ReviewAction
 from app.modules.promotion.urge_calculator import get_today
-
 
 log = logging.getLogger(__name__)
 
 
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class SettlementService:
@@ -167,9 +167,7 @@ class SettlementService:
                 details={"settlement_id": str(settlement_id)},
             )
 
-        settlement_state_transitions_total.labels(
-            from_state=from_status, to_state=to_status
-        ).inc()
+        settlement_state_transitions_total.labels(from_state=from_status, to_state=to_status).inc()
 
         await self._audit.log(
             action=audit_action,
@@ -237,7 +235,6 @@ class SettlementService:
         )
         await self._session.commit()
         return await self._to_response(updated, user)
-
 
     # ============================================================
     # 状态推进：upload_payment_proof（mark_paid + FB4 + FB5）
@@ -328,14 +325,14 @@ class SettlementService:
         )
         try:
             await event_bus.dispatch(event, session=self._session)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             # 通知类事件失败不阻塞主流程；与 U04 review approve raise 不对称（FB5）
             log.exception("settlement_paid_dispatch_failed")
             try:
                 import sentry_sdk
 
                 sentry_sdk.capture_exception(exc)
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: S110 Sentry 上报是 best-effort，其失败不得掩盖原始异常（上一行已 log.exception）
                 pass
             await self._log_event_dispatch_failure(event, exc, user, blocking=False)
             # 不重新 raise — 让 commit 继续（mark_paid 主流程已成功）
@@ -347,9 +344,7 @@ class SettlementService:
     # 状态推进：resubmit（已驳回 → 待核查）
     # ============================================================
 
-    async def resubmit(
-        self, settlement_id: UUID, user: User
-    ) -> SettlementResponse:
+    async def resubmit(self, settlement_id: UUID, user: User) -> SettlementResponse:
         """已驳回 → 待核查（PR 修改后重新提交）。"""
         settlement = await self._repo.get_by_id(settlement_id)
         if settlement is None:
@@ -387,7 +382,6 @@ class SettlementService:
         )
         await self._session.commit()
         return await self._to_response(updated, user)
-
 
     # ============================================================
     # Extra Item
@@ -459,9 +453,7 @@ class SettlementService:
     # Read
     # ============================================================
 
-    async def get_settlement(
-        self, settlement_id: UUID, user: User
-    ) -> SettlementResponse:
+    async def get_settlement(self, settlement_id: UUID, user: User) -> SettlementResponse:
         settlement = await self._repo.get_by_id(settlement_id)
         if settlement is None:
             raise SettlementNotFoundError(f"结算单 {settlement_id} 不存在")
@@ -489,9 +481,7 @@ class SettlementService:
         repo_filters = RepoSettlementListFilters(
             keyword=filters.keyword,
             settlement_status=(
-                filters.settlement_status.value
-                if filters.settlement_status
-                else None
+                filters.settlement_status.value if filters.settlement_status else None
             ),
             promotion_id=filters.promotion_id,
             blogger_id=filters.blogger_id,
@@ -518,10 +508,7 @@ class SettlementService:
             current_user_id=user.id,
         )
 
-        responses = [
-            await self._to_response(s, user, include_extra_items=False)
-            for s in items
-        ]
+        responses = [await self._to_response(s, user, include_extra_items=False) for s in items]
 
         # 反范式富化：批量取款式编码/名称 + 博主昵称（对齐 final.xlsx 结款表）
         await self._enrich_display_fields(items, responses)
@@ -533,9 +520,7 @@ class SettlementService:
             page_size=page_size,
         )
 
-    async def _enrich_display_fields(
-        self, items: Any, responses: list[SettlementResponse]
-    ) -> None:
+    async def _enrich_display_fields(self, items: Any, responses: list[SettlementResponse]) -> None:
         """批量 join 款式（style_code/style_name）+ 博主（nickname）填充展示列。"""
         from sqlalchemy import select as _select
 
@@ -556,15 +541,14 @@ class SettlementService:
             ).all()
             style_map = {r.id: (r.style_code, r.style_name) for r in rows}
         if blogger_ids:
-            rows = (
+            # 与上面的 style 查询列数不同，用独立变量避免类型冲突
+            brows = (
                 await self._session.execute(
-                    _select(Blogger.id, Blogger.nickname).where(
-                        Blogger.id.in_(blogger_ids)
-                    )
+                    _select(Blogger.id, Blogger.nickname).where(Blogger.id.in_(blogger_ids))
                 )
             ).all()
-            blogger_map = {r.id: r.nickname for r in rows}
-        for s, resp in zip(items, responses):
+            blogger_map = {r.id: r.nickname for r in brows}
+        for s, resp in zip(items, responses, strict=False):
             sc = style_map.get(s.style_id)
             if sc:
                 resp.style_code, resp.style_name = sc
@@ -583,23 +567,20 @@ class SettlementService:
             raise FieldPermissionDenied(field="settlement_amount", entity="settlement")
 
         target_date = date_value or get_today()  # FB8 时区入口
-        raw = await self._repo.daily_summary_as_of(
-            tenant_id=user.tenant_id, date_value=target_date
-        )
+        raw = await self._repo.daily_summary_as_of(tenant_id=user.tenant_id, date_value=target_date)
 
         def _bucket(status_label: str) -> AmountBucket:
             data = raw.get(status_label, {"count": 0, "total_amount": "0"})
-            return AmountBucket(
-                count=data["count"], total_amount=Decimal(data["total_amount"])
-            )
+            return AmountBucket(count=data["count"], total_amount=Decimal(data["total_amount"]))
 
         outstanding_count = sum(
-            raw.get(s, {"count": 0})["count"]
-            for s in ("待核查", "待付款", "待财务付款")
+            raw.get(s, {"count": 0})["count"] for s in ("待核查", "待付款", "待财务付款")
         )
         outstanding_amount = sum(
-            (Decimal(raw.get(s, {"total_amount": "0"})["total_amount"])
-             for s in ("待核查", "待付款", "待财务付款")),
+            (
+                Decimal(raw.get(s, {"total_amount": "0"})["total_amount"])
+                for s in ("待核查", "待付款", "待财务付款")
+            ),
             Decimal("0"),
         )
 
@@ -634,9 +615,7 @@ class SettlementService:
 
         def _bucket(key: str) -> AmountBucket:
             data = raw[key]
-            return AmountBucket(
-                count=data["count"], total_amount=Decimal(data["total_amount"])
-            )
+            return AmountBucket(count=data["count"], total_amount=Decimal(data["total_amount"]))
 
         return DailySummaryActivityResponse(
             kind="activity",
@@ -648,7 +627,6 @@ class SettlementService:
                 newly_rejected=_bucket("newly_rejected"),
             ),
         )
-
 
     # ============================================================
     # Private helpers
@@ -668,9 +646,7 @@ class SettlementService:
             scopes=merge_permissions(role_scopes, grants, revokes),
         )
         if not perms.has("finance.settlement", "pay"):
-            raise FieldPermissionDenied(
-                field="payment_proof_attachment_id", entity="settlement"
-            )
+            raise FieldPermissionDenied(field="payment_proof_attachment_id", entity="settlement")
 
     async def _to_response(
         self,
@@ -693,10 +669,7 @@ class SettlementService:
 
         # 签名 URL（仅可见金额角色 + 已有 attachment 时生成）
         signed_url: str | None = None
-        if (
-            can_see_payment
-            and settlement.payment_proof_attachment_id is not None
-        ):
+        if can_see_payment and settlement.payment_proof_attachment_id is not None:
             attachment = await self._attachment_service.get_by_id(
                 session=self._session,
                 attachment_id=settlement.payment_proof_attachment_id,
@@ -706,18 +679,13 @@ class SettlementService:
                     signed_url = self._attachment_service.get_signed_url(
                         "private", attachment.r2_key, expires_in=900
                     )
-                except Exception:  # noqa: BLE001
+                except Exception:
                     log.warning("signed_url_generation_failed")
 
         extra_items: list[SettlementExtraItemResponse] = []
         if include_extra_items:
-            raw_items = await self._repo.list_extra_items(
-                settlement_id=settlement.id
-            )
-            extra_items = [
-                SettlementExtraItemResponse.model_validate(it)
-                for it in raw_items
-            ]
+            raw_items = await self._repo.list_extra_items(settlement_id=settlement.id)
+            extra_items = [SettlementExtraItemResponse.model_validate(it) for it in raw_items]
 
         return SettlementResponse(
             id=settlement.id,
@@ -728,9 +696,7 @@ class SettlementService:
             pr_id=settlement.pr_id,
             amount=settlement.amount if can_see_amount else None,
             total_amount=settlement.total_amount if can_see_total else None,
-            payment_amount=(
-                settlement.payment_amount if can_see_payment_amount else None
-            ),
+            payment_amount=(settlement.payment_amount if can_see_payment_amount else None),
             payment_date=settlement.payment_date,
             payment_proof_attachment_id=settlement.payment_proof_attachment_id,
             payment_proof_signed_url=signed_url,
@@ -788,7 +754,7 @@ class SettlementService:
                         user_id=user.id,
                     )
                     await audit_session.commit()
-            except Exception as audit_exc:  # noqa: BLE001
+            except Exception as audit_exc:
                 log.exception(
                     "audit_for_event_failure_itself_failed",
                     extra={

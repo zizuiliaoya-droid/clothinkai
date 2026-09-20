@@ -12,9 +12,7 @@ from datetime import date
 from app.modules.promotion.urge_calculator import calculate_urge_status
 
 # 4 个白名单变量（BR-U07-21）
-ALLOWED_VARS: frozenset[str] = frozenset(
-    {"博主昵称", "商品简称", "预定发布日期", "剩余天数"}
-)
+ALLOWED_VARS: frozenset[str] = frozenset({"博主昵称", "商品简称", "预定发布日期", "剩余天数"})
 
 _VAR_RE = re.compile(r"\{([^}]+)\}")
 

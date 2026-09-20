@@ -34,9 +34,7 @@ class OrderAdjustment(TenantScopedModel):
     order_type: Mapped[str] = mapped_column(String(8), nullable=False)
     order_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     order_no: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    blogger_identifier: Mapped[str | None] = mapped_column(
-        String(128), nullable=True
-    )
+    blogger_identifier: Mapped[str | None] = mapped_column(String(128), nullable=True)
     style_id: Mapped[UUID | None] = mapped_column(
         PGUUID(as_uuid=True),
         ForeignKey("style.id", ondelete="RESTRICT"),
@@ -48,9 +46,7 @@ class OrderAdjustment(TenantScopedModel):
         nullable=True,
     )
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
-    payment_amount: Mapped[Decimal | None] = mapped_column(
-        Numeric(12, 2), nullable=True
-    )
+    payment_amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     payment_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     payment_proof_attachment_id: Mapped[UUID | None] = mapped_column(
         PGUUID(as_uuid=True),
@@ -60,9 +56,7 @@ class OrderAdjustment(TenantScopedModel):
     exclude_from_roi: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")
     )
-    status: Mapped[str] = mapped_column(
-        String(8), nullable=False, server_default=text("'待付款'")
-    )
+    status: Mapped[str] = mapped_column(String(8), nullable=False, server_default=text("'待付款'"))
     promotion_id: Mapped[UUID | None] = mapped_column(
         PGUUID(as_uuid=True),
         ForeignKey("promotion.id", ondelete="SET NULL"),
@@ -73,24 +67,21 @@ class OrderAdjustment(TenantScopedModel):
     __table_args__ = (
         Index(
             "uq_order_adjustment_promotion",
-            "tenant_id", "promotion_id",
+            "tenant_id",
+            "promotion_id",
             unique=True,
             postgresql_where=text("promotion_id IS NOT NULL"),
         ),
-        Index(
-            "idx_order_adjustment_type", "tenant_id", "order_type", "order_date"
-        ),
+        Index("idx_order_adjustment_type", "tenant_id", "order_type", "order_date"),
         Index(
             "idx_order_adjustment_roi",
-            "tenant_id", "style_id", "exclude_from_roi",
+            "tenant_id",
+            "style_id",
+            "exclude_from_roi",
         ),
         CheckConstraint("amount >= 0", name="ck_order_adjustment_amount_nonneg"),
-        CheckConstraint(
-            "order_type IN ('拍单','刷单')", name="ck_order_adjustment_type"
-        ),
-        CheckConstraint(
-            "status IN ('待付款','已付款')", name="ck_order_adjustment_status"
-        ),
+        CheckConstraint("order_type IN ('拍单','刷单')", name="ck_order_adjustment_type"),
+        CheckConstraint("status IN ('待付款','已付款')", name="ck_order_adjustment_status"),
     )
 
 
@@ -102,9 +93,7 @@ class BalanceRecord(TenantScopedModel):
     record_date: Mapped[date] = mapped_column(Date, nullable=False)
     record_type: Mapped[str] = mapped_column(String(16), nullable=False)
     income: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
-    expense: Mapped[Decimal | None] = mapped_column(
-        Numeric(12, 2), nullable=True
-    )
+    expense: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     balance_after: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     remark: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_by: Mapped[UUID | None] = mapped_column(
@@ -115,12 +104,8 @@ class BalanceRecord(TenantScopedModel):
 
     __table_args__ = (
         Index("idx_balance_record_tenant_created", "tenant_id", "created_at"),
-        CheckConstraint(
-            "income IS NULL OR income >= 0", name="ck_balance_income_nonneg"
-        ),
-        CheckConstraint(
-            "expense IS NULL OR expense >= 0", name="ck_balance_expense_nonneg"
-        ),
+        CheckConstraint("income IS NULL OR income >= 0", name="ck_balance_income_nonneg"),
+        CheckConstraint("expense IS NULL OR expense >= 0", name="ck_balance_expense_nonneg"),
     )
 
 

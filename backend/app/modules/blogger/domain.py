@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.modules.blogger.models import Blogger
-from app.modules.blogger.schemas import BloggerCreate, BloggerUpdate
+from app.modules.blogger.schemas import BloggerUpdate
 
 # ---------------------------------------------------------------------------
 # 审计敏感字段配置（BR-U03-30）
@@ -23,9 +23,7 @@ BLOGGER_SENSITIVE_FIELDS: frozenset[str] = frozenset(
 )
 """Blogger 表写 audit_log 的字段白名单（BR-U03-30）。"""
 
-BLOGGER_SENSITIVE_VALUE_FIELDS: frozenset[str] = frozenset(
-    {"quote", "wechat", "phone"}
-)
+BLOGGER_SENSITIVE_VALUE_FIELDS: frozenset[str] = frozenset({"quote", "wechat", "phone"})
 """Blogger 表 audit_log 不存历史值的字段（仅记 ``*_changed: true`` 标记）。"""
 
 
@@ -34,9 +32,7 @@ BLOGGER_SENSITIVE_VALUE_FIELDS: frozenset[str] = frozenset(
 # ---------------------------------------------------------------------------
 
 
-def compute_blogger_changes(
-    blogger: Blogger, payload: BloggerUpdate
-) -> dict[str, dict[str, Any]]:
+def compute_blogger_changes(blogger: Blogger, payload: BloggerUpdate) -> dict[str, dict[str, Any]]:
     """对比 ORM 实例与 payload，返回变更字段的 ``{before, after}`` 字典。
 
     仅包含 ``payload.model_fields_set`` 中显式设置的字段（PATCH 语义）。
@@ -94,7 +90,7 @@ def _serialize(value: Any) -> Any:
         return None
     if isinstance(value, Enum):
         return value.value
-    if isinstance(value, (datetime, date)):
+    if isinstance(value, datetime | date):
         return value.isoformat()
     if isinstance(value, Decimal):
         return str(value)

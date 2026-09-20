@@ -43,7 +43,9 @@ class TestDesignNotification:
     ) -> None:
         token = tenant_id_ctx.set(tenant_a.id)
         try:
-            designer = await factory.user(tenant_a, roles=[await _role(session, "designer", "设计师")])
+            designer = await factory.user(
+                tenant_a, roles=[await _role(session, "designer", "设计师")]
+            )
             pm = await factory.user(tenant_a, roles=[await _role(session, "pattern_maker", "版师")])
             svc = DesignService(session)
             d = await svc.create_design(DesignCreate(style_code="NT1", style_name="款"), designer)
@@ -51,9 +53,9 @@ class TestDesignNotification:
 
             cnt = (
                 await session.execute(
-                    select(func.count()).select_from(Notification).where(
-                        Notification.user_id == pm.id
-                    )
+                    select(func.count())
+                    .select_from(Notification)
+                    .where(Notification.user_id == pm.id)
                 )
             ).scalar_one()
             assert cnt >= 1
@@ -66,7 +68,9 @@ class TestDesignNotification:
         """该角色租户内无人时不报错（BR-U10a-62）。"""
         token = tenant_id_ctx.set(tenant_a.id)
         try:
-            designer = await factory.user(tenant_a, roles=[await _role(session, "designer", "设计师")])
+            designer = await factory.user(
+                tenant_a, roles=[await _role(session, "designer", "设计师")]
+            )
             svc = DesignService(session)
             d = await svc.create_design(DesignCreate(style_code="NT2", style_name="款"), designer)
             # 无 pattern_maker 用户 → 不报错
@@ -80,18 +84,28 @@ class TestDesignNotification:
     ) -> None:
         token = tenant_id_ctx.set(tenant_a.id)
         try:
-            designer = await factory.user(tenant_a, roles=[await _role(session, "designer", "设计师")])
+            designer = await factory.user(
+                tenant_a, roles=[await _role(session, "designer", "设计师")]
+            )
             pm = await factory.user(tenant_a, roles=[await _role(session, "pattern_maker", "版师")])
             mer = await factory.user(tenant_a, roles=[await _role(session, "merchandiser", "跟单")])
-            da = await factory.user(tenant_a, roles=[await _role(session, "design_assistant", "设计助理")])
+            da = await factory.user(
+                tenant_a, roles=[await _role(session, "design_assistant", "设计助理")]
+            )
             svc = DesignService(session)
 
             d = await svc.create_design(DesignCreate(style_code="NT3", style_name="款"), designer)
             sid = d.id
             # 给 style 添加一个 active SKU
             sku = Sku(
-                tenant_id=tenant_a.id, style_id=sid, sku_code="NT3-R-M",
-                color="红", size="M", sourcing_type="自产", is_active=True, is_deleted=False,
+                tenant_id=tenant_a.id,
+                style_id=sid,
+                sku_code="NT3-R-M",
+                color="红",
+                size="M",
+                sourcing_type="自产",
+                is_active=True,
+                is_deleted=False,
             )
             session.add(sku)
             await session.flush()
@@ -104,8 +118,13 @@ class TestDesignNotification:
             # 核价：10+5+5 = 20
             await svc.submit_costing(
                 sid,
-                CostingSubmit(cost_breakdown=CostBreakdown(
-                    fabric_cost=Decimal("10"), accessory_cost=Decimal("5"), craft_cost=Decimal("5"))),
+                CostingSubmit(
+                    cost_breakdown=CostBreakdown(
+                        fabric_cost=Decimal("10"),
+                        accessory_cost=Decimal("5"),
+                        craft_cost=Decimal("5"),
+                    )
+                ),
                 da,
             )
             await session.refresh(sku)

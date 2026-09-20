@@ -39,9 +39,7 @@ class TenancyContextMiddleware(BaseHTTPMiddleware):
     本中间件只负责"标记"日志和 Sentry 上下文。
     """
 
-    async def dispatch(
-        self, request: Request, call_next: RequestResponseEndpoint
-    ) -> Response:
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         token = _extract_bearer_token(request)
         ctx_tokens: list[Any] = []
 

@@ -31,20 +31,14 @@ from app.modules.finance.repository import SettlementRepository
 class TestSequenceConcurrent:
     """FB2: 首次创建 race 也无重复（INSERT ON CONFLICT DO UPDATE RETURNING）."""
 
-    async def test_concurrent_first_create_no_duplicates(
-        self, engine: Any
-    ) -> None:
-        Session = async_sessionmaker(
-            engine, expire_on_commit=False, class_=AsyncSession
-        )
+    async def test_concurrent_first_create_no_duplicates(self, engine: Any) -> None:
+        Session = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
         date_key = date(2026, 5, 26)
 
         # 用 003 seed 的已提交默认 tenant（settlement_sequence FK → tenant）
         async with Session() as s0:
             tenant_row = (
-                await s0.execute(
-                    text("SELECT id FROM tenant ORDER BY created_at ASC LIMIT 1")
-                )
+                await s0.execute(text("SELECT id FROM tenant ORDER BY created_at ASC LIMIT 1"))
             ).first()
             assert tenant_row is not None, "默认 tenant 缺失（003 seed 未跑）"
             tenant_id = tenant_row[0]
@@ -53,8 +47,7 @@ class TestSequenceConcurrent:
         async with Session() as pre:
             await pre.execute(
                 text(
-                    "DELETE FROM settlement_sequence "
-                    "WHERE tenant_id = :tid AND date_key = :dk"
+                    "DELETE FROM settlement_sequence " "WHERE tenant_id = :tid AND date_key = :dk"
                 ),
                 {"tid": tenant_id, "dk": date_key},
             )
@@ -105,9 +98,7 @@ class TestUpdateStateConcurrent:
         全自包含 committed 数据（用 003 seed 的默认 tenant）+ finally 清理，
         不依赖 rollback fixture（跨连接需真实可见）。
         """
-        Session = async_sessionmaker(
-            engine, expire_on_commit=False, class_=AsyncSession
-        )
+        Session = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
         settlement_id = uuid4()
         promotion_id = uuid4()
         style_id = uuid4()
@@ -117,9 +108,7 @@ class TestUpdateStateConcurrent:
         # 1) seed：默认 tenant + style + blogger + promotion + settlement（已提交）
         async with Session() as seed:
             tenant_row = (
-                await seed.execute(
-                    text("SELECT id FROM tenant ORDER BY created_at ASC LIMIT 1")
-                )
+                await seed.execute(text("SELECT id FROM tenant ORDER BY created_at ASC LIMIT 1"))
             ).first()
             assert tenant_row is not None, "默认 tenant 缺失（003 seed 未跑）"
             tenant_id = tenant_row[0]
@@ -238,7 +227,9 @@ class TestUpdateStateNoMatch:
             style = await product_factory.style()
             blogger = await blogger_factory.blogger()
             s = await settlement_factory.settlement(
-                style=style, blogger=blogger, settlement_status="待付款",
+                style=style,
+                blogger=blogger,
+                settlement_status="待付款",
             )
             repo = SettlementRepository(session)
             updated = await repo.update_state(
@@ -264,7 +255,9 @@ class TestUpdateStateNoMatch:
             style = await product_factory.style()
             blogger = await blogger_factory.blogger()
             s = await settlement_factory.settlement(
-                style=style, blogger=blogger, settlement_status="待核查",
+                style=style,
+                blogger=blogger,
+                settlement_status="待核查",
             )
             repo = SettlementRepository(session)
             updated = await repo.update_state(

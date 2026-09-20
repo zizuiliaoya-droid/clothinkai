@@ -31,7 +31,6 @@ from pydantic import (
 from app.modules.finance.enums import ExtraItemType, SettlementStatus
 from app.modules.promotion.enums import ReviewAction
 
-
 _AmountField = Annotated[
     Decimal,
     Field(ge=Decimal("0"), max_digits=12, decimal_places=2),
@@ -57,7 +56,7 @@ class SettlementReviewRequest(BaseModel):
     review_reason: str | None = Field(default=None, max_length=2000)
 
     @model_validator(mode="after")
-    def _require_reason_on_reject(self) -> "SettlementReviewRequest":
+    def _require_reason_on_reject(self) -> SettlementReviewRequest:
         if self.action == ReviewAction.REJECT and not self.review_reason:
             raise ValueError("驳回时 review_reason 必填")
         return self

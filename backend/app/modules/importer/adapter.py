@@ -22,12 +22,10 @@ if TYPE_CHECKING:
 class ImportAdapter(Protocol):
     """每个业务来源实现一个适配器（U06b/c/d/e）。"""
 
-    source: str          # 来源标识（注册键），如 "manual_style_sku"
-    target_table: str    # 目标表名（审计 / 展示）
+    source: str  # 来源标识（注册键），如 "manual_style_sku"
+    target_table: str  # 目标表名（审计 / 展示）
 
-    def parse_row(
-        self, row: dict[str, Any], mapping: "FieldMapping | None"
-    ) -> dict[str, Any]:
+    def parse_row(self, row: dict[str, Any], mapping: FieldMapping | None) -> dict[str, Any]:
         """按 field_mapping 把原始列名映射成目标字段 + 类型转换。
 
         纯函数，不碰 DB。mapping 为 None 时按恒等映射（原样）。

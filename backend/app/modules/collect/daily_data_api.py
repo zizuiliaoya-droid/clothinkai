@@ -49,11 +49,7 @@ async def list_qianniu_daily(
     total = int(
         (await session.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one()
     )
-    stmt = (
-        stmt.order_by(QianniuDaily.date.desc())
-        .limit(page_size)
-        .offset((page - 1) * page_size)
-    )
+    stmt = stmt.order_by(QianniuDaily.date.desc()).limit(page_size).offset((page - 1) * page_size)
     rows = (await session.execute(stmt)).scalars().all()
     items = [
         _serialize(
@@ -93,11 +89,7 @@ async def list_ad_daily(
     total = int(
         (await session.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one()
     )
-    stmt = (
-        stmt.order_by(AdDaily.date.desc())
-        .limit(page_size)
-        .offset((page - 1) * page_size)
-    )
+    stmt = stmt.order_by(AdDaily.date.desc()).limit(page_size).offset((page - 1) * page_size)
     rows = (await session.execute(stmt)).scalars().all()
     items = [
         _serialize(

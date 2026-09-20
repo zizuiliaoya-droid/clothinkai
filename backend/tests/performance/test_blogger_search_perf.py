@@ -89,9 +89,7 @@ class TestBloggerSearchPerformance:
             )
             plan = result.scalar_one()
             plan_str = str(plan).lower()
-            assert "trgm" in plan_str or "gin" in plan_str, (
-                f"GIN trgm 索引未命中！EXPLAIN: {plan}"
-            )
+            assert "trgm" in plan_str or "gin" in plan_str, f"GIN trgm 索引未命中！EXPLAIN: {plan}"
 
             # 测量
             user = await factory.user(tenant_a, roles=[admin_role])
@@ -118,8 +116,6 @@ class TestBloggerSearchPerformance:
                 f"P50={p50:.1f}ms P95={p95:.1f}ms P99={p99:.1f}ms "
                 f"target_p95={perf_target_p95_ms}ms"
             )
-            assert p95 <= perf_target_p95_ms, (
-                f"P95={p95:.1f}ms 超过 SLA {perf_target_p95_ms}ms"
-            )
+            assert p95 <= perf_target_p95_ms, f"P95={p95:.1f}ms 超过 SLA {perf_target_p95_ms}ms"
         finally:
             tenant_id_ctx.reset(token)

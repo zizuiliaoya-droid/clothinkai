@@ -62,9 +62,7 @@ async def avg_cpl_for_blogger(
     rows = await _load_promotions(blogger_id, session, tenant_id)
     cpls: list[Decimal] = []
     for p in rows:
-        eff = calculate_effective_like_count(
-            platform=p.platform, like_count=p.like_count
-        )
+        eff = calculate_effective_like_count(platform=p.platform, like_count=p.like_count)
         cpl = calculate_cpl(quote_amount=p.quote_amount, effective_like_count=eff)
         if cpl is not None:
             cpls.append(cpl)
@@ -86,9 +84,7 @@ async def hit_rate_for_blogger(
     hit_count = sum(
         1
         for p in rows
-        if calculate_is_hit(
-            like_count=p.like_count, threshold=HIT_THRESHOLD_LIKE_COUNT
-        )
+        if calculate_is_hit(like_count=p.like_count, threshold=HIT_THRESHOLD_LIKE_COUNT)
     )
     return safe_div(hit_count, len(rows), quantize=Decimal("0.0001"))
 

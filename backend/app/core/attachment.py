@@ -17,6 +17,7 @@ U05 触发补齐 shared attachment 基础设施（详见 U05 code-generation-pla
 from __future__ import annotations
 
 import logging
+from datetime import UTC
 from pathlib import Path
 from typing import IO, Any, Literal
 from uuid import UUID, uuid4
@@ -147,17 +148,17 @@ class Attachment(TenantScopedModel):
             "bucket IN ('public', 'private', 'credentials', 'backups')",
             name="ck_attachment_bucket",
         ),
-        CheckConstraint(
-            "status IN ('uploading', 'ready')", name="ck_attachment_status"
-        ),
+        CheckConstraint("status IN ('uploading', 'ready')", name="ck_attachment_status"),
     )
 
 
 # 允许的 purpose 白名单（U05 引入；后续模块按需追加）
-ALLOWED_PURPOSES: frozenset[str] = frozenset({
-    "settlement_proof",  # U05 付款截图（FB4）
-    "promotion_payment_qr",  # 站外推广博主收款码（私有）
-})
+ALLOWED_PURPOSES: frozenset[str] = frozenset(
+    {
+        "settlement_proof",  # U05 付款截图（FB4）
+        "promotion_payment_qr",  # 站外推广博主收款码（私有）
+    }
+)
 
 
 # ---------------------------------------------------------------------------
@@ -207,7 +208,7 @@ class AttachmentService:
                 extra={"bucket": bucket, "key": key, "content_type": content_type},
             )
             return key
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.exception("attachment_upload_failed", extra={"bucket": bucket, "key": key})
             raise AttachmentError(f"上传 R2 失败: {exc}") from exc
 
@@ -235,7 +236,7 @@ class AttachmentService:
                     ExpiresIn=expires_in,
                 )
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise AttachmentError(f"生成签名 URL 失败: {exc}") from exc
 
     def delete(self, bucket: BucketKind, key: str) -> None:
@@ -244,7 +245,7 @@ class AttachmentService:
             raise AttachmentError("R2 未配置")
         try:
             self._client.delete_object(Bucket=_bucket_name(bucket), Key=key)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.warning("attachment_delete_failed", extra={"bucket": bucket, "key": key})
             raise AttachmentError(f"删除 R2 对象失败: {exc}") from exc
 
@@ -263,7 +264,7 @@ class AttachmentService:
         try:
             obj = self._client.get_object(Bucket=_bucket_name(bucket), Key=key)
             return bytes(obj["Body"].read())
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.exception(
                 "attachment_get_object_failed",
                 extra={"bucket": bucket, "key": key},
@@ -271,9 +272,7 @@ class AttachmentService:
             raise AttachmentError(f"读取 R2 对象失败: {exc}") from exc
 
     @staticmethod
-    def make_tenant_key(
-        tenant_id: UUID, prefix: str, *, filename: str | None = None
-    ) -> str:
+    def make_tenant_key(tenant_id: UUID, prefix: str, *, filename: str | None = None) -> str:
         """生成统一格式的对象键：``{tenant_id}/{prefix}/{uuid}_{filename}``。"""
         suffix = filename or uuid4().hex
         return f"{tenant_id}/{prefix}/{uuid4().hex}_{suffix}"
@@ -309,8 +308,7 @@ class AttachmentService:
         """
         if purpose not in ALLOWED_PURPOSES:
             raise AttachmentError(
-                f"purpose '{purpose}' 不在白名单，"
-                f"允许值：{sorted(ALLOWED_PURPOSES)}"
+                f"purpose '{purpose}' 不在白名单，" f"允许值：{sorted(ALLOWED_PURPOSES)}"
             )
         if not self.is_configured:
             raise AttachmentError("R2 未配置")
@@ -346,7 +344,7 @@ class AttachmentService:
                 ExpiresIn=900,  # 15 分钟（与 GET 签名一致）
                 HttpMethod="PUT",
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise AttachmentError(f"生成 PUT 签名 URL 失败: {exc}") from exc
 
         log.info(
@@ -371,7 +369,6 @@ class AttachmentService:
         WHERE 含 tenant_id 防越权（与 RLS 双重防护）。
         """
         from datetime import datetime as _datetime
-        from datetime import timezone as _timezone
 
         stmt = (
             update(Attachment)
@@ -380,7 +377,7 @@ class AttachmentService:
                 Attachment.tenant_id == tenant_id,
                 Attachment.status == "uploading",
             )
-            .values(status="ready", updated_at=_datetime.now(_timezone.utc))
+            .values(status="ready", updated_at=_datetime.now(UTC))
             .returning(Attachment)
             .execution_options(synchronize_session=False)
         )
@@ -391,7 +388,7 @@ class AttachmentService:
                 f"attachment {attachment_id} 不存在或不属于本租户或非 uploading 状态"
             )
         await session.flush()
-        attachment = row[0]
+        attachment: Attachment = row[0]
         # RETURNING 可能命中 session 身份映射中的旧实例（status 仍为 uploading）；
         # 显式刷新以反映 DB 最新状态。
         await session.refresh(attachment)

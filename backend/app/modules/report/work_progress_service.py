@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import calendar
+from collections.abc import Mapping
 from datetime import date
 from decimal import Decimal
-from typing import Any, Mapping
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,9 +35,7 @@ class WorkProgressService:
     def __init__(self, session: AsyncSession) -> None:
         self._repo = WorkProgressRepository(session)
 
-    async def get_for_month(
-        self, tenant_id: UUID, month: str
-    ) -> list[PrWorkProgress]:
+    async def get_for_month(self, tenant_id: UUID, month: str) -> list[PrWorkProgress]:
         date_from, date_to = _month_range(month)
         with report_query_duration_seconds.labels("work_progress").time():
             rows = await self._repo.aggregate_by_pr(
@@ -60,9 +59,7 @@ class WorkProgressService:
             overdue_count=int(r["overdue_count"]),
             publish_count=publish,
             info_complete_count=int(r["info_complete_count"]),
-            info_complete_rate=safe_div(
-                r["info_complete_count"], publish, quantize=_Q4
-            ),
+            info_complete_rate=safe_div(r["info_complete_count"], publish, quantize=_Q4),
             cancel_count=int(r["cancel_count"]),
             recall_due_count=int(r["recall_due_count"]),
             recall_success_count=int(r["recall_success_count"]),

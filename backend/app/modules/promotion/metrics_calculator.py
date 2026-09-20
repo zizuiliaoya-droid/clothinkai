@@ -38,11 +38,7 @@ def calculate_effective_like_count(
     if like_count is None:
         return None
     coefficient = PLATFORM_LIKE_COEFFICIENT.get(platform, Decimal("1.0"))
-    return int(
-        (Decimal(like_count) * coefficient).to_integral_value(
-            rounding=ROUND_HALF_UP
-        )
-    )
+    return int((Decimal(like_count) * coefficient).to_integral_value(rounding=ROUND_HALF_UP))
 
 
 def calculate_is_hit(

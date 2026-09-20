@@ -38,17 +38,17 @@ class DesignRepository:
         return style
 
     async def style_code_exists(self, style_code: str) -> bool:
-        stmt = select(func.count()).select_from(Style).where(
-            Style.style_code == style_code, Style.is_deleted.is_(False)
+        stmt = (
+            select(func.count())
+            .select_from(Style)
+            .where(Style.style_code == style_code, Style.is_deleted.is_(False))
         )
         return bool((await self._session.execute(stmt)).scalar_one())
 
     def add_style(self, style: Style) -> None:
         self._session.add(style)
 
-    async def update_design_status(
-        self, style_id: UUID, from_status: str, to_status: str
-    ) -> bool:
+    async def update_design_status(self, style_id: UUID, from_status: str, to_status: str) -> bool:
         """乐观并发推进：仅当 design_status 仍为 from_status 时更新。
 
         返回 True 表示推进成功；False 表示并发冲突（状态已变）。
@@ -166,9 +166,7 @@ class DesignRepository:
 
     # ----------------------- SKU 批量（系统口径） ----------------------- #
 
-    async def bulk_update_sku_cost_price(
-        self, style_id: UUID, value: Decimal
-    ) -> int:
+    async def bulk_update_sku_cost_price(self, style_id: UUID, value: Decimal) -> int:
         stmt = (
             update(Sku)
             .where(
@@ -181,9 +179,7 @@ class DesignRepository:
         result = await self._session.execute(stmt)
         return int(result.rowcount or 0)
 
-    async def bulk_update_sku_tag_price(
-        self, style_id: UUID, value: Decimal
-    ) -> int:
+    async def bulk_update_sku_tag_price(self, style_id: UUID, value: Decimal) -> int:
         stmt = (
             update(Sku)
             .where(

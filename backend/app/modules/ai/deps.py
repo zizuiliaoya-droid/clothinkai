@@ -14,9 +14,7 @@ def get_ai_advisory_service(session: SessionDep) -> AiAdvisoryService:
     return AiAdvisoryService(session)
 
 
-AiAdvisoryServiceDep = Annotated[
-    AiAdvisoryService, Depends(get_ai_advisory_service)
-]
+AiAdvisoryServiceDep = Annotated[AiAdvisoryService, Depends(get_ai_advisory_service)]
 
 
 __all__ = ["AiAdvisoryServiceDep", "get_ai_advisory_service"]

@@ -20,7 +20,6 @@ import app.tasks.import_tasks as tasks
 from app.modules.importer.registry import ImportAdapterRegistry
 from app.tasks.import_tasks import _parse_rows, _run_import_batch, _sanitize
 
-
 # ---------------------------------------------------------------------------
 # 纯函数（CI 安全）
 # ---------------------------------------------------------------------------
@@ -36,7 +35,7 @@ class TestParseRows:
         ]
 
     def test_parse_csv_with_bom(self):
-        raw = "\ufeffname\nv1\n".encode("utf-8")
+        raw = "\ufeffname\nv1\n".encode()
         rows = _parse_rows(raw, "x.csv")
         assert rows == [(1, {"name": "v1"})]
 
@@ -73,18 +72,14 @@ class TestSanitize:
 @pytest.mark.integration
 @pytest.mark.asyncio
 class TestRunnerEndToEnd:
-    async def test_partial_run_writes_jobs_and_records(
-        self, engine: Any, monkeypatch
-    ) -> None:
+    async def test_partial_run_writes_jobs_and_records(self, engine: Any, monkeypatch) -> None:
         """FakeAdapter：3 行（1 行 _force_fail）→ batch=partial，2 success + 1 failed job。
 
         验证 NF-1 per-row 事务（成功行提交、失败行独立写）+ FB-A get_object_bytes。
         """
         from tests.conftest import FakeImportAdapter
 
-        Maker = async_sessionmaker(
-            engine, expire_on_commit=False, class_=AsyncSession
-        )
+        Maker = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
         # runner 的双 session 都指向测试 engine
         monkeypatch.setattr(tasks, "AsyncSessionApp", Maker)
         monkeypatch.setattr(tasks, "AsyncSessionBypass", Maker)
@@ -98,7 +93,7 @@ class TestRunnerEndToEnd:
             f"BR{suffix}A,品牌A,0\n"
             f"BR{suffix}B,品牌B,0\n"
             f"BR{suffix}C,品牌C,1\n"
-        ).encode("utf-8")
+        ).encode()
 
         # FB-A：mock U01 R2 helper（不碰 attachment ORM）
         import app.core.attachment as attachment_mod
@@ -113,9 +108,7 @@ class TestRunnerEndToEnd:
         # seed committed：默认 tenant + processing batch
         async with Maker() as seed:
             tenant_row = (
-                await seed.execute(
-                    text("SELECT id FROM tenant ORDER BY created_at ASC LIMIT 1")
-                )
+                await seed.execute(text("SELECT id FROM tenant ORDER BY created_at ASC LIMIT 1"))
             ).first()
             assert tenant_row is not None, "默认 tenant 缺失（003 seed 未跑）"
             tenant_id = tenant_row[0]
@@ -157,10 +150,7 @@ class TestRunnerEndToEnd:
 
                 batch_row = (
                     await check.execute(
-                        text(
-                            "SELECT status, imported, failed FROM import_batch "
-                            "WHERE id = :id"
-                        ),
+                        text("SELECT status, imported, failed FROM import_batch " "WHERE id = :id"),
                         {"id": batch_id},
                     )
                 ).first()
@@ -184,12 +174,8 @@ class TestRunnerEndToEnd:
                 )
                 await cleanup.commit()
 
-    async def test_adapter_not_registered_marks_failed(
-        self, engine: Any, monkeypatch
-    ) -> None:
-        Maker = async_sessionmaker(
-            engine, expire_on_commit=False, class_=AsyncSession
-        )
+    async def test_adapter_not_registered_marks_failed(self, engine: Any, monkeypatch) -> None:
+        Maker = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
         monkeypatch.setattr(tasks, "AsyncSessionApp", Maker)
         monkeypatch.setattr(tasks, "AsyncSessionBypass", Maker)
         ImportAdapterRegistry.clear()  # 无 adapter
@@ -197,9 +183,7 @@ class TestRunnerEndToEnd:
         batch_id = uuid4()
         async with Maker() as seed:
             tenant_id = (
-                await seed.execute(
-                    text("SELECT id FROM tenant ORDER BY created_at ASC LIMIT 1")
-                )
+                await seed.execute(text("SELECT id FROM tenant ORDER BY created_at ASC LIMIT 1"))
             ).first()[0]
             await seed.execute(
                 text(

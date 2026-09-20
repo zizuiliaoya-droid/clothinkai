@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, patch
-from uuid import uuid4
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -75,8 +74,9 @@ class TestLogin:
             user = await factory.user(  # type: ignore[attr-defined]
                 tenant_a, username="alice", password_hash=hash_password(PASSWORD)
             )
-            with patch("app.modules.auth.service.cache", stub_cache), patch(
-                "app.core.security.permissions.cache", stub_cache
+            with (
+                patch("app.modules.auth.service.cache", stub_cache),
+                patch("app.core.security.permissions.cache", stub_cache),
             ):
                 svc = AuthService(session)
                 access, refresh, ret_user, must_change = await svc.login(
@@ -114,9 +114,7 @@ class TestLogin:
         finally:
             tenant_id_ctx.reset(token)
 
-    async def test_login_unknown_user(
-        self, session: AsyncSession, stub_cache: AsyncMock
-    ) -> None:
+    async def test_login_unknown_user(self, session: AsyncSession, stub_cache: AsyncMock) -> None:
         with patch("app.modules.auth.service.cache", stub_cache):
             svc = AuthService(session)
             with pytest.raises(InvalidCredentialsError):

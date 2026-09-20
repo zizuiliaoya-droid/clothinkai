@@ -29,9 +29,7 @@ def _payload() -> WecomConfigUpdate:
 @pytest.mark.integration
 @pytest.mark.asyncio
 class TestWecomConfig:
-    async def test_configure_encrypts_and_no_plaintext(
-        self, session: Any, tenant_a: Any
-    ) -> None:
+    async def test_configure_encrypts_and_no_plaintext(self, session: Any, tenant_a: Any) -> None:
         tok = tenant_id_ctx.set(tenant_a.id)
         try:
             svc = WecomConfigService(session)
@@ -40,10 +38,7 @@ class TestWecomConfig:
 
             row = (
                 await session.execute(
-                    text(
-                        "SELECT secret_ciphertext FROM wecom_config "
-                        "WHERE tenant_id = :t"
-                    ),
+                    text("SELECT secret_ciphertext FROM wecom_config " "WHERE tenant_id = :t"),
                     {"t": str(tenant_a.id)},
                 )
             ).first()
@@ -51,9 +46,7 @@ class TestWecomConfig:
             ciphertext = bytes(row[0])
             assert ciphertext != b"super-secret-value"
             assert (
-                decrypt_credential(
-                    tenant_a.id, None, ciphertext, purpose="t"
-                )
+                decrypt_credential(tenant_a.id, None, ciphertext, purpose="t")
                 == "super-secret-value"
             )
 
@@ -64,9 +57,7 @@ class TestWecomConfig:
         finally:
             tenant_id_ctx.reset(tok)
 
-    async def test_test_connection_ok(
-        self, session: Any, tenant_a: Any, monkeypatch
-    ) -> None:
+    async def test_test_connection_ok(self, session: Any, tenant_a: Any, monkeypatch) -> None:
         tok = tenant_id_ctx.set(tenant_a.id)
         try:
             svc = WecomConfigService(session)
@@ -82,9 +73,7 @@ class TestWecomConfig:
         finally:
             tenant_id_ctx.reset(tok)
 
-    async def test_update_overwrites(
-        self, session: Any, tenant_a: Any
-    ) -> None:
+    async def test_update_overwrites(self, session: Any, tenant_a: Any) -> None:
         tok = tenant_id_ctx.set(tenant_a.id)
         try:
             svc = WecomConfigService(session)
@@ -98,9 +87,7 @@ class TestWecomConfig:
             assert resp.corp_id == "corp999"
             count = (
                 await session.execute(
-                    text(
-                        "SELECT COUNT(*) FROM wecom_config WHERE tenant_id = :t"
-                    ),
+                    text("SELECT COUNT(*) FROM wecom_config WHERE tenant_id = :t"),
                     {"t": str(tenant_a.id)},
                 )
             ).scalar_one()

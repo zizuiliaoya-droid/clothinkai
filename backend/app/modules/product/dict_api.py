@@ -54,9 +54,8 @@ async def list_dict_items(
     dict_type: Annotated[str | None, Query(max_length=32)] = None,
     is_active: bool = True,
 ) -> list[DictItemResponse]:
-    stmt = (
-        select(DictItem)
-        .where(DictItem.tenant_id == user.tenant_id, DictItem.is_active == is_active)
+    stmt = select(DictItem).where(
+        DictItem.tenant_id == user.tenant_id, DictItem.is_active == is_active
     )
     if dict_type:
         stmt = stmt.where(DictItem.dict_type == dict_type)
@@ -64,8 +63,11 @@ async def list_dict_items(
     rows = (await session.execute(stmt)).scalars().all()
     return [
         DictItemResponse(
-            id=str(r.id), dict_type=r.dict_type, value=r.value,
-            sort_order=r.sort_order, is_active=r.is_active,
+            id=str(r.id),
+            dict_type=r.dict_type,
+            value=r.value,
+            sort_order=r.sort_order,
+            is_active=r.is_active,
         )
         for r in rows
     ]
@@ -110,8 +112,11 @@ async def create_dict_item(
     else:
         await session.commit()
     return DictItemResponse(
-        id=str(row.id), dict_type=row.dict_type, value=row.value,
-        sort_order=row.sort_order, is_active=row.is_active,
+        id=str(row.id),
+        dict_type=row.dict_type,
+        value=row.value,
+        sort_order=row.sort_order,
+        is_active=row.is_active,
     )
 
 
@@ -126,9 +131,7 @@ async def delete_dict_item(
     session: SessionDep,
 ) -> Response:
     await session.execute(
-        delete(DictItem).where(
-            DictItem.id == item_id, DictItem.tenant_id == user.tenant_id
-        )
+        delete(DictItem).where(DictItem.id == item_id, DictItem.tenant_id == user.tenant_id)
     )
     await session.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)

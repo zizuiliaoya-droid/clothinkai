@@ -8,10 +8,10 @@ from enum import Enum
 class BloggerType(str, Enum):
     """博主类型。MVP 阶段 PR 手动选择，V1 / U10b 系统按粉丝量自动计算。"""
 
-    AMATEUR = "素人"      # < 1k
-    KOC = "KOC"           # 1k - 10k
-    KOL = "KOL"           # 10k - 100w
-    CELEBRITY = "明星"    # 100w+
+    AMATEUR = "素人"  # < 1k
+    KOC = "KOC"  # 1k - 10k
+    KOL = "KOL"  # 10k - 100w
+    CELEBRITY = "明星"  # 100w+
 
 
 class Platform(str, Enum):

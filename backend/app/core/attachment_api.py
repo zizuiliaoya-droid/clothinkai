@@ -20,13 +20,11 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.attachment import (
     ALLOWED_PURPOSES,
-    Attachment,
     BucketKind,
     attachment_service,
 )
 from app.core.exceptions import AttachmentError
 from app.modules.auth.deps import CurrentActiveUser, SessionDep
-
 
 router = APIRouter(prefix="/api", tags=["attachment"])
 

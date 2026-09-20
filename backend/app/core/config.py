@@ -148,26 +148,26 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------ #
     # 导入框架（U06a）
     # ------------------------------------------------------------------ #
-    IMPORT_MAX_FILE_MB: int = 20            # 上传文件大小上限（NF-6 handler 兜底层）
-    IMPORT_MAX_ROWS: int = 50000            # 单文件数据行数上限（不含表头）
-    IMPORT_RETENTION_DAYS: int = 0          # 0 = MVP 不清理 R2 import 文件；V1 设保留期
-    IMPORT_BUCKET: str = "private"          # 导入文件 R2 桶（固定 private）
+    IMPORT_MAX_FILE_MB: int = 20  # 上传文件大小上限（NF-6 handler 兜底层）
+    IMPORT_MAX_ROWS: int = 50000  # 单文件数据行数上限（不含表头）
+    IMPORT_RETENTION_DAYS: int = 0  # 0 = MVP 不清理 R2 import 文件；V1 设保留期
+    IMPORT_BUCKET: str = "private"  # 导入文件 R2 桶（固定 private）
 
     # ------------------------------------------------------------------ #
     # 企微集成（U07）
     # ------------------------------------------------------------------ #
     WECOM_API_BASE: str = "https://qyapi.weixin.qq.com"  # 企微 API 域名（可指向 mock）
-    WECOM_HTTP_TIMEOUT: int = 10            # 企微外部调用超时（秒）
-    WECOM_TOKEN_TTL: int = 7000             # access_token 缓存 TTL（企微 7200 留余量）
+    WECOM_HTTP_TIMEOUT: int = 10  # 企微外部调用超时（秒）
+    WECOM_TOKEN_TTL: int = 7000  # access_token 缓存 TTL（企微 7200 留余量）
     WECOM_URGE_SCAN_CRON: str = "0 9 * * *"  # 催发扫描调度（Asia/Shanghai）
 
     # ------------------------------------------------------------------ #
     # AI 决策建议（U18，DeepSeek，P3）
     # ------------------------------------------------------------------ #
     DEEPSEEK_API_BASE: str = "https://api.deepseek.com"  # DeepSeek API 域名
-    DEEPSEEK_API_KEY: str = ""               # 空 → AI 端点全 503 降级
-    DEEPSEEK_MODEL: str = "deepseek-chat"    # 模型名
-    DEEPSEEK_TIMEOUT: int = 30               # AI 调用超时（秒）
+    DEEPSEEK_API_KEY: str = ""  # 空 → AI 端点全 503 降级
+    DEEPSEEK_MODEL: str = "deepseek-chat"  # 模型名
+    DEEPSEEK_TIMEOUT: int = 30  # AI 调用超时（秒）
 
     # ------------------------------------------------------------------ #
     # 派生属性

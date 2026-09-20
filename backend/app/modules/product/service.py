@@ -28,7 +28,6 @@ from app.core.security.field_permissions import (
 from app.modules.auth.models import User
 from app.modules.auth.repository import PermissionRepository, RoleRepository
 from app.modules.finance.order_adjustment_repository import OrderAdjustmentRepository
-from app.modules.promotion.repository import PromotionRepository
 from app.modules.product.domain import (
     build_sku_audit_changes,
     build_style_audit_changes,
@@ -50,9 +49,9 @@ from app.modules.product.exceptions import (
 )
 from app.modules.product.models import Sku, Style
 from app.modules.product.repository import (
+    SkuRepository,
     StyleListFilters,
     StyleRepository,
-    SkuRepository,
 )
 from app.modules.product.schemas import (
     CostTablePage,
@@ -67,7 +66,7 @@ from app.modules.product.schemas import (
     StyleResponse,
     StyleUpdate,
 )
-
+from app.modules.promotion.repository import PromotionRepository
 
 log = logging.getLogger(__name__)
 STYLE_MAIN_IMAGE_MAX_BYTES = 300 * 1024
@@ -93,9 +92,7 @@ class StyleService:
 
     # ----------------------- create / update / delete ----------------------- #
 
-    async def create_style(
-        self, payload: StyleCreate, user: User
-    ) -> StyleResponse:
+    async def create_style(self, payload: StyleCreate, user: User) -> StyleResponse:
         # BR-U02-01: 唯一性
         if await self._styles.code_exists(payload.style_code):
             raise StyleCodeConflictError(
@@ -132,9 +129,7 @@ class StyleService:
         await self._session.commit()
         return await self._to_response(style, user)
 
-    async def update_style(
-        self, style_id: UUID, payload: StyleUpdate, user: User
-    ) -> StyleResponse:
+    async def update_style(self, style_id: UUID, payload: StyleUpdate, user: User) -> StyleResponse:
         style = await self._styles.get_by_id(style_id)
         if style is None:
             raise StyleNotFoundError(f"款式 {style_id} 不存在")
@@ -155,7 +150,7 @@ class StyleService:
             return await self._to_response(style, user)
 
         # 应用变更
-        for field, diff in changes.items():
+        for field, _diff in changes.items():
             new_value = getattr(payload, field)
             if field in {"gender", "design_status"}:
                 # Enum → str 存储
@@ -183,9 +178,7 @@ class StyleService:
         if style is None:
             raise StyleNotFoundError(f"款式 {style_id} 不存在")
 
-        active_count = await self._skus.count_by_style(
-            style_id, is_active=True, is_deleted=False
-        )
+        active_count = await self._skus.count_by_style(style_id, is_active=True, is_deleted=False)
         if active_count > 0:
             raise StyleHasActiveSkuError(
                 f"款式下还有 {active_count} 个启用 SKU，请先停用或删除",
@@ -203,9 +196,7 @@ class StyleService:
         )
         await self._session.commit()
 
-    async def disable_style(
-        self, style_id: UUID, user: User
-    ) -> StyleResponse:
+    async def disable_style(self, style_id: UUID, user: User) -> StyleResponse:
         style = await self._styles.get_by_id(style_id)
         if style is None:
             raise StyleNotFoundError(f"款式 {style_id} 不存在")
@@ -220,9 +211,28 @@ class StyleService:
         await self._session.commit()
         return await self._to_response(style, user)
 
-    async def restore_style(
-        self, style_id: UUID, user: User
-    ) -> StyleResponse:
+    async def enable_style(self, style_id: UUID, user: User) -> StyleResponse:
+        """重新启用被停用的款式（``disable_style`` 的逆操作）。
+
+        与 ``restore_style`` 是两件不同的事：
+        - ``enable_style`` / ``disable_style`` 操作 ``is_active``（业务上的启用/停用）
+        - ``restore_style`` 操作 ``is_deleted``（软删的恢复）
+        """
+        style = await self._styles.get_by_id(style_id)
+        if style is None:
+            raise StyleNotFoundError(f"款式 {style_id} 不存在")
+        style.is_active = True
+        await self._session.flush()
+        await self._audit.log(
+            action="style.enable",
+            resource="style",
+            resource_id=style.id,
+            user_id=user.id,
+        )
+        await self._session.commit()
+        return await self._to_response(style, user)
+
+    async def restore_style(self, style_id: UUID, user: User) -> StyleResponse:
         """BR-U02-22: 恢复软删的 style."""
         style = await self._styles.get_by_id(style_id, include_deleted=True)
         if style is None or not style.is_deleted:
@@ -319,7 +329,7 @@ class StyleService:
             await self._session.rollback()
             try:
                 await run_in_threadpool(attachment_service.delete, "private", new_key)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 log.warning(
                     "style_main_image_compensation_delete_failed",
                     extra={"style_id": str(style_id), "key": new_key},
@@ -329,7 +339,7 @@ class StyleService:
         if old_key and old_key != new_key:
             try:
                 await run_in_threadpool(attachment_service.delete, "private", old_key)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 log.warning(
                     "style_main_image_old_object_delete_failed",
                     extra={"style_id": str(style_id), "key": old_key},
@@ -356,7 +366,7 @@ class StyleService:
         await self._session.commit()
         try:
             await run_in_threadpool(attachment_service.delete, "private", old_key)
-        except Exception:  # noqa: BLE001
+        except Exception:
             log.warning(
                 "style_main_image_object_delete_failed",
                 extra={"style_id": str(style_id), "key": old_key},
@@ -378,9 +388,7 @@ class StyleService:
         page_size: int,
         user: User,
     ) -> StylePage:
-        items, total = await self._styles.list(
-            filters=filters, page=page, page_size=page_size
-        )
+        items, total = await self._styles.list(filters=filters, page=page, page_size=page_size)
         return StylePage(
             items=[await self._to_response(s, user) for s in items],
             total=total,
@@ -444,7 +452,7 @@ class StyleService:
                 main_url = attachment_service.get_signed_url(
                     "private", style.main_image_key, expires_in=3600
                 )
-            except Exception:  # noqa: BLE001
+            except Exception:
                 main_url = None
         return StyleResponse(
             id=style.id,
@@ -550,7 +558,7 @@ class SkuService:
         page: int,
         page_size: int,
         user: User,
-    ) -> "CostTablePage":
+    ) -> CostTablePage:
         """商品成本表（SKU 级，join 款式+品牌）。"""
         rows, total = await self._skus.list_cost_table(
             keyword=keyword,
@@ -580,13 +588,9 @@ class SkuService:
             )
             for r in rows
         ]
-        return CostTablePage(
-            items=items, total=total, page=page, page_size=page_size
-        )
+        return CostTablePage(items=items, total=total, page=page, page_size=page_size)
 
-    async def update_sku(
-        self, sku_id: UUID, payload: SkuUpdate, user: User
-    ) -> SkuResponse:
+    async def update_sku(self, sku_id: UUID, payload: SkuUpdate, user: User) -> SkuResponse:
         sku = await self._skus.get_by_id(sku_id)
         if sku is None:
             raise SkuNotFoundError(f"SKU {sku_id} 不存在")
@@ -644,9 +648,7 @@ class SkuService:
         await self._session.commit()
         return await self._to_response(sku, user)
 
-    async def upsert_sku(
-        self, payload: SkuCreate, user: User
-    ) -> SkuResponse:
+    async def upsert_sku(self, payload: SkuCreate, user: User) -> SkuResponse:
         """U06b 导入路径：数据库原子 upsert.
 
         Pattern P-U02-03：
@@ -684,14 +686,10 @@ class SkuService:
             "is_deleted": False,
         }
 
-        sku, is_inserted = await self._skus.upsert_atomic(
-            tenant_id=user.tenant_id, values=values
-        )
+        sku, is_inserted = await self._skus.upsert_atomic(tenant_id=user.tenant_id, values=values)
 
         # 指标：按 result 分类
-        sku_upsert_total.labels(
-            result="created" if is_inserted else "updated"
-        ).inc()
+        sku_upsert_total.labels(result="created" if is_inserted else "updated").inc()
 
         action = "sku.create_via_import" if is_inserted else "sku.update_via_import"
         after_marker: dict[str, Any] = {
@@ -761,9 +759,7 @@ class SkuService:
         style = await self._styles.get_by_id(style_id)
         if style is None:
             raise StyleNotFoundError(f"款式 {style_id} 不存在")
-        items = await self._skus.list_by_style(
-            style_id, include_inactive=include_inactive
-        )
+        items = await self._skus.list_by_style(style_id, include_inactive=include_inactive)
         return [await self._to_response(s, user) for s in items]
 
     # ----------------------- private ----------------------- #

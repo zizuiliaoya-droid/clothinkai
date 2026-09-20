@@ -69,7 +69,7 @@ def decrypt_credential(
     nonce, ct = ciphertext[:_NONCE_BYTES], ciphertext[_NONCE_BYTES:]
     try:
         return AESGCM(_derive_key(tenant_id)).decrypt(nonce, ct, None).decode()
-    except Exception as exc:  # noqa: BLE001 — InvalidTag 等统一转业务异常
+    except Exception as exc:
         raise CredentialDecryptError("凭据解密失败（密文损坏或密钥不匹配）") from exc
 
 

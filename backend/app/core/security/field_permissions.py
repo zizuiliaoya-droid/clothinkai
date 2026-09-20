@@ -16,6 +16,8 @@ core 注册表，并叠加字段级自定义 override（撤销 > 授予 > 角色
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
+from uuid import UUID
 
 
 @dataclass(frozen=True)
@@ -121,7 +123,7 @@ def field_filter(entity: str, data: dict, ctx: FieldPermissionContext) -> dict:
 
 
 async def build_field_perm_context(
-    user_id, role_repo, perm_repo
+    user_id: UUID, role_repo: Any, perm_repo: Any
 ) -> FieldPermissionContext:
     """构造 FieldPermissionContext（4 模块 service 共用，单一构建器）。
 
@@ -129,6 +131,9 @@ async def build_field_perm_context(
         user_id: 当前用户 id。
         role_repo: RoleRepository（list_codes_for_user）。
         perm_repo: PermissionRepository（list_scopes_for_user）。
+
+    两个 repo 参数标注为 ``Any``：它们的具体类型在 ``app.modules.auth`` 下，
+    而本模块属 ``app.core``，标注真实类型会让 core 反向依赖 modules。
     """
     role_codes = frozenset(await role_repo.list_codes_for_user(user_id))
     role_scopes, grants, revokes = await perm_repo.list_scopes_for_user(user_id)

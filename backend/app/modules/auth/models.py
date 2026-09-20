@@ -34,7 +34,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base, SoftDeleteMixin, TenantScopedModel, TimestampMixin
 
@@ -135,7 +135,7 @@ class User(TenantScopedModel, SoftDeleteMixin):
 
     __table_args__ = (
         UniqueConstraint("tenant_id", "username", name="uq_user_tenant_username"),
-        Index("ix_user_locked", "tenant_id", "locked_at", postgresql_where=(locked_at.isnot(None))),  # type: ignore[attr-defined]
+        Index("ix_user_locked", "tenant_id", "locked_at", postgresql_where=(locked_at.isnot(None))),
     )
 
 
@@ -159,9 +159,7 @@ class UserRole(TenantScopedModel):
     )
 
     __table_args__ = (
-        UniqueConstraint(
-            "tenant_id", "user_id", "role_id", name="uq_user_role_tenant_user_role"
-        ),
+        UniqueConstraint("tenant_id", "user_id", "role_id", name="uq_user_role_tenant_user_role"),
     )
 
 
@@ -222,7 +220,7 @@ class RefreshToken(TenantScopedModel):
         Index(
             "ix_refresh_token_active_expiry",
             "expires_at",
-            postgresql_where=(revoked_at.is_(None)),  # type: ignore[attr-defined]
+            postgresql_where=(revoked_at.is_(None)),
         ),
     )
 
@@ -242,8 +240,8 @@ class AuditLog(Base):
     action: Mapped[str] = mapped_column(String(64), nullable=False)
     resource: Mapped[str | None] = mapped_column(String(64), nullable=True)
     resource_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    before: Mapped[dict | None] = mapped_column(JSONB, nullable=True)  # type: ignore[type-arg]
-    after: Mapped[dict | None] = mapped_column(JSONB, nullable=True)  # type: ignore[type-arg]
+    before: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    after: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     purpose: Mapped[str | None] = mapped_column(String(128), nullable=True)
     ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
     user_agent: Mapped[str | None] = mapped_column(String(256), nullable=True)
@@ -271,11 +269,13 @@ class BackupRecord(Base, TimestampMixin):
     __tablename__ = "backup_record"
 
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
-    backup_type: Mapped[str] = mapped_column(String(16), nullable=False)  # daily/monthly/manual/restore_drill
+    backup_type: Mapped[str] = mapped_column(
+        String(16), nullable=False
+    )  # daily/monthly/manual/restore_drill
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="running")
-    includes: Mapped[dict | None] = mapped_column(JSONB, nullable=True)  # type: ignore[type-arg]
+    includes: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     r2_key: Mapped[str | None] = mapped_column(String(256), nullable=True)
     size_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     checksum: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -286,7 +286,7 @@ class BackupRecord(Base, TimestampMixin):
         Index(
             "ix_backup_record_retention",
             "retention_until",
-            postgresql_where=(r2_key.isnot(None)),  # type: ignore[attr-defined]
+            postgresql_where=(r2_key.isnot(None)),
         ),
     )
 

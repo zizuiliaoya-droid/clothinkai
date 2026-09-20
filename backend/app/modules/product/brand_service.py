@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import AuditService
-from app.core.exceptions import ResourceNotFoundError
 from app.modules.product.brand_repository import BrandRepository
 from app.modules.product.brand_schemas import (
     BrandCreate,
@@ -44,9 +42,7 @@ class BrandService:
         await self._session.commit()
         return BrandResponse.model_validate(brand)
 
-    async def update_brand(
-        self, brand_id: UUID, payload: BrandUpdate
-    ) -> BrandResponse:
+    async def update_brand(self, brand_id: UUID, payload: BrandUpdate) -> BrandResponse:
         brand = await self._repo.get_by_id(brand_id)
         if brand is None:
             raise BrandNotFoundError(f"品牌 {brand_id} 不存在")
@@ -81,9 +77,7 @@ class BrandService:
         page: int = 1,
         page_size: int = 50,
     ) -> tuple[list[BrandResponse], int]:
-        items, total = await self._repo.list(
-            is_active=is_active, page=page, page_size=page_size
-        )
+        items, total = await self._repo.list(is_active=is_active, page=page, page_size=page_size)
         return [BrandResponse.model_validate(b) for b in items], total
 
 

@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from uuid import uuid4
 
@@ -51,16 +51,13 @@ class TestAsymmetryWithSettlementRequested:
     def test_asymmetry(self) -> None:
         # 正向必须有 handler（U05 未部署 → U04 review approve 失败）
         # 反向可丢（U04 listener 缺失不阻塞 U05 mark_paid）
-        assert (
-            SettlementRequested.required_handler
-            != SettlementPaid.required_handler
-        )
+        assert SettlementRequested.required_handler != SettlementPaid.required_handler
 
 
 def _make_paid_event() -> SettlementPaid:
     return SettlementPaid(
         event_id=uuid4(),
-        timestamp=datetime.now(timezone.utc),
+        timestamp=datetime.now(UTC),
         tenant_id=uuid4(),
         settlement_id=uuid4(),
         promotion_id=uuid4(),

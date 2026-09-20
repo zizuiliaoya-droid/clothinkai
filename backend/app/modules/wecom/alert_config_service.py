@@ -35,12 +35,9 @@ class AlertConfigService:
             is_enabled=cfg.is_enabled,
         )
 
-    async def upsert(
-        self, payload: AlertConfigUpdate, user: User
-    ) -> WecomAlertConfig:
-        if (
-            payload.control_group_webhook
-            and not payload.control_group_webhook.startswith("https://")
+    async def upsert(self, payload: AlertConfigUpdate, user: User) -> WecomAlertConfig:
+        if payload.control_group_webhook and not payload.control_group_webhook.startswith(
+            "https://"
         ):
             raise AlertConfigInvalidError("webhook 须为 https URL")
         recipients = list(dict.fromkeys(payload.alert_recipients))  # 去重保序

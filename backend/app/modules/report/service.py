@@ -6,8 +6,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from decimal import Decimal
-from typing import Any, Mapping
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -47,9 +48,7 @@ class PublishProgressService:
             "important_days": _IMPORTANT_DAYS,
         }
 
-    async def get_summary(
-        self, tenant_id: UUID, time_range: tuple
-    ) -> ProgressSummary:
+    async def get_summary(self, tenant_id: UUID, time_range: tuple) -> ProgressSummary:
         row = await self._repo.aggregate_summary(**self._common(tenant_id, time_range))
         quote = int(row["quote_count"])
         publish_rate = safe_div(row["publish_count"], quote, quantize=_Q4)
@@ -119,9 +118,7 @@ class PublishProgressService:
                 publish_count=int(r["publish_count"]),
                 overdue_count=int(r["overdue_count"]),
                 like_count=int(r["like_count"]),
-                publish_rate=safe_div(
-                    r["publish_count"], r["quote_count"], quantize=_Q4
-                ),
+                publish_rate=safe_div(r["publish_count"], r["quote_count"], quantize=_Q4),
             )
             for r in rows
         ]

@@ -24,8 +24,9 @@ class TestHealthEndpoints:
         """Readiness：DB + Redis 都健康 → 200。"""
         from app import main as main_module
 
-        with patch.object(main_module, "check_db_health", AsyncMock(return_value=True)), patch.object(
-            main_module, "check_redis_health", AsyncMock(return_value=True)
+        with (
+            patch.object(main_module, "check_db_health", AsyncMock(return_value=True)),
+            patch.object(main_module, "check_redis_health", AsyncMock(return_value=True)),
         ):
             async with AsyncClient(
                 transport=ASGITransport(app=main_module.app), base_url="http://test"
@@ -40,8 +41,9 @@ class TestHealthEndpoints:
     async def test_ready_when_db_unhealthy(self) -> None:
         from app import main as main_module
 
-        with patch.object(main_module, "check_db_health", AsyncMock(return_value=False)), patch.object(
-            main_module, "check_redis_health", AsyncMock(return_value=True)
+        with (
+            patch.object(main_module, "check_db_health", AsyncMock(return_value=False)),
+            patch.object(main_module, "check_redis_health", AsyncMock(return_value=True)),
         ):
             async with AsyncClient(
                 transport=ASGITransport(app=main_module.app), base_url="http://test"

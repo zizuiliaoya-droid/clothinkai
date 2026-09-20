@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
@@ -24,8 +24,6 @@ from app.core.exceptions import (
     AccountDisabledError,
     AccountLockedError,
     InvalidCredentialsError,
-    PasswordMustChangeError,
-    PermissionDeniedError,
     RateLimitedError,
     ResourceNotFoundError,
     TenantContextMissingError,
@@ -38,7 +36,6 @@ from app.core.security.auth import (
     encode_refresh_token,
     hash_password,
     is_revoked,
-    revoke_token,
     verify_password,
 )
 from app.core.security.permissions import (
@@ -54,7 +51,6 @@ from app.modules.auth.exceptions import (
 )
 from app.modules.auth.models import (
     RefreshToken,
-    Role,
     User,
 )
 from app.modules.auth.repository import (
@@ -76,7 +72,7 @@ log = logging.getLogger(__name__)
 
 
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _login_fail_key(ip: str, username: str) -> str:
@@ -569,9 +565,7 @@ class PermissionService:
     async def _resolve_permission_id(self, scope: str) -> UUID:
         perm = await self._perms.get_by_scope(scope)
         if perm is None:
-            raise ValidationError(
-                f"未知权限 scope: {scope}", details={"scope": scope}
-            )
+            raise ValidationError(f"未知权限 scope: {scope}", details={"scope": scope})
         return perm.id
 
     async def _apply(
@@ -611,9 +605,7 @@ class PermissionService:
         actor_id: UUID,
         reason: str | None = None,
     ) -> None:
-        await self._apply(
-            target_user_id, scope, effect="grant", actor_id=actor_id, reason=reason
-        )
+        await self._apply(target_user_id, scope, effect="grant", actor_id=actor_id, reason=reason)
 
     async def revoke(
         self,
@@ -623,15 +615,11 @@ class PermissionService:
         actor_id: UUID,
         reason: str | None = None,
     ) -> None:
-        await self._apply(
-            target_user_id, scope, effect="revoke", actor_id=actor_id, reason=reason
-        )
+        await self._apply(target_user_id, scope, effect="revoke", actor_id=actor_id, reason=reason)
 
     async def get_effective(self, target_user_id: UUID) -> dict[str, Any]:
         await self._ensure_user(target_user_id)
-        role_scopes, grants, revokes = await self._perms.list_scopes_for_user(
-            target_user_id
-        )
+        role_scopes, grants, revokes = await self._perms.list_scopes_for_user(target_user_id)
         effective = merge_permissions(role_scopes, grants, revokes)
         return {
             "user_id": str(target_user_id),

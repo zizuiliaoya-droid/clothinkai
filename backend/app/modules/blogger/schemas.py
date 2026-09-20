@@ -15,7 +15,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.modules.blogger.enums import BloggerType, GenderTarget, Platform
 
-
 _QuoteField = Annotated[
     Decimal,
     Field(ge=Decimal("0"), max_digits=10, decimal_places=2),
@@ -55,9 +54,7 @@ class BloggerBase(BaseModel):
 
 
 class BloggerCreate(BloggerBase):
-    xiaohongshu_id: str = Field(
-        min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_\-]+$"
-    )
+    xiaohongshu_id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_\-]+$")
 
     @field_validator("category_tags", "quality_tags")
     @classmethod

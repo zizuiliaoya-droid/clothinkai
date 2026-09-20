@@ -91,10 +91,14 @@ class PlatformProductService:
                 ) from exc
             raise
         await self._audit.log(
-            action="platform_product.create", resource="platform_product",
+            action="platform_product.create",
+            resource="platform_product",
             resource_id=pp.id,
-            after={"platform": pp.platform, "platform_id": pp.platform_id,
-                   "style_id": str(pp.style_id)},
+            after={
+                "platform": pp.platform,
+                "platform_id": pp.platform_id,
+                "style_id": str(pp.style_id),
+            },
             user_id=user_id,
         )
         await self._session.commit()
@@ -123,22 +127,27 @@ class PlatformProductService:
             await self._session.flush()
             await self._audit.log(
                 action="platform_product.update_via_import",
-                resource="platform_product", resource_id=existing.id,
-                after={"style_id": str(style_id)}, user_id=user_id,
+                resource="platform_product",
+                resource_id=existing.id,
+                after={"style_id": str(style_id)},
+                user_id=user_id,
             )
             await self._session.commit()
             return existing
         pp = PlatformProduct(
-            platform=platform, platform_id=platform_id,
-            style_id=style_id, sku_id=sku_id, title=title,
+            platform=platform,
+            platform_id=platform_id,
+            style_id=style_id,
+            sku_id=sku_id,
+            title=title,
         )
         self._session.add(pp)
         await self._session.flush()
         await self._audit.log(
             action="platform_product.create_via_import",
-            resource="platform_product", resource_id=pp.id,
-            after={"platform": platform, "platform_id": platform_id,
-                   "style_id": str(style_id)},
+            resource="platform_product",
+            resource_id=pp.id,
+            after={"platform": platform, "platform_id": platform_id, "style_id": str(style_id)},
             user_id=user_id,
         )
         await self._session.commit()
@@ -147,9 +156,7 @@ class PlatformProductService:
     # ------------------------------------------------------------------ #
     # find（反查，U13/U14）
     # ------------------------------------------------------------------ #
-    async def find_by_platform_id(
-        self, platform: str, platform_id: str
-    ) -> PlatformProduct | None:
+    async def find_by_platform_id(self, platform: str, platform_id: str) -> PlatformProduct | None:
         return await self._find(platform, platform_id)
 
     # ------------------------------------------------------------------ #
@@ -172,8 +179,10 @@ class PlatformProductService:
             pp.is_active = payload.is_active
         await self._session.flush()
         await self._audit.log(
-            action="platform_product.update", resource="platform_product",
-            resource_id=pp.id, user_id=user_id,
+            action="platform_product.update",
+            resource="platform_product",
+            resource_id=pp.id,
+            user_id=user_id,
         )
         await self._session.commit()
         return PlatformProductResponse.model_validate(pp)
@@ -184,25 +193,30 @@ class PlatformProductService:
             raise PlatformProductNotFoundError("平台商品映射不存在")
         await self._session.delete(pp)
         await self._audit.log(
-            action="platform_product.delete", resource="platform_product",
-            resource_id=pp.id, user_id=user_id,
+            action="platform_product.delete",
+            resource="platform_product",
+            resource_id=pp.id,
+            user_id=user_id,
         )
         await self._session.commit()
 
     async def list(
-        self, *, tenant_id: UUID, style_id: UUID | None = None,
-        page: int = 1, page_size: int = 20
+        self, *, tenant_id: UUID, style_id: UUID | None = None, page: int = 1, page_size: int = 20
     ) -> tuple[Sequence[PlatformProduct], int]:
         stmt = select(PlatformProduct).where(PlatformProduct.tenant_id == tenant_id)
-        count_stmt = select(func.count()).select_from(PlatformProduct).where(
-            PlatformProduct.tenant_id == tenant_id
+        count_stmt = (
+            select(func.count())
+            .select_from(PlatformProduct)
+            .where(PlatformProduct.tenant_id == tenant_id)
         )
         if style_id is not None:
             stmt = stmt.where(PlatformProduct.style_id == style_id)
             count_stmt = count_stmt.where(PlatformProduct.style_id == style_id)
-        stmt = stmt.order_by(PlatformProduct.created_at.desc()).offset(
-            (page - 1) * page_size
-        ).limit(page_size)
+        stmt = (
+            stmt.order_by(PlatformProduct.created_at.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
         items = (await self._session.execute(stmt)).scalars().all()
         total = (await self._session.execute(count_stmt)).scalar_one()
         return items, int(total)

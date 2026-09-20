@@ -9,6 +9,8 @@
 
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
+
 import pytest
 
 from app.core.security.field_permissions import (
@@ -55,7 +57,8 @@ class TestRegistryValues:
         assert FIELD_PERMISSION_REGISTRY["settlement"]["amount"].writable_roles == frozenset()
 
     def test_rule_is_frozen(self) -> None:
-        with pytest.raises(Exception):
+        # FieldRule 是 @dataclass(frozen=True)，改属性抛 FrozenInstanceError
+        with pytest.raises(FrozenInstanceError):
             FieldRule(frozenset()).visible_roles = frozenset({"x"})  # type: ignore[misc]
 
 
@@ -108,7 +111,10 @@ class TestCanWriteField:
 
     def test_settlement_payment_amount_writable_roles(self) -> None:
         assert can_write_field("settlement", "payment_amount", _ctx({"pr_manager"})) is True
-        assert can_write_field("settlement", "payment_amount", _ctx({"finance"})) is False
+        # finance 自 9d5e0c5 起可写 payment_amount（财务账号需能走完整结款流程）
+        assert can_write_field("settlement", "payment_amount", _ctx({"finance"})) is True
+        # 非财务/PR 角色仍不可写
+        assert can_write_field("settlement", "payment_amount", _ctx({"designer"})) is False
 
     def test_settlement_amount_no_write_by_role(self) -> None:
         # writable_roles 为空 → 任何角色（非超管）都不可写

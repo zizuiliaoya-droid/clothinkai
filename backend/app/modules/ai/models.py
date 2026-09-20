@@ -35,7 +35,9 @@ class AiAdviceLog(TenantScopedModel):
     __table_args__ = (
         Index(
             "idx_ai_advice_log_tenant_type",
-            "tenant_id", "advice_type", "created_at",
+            "tenant_id",
+            "advice_type",
+            "created_at",
         ),
     )
 

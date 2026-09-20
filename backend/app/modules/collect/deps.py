@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Annotated, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Annotated
 
 from fastapi import Depends, Header, Request
 from sqlalchemy import text
@@ -27,18 +28,14 @@ def get_worker_token_service(session: SessionDep) -> WorkerTokenService:
     return WorkerTokenService(session)
 
 
-WorkerTokenServiceDep = Annotated[
-    WorkerTokenService, Depends(get_worker_token_service)
-]
+WorkerTokenServiceDep = Annotated[WorkerTokenService, Depends(get_worker_token_service)]
 
 
 def get_data_quality_service(session: SessionDep) -> DataQualityService:
     return DataQualityService(session)
 
 
-DataQualityServiceDep = Annotated[
-    DataQualityService, Depends(get_data_quality_service)
-]
+DataQualityServiceDep = Annotated[DataQualityService, Depends(get_data_quality_service)]
 
 
 async def get_worker_token(
@@ -53,9 +50,7 @@ async def get_worker_token(
     try:
         async with AsyncSessionBypass() as session:
             await session.execute(text("SET LOCAL app.bypass_rls = 'on'"))
-            worker = await WorkerTokenService(session).authenticate(
-                x_worker_token, client_ip
-            )
+            worker = await WorkerTokenService(session).authenticate(x_worker_token, client_ip)
     finally:
         bypass_rls_ctx.reset(bypass_token)
 
@@ -83,9 +78,7 @@ def get_crawler_task_service(
     return CrawlerTaskService(session)
 
 
-CrawlerTaskServiceDep = Annotated[
-    CrawlerTaskService, Depends(get_crawler_task_service)
-]
+CrawlerTaskServiceDep = Annotated[CrawlerTaskService, Depends(get_crawler_task_service)]
 
 
 __all__ = [

@@ -10,8 +10,8 @@ import os
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import select, text
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.core.security.auth import hash_password
 from app.modules.auth.models import Tenant, User
@@ -56,9 +56,9 @@ class TestRowLevelSecurity:
             session.add(u)
         await session.flush()
 
-        # 用 clothing_app 角色重新连接（RLS 启用）
+        # 用 clothing_app 角色重新连接（RLS 启用）。
+        # 本测试直接用 engine.connect() + SET LOCAL 验证，不经过 sessionmaker。
         app_engine = create_async_engine(APP_DATABASE_URL, future=True)
-        AppSession = async_sessionmaker(app_engine, expire_on_commit=False, class_=AsyncSession)
 
         try:
             async with app_engine.connect() as conn:
@@ -70,7 +70,9 @@ class TestRowLevelSecurity:
                     )
                     # 仅能看到 tenant_a 的用户
                     result = await conn.execute(
-                        text(f"SELECT username FROM \"user\" WHERE id IN ({','.join(repr(str(u.id)) for u in users_to_insert)})")
+                        text(
+                            f"SELECT username FROM \"user\" WHERE id IN ({','.join(repr(str(u.id)) for u in users_to_insert)})"
+                        )
                     )
                     rows = result.fetchall()
                     usernames = {row[0] for row in rows}
@@ -107,7 +109,9 @@ class TestRowLevelSecurity:
                 async with conn.begin():
                     await conn.execute(text("SET LOCAL app.bypass_rls = 'on'"))
                     result = await conn.execute(
-                        text(f"SELECT count(*) FROM \"user\" WHERE id IN ({','.join(repr(str(u.id)) for u in users_to_insert)})")
+                        text(
+                            f"SELECT count(*) FROM \"user\" WHERE id IN ({','.join(repr(str(u.id)) for u in users_to_insert)})"
+                        )
                     )
                     count = result.scalar_one()
                     assert count == 2
@@ -122,9 +126,7 @@ class TestRowLevelSecurity:
 class TestAuditLogAppendOnly:
     """audit_log REVOKE UPDATE/DELETE 验证。"""
 
-    async def test_clothing_app_cannot_update_audit_log(
-        self, session: AsyncSession
-    ) -> None:
+    async def test_clothing_app_cannot_update_audit_log(self, session: AsyncSession) -> None:
         from app.modules.auth.models import AuditLog
 
         # 先用 bypass 插入一条
@@ -140,17 +142,13 @@ class TestAuditLogAppendOnly:
                 async with conn.begin():
                     with pytest.raises(Exception):  # noqa: B017
                         await conn.execute(
-                            text(
-                                "UPDATE audit_log SET action = 'tampered' WHERE id = :id"
-                            ),
+                            text("UPDATE audit_log SET action = 'tampered' WHERE id = :id"),
                             {"id": entry_id},
                         )
         finally:
             await app_engine.dispose()
 
-    async def test_clothing_app_cannot_delete_audit_log(
-        self, session: AsyncSession
-    ) -> None:
+    async def test_clothing_app_cannot_delete_audit_log(self, session: AsyncSession) -> None:
         from app.modules.auth.models import AuditLog
 
         entry = AuditLog(actor_type="system", action="login")

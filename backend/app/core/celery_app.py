@@ -57,9 +57,9 @@ celery_app.autodiscover_tasks(
         "app.tasks.backup_tasks",
         "app.tasks.cleanup_tasks",
         "app.tasks.import_tasks",  # U06a：run_import_batch（NF-4，否则 .delay 找不到任务）
-        "app.tasks.wecom_tasks",   # U07：scan_and_dispatch_urge + execute_wecom_message
-        "app.tasks.blogger_tasks", # U11：recompute_all_blogger_tags
-        "app.tasks.crawler_tasks", # U13：schedule_daily_tasks
+        "app.tasks.wecom_tasks",  # U07：scan_and_dispatch_urge + execute_wecom_message
+        "app.tasks.blogger_tasks",  # U11：recompute_all_blogger_tags
+        "app.tasks.crawler_tasks",  # U13：schedule_daily_tasks
         "app.tasks.report_tasks",  # U14：precompute_report_cache（占位）
     ]
 )

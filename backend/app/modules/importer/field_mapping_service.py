@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -35,9 +35,7 @@ class FieldMappingService:
         self._repo = FieldMappingRepository(session)
         self._audit = AuditService(session)
 
-    async def create_version(
-        self, payload: FieldMappingCreate, user: User
-    ) -> FieldMapping:
+    async def create_version(self, payload: FieldMappingCreate, user: User) -> FieldMapping:
         """新建字段映射版本并设为 active（旧 active 同事务下线）。
 
         Raises:
@@ -79,18 +77,14 @@ class FieldMappingService:
         """取当前 active 版本（无 → None）。"""
         return await self._repo.get_active(user.tenant_id, source)
 
-    async def get_by_version(
-        self, source: str, version: int, user: User
-    ) -> FieldMapping:
+    async def get_by_version(self, source: str, version: int, user: User) -> FieldMapping:
         """取指定版本（不存在 → 422）。"""
         mapping = await self._repo.get_by_version(user.tenant_id, source, version)
         if mapping is None:
             raise ImportMappingVersionNotFoundError()
         return mapping
 
-    async def list_versions(
-        self, source: str, user: User
-    ) -> Sequence[FieldMapping]:
+    async def list_versions(self, source: str, user: User) -> Sequence[FieldMapping]:
         """列出某 source 的所有版本（version 倒序）。"""
         return await self._repo.list_versions(user.tenant_id, source)
 

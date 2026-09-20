@@ -36,11 +36,7 @@ class BrandRepository:
         total_stmt = select(func.count()).select_from(stmt.subquery())
         total = int((await self._session.execute(total_stmt)).scalar_one())
 
-        stmt = (
-            stmt.order_by(Brand.brand_code.asc())
-            .limit(page_size)
-            .offset((page - 1) * page_size)
-        )
+        stmt = stmt.order_by(Brand.brand_code.asc()).limit(page_size).offset((page - 1) * page_size)
         items = (await self._session.execute(stmt)).scalars().all()
         return items, total
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
 
@@ -49,10 +50,14 @@ class BundleService:
         except IntegrityError as exc:
             raise DuplicateResourceError("bundle_code 已存在") from exc
         for it in payload.items:
-            self._repo.add_item(BundleItem(
-                tenant_id=user.tenant_id, bundle_id=bundle.id,
-                sku_id=it.sku_id, quantity=it.quantity,
-            ))
+            self._repo.add_item(
+                BundleItem(
+                    tenant_id=user.tenant_id,
+                    bundle_id=bundle.id,
+                    sku_id=it.sku_id,
+                    quantity=it.quantity,
+                )
+            )
         await self._s.flush()
         await AuditService(self._s).log(
             "product.bundle.create",
@@ -63,21 +68,17 @@ class BundleService:
         await self._s.commit()
         return bundle
 
-    async def get_with_items(
-        self, bundle_id: UUID
-    ) -> tuple[BundleProduct, list[BundleItem]]:
+    async def get_with_items(self, bundle_id: UUID) -> tuple[BundleProduct, list[BundleItem]]:
         bundle = await self._repo.get(bundle_id)
         if bundle is None:
             raise ResourceNotFoundError("套装不存在")
         items = list(await self._repo.list_items(bundle_id))
         return bundle, items
 
-    async def list_bundles(self, *, limit: int = 50, offset: int = 0):
+    async def list_bundles(self, *, limit: int = 50, offset: int = 0) -> Sequence[BundleProduct]:
         return await self._repo.list_bundles(limit=limit, offset=offset)
 
-    async def split_quantities(
-        self, bundle_id: UUID, sold_qty: int
-    ) -> list[tuple[UUID, int]]:
+    async def split_quantities(self, bundle_id: UUID, sold_qty: int) -> list[tuple[UUID, int]]:
         """EP02-S08：销量按 item 数量拆分到各 sku。"""
         items = await self._repo.list_items(bundle_id)
         return [(it.sku_id, it.quantity * sold_qty) for it in items]

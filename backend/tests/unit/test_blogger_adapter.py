@@ -116,9 +116,7 @@ def test_parse_row_custom_mapping():
             {"source_col": "标签", "target_field": "category_tags", "type": "list"},
         ]
     )
-    parsed = _adapter().parse_row(
-        {"博主ID": "x9", "粉丝量": "8000", "标签": "A,B"}, mapping
-    )
+    parsed = _adapter().parse_row({"博主ID": "x9", "粉丝量": "8000", "标签": "A,B"}, mapping)
     assert parsed["xiaohongshu_id"] == "x9"
     assert parsed["follower_count"] == 8000
     assert parsed["category_tags"] == ["A", "B"]

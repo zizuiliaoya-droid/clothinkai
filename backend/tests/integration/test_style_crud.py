@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -23,6 +23,7 @@ from app.modules.product.exceptions import (
     StyleHasActiveSkuError,
     StyleNotFoundError,
 )
+from app.modules.product.repository import StyleListFilters
 from app.modules.product.schemas import StyleCreate, StyleUpdate
 from app.modules.product.service import StyleService
 
@@ -196,6 +197,108 @@ class TestSoftDeleteStyle:
             await session.refresh(style)
             assert style.is_deleted is True
             assert style.is_active is False
+        finally:
+            tenant_id_ctx.reset(token)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+class TestDisableEnableStyle:
+    """停用 / 启用（is_active）与恢复软删（is_deleted）是两条独立通道。
+
+    回归用户反馈：前端曾把「恢复」接到 restore_style（软删恢复），
+    对未软删的款式必然抛错，导致停用后无法再启用。
+    """
+
+    async def test_disable_then_enable_roundtrip(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
+    ) -> None:
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            style = await product_factory.style()
+            user = await factory.user(tenant_a, roles=[admin_role])
+            svc = StyleService(session)
+
+            disabled = await svc.disable_style(style.id, user)
+            assert disabled.is_active is False
+
+            enabled = await svc.enable_style(style.id, user)
+            assert enabled.is_active is True
+            # 启用不应触碰软删标记
+            assert enabled.is_deleted is False
+        finally:
+            tenant_id_ctx.reset(token)
+
+    async def test_restore_rejects_merely_disabled_style(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
+    ) -> None:
+        """仅被停用（未软删）的款式走 restore 必须报错 —— 这正是之前前端踩的坑。"""
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            style = await product_factory.style()
+            user = await factory.user(tenant_a, roles=[admin_role])
+            svc = StyleService(session)
+            await svc.disable_style(style.id, user)
+
+            with pytest.raises(StyleNotFoundError):
+                await svc.restore_style(style.id, user)
+        finally:
+            tenant_id_ctx.reset(token)
+
+    async def test_list_status_filter_and_ordering(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
+    ) -> None:
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            active = await product_factory.style(style_code="ACT001")
+            inactive = await product_factory.style(style_code="INACT001")
+            user = await factory.user(tenant_a, roles=[admin_role])
+            svc = StyleService(session)
+            await svc.disable_style(inactive.id, user)
+
+            # 默认：只看启用
+            page = await svc.list_styles(
+                filters=StyleListFilters(), page=1, page_size=50, user=user
+            )
+            ids = {i.id for i in page.items}
+            assert active.id in ids
+            assert inactive.id not in ids
+
+            # 只看停用
+            page = await svc.list_styles(
+                filters=StyleListFilters(is_active=False, include_inactive=True),
+                page=1,
+                page_size=50,
+                user=user,
+            )
+            ids = {i.id for i in page.items}
+            assert ids == {inactive.id}
+
+            # 全部：停用排在最后
+            page = await svc.list_styles(
+                filters=StyleListFilters(include_inactive=True),
+                page=1,
+                page_size=50,
+                user=user,
+            )
+            flags = [i.is_active for i in page.items]
+            assert set(flags) == {True, False}
+            assert flags == sorted(flags, reverse=True), "停用的应排在最后"
         finally:
             tenant_id_ctx.reset(token)
 

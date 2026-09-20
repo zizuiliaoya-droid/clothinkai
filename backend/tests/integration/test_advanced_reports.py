@@ -20,11 +20,11 @@ from app.core.tenancy import tenant_id_ctx
 from app.modules.collect.models import AdDaily, QianniuDaily
 from app.modules.finance.order_adjustment_models import OrderAdjustment
 from app.modules.product.platform_product_models import PlatformProduct
+from app.modules.report.advanced_repository import ProductionRepository
 from app.modules.report.advanced_schemas import (
     StoreDailyManualUpdate,
     TargetCreate,
 )
-from app.modules.report.advanced_repository import ProductionRepository
 from app.modules.report.production_service import ProductionService
 from app.modules.report.store_daily_service import StoreDailyService
 from app.modules.report.target_planning_service import TargetPlanningService
@@ -111,27 +111,33 @@ class TestWorkProgress:
             blogger = await blogger_factory.blogger()
             # 同 PR 本月 2 篇：1 已发布(含 like) + 1 未发布
             await promotion_factory.promotion(
-                style=style, blogger=blogger, pr=pr,
+                style=style,
+                blogger=blogger,
+                pr=pr,
                 cooperation_date=date(2026, 5, 10),
-                publish_status="已发布", like_count=600,
+                publish_status="已发布",
+                like_count=600,
                 cost_snapshot=Decimal("300"),
             )
             await promotion_factory.promotion(
-                style=style, blogger=blogger, pr=pr,
+                style=style,
+                blogger=blogger,
+                pr=pr,
                 cooperation_date=date(2026, 5, 20),
                 publish_status="未发布",
             )
             # 上月 1 篇（不应计入 2026-05）
             await promotion_factory.promotion(
-                style=style, blogger=blogger, pr=pr,
+                style=style,
+                blogger=blogger,
+                pr=pr,
                 cooperation_date=date(2026, 4, 15),
-                publish_status="已发布", like_count=10,
+                publish_status="已发布",
+                like_count=10,
             )
             await session.commit()
 
-            rows = await WorkProgressService(session).get_for_month(
-                tenant_a.id, "2026-05"
-            )
+            rows = await WorkProgressService(session).get_for_month(tenant_a.id, "2026-05")
             mine = [r for r in rows if r.pr_id == pr.id]
             assert len(mine) == 1
             row = mine[0]
@@ -142,15 +148,11 @@ class TestWorkProgress:
         finally:
             tenant_id_ctx.reset(tok)
 
-    async def test_invalid_month_raises(
-        self, session: AsyncSession, tenant_a: Any
-    ) -> None:
+    async def test_invalid_month_raises(self, session: AsyncSession, tenant_a: Any) -> None:
         from app.modules.report.exceptions import ReportInvalidTimeRangeError
 
         with pytest.raises(ReportInvalidTimeRangeError):
-            await WorkProgressService(session).get_for_month(
-                tenant_a.id, "2026-13"
-            )
+            await WorkProgressService(session).get_for_month(tenant_a.id, "2026-13")
 
 
 class TestTargetPlanning:
@@ -173,14 +175,18 @@ class TestTargetPlanning:
             # 设目标 3，实际 2 篇 → 未达标 gap=-1
             await svc.set_target(
                 TargetCreate(
-                    pr_id=pr.id, style_id=style.id,
-                    period_month="2026-05", min_target=3,
+                    pr_id=pr.id,
+                    style_id=style.id,
+                    period_month="2026-05",
+                    min_target=3,
                 ),
                 pr,
             )
             for _ in range(2):
                 await promotion_factory.promotion(
-                    style=style, blogger=blogger, pr=pr,
+                    style=style,
+                    blogger=blogger,
+                    pr=pr,
                     cooperation_date=date(2026, 5, 8),
                 )
             await session.commit()
@@ -208,8 +214,10 @@ class TestTargetPlanning:
             style = await product_factory.style()
             svc = TargetPlanningService(session)
             base = TargetCreate(
-                pr_id=pr.id, style_id=style.id,
-                period_month="2026-05", min_target=3,
+                pr_id=pr.id,
+                style_id=style.id,
+                period_month="2026-05",
+                min_target=3,
             )
             await svc.set_target(base, pr)
             await svc.set_target(base.model_copy(update={"min_target": 8}), pr)
@@ -243,7 +251,8 @@ class TestStoreDaily:
             svc = StoreDailyService(session)
             # 手动 upsert 广告花费
             await svc.upsert_manual(
-                tenant_a.id, day,
+                tenant_a.id,
+                day,
                 StoreDailyManualUpdate(ad_spend_total=Decimal("150.00")),
                 ops,
             )
@@ -271,12 +280,14 @@ class TestStoreDaily:
             day = date(2026, 5, 16)
             svc = StoreDailyService(session)
             await svc.upsert_manual(
-                tenant_a.id, day,
+                tenant_a.id,
+                day,
                 StoreDailyManualUpdate(zhitongche_spend=Decimal("50.00")),
                 ops,
             )
             row = await svc.upsert_manual(
-                tenant_a.id, day,
+                tenant_a.id,
+                day,
                 StoreDailyManualUpdate(zhitongche_spend=Decimal("80.00")),
                 ops,
             )
@@ -303,40 +314,50 @@ class TestProduction:
             style = await product_factory.style()
             blogger = await blogger_factory.blogger()
             pp = await _platform_product(session, tenant_a, style)
-            ad_pp = await _platform_product(
-                session, tenant_a, style, platform="万相台"
-            )
+            ad_pp = await _platform_product(session, tenant_a, style, platform="万相台")
             cur = date(2026, 5, 20)
             prev = date(2026, 5, 19)  # 上一周期（跨度 0 天 → 前一天）
             # 本期：支付 1000 退款 100 + 广告 200 + promotion 500
             await _qianniu(
-                session, tenant_a, pp, cur, pay="1000.00",
+                session,
+                tenant_a,
+                pp,
+                cur,
+                pay="1000.00",
                 extra={"refund_amount": "100.00", "add_cart_count": 50},
             )
             await _ad(session, tenant_a, ad_pp, cur, cost="200.00")
             await promotion_factory.promotion(
-                style=style, blogger=blogger, pr=pr,
-                cooperation_date=cur, quote_amount=Decimal("500.00"),
+                style=style,
+                blogger=blogger,
+                pr=pr,
+                cooperation_date=cur,
+                quote_amount=Decimal("500.00"),
                 publish_status="已发布",
             )
             # 未发布和已停用推广均不得计入投产成本。
             await promotion_factory.promotion(
-                style=style, blogger=blogger, pr=pr,
-                cooperation_date=cur, quote_amount=Decimal("900.00"),
+                style=style,
+                blogger=blogger,
+                pr=pr,
+                cooperation_date=cur,
+                quote_amount=Decimal("900.00"),
                 publish_status="未发布",
             )
             await promotion_factory.promotion(
-                style=style, blogger=blogger, pr=pr,
-                cooperation_date=cur, quote_amount=Decimal("800.00"),
-                publish_status="已发布", is_active=False,
+                style=style,
+                blogger=blogger,
+                pr=pr,
+                cooperation_date=cur,
+                quote_amount=Decimal("800.00"),
+                publish_status="已发布",
+                is_active=False,
             )
             # 上期：支付 800
             await _qianniu(session, tenant_a, pp, prev, pay="800.00")
             await session.commit()
 
-            report = await ProductionService(session).get_report(
-                tenant_a.id, (cur, cur)
-            )
+            report = await ProductionService(session).get_report(tenant_a.id, (cur, cur))
             assert len(report.items) == 1
             row = report.items[0]
             assert row.pay_amount == Decimal("1000.00")
@@ -379,7 +400,11 @@ class TestProduction:
             pp = await _platform_product(session, tenant_a, style)
             day = date(2026, 5, 21)
             await _qianniu(
-                session, tenant_a, pp, day, pay="300.00",
+                session,
+                tenant_a,
+                pp,
+                day,
+                pay="300.00",
                 extra={"refund_amount": "20.00"},
             )
             await session.commit()
@@ -407,16 +432,14 @@ class TestProduction:
             other_style = await product_factory.style()
             style.qianniu_product_id = "LEGACY-ID"
             pp1 = await _platform_product(session, tenant_a, style)
-            pp2 = await _platform_product(session, tenant_a, style)
+            await _platform_product(session, tenant_a, style)
             conflicting_q = PlatformProduct(
                 tenant_id=tenant_a.id,
                 platform="千牛",
                 platform_id="LEGACY-ID",
                 style_id=other_style.id,
             )
-            ad_pp = await _platform_product(
-                session, tenant_a, style, platform="万相台"
-            )
+            ad_pp = await _platform_product(session, tenant_a, style, platform="万相台")
             cross_platform_ad = PlatformProduct(
                 tenant_id=tenant_a.id,
                 platform="千牛",
@@ -479,12 +502,8 @@ class TestProduction:
             await session.commit()
 
             service = ProductionService(session)
-            included = await service.get_report(
-                tenant_a.id, (day, day), exclude_brushing=False
-            )
-            excluded = await service.get_report(
-                tenant_a.id, (day, day), exclude_brushing=True
-            )
+            included = await service.get_report(tenant_a.id, (day, day), exclude_brushing=False)
+            excluded = await service.get_report(tenant_a.id, (day, day), exclude_brushing=True)
             extra_rows = await ProductionRepository(session).fetch_extra_by_style(
                 tenant_id=tenant_a.id, date_from=day, date_to=day
             )
@@ -528,14 +547,15 @@ class TestRls:
             style_b = await product_factory.style(tenant=tenant_b)
             blogger_b = await blogger_factory.blogger(tenant=tenant_b)
             await promotion_factory.promotion(
-                style=style_b, blogger=blogger_b, pr=pr_b, tenant=tenant_b,
+                style=style_b,
+                blogger=blogger_b,
+                pr=pr_b,
+                tenant=tenant_b,
                 cooperation_date=date(2026, 5, 10),
             )
             await session.commit()
             # 查 tenant_a 的工作进度 → 不含 tenant_b 数据
-            rows_a = await WorkProgressService(session).get_for_month(
-                tenant_a.id, "2026-05"
-            )
+            rows_a = await WorkProgressService(session).get_for_month(tenant_a.id, "2026-05")
             assert all(r.pr_id != pr_b.id for r in rows_a)
         finally:
             tenant_id_ctx.reset(tok)

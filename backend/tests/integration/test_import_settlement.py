@@ -39,9 +39,7 @@ async def _seed(Maker, suffix: str, batch_id):
     promo2_code = f"PR{suffix}2"
     async with Maker() as s:
         tenant_id = (
-            await s.execute(
-                text("SELECT id FROM tenant ORDER BY created_at ASC LIMIT 1")
-            )
+            await s.execute(text("SELECT id FROM tenant ORDER BY created_at ASC LIMIT 1"))
         ).first()[0]
         style_id = (
             await s.execute(
@@ -126,12 +124,8 @@ async def _seed(Maker, suffix: str, batch_id):
 
 async def _cleanup(Maker, suffix: str, batch_id):
     async with Maker() as c:
-        await c.execute(
-            text("DELETE FROM import_job WHERE batch_id = :id"), {"id": batch_id}
-        )
-        await c.execute(
-            text("DELETE FROM import_batch WHERE id = :id"), {"id": batch_id}
-        )
+        await c.execute(text("DELETE FROM import_job WHERE batch_id = :id"), {"id": batch_id})
+        await c.execute(text("DELETE FROM import_batch WHERE id = :id"), {"id": batch_id})
         # settlement 引用 promotion/style/blogger，先删 settlement
         await c.execute(
             text(
@@ -170,9 +164,7 @@ class TestSettlementImportEndToEnd:
     ) -> None:
         """1 成功（promotion 派生 + settlement_no）+ 1 重复 promotion（UNIQUE 冲突）
         + 1 缺 promotion → partial；且不触发事件。"""
-        Maker = async_sessionmaker(
-            engine, expire_on_commit=False, class_=AsyncSession
-        )
+        Maker = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
         monkeypatch.setattr(tasks, "AsyncSessionApp", Maker)
         monkeypatch.setattr(tasks, "AsyncSessionBypass", Maker)
         ImportAdapterRegistry.clear()
@@ -187,7 +179,7 @@ class TestSettlementImportEndToEnd:
             f"{promo1_code},2026-06-01,500.00,1500.00,1500.00,待付款\n"
             f"{promo2_code},2026-06-01,500.00,500.00,,待核查\n"
             f"PR{suffix}MISSING,2026-06-01,100,100,,待核查\n"
-        ).encode("utf-8")
+        ).encode()
 
         import app.core.attachment as att_mod
 
@@ -241,9 +233,7 @@ class TestSettlementImportEndToEnd:
                 # row2：重复 promotion → UNIQUE 冲突 FB3
                 assert "已有结算单" in (jobs[1][2] or "")
                 # row3：promotion 不存在
-                assert "推广编号" in (jobs[2][2] or "") and "不存在" in (
-                    jobs[2][2] or ""
-                )
+                assert "推广编号" in (jobs[2][2] or "") and "不存在" in (jobs[2][2] or "")
 
             # 不触发事件（导入是数据迁移，区别 U05 service）
             assert event_capture == []
@@ -251,14 +241,11 @@ class TestSettlementImportEndToEnd:
             ImportAdapterRegistry.clear()
             await _cleanup(Maker, suffix, batch_id)
 
-
     async def test_full_row_all_fields_persisted(
         self, engine: Any, monkeypatch, event_capture: list
     ) -> None:
         """单行全字段（付款金额/付款日期/笔记标题/备注）→ success 且全部入库。"""
-        Maker = async_sessionmaker(
-            engine, expire_on_commit=False, class_=AsyncSession
-        )
+        Maker = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
         monkeypatch.setattr(tasks, "AsyncSessionApp", Maker)
         monkeypatch.setattr(tasks, "AsyncSessionBypass", Maker)
         ImportAdapterRegistry.clear()
@@ -273,7 +260,7 @@ class TestSettlementImportEndToEnd:
             "推广编号,结算日期,金额,总金额,付款金额,付款日期,结算状态,笔记标题,备注\n"
             f'{promo1_code},2026-06-01,"1,299.00","1,299.00",1299.00,2026-06-10,'
             "已付款,夏季新款,首笔结算\n"
-        ).encode("utf-8")
+        ).encode()
 
         import app.core.attachment as att_mod
 

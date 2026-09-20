@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Query, status
 
 from app.modules.auth.deps import CurrentActiveUser, require_permission
+from app.modules.product.bundle_models import BundleItem, BundleProduct
 from app.modules.product.bundle_schemas import (
     BundleCreate,
     BundleItemResponse,
@@ -18,17 +20,14 @@ from app.modules.product.deps import BundleServiceDep
 router = APIRouter(prefix="/api/bundles", tags=["product"])
 
 
-def _to_response(bundle, items) -> BundleResponse:
+def _to_response(bundle: BundleProduct, items: Sequence[BundleItem]) -> BundleResponse:
     return BundleResponse(
         id=bundle.id,
         bundle_code=bundle.bundle_code,
         bundle_name=bundle.bundle_name,
         remark=bundle.remark,
         is_active=bundle.is_active,
-        items=[
-            BundleItemResponse(sku_id=it.sku_id, quantity=it.quantity)
-            for it in items
-        ],
+        items=[BundleItemResponse(sku_id=it.sku_id, quantity=it.quantity) for it in items],
     )
 
 

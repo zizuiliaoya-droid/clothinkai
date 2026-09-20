@@ -24,15 +24,11 @@ class TestComputeBloggerType:
 
     def test_below_koc(self) -> None:
         assert BloggerTagService.compute_blogger_type(0) == "素人"
-        assert (
-            BloggerTagService.compute_blogger_type(FOLLOWER_KOC_MIN - 1) == "素人"
-        )
+        assert BloggerTagService.compute_blogger_type(FOLLOWER_KOC_MIN - 1) == "素人"
 
     def test_koc_boundary(self) -> None:
         assert BloggerTagService.compute_blogger_type(FOLLOWER_KOC_MIN) == "KOC"
-        assert (
-            BloggerTagService.compute_blogger_type(FOLLOWER_KOL_MIN - 1) == "KOC"
-        )
+        assert BloggerTagService.compute_blogger_type(FOLLOWER_KOL_MIN - 1) == "KOC"
 
     def test_kol_boundary(self) -> None:
         assert BloggerTagService.compute_blogger_type(FOLLOWER_KOL_MIN) == "KOL"
@@ -47,9 +43,7 @@ class TestComputeReadLikeRatio:
         assert BloggerTagService.compute_read_like_ratio({}) is None
 
     def test_missing_note_stats(self) -> None:
-        assert (
-            BloggerTagService.compute_read_like_ratio({"foo": "bar"}) is None
-        )
+        assert BloggerTagService.compute_read_like_ratio({"foo": "bar"}) is None
 
     def test_zero_reads_returns_none(self) -> None:
         profile = {"note_stats": {"avg_likes": 100, "avg_reads": 0}}

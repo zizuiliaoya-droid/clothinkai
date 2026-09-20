@@ -6,12 +6,11 @@ import gzip
 import json
 import logging
 import tempfile
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import sentry_sdk
-from celery import Task
 from sqlalchemy import delete, select
 
 from app.core.attachment import attachment_service
@@ -34,11 +33,9 @@ def cleanup_expired_refresh_tokens() -> dict[str, Any]:
 
 
 async def _run_cleanup_refresh_tokens() -> dict[str, Any]:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     async with AsyncSessionBypass() as session:
-        result = await session.execute(
-            delete(RefreshToken).where(RefreshToken.expires_at < now)
-        )
+        result = await session.execute(delete(RefreshToken).where(RefreshToken.expires_at < now))
         await session.commit()
         deleted = int(result.rowcount or 0)
     log.info("cleanup_refresh_tokens_done", extra={"deleted": deleted})
@@ -55,9 +52,7 @@ def archive_audit_logs() -> dict[str, Any]:
 
 
 async def _run_archive_audit_logs() -> dict[str, Any]:
-    threshold = datetime.now(timezone.utc) - timedelta(
-        days=settings.AUDIT_RETAIN_MONTHS * 30
-    )
+    threshold = datetime.now(UTC) - timedelta(days=settings.AUDIT_RETAIN_MONTHS * 30)
     archived_count = 0
     try:
         async with AsyncSessionBypass() as session:
@@ -106,15 +101,13 @@ async def _run_archive_audit_logs() -> dict[str, Any]:
 
             # 删除已归档记录（用 archiver role 实际更安全；U01 用 bypass 引擎兼可）
             ids = [r.id for r in records]
-            del_result = await session.execute(
-                delete(AuditLog).where(AuditLog.id.in_(ids))
-            )
+            del_result = await session.execute(delete(AuditLog).where(AuditLog.id.in_(ids)))
             await session.commit()
             archived_count = int(del_result.rowcount or 0)
 
         log.info("archive_audit_logs_done", extra={"archived": archived_count})
         return {"archived": archived_count}
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         sentry_sdk.capture_exception(exc)
         log.exception("archive_audit_logs_failed")
         raise

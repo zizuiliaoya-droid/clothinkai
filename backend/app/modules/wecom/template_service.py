@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.modules.wecom.domain import validate_template_vars
 from app.modules.wecom.exceptions import WecomTemplateInvalidVarError
 from app.modules.wecom.models import MessageTemplate
@@ -19,7 +21,7 @@ _DEFAULTS: dict[str, str] = {
 
 
 class MessageTemplateService:
-    def __init__(self, session) -> None:
+    def __init__(self, session: AsyncSession) -> None:
         self._s = session
         self._repo = MessageTemplateRepository(session)
 
@@ -31,9 +33,7 @@ class MessageTemplateService:
             raise WecomTemplateInvalidVarError(invalid)
         tpl = await self._repo.get(template_type)
         if tpl is None:
-            tpl = MessageTemplate(
-                template_type=template_type, content=content, updated_by=actor_id
-            )
+            tpl = MessageTemplate(template_type=template_type, content=content, updated_by=actor_id)
             self._repo.add(tpl)
         else:
             tpl.content = content
@@ -49,9 +49,7 @@ class MessageTemplateService:
         existing = await self._repo.get_all()
         for ttype, content in _DEFAULTS.items():
             if ttype not in existing:
-                self._repo.add(
-                    MessageTemplate(template_type=ttype, content=content)
-                )
+                self._repo.add(MessageTemplate(template_type=ttype, content=content))
         await self._s.flush()
 
     async def load_rendered_map(self) -> dict[str, str]:

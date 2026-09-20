@@ -22,18 +22,14 @@ class TestProductApiContract:
     async def test_styles_list_requires_auth(self) -> None:
         from app.main import app
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.get("/api/styles/")
         assert resp.status_code == 401
 
     async def test_skus_create_requires_auth(self) -> None:
         from app.main import app
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.post(
                 "/api/skus/",
                 json={
@@ -48,18 +44,14 @@ class TestProductApiContract:
     async def test_brands_list_requires_auth(self) -> None:
         from app.main import app
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.get("/api/brands/")
         assert resp.status_code == 401
 
     async def test_match_requires_auth(self) -> None:
         from app.main import app
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.get("/api/styles/match?keyword=x")
         assert resp.status_code == 401
 
@@ -67,9 +59,7 @@ class TestProductApiContract:
         """无效 style_code 格式 → schema 422 (在鉴权前发生)."""
         from app.main import app
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.post(
                 "/api/styles/",
                 json={
@@ -86,9 +76,7 @@ class TestProductApiContract:
     async def test_openapi_exposes_product_endpoints(self) -> None:
         from app.main import app
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.get("/api/openapi.json")
         assert resp.status_code == 200
         spec = resp.json()

@@ -2,19 +2,19 @@
 
 from __future__ import annotations
 
+from datetime import UTC
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import ResourceNotFoundError
 from app.core.tenancy import tenant_id_ctx
 from app.modules.auth.exceptions import (
     CannotUnlockUserError,
     RoleNotFoundError,
     UsernameAlreadyExistsError,
 )
-from app.modules.auth.models import Role, Tenant, User
+from app.modules.auth.models import Role, Tenant
 from app.modules.auth.schemas import UserCreate
 from app.modules.auth.service import UserService
 
@@ -39,8 +39,9 @@ class TestCreateUser:
     ) -> None:
         token = tenant_id_ctx.set(tenant_a.id)
         try:
-            with patch("app.modules.auth.service.cache", stub_cache), patch(
-                "app.core.security.permissions.cache", stub_cache
+            with (
+                patch("app.modules.auth.service.cache", stub_cache),
+                patch("app.core.security.permissions.cache", stub_cache),
             ):
                 svc = UserService(session)
                 user, plain = await svc.create(
@@ -82,9 +83,7 @@ class TestCreateUser:
             with patch("app.modules.auth.service.cache", stub_cache):
                 svc = UserService(session)
                 with pytest.raises(RoleNotFoundError):
-                    await svc.create(
-                        UserCreate(username="bob", role_codes=["nonexistent_role"])
-                    )
+                    await svc.create(UserCreate(username="bob", role_codes=["nonexistent_role"]))
         finally:
             tenant_id_ctx.reset(token)
 
@@ -102,16 +101,18 @@ class TestToggleAndUnlock:
         token = tenant_id_ctx.set(tenant_a.id)
         try:
             user = await factory.user(tenant_a, status="active")  # type: ignore[attr-defined]
-            with patch("app.modules.auth.service.cache", stub_cache), patch(
-                "app.core.security.permissions.cache", stub_cache
+            with (
+                patch("app.modules.auth.service.cache", stub_cache),
+                patch("app.core.security.permissions.cache", stub_cache),
             ):
                 svc = UserService(session)
                 updated = await svc.toggle_active(user.id)
             assert updated.status == "disabled"
 
             # 再次 toggle 回 active
-            with patch("app.modules.auth.service.cache", stub_cache), patch(
-                "app.core.security.permissions.cache", stub_cache
+            with (
+                patch("app.modules.auth.service.cache", stub_cache),
+                patch("app.core.security.permissions.cache", stub_cache),
             ):
                 updated = await svc.toggle_active(user.id)
             assert updated.status == "active"
@@ -125,17 +126,18 @@ class TestToggleAndUnlock:
         factory: object,
         stub_cache: AsyncMock,
     ) -> None:
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         token = tenant_id_ctx.set(tenant_a.id)
         try:
             user = await factory.user(tenant_a)  # type: ignore[attr-defined]
-            user.locked_at = datetime.now(timezone.utc)
+            user.locked_at = datetime.now(UTC)
             user.failed_login_count = 10
             await session.flush()
 
-            with patch("app.modules.auth.service.cache", stub_cache), patch(
-                "app.core.security.permissions.cache", stub_cache
+            with (
+                patch("app.modules.auth.service.cache", stub_cache),
+                patch("app.core.security.permissions.cache", stub_cache),
             ):
                 svc = UserService(session)
                 updated = await svc.unlock(user.id)
@@ -177,8 +179,9 @@ class TestRoleAssignment:
         token = tenant_id_ctx.set(tenant_a.id)
         try:
             user = await factory.user(tenant_a)  # type: ignore[attr-defined]
-            with patch("app.modules.auth.service.cache", stub_cache), patch(
-                "app.core.security.permissions.cache", stub_cache
+            with (
+                patch("app.modules.auth.service.cache", stub_cache),
+                patch("app.core.security.permissions.cache", stub_cache),
             ):
                 svc = UserService(session)
                 # 分配 admin + designer
@@ -190,8 +193,9 @@ class TestRoleAssignment:
             assert set(codes) == {"admin", "designer"}
 
             # 改为只保留 designer
-            with patch("app.modules.auth.service.cache", stub_cache), patch(
-                "app.core.security.permissions.cache", stub_cache
+            with (
+                patch("app.modules.auth.service.cache", stub_cache),
+                patch("app.core.security.permissions.cache", stub_cache),
             ):
                 await svc.assign_roles(user.id, ["designer"])
             codes = await RoleRepository(session).list_codes_for_user(user.id)

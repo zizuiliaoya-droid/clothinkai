@@ -29,9 +29,7 @@ class BundleRepository:
         stmt = select(BundleItem).where(BundleItem.bundle_id == bundle_id)
         return (await self._s.execute(stmt)).scalars().all()
 
-    async def list_bundles(
-        self, *, limit: int = 50, offset: int = 0
-    ) -> Sequence[BundleProduct]:
+    async def list_bundles(self, *, limit: int = 50, offset: int = 0) -> Sequence[BundleProduct]:
         stmt = (
             select(BundleProduct)
             .order_by(BundleProduct.created_at.desc())

@@ -7,6 +7,10 @@
 
 from __future__ import annotations
 
+from uuid import UUID
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.core.audit import AuditService
 from app.core.security.crypto import decrypt_credential, encrypt_credential
 from app.modules.wecom.client import WecomClient, build_http_client
@@ -21,11 +25,11 @@ from app.modules.wecom.schemas import (
 
 
 class WecomConfigService:
-    def __init__(self, session) -> None:
+    def __init__(self, session: AsyncSession) -> None:
         self._s = session
         self._repo = WecomConfigRepository(session)
 
-    async def configure(self, payload: WecomConfigUpdate, tenant_id) -> WecomConfig:
+    async def configure(self, payload: WecomConfigUpdate, tenant_id: UUID) -> WecomConfig:
         cfg = await self._repo.get()
         ciphertext = encrypt_credential(tenant_id, payload.secret)
         if cfg is None:
@@ -47,9 +51,7 @@ class WecomConfigService:
             cfg.callback_aes_key = payload.callback_aes_key
             cfg.default_sender_userid = payload.default_sender_userid
             cfg.is_active = payload.is_active
-        await AuditService(self._s).log(
-            "wecom.config.update", resource="wecom_config"
-        )
+        await AuditService(self._s).log("wecom.config.update", resource="wecom_config")
         await self._s.flush()
         return cfg
 
@@ -66,15 +68,17 @@ class WecomConfigService:
             is_active=cfg.is_active,
         )
 
-    async def test_connection(self, tenant_id) -> WecomTestResult:
+    async def test_connection(self, tenant_id: UUID) -> WecomTestResult:
         cfg = await self._repo.get()
         if cfg is None or not cfg.is_active:
             raise WecomNotConfiguredError()
 
         async def _secret() -> str:
             await AuditService(self._s).log(
-                "wecom.secret.decrypt", resource="wecom_config",
-                actor_type="system", purpose="test_connection",
+                "wecom.secret.decrypt",
+                resource="wecom_config",
+                actor_type="system",
+                purpose="test_connection",
             )
             return decrypt_credential(
                 tenant_id, cfg.id, cfg.secret_ciphertext, purpose="test_connection"
@@ -85,7 +89,7 @@ class WecomConfigService:
             client = WecomClient(tenant_id, cfg, http=http, secret_provider=_secret)
             await client.get_access_token(force_refresh=True)
             return WecomTestResult(ok=True)
-        except Exception as exc:  # noqa: BLE001 — 连接性测试属业务结果
+        except Exception as exc:
             return WecomTestResult(ok=False, reason=str(exc))
         finally:
             await http.aclose()

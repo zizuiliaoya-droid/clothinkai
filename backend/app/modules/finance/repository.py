@@ -31,9 +31,7 @@ from app.modules.finance.exceptions import SequenceOverflowError
 from app.modules.finance.models import (
     Settlement,
     SettlementExtraItem,
-    SettlementSequence,
 )
-
 
 # ---------------------------------------------------------------------------
 # Filters dataclass
@@ -74,41 +72,28 @@ class SettlementRepository:
 
     # ----------------------- get / find ----------------------- #
 
-    async def get_by_id(
-        self, settlement_id: UUID
-    ) -> Settlement | None:
+    async def get_by_id(self, settlement_id: UUID) -> Settlement | None:
         """无 is_active 字段（FB3），任何 settlement 都是活跃的。"""
         return await self._session.get(Settlement, settlement_id)
 
-    async def get_by_settlement_no(
-        self, settlement_no: str
-    ) -> Settlement | None:
-        stmt = select(Settlement).where(
-            Settlement.settlement_no == settlement_no
-        )
+    async def get_by_settlement_no(self, settlement_no: str) -> Settlement | None:
+        stmt = select(Settlement).where(Settlement.settlement_no == settlement_no)
         return (await self._session.execute(stmt)).scalar_one_or_none()
 
-    async def find_by_promotion_id(
-        self, promotion_id: UUID
-    ) -> Settlement | None:
+    async def find_by_promotion_id(self, promotion_id: UUID) -> Settlement | None:
         """幂等 SELECT 兜底（与 DB UNIQUE 永久 + UNIQUE(request_event_id) 三重防护，FB1+FB3）。"""
         stmt = select(Settlement).where(Settlement.promotion_id == promotion_id)
         return (await self._session.execute(stmt)).scalar_one_or_none()
 
-    async def find_by_request_event_id(
-        self, request_event_id: UUID
-    ) -> Settlement | None:
+    async def find_by_request_event_id(self, request_event_id: UUID) -> Settlement | None:
         """事件重放兜底 SELECT（DB UNIQUE 已防，service 层 SELECT 友好 audit 区分）。"""
-        stmt = select(Settlement).where(
-            Settlement.request_event_id == request_event_id
-        )
+        stmt = select(Settlement).where(Settlement.request_event_id == request_event_id)
         return (await self._session.execute(stmt)).scalar_one_or_none()
 
     # ----------------------- write helper ----------------------- #
 
     def add(self, settlement: Settlement) -> None:
         self._session.add(settlement)
-
 
     # ----------------------- next_settlement_sequence (FB2 复用 U04) ----------------------- #
 
@@ -143,14 +128,10 @@ class SettlementRepository:
                 RETURNING last_seq
                 """
             )
-            result = await self._session.execute(
-                stmt, {"tid": tenant_id, "dk": date_key}
-            )
+            result = await self._session.execute(stmt, {"tid": tenant_id, "dk": date_key})
             next_seq = int(result.scalar_one())
         finally:
-            settlement_sequence_lock_duration_seconds.observe(
-                time.perf_counter() - start
-            )
+            settlement_sequence_lock_duration_seconds.observe(time.perf_counter() - start)
 
         if next_seq > 9999:
             raise SequenceOverflowError(
@@ -247,12 +228,9 @@ class SettlementRepository:
         await self._session.refresh(settlement)
         return settlement
 
-
     # ----------------------- extra_item ----------------------- #
 
-    async def list_extra_items(
-        self, *, settlement_id: UUID
-    ) -> Sequence[SettlementExtraItem]:
+    async def list_extra_items(self, *, settlement_id: UUID) -> Sequence[SettlementExtraItem]:
         stmt = (
             select(SettlementExtraItem)
             .where(SettlementExtraItem.settlement_id == settlement_id)
@@ -261,11 +239,9 @@ class SettlementRepository:
         return (await self._session.execute(stmt)).scalars().all()
 
     async def sum_extra_items(self, *, settlement_id: UUID) -> Decimal:
-        stmt = select(
-            func.coalesce(
-                func.sum(SettlementExtraItem.amount), Decimal("0")
-            )
-        ).where(SettlementExtraItem.settlement_id == settlement_id)
+        stmt = select(func.coalesce(func.sum(SettlementExtraItem.amount), Decimal("0"))).where(
+            SettlementExtraItem.settlement_id == settlement_id
+        )
         result = await self._session.execute(stmt)
         return Decimal(result.scalar_one() or 0)
 
@@ -296,9 +272,7 @@ class SettlementRepository:
             stmt = stmt.where(Settlement.pr_id == current_user_id)
 
         if filters.settlement_status:
-            stmt = stmt.where(
-                Settlement.settlement_status == filters.settlement_status
-            )
+            stmt = stmt.where(Settlement.settlement_status == filters.settlement_status)
 
         if filters.promotion_id:
             stmt = stmt.where(Settlement.promotion_id == filters.promotion_id)
@@ -316,30 +290,20 @@ class SettlementRepository:
         if filters.created_at_from:
             stmt = stmt.where(Settlement.created_at >= filters.created_at_from)
         if filters.created_at_to:
-            stmt = stmt.where(
-                Settlement.created_at < filters.created_at_to + timedelta(days=1)
-            )
+            stmt = stmt.where(Settlement.created_at < filters.created_at_to + timedelta(days=1))
         if filters.payment_date_from:
-            stmt = stmt.where(
-                Settlement.payment_date >= filters.payment_date_from
-            )
+            stmt = stmt.where(Settlement.payment_date >= filters.payment_date_from)
         if filters.payment_date_to:
-            stmt = stmt.where(
-                Settlement.payment_date <= filters.payment_date_to
-            )
+            stmt = stmt.where(Settlement.payment_date <= filters.payment_date_to)
 
         if filters.amount_from is not None:
             stmt = stmt.where(Settlement.total_amount >= filters.amount_from)
         if filters.amount_to is not None:
             stmt = stmt.where(Settlement.total_amount <= filters.amount_to)
         if filters.payment_amount_from is not None:
-            stmt = stmt.where(
-                Settlement.payment_amount >= filters.payment_amount_from
-            )
+            stmt = stmt.where(Settlement.payment_amount >= filters.payment_amount_from)
         if filters.payment_amount_to is not None:
-            stmt = stmt.where(
-                Settlement.payment_amount <= filters.payment_amount_to
-            )
+            stmt = stmt.where(Settlement.payment_amount <= filters.payment_amount_to)
 
         if filters.keyword:
             # 命中 idx_settlement_no_trgm GIN 索引
@@ -357,7 +321,6 @@ class SettlementRepository:
         )
         items = (await self._session.execute(stmt)).scalars().all()
         return items, total
-
 
     # ----------------------- daily_summary 双口径 (FB7) ----------------------- #
 

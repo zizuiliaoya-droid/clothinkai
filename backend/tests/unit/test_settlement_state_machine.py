@@ -24,9 +24,7 @@ class TestSettlementStateMachineAllowed:
             ("已驳回", "resubmit", "待核查"),
         ],
     )
-    def test_allowed_transition(
-        self, from_state: str, action: str, to_state: str
-    ) -> None:
+    def test_allowed_transition(self, from_state: str, action: str, to_state: str) -> None:
         # 不抛异常即通过
         SettlementStatusMachine.assert_can_transition(
             from_state=from_state, to_state=to_state, action=action
@@ -60,9 +58,7 @@ class TestSettlementStateMachineRejected:
             ("待核查", "approve", "已驳回"),
         ],
     )
-    def test_rejected_transition(
-        self, from_state: str, action: str, to_state: str
-    ) -> None:
+    def test_rejected_transition(self, from_state: str, action: str, to_state: str) -> None:
         with pytest.raises(IllegalStateTransitionError) as exc_info:
             SettlementStatusMachine.assert_can_transition(
                 from_state=from_state, to_state=to_state, action=action

@@ -121,16 +121,12 @@ class TestScheduleAndPoll:
             assert not hasattr(assignment, "password")
 
             # exchange → 明文
-            resp = await svc.exchange_credential(
-                assignment.task_id, assignment.cred_token, wt
-            )
+            resp = await svc.exchange_credential(assignment.task_id, assignment.cred_token, wt)
             assert resp.password == "secret-pass"
 
             # 再次 exchange → 403（一次性）
             with pytest.raises(CredTokenInvalid):
-                await svc.exchange_credential(
-                    assignment.task_id, assignment.cred_token, wt
-                )
+                await svc.exchange_credential(assignment.task_id, assignment.cred_token, wt)
         finally:
             tenant_id_ctx.reset(token)
 
@@ -193,31 +189,43 @@ class TestQianniuUpsert:
             adapter = QianniuImportAdapter()
             # 匹配
             parsed = adapter.parse_row(
-                {"商品ID": "P123", "日期": "2026-06-08", "访客数": "100",
-                 "支付金额": "50.00", "支付订单数": "3"},
+                {
+                    "商品ID": "P123",
+                    "统计日期": "2026-06-08",
+                    "商品访客数": "100",
+                    "支付金额": "50.00",
+                    "支付件数": "3",
+                },
                 None,
             )
             await adapter.upsert(parsed, session=session, tenant_id=tenant_a.id, actor_id=None)
             # 未匹配 → dq issue
             parsed2 = adapter.parse_row(
-                {"商品ID": "UNKNOWN", "日期": "2026-06-08", "访客数": "5"}, None
+                {"商品ID": "UNKNOWN", "统计日期": "2026-06-08", "商品访客数": "5"},
+                None,
             )
             await adapter.upsert(parsed2, session=session, tenant_id=tenant_a.id, actor_id=None)
             await session.flush()
 
-            cnt = (await session.execute(
-                text("SELECT COUNT(*) FROM qianniu_daily WHERE tenant_id=:t"),
-                {"t": str(tenant_a.id)},
-            )).scalar_one()
+            cnt = (
+                await session.execute(
+                    text("SELECT COUNT(*) FROM qianniu_daily WHERE tenant_id=:t"),
+                    {"t": str(tenant_a.id)},
+                )
+            ).scalar_one()
             assert cnt == 2
 
-            dq = (await session.execute(
-                select(func.count()).select_from(DataQualityIssue).where(
-                    DataQualityIssue.tenant_id == tenant_a.id,
-                    DataQualityIssue.source == "qianniu",
-                    DataQualityIssue.severity == "warning",
+            dq = (
+                await session.execute(
+                    select(func.count())
+                    .select_from(DataQualityIssue)
+                    .where(
+                        DataQualityIssue.tenant_id == tenant_a.id,
+                        DataQualityIssue.source == "qianniu",
+                        DataQualityIssue.severity == "warning",
+                    )
                 )
-            )).scalar_one()
+            ).scalar_one()
             assert dq == 1
         finally:
             tenant_id_ctx.reset(token)
@@ -255,12 +263,8 @@ class TestReportResult:
         token = tenant_id_ctx.set(tenant_a.id)
         try:
             user = await factory.user(tenant_a, roles=[admin_role])
-            wt, _ = await WorkerTokenService(session).issue(
-                "vm-result", ["1.1.1.1"], user
-            )
-            other_wt, _ = await WorkerTokenService(session).issue(
-                "vm-other", ["1.1.1.2"], user
-            )
+            wt, _ = await WorkerTokenService(session).issue("vm-result", ["1.1.1.1"], user)
+            other_wt, _ = await WorkerTokenService(session).issue("vm-other", ["1.1.1.2"], user)
             cred = await _make_credential(session, tenant_a)
             lease_token = "current-lease-token"
             task = CrawlerTask(
@@ -276,9 +280,7 @@ class TestReportResult:
             await session.flush()
             svc = CrawlerTaskService(session)
             with pytest.raises(CrawlerTaskResultInvalid):
-                await svc.report_result(
-                    task.id, "success", wt, lease_token=lease_token
-                )
+                await svc.report_result(task.id, "success", wt, lease_token=lease_token)
             with pytest.raises(CrawlerTaskNotFound):
                 await svc.report_result(
                     task.id,

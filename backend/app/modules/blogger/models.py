@@ -55,9 +55,7 @@ class Blogger(TenantScopedModel):
         nullable=False, server_default=text("false")
     )
     contact_backup: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    contact_backup_added: Mapped[bool] = mapped_column(
-        nullable=False, server_default=text("false")
-    )
+    contact_backup_added: Mapped[bool] = mapped_column(nullable=False, server_default=text("false"))
     wechat: Mapped[str | None] = mapped_column(String(64), nullable=True)
     phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
     follower_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -72,21 +70,15 @@ class Blogger(TenantScopedModel):
     quote: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
     cooperation_history: Mapped[str | None] = mapped_column(Text, nullable=True)
     remark: Mapped[str | None] = mapped_column(Text, nullable=True)
-    is_suspected_fake: Mapped[bool] = mapped_column(
-        nullable=False, server_default=text("false")
-    )
+    is_suspected_fake: Mapped[bool] = mapped_column(nullable=False, server_default=text("false"))
     # U11：受众画像（U13 采集 Worker 写入，U11 仅读展示 read_like_ratio）
     audience_profile: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     # 灰豚爬虫指标（对齐 final.xlsx 博主库 41 列：3/7/14篇互动、粉丝画像、涨跌等）
     crawler_metrics: Mapped[dict] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )
-    is_active: Mapped[bool] = mapped_column(
-        nullable=False, server_default=text("true")
-    )
-    is_deleted: Mapped[bool] = mapped_column(
-        nullable=False, server_default=text("false")
-    )
+    is_active: Mapped[bool] = mapped_column(nullable=False, server_default=text("true"))
+    is_deleted: Mapped[bool] = mapped_column(nullable=False, server_default=text("false"))
 
     __table_args__ = (
         # 部分唯一索引：软删后 xiaohongshu_id 释放
@@ -118,9 +110,7 @@ class Blogger(TenantScopedModel):
             "follower_count IS NULL OR follower_count >= 0",
             name="ck_blogger_follower_count_nonneg",
         ),
-        CheckConstraint(
-            "quote IS NULL OR quote >= 0", name="ck_blogger_quote_nonneg"
-        ),
+        CheckConstraint("quote IS NULL OR quote >= 0", name="ck_blogger_quote_nonneg"),
     )
 
 

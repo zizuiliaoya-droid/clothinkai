@@ -20,9 +20,7 @@ class TestPermissionApiContract:
         from app.main import app
 
         uid = uuid4()
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.post(
                 f"/api/users/{uid}/permissions/grant",
                 json={"scope": "field.sku.cost_price:read"},
@@ -33,9 +31,7 @@ class TestPermissionApiContract:
         from app.main import app
 
         uid = uuid4()
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.post(
                 f"/api/users/{uid}/permissions/revoke",
                 json={"scope": "field.sku.cost_price:read"},
@@ -46,18 +42,14 @@ class TestPermissionApiContract:
         from app.main import app
 
         uid = uuid4()
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.get(f"/api/users/{uid}/effective-permissions")
         assert resp.status_code == 401
 
     async def test_endpoints_in_openapi(self) -> None:
         from app.main import app
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.get("/api/openapi.json")
         assert resp.status_code == 200
         paths = resp.json()["paths"]

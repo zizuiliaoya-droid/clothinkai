@@ -93,14 +93,10 @@ class BloggerTagService:
                 b.blogger_type = self.compute_blogger_type(b.follower_count)
                 ratio = self.compute_read_like_ratio(b.audience_profile)
                 b.is_suspected_fake = self.is_fake_account(ratio)
-                b.quality_tags = await compute_quality_tags(
-                    b.id, self._session, tenant_id
-                )
+                b.quality_tags = await compute_quality_tags(b.id, self._session, tenant_id)
                 updated += 1
-            except Exception:  # noqa: BLE001 单 blogger 失败不影响其余
-                log.warning(
-                    "recompute_blogger_failed blogger_id=%s", str(b.id)
-                )
+            except Exception:
+                log.warning("recompute_blogger_failed blogger_id=%s", str(b.id))
                 failed += 1
         await self._session.flush()
         return {"updated": updated, "failed": failed}

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 SETTLEMENT_PERMISSIONS: list[tuple[str, str, str]] = [
     # (scope, action, description)
     ("settlement", "read", "查询结算单"),

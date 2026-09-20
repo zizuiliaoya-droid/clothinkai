@@ -16,9 +16,9 @@ from app.core.config import settings
 from app.modules.collect.deps import CrawlerTaskServiceDep, WorkerTokenDep
 from app.modules.collect.exceptions import CrawlerTaskResultInvalid
 from app.modules.collect.schemas import (
+    CrawlerTaskAssignment,
     CredExchangeRequest,
     CredExchangeResponse,
-    CrawlerTaskAssignment,
 )
 
 router = APIRouter(prefix="/api/crawler/tasks", tags=["crawler"])

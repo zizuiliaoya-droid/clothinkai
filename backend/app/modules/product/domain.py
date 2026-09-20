@@ -36,9 +36,7 @@ SKU_SENSITIVE_FIELDS: frozenset[str] = frozenset(
 )
 """SKU 表写 audit_log 的字段白名单（BR-U02-31）。"""
 
-SKU_SENSITIVE_VALUE_FIELDS: frozenset[str] = frozenset(
-    {"cost_price", "purchase_price"}
-)
+SKU_SENSITIVE_VALUE_FIELDS: frozenset[str] = frozenset({"cost_price", "purchase_price"})
 """SKU 表 audit_log 不存历史值的字段（仅记 ``*_changed: true``）。"""
 
 
@@ -96,9 +94,7 @@ def validate_sku_prices(payload: SkuCreate | SkuUpdate) -> None:
 # ---------------------------------------------------------------------------
 
 
-def compute_style_changes(
-    style: Style, payload: StyleUpdate
-) -> dict[str, dict[str, Any]]:
+def compute_style_changes(style: Style, payload: StyleUpdate) -> dict[str, dict[str, Any]]:
     """对比当前 ORM 实例与 payload，返回变更字段的 ``{before, after}`` 字典。
 
     仅包含 ``payload.model_fields_set`` 中显式设置的字段（PATCH 语义）。
@@ -114,9 +110,7 @@ def compute_style_changes(
     return changes
 
 
-def compute_sku_changes(
-    sku: Sku, payload: SkuUpdate
-) -> dict[str, dict[str, Any]]:
+def compute_sku_changes(sku: Sku, payload: SkuUpdate) -> dict[str, dict[str, Any]]:
     """同 ``compute_style_changes``，对 SKU。"""
     changes: dict[str, dict[str, Any]] = {}
     fields = payload.model_fields_set
@@ -165,9 +159,7 @@ def build_sku_audit_changes(
 # ---------------------------------------------------------------------------
 
 
-def _resolve_sourcing_type(
-    payload: SkuCreate | SkuUpdate, base: Sku | None
-) -> SourcingType:
+def _resolve_sourcing_type(payload: SkuCreate | SkuUpdate, base: Sku | None) -> SourcingType:
     """优先取 payload.sourcing_type；若 None 则取 base."""
     if "sourcing_type" in payload.model_fields_set:
         v = payload.sourcing_type
@@ -178,9 +170,7 @@ def _resolve_sourcing_type(
     return SourcingType.SELF_PRODUCED
 
 
-def _resolve_value(
-    payload: SkuCreate | SkuUpdate, base: Sku | None, field: str
-) -> Any:
+def _resolve_value(payload: SkuCreate | SkuUpdate, base: Sku | None, field: str) -> Any:
     """优先取 payload.<field>；若未显式设置则取 base."""
     if field in payload.model_fields_set:
         return getattr(payload, field)
@@ -197,7 +187,7 @@ def _serialize(value: Any) -> Any:
 
     if value is None:
         return None
-    if isinstance(value, (datetime, date)):
+    if isinstance(value, datetime | date):
         return value.isoformat()
     if isinstance(value, Decimal):
         return str(value)

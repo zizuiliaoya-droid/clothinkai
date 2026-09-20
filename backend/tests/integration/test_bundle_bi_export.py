@@ -23,8 +23,12 @@ pytestmark = pytest.mark.asyncio
 
 class TestBundle:
     async def test_create_and_split(
-        self, session: AsyncSession, tenant_a: Any, factory: Any,
-        follower_role: Any, product_factory: Any,
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        follower_role: Any,
+        product_factory: Any,
     ) -> None:
         tok = tenant_id_ctx.set(tenant_a.id)
         try:
@@ -33,11 +37,17 @@ class TestBundle:
             sku_a = await product_factory.sku(style, sku_code="A1")
             sku_b = await product_factory.sku(style, sku_code="B1")
             svc = BundleService(session)
-            bundle = await svc.create(BundleCreate(
-                bundle_code="BD001", bundle_name="春季套装",
-                items=[BundleItemIn(sku_id=sku_a.id, quantity=1),
-                       BundleItemIn(sku_id=sku_b.id, quantity=2)],
-            ), user)
+            bundle = await svc.create(
+                BundleCreate(
+                    bundle_code="BD001",
+                    bundle_name="春季套装",
+                    items=[
+                        BundleItemIn(sku_id=sku_a.id, quantity=1),
+                        BundleItemIn(sku_id=sku_b.id, quantity=2),
+                    ],
+                ),
+                user,
+            )
             _, items = await svc.get_with_items(bundle.id)
             assert len(items) == 2
             # 卖 3 件 → A:3, B:6
@@ -48,8 +58,13 @@ class TestBundle:
             tenant_id_ctx.reset(tok)
 
     async def test_cross_tenant_sku_rejected(
-        self, session: AsyncSession, tenant_a: Any, tenant_b: Any, factory: Any,
-        follower_role: Any, product_factory: Any,
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        tenant_b: Any,
+        factory: Any,
+        follower_role: Any,
+        product_factory: Any,
     ) -> None:
         tok = tenant_id_ctx.set(tenant_a.id)
         try:
@@ -58,16 +73,24 @@ class TestBundle:
             sku_b = await product_factory.sku(style_b, tenant=tenant_b, sku_code="XB")
             svc = BundleService(session)
             with pytest.raises(ValidationError):
-                await svc.create(BundleCreate(
-                    bundle_code="BD002", bundle_name="x",
-                    items=[BundleItemIn(sku_id=sku_b.id, quantity=1)],
-                ), user)
+                await svc.create(
+                    BundleCreate(
+                        bundle_code="BD002",
+                        bundle_name="x",
+                        items=[BundleItemIn(sku_id=sku_b.id, quantity=1)],
+                    ),
+                    user,
+                )
         finally:
             tenant_id_ctx.reset(tok)
 
     async def test_duplicate_sku_in_bundle_rejected(
-        self, session: AsyncSession, tenant_a: Any, factory: Any,
-        follower_role: Any, product_factory: Any,
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        follower_role: Any,
+        product_factory: Any,
     ) -> None:
         tok = tenant_id_ctx.set(tenant_a.id)
         try:
@@ -76,18 +99,28 @@ class TestBundle:
             sku_a = await product_factory.sku(style, sku_code="DUP")
             svc = BundleService(session)
             with pytest.raises(ValidationError):
-                await svc.create(BundleCreate(
-                    bundle_code="BD003", bundle_name="x",
-                    items=[BundleItemIn(sku_id=sku_a.id, quantity=1),
-                           BundleItemIn(sku_id=sku_a.id, quantity=2)],
-                ), user)
+                await svc.create(
+                    BundleCreate(
+                        bundle_code="BD003",
+                        bundle_name="x",
+                        items=[
+                            BundleItemIn(sku_id=sku_a.id, quantity=1),
+                            BundleItemIn(sku_id=sku_a.id, quantity=2),
+                        ],
+                    ),
+                    user,
+                )
         finally:
             tenant_id_ctx.reset(tok)
 
 
 class TestUserPreference:
     async def test_upsert_and_get_default(
-        self, session: AsyncSession, tenant_a: Any, factory: Any, admin_role: Any,
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
     ) -> None:
         tok = tenant_id_ctx.set(tenant_a.id)
         try:
@@ -106,7 +139,9 @@ class TestUserPreference:
 
 class TestExport:
     async def test_export_production_xlsx_parseable(
-        self, session: AsyncSession, tenant_a: Any,
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
     ) -> None:
         tok = tenant_id_ctx.set(tenant_a.id)
         try:
@@ -122,7 +157,9 @@ class TestExport:
             tenant_id_ctx.reset(tok)
 
     async def test_export_invalid_type(
-        self, session: AsyncSession, tenant_a: Any,
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
     ) -> None:
         from app.modules.report.exceptions import ReportExportTypeInvalidError
 

@@ -11,11 +11,14 @@ ORM 层多租户注入（before_compile 事件 + before_insert 事件）：
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator, Mapping, Sequence
+from datetime import UTC, datetime
+from typing import Any, cast
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, ForeignKey, MetaData, event, text
+from sqlalchemy import DateTime, ForeignKey, MetaData, event, func, text
+from sqlalchemy.dialects.postgresql import UUID as PGUUID
+from sqlalchemy.engine import RowMapping
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import (
     DeclarativeBase,
@@ -55,9 +58,6 @@ class Base(DeclarativeBase):
 # 通用字段 mixin
 # ---------------------------------------------------------------------------
 
-from sqlalchemy import func
-from sqlalchemy.dialects.postgresql import UUID as PGUUID
-
 
 class TimestampMixin:
     """统一时间戳字段。
@@ -71,15 +71,15 @@ class TimestampMixin:
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-        default=lambda: datetime.now(timezone.utc),
+        default=lambda: datetime.now(UTC),
         server_default=func.now(),
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-        default=lambda: datetime.now(timezone.utc),
+        default=lambda: datetime.now(UTC),
         server_default=func.now(),
-        onupdate=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(UTC),
     )
 
 
@@ -207,9 +207,7 @@ def _apply_tenant_guc(session: Session, _transaction: Any, connection: Any) -> N
     tid = tenant_id_ctx.get()
     if tid is not None:
         # tid 为 UUID 实例，str 化后为标准 UUID 文本，无注入风险
-        connection.exec_driver_sql(
-            f"SELECT set_config('app.tenant_id', '{tid}', true)"
-        )
+        connection.exec_driver_sql(f"SELECT set_config('app.tenant_id', '{tid}', true)")
 
 
 @event.listens_for(Session, "do_orm_execute")
@@ -231,7 +229,7 @@ def _enforce_tenant_filter(orm_execute_state: Any) -> None:
         # 真正的业务安全由 PostgreSQL RLS 兜底
         return
 
-    def _make_criteria(cls: type) -> ColumnElement[bool]:
+    def _make_criteria(cls: type[TenantScopedModel]) -> ColumnElement[bool]:
         return cls.tenant_id == tid
 
     orm_execute_state.statement = orm_execute_state.statement.options(
@@ -276,7 +274,7 @@ async def check_db_health() -> bool:
         async with engine_app.connect() as conn:
             await conn.execute(text("SELECT 1"))
         return True
-    except Exception:  # noqa: BLE001
+    except Exception:
         return False
 
 
@@ -284,3 +282,28 @@ async def dispose_engines() -> None:
     """优雅关闭引擎（lifespan 退出时调用）。"""
     await engine_app.dispose()
     await engine_bypass.dispose()
+
+
+# ---------------------------------------------------------------------------
+# RowMapping 键类型收窄
+# ---------------------------------------------------------------------------
+
+
+def as_mappings(rows: Sequence[RowMapping]) -> list[Mapping[str, Any]]:
+    """把 ``.mappings().all()`` 的结果收窄为 ``list[Mapping[str, Any]]``。
+
+    SQLAlchemy 把 ``RowMapping`` 声明为 ``Mapping[_KeyType, Any]``（键可以是列对象
+    而不只是字符串），而 ``Mapping`` 的键类型是**不变的**（invariant），因此
+    ``Sequence[RowMapping]`` 不能直接当作 ``Iterable[Mapping[str, Any]]`` 使用。
+
+    对 ``text()`` 文本查询，``.mappings()`` 的键就是 SELECT 里的列名字符串，
+    所以这里做一次集中的显式收窄，避免在各仓储里散落十几个 ``cast``。
+
+    纯类型层面操作，无运行时开销（``list()`` 的拷贝与收窄前一致）。
+    """
+    return cast("list[Mapping[str, Any]]", list(rows))
+
+
+def as_mapping(row: RowMapping) -> Mapping[str, Any]:
+    """:func:`as_mappings` 的单行版本（``.mappings().one()`` / ``.first()``）。"""
+    return cast("Mapping[str, Any]", row)

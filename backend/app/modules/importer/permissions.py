@@ -10,7 +10,6 @@
 
 from __future__ import annotations
 
-
 IMPORTER_PERMISSIONS: list[tuple[str, str, str]] = [
     # (scope, action, description)
     ("importer.batch", "read", "查询导入批次 / 下载失败明细"),

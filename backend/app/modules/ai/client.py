@@ -25,9 +25,7 @@ class DeepSeekClient:
     def __init__(self, http: httpx.AsyncClient) -> None:
         self._http = http
 
-    async def chat(
-        self, messages: list[dict], *, model: str | None = None
-    ) -> dict[str, Any]:
+    async def chat(self, messages: list[dict], *, model: str | None = None) -> dict[str, Any]:
         if not settings.DEEPSEEK_API_KEY:
             raise AiServiceUnavailableError()
         t0 = time.monotonic()

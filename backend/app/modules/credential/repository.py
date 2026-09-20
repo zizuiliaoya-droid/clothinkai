@@ -37,9 +37,7 @@ class CredentialRepository:
     ) -> tuple[Sequence[Credential], int]:
         stmt = select(Credential).where(Credential.tenant_id == tenant_id)
         count_stmt = (
-            select(func.count())
-            .select_from(Credential)
-            .where(Credential.tenant_id == tenant_id)
+            select(func.count()).select_from(Credential).where(Credential.tenant_id == tenant_id)
         )
         if platform is not None:
             stmt = stmt.where(Credential.platform == platform)

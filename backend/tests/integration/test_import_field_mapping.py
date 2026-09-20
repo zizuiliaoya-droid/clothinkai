@@ -17,9 +17,7 @@ def _payload(source: str = "fake_source") -> FieldMappingCreate:
         source=source,
         columns=[
             FieldMappingColumn(source_col="名称", target_field="name", type="str"),
-            FieldMappingColumn(
-                source_col="价格", target_field="price", type="decimal"
-            ),
+            FieldMappingColumn(source_col="价格", target_field="price", type="decimal"),
         ],
     )
 

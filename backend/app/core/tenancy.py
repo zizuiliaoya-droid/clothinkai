@@ -8,9 +8,9 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
-from typing import AsyncIterator
 from uuid import UUID
 
 # ---------------------------------------------------------------------------

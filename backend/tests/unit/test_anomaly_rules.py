@@ -22,23 +22,17 @@ def _row(*, return_rate=None, net_roi=None):
 def _cfg(*, return_rate_threshold="0.4000", low_roi_threshold=None):
     return SimpleNamespace(
         return_rate_threshold=Decimal(return_rate_threshold),
-        low_roi_threshold=(
-            Decimal(low_roi_threshold) if low_roi_threshold is not None else None
-        ),
+        low_roi_threshold=(Decimal(low_roi_threshold) if low_roi_threshold is not None else None),
     )
 
 
 class TestReturnRateRule:
     def test_above_threshold_fires(self) -> None:
-        out = AnomalyAlertService._evaluate_row(
-            _row(return_rate=Decimal("0.5000")), _cfg()
-        )
+        out = AnomalyAlertService._evaluate_row(_row(return_rate=Decimal("0.5000")), _cfg())
         assert [t for t, _ in out] == ["return_rate_high"]
 
     def test_equal_threshold_no_fire(self) -> None:
-        out = AnomalyAlertService._evaluate_row(
-            _row(return_rate=Decimal("0.4000")), _cfg()
-        )
+        out = AnomalyAlertService._evaluate_row(_row(return_rate=Decimal("0.4000")), _cfg())
         assert out == []
 
     def test_none_no_fire(self) -> None:
@@ -78,9 +72,7 @@ class TestCombined:
         assert sorted(t for t, _ in out) == ["return_rate_high", "roi_low"]
 
     def test_detail_payload(self) -> None:
-        out = AnomalyAlertService._evaluate_row(
-            _row(return_rate=Decimal("0.5000")), _cfg()
-        )
+        out = AnomalyAlertService._evaluate_row(_row(return_rate=Decimal("0.5000")), _cfg())
         _, detail = out[0]
         assert detail["value"] == "0.5000"
         assert detail["threshold"] == "0.4000"

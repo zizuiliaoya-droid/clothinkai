@@ -43,9 +43,7 @@ class HuitunImportAdapter:
     source: str = "huitun"
     target_table: str = "blogger"
 
-    def parse_row(
-        self, row: dict[str, Any], mapping: "FieldMapping | None"
-    ) -> dict[str, Any]:
+    def parse_row(self, row: dict[str, Any], mapping: FieldMapping | None) -> dict[str, Any]:
         columns = (
             mapping.mapping_config.get("columns", _DEFAULT_COLUMNS)
             if mapping is not None

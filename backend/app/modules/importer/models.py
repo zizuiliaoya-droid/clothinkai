@@ -32,7 +32,6 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import TenantScopedModel
 
-
 # ---------------------------------------------------------------------------
 # ImportBatch（导入批次）
 # ---------------------------------------------------------------------------
@@ -58,18 +57,10 @@ class ImportBatch(TenantScopedModel):
     status: Mapped[str] = mapped_column(
         String(16), nullable=False, server_default=text("'processing'")
     )
-    total_rows: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default=text("0")
-    )
-    imported: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default=text("0")
-    )
-    failed: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default=text("0")
-    )
-    retry_count: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default=text("0")
-    )
+    total_rows: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    imported: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    failed: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    retry_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     error_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     created_by: Mapped[UUID | None] = mapped_column(
@@ -132,22 +123,14 @@ class ImportJob(TenantScopedModel):
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     raw_data: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
-    target_resource_id: Mapped[UUID | None] = mapped_column(
-        PGUUID(as_uuid=True), nullable=True
-    )
-    attempt_count: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default=text("1")
-    )
+    target_resource_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
 
     __table_args__ = (
         # NF-3/FB-E：行幂等 + 重试原地更新定位
         Index("uq_import_job_batch_row", "batch_id", "row_number", unique=True),
-        Index(
-            "idx_import_job_batch_status", "tenant_id", "batch_id", "status"
-        ),
-        CheckConstraint(
-            "status IN ('success','failed')", name="ck_import_job_status"
-        ),
+        Index("idx_import_job_batch_status", "tenant_id", "batch_id", "status"),
+        CheckConstraint("status IN ('success','failed')", name="ck_import_job_status"),
         CheckConstraint("attempt_count >= 1", name="ck_import_job_attempt"),
     )
 
@@ -165,9 +148,7 @@ class FieldMapping(TenantScopedModel):
     source: Mapped[str] = mapped_column(String(32), nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False)
     mapping_config: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
-    is_active: Mapped[bool] = mapped_column(
-        nullable=False, server_default=text("false")
-    )
+    is_active: Mapped[bool] = mapped_column(nullable=False, server_default=text("false"))
     created_by: Mapped[UUID | None] = mapped_column(
         PGUUID(as_uuid=True),
         ForeignKey("user.id", ondelete="SET NULL"),
@@ -190,9 +171,7 @@ class FieldMapping(TenantScopedModel):
             unique=True,
             postgresql_where=text("is_active"),
         ),
-        Index(
-            "idx_field_mapping_active", "tenant_id", "source", "is_active"
-        ),
+        Index("idx_field_mapping_active", "tenant_id", "source", "is_active"),
         CheckConstraint("version >= 1", name="ck_field_mapping_version"),
     )
 

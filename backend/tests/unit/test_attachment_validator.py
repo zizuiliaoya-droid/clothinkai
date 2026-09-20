@@ -55,9 +55,7 @@ class TestValidatorHappyPath:
         tid = uuid4()
         att = _make_attachment(tid)
         validator, _ = _make_validator(att)
-        result = await validator.validate(
-            session=MagicMock(), attachment_id=att.id, tenant_id=tid
-        )
+        result = await validator.validate(session=MagicMock(), attachment_id=att.id, tenant_id=tid)
         assert result is att
 
 
@@ -69,54 +67,42 @@ class TestValidator6Checks:
     async def test_not_found(self) -> None:
         validator, _ = _make_validator(None)
         with pytest.raises(InvalidAttachmentReferenceError):
-            await validator.validate(
-                session=MagicMock(), attachment_id=uuid4(), tenant_id=uuid4()
-            )
+            await validator.validate(session=MagicMock(), attachment_id=uuid4(), tenant_id=uuid4())
 
     async def test_bucket_invalid(self) -> None:
         tid = uuid4()
         att = _make_attachment(tid, bucket="public")
         validator, _ = _make_validator(att)
         with pytest.raises(InvalidAttachmentBucketError):
-            await validator.validate(
-                session=MagicMock(), attachment_id=att.id, tenant_id=tid
-            )
+            await validator.validate(session=MagicMock(), attachment_id=att.id, tenant_id=tid)
 
     async def test_purpose_invalid(self) -> None:
         tid = uuid4()
         att = _make_attachment(tid, purpose="avatar")
         validator, _ = _make_validator(att)
         with pytest.raises(InvalidAttachmentPurposeError):
-            await validator.validate(
-                session=MagicMock(), attachment_id=att.id, tenant_id=tid
-            )
+            await validator.validate(session=MagicMock(), attachment_id=att.id, tenant_id=tid)
 
     async def test_mime_invalid(self) -> None:
         tid = uuid4()
         att = _make_attachment(tid, mime_type="text/html")
         validator, _ = _make_validator(att)
         with pytest.raises(InvalidAttachmentMimeError):
-            await validator.validate(
-                session=MagicMock(), attachment_id=att.id, tenant_id=tid
-            )
+            await validator.validate(session=MagicMock(), attachment_id=att.id, tenant_id=tid)
 
     async def test_size_too_large(self) -> None:
         tid = uuid4()
         att = _make_attachment(tid, size_bytes=MAX_SIZE_BYTES + 1)
         validator, _ = _make_validator(att)
         with pytest.raises(AttachmentTooLargeError):
-            await validator.validate(
-                session=MagicMock(), attachment_id=att.id, tenant_id=tid
-            )
+            await validator.validate(session=MagicMock(), attachment_id=att.id, tenant_id=tid)
 
     async def test_status_not_ready(self) -> None:
         tid = uuid4()
         att = _make_attachment(tid, status="uploading")
         validator, _ = _make_validator(att)
         with pytest.raises(AttachmentNotReadyError):
-            await validator.validate(
-                session=MagicMock(), attachment_id=att.id, tenant_id=tid
-            )
+            await validator.validate(session=MagicMock(), attachment_id=att.id, tenant_id=tid)
 
 
 @pytest.mark.unit
@@ -146,9 +132,7 @@ class TestCrossTenant4LayerDefense:
         owner_tid = uuid4()
         att = _make_attachment(owner_tid)
         validator, _ = _make_validator(att)
-        with patch.object(
-            validator, "_handle_cross_tenant_attempt", new=AsyncMock()
-        ):
+        with patch.object(validator, "_handle_cross_tenant_attempt", new=AsyncMock()):
             with pytest.raises(InvalidAttachmentReferenceError):
                 await validator.validate(
                     session=MagicMock(),
@@ -162,13 +146,11 @@ class TestCrossTenant4LayerDefense:
         att = _make_attachment(owner_tid)
         validator, _ = _make_validator(att)
 
-        with patch(
-            "app.modules.finance.attachment_validator.sentry_sdk"
-        ), patch(
-            "app.modules.finance.attachment_validator.AsyncSessionBypass"
-        ), patch.object(
-            validator, "_record_failure"
-        ) as mock_record:
+        with (
+            patch("app.modules.finance.attachment_validator.sentry_sdk"),
+            patch("app.modules.finance.attachment_validator.AsyncSessionBypass"),
+            patch.object(validator, "_record_failure") as mock_record,
+        ):
             with pytest.raises(InvalidAttachmentReferenceError):
                 await validator.validate(
                     session=MagicMock(),

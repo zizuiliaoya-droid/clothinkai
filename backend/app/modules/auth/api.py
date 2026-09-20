@@ -10,15 +10,18 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Request, Response, status
+from fastapi import APIRouter, Query, Request, Response, status
 from slowapi.util import get_remote_address
 
 from app.core.audit import AuditService
+
+# slowapi 限流装饰器从 app.main 中绑定的 limiter 上获取
+# 但为了避免循环依赖，这里使用全局 limiter 单例
+# 真正的 main.py 会调用 limiter.init_app(app) 与 add_exception_handler
 from app.modules.auth import permissions as scopes
 from app.modules.auth.deps import (
     BypassSessionDep,
     CurrentActiveUser,
-    CurrentPerms,
     CurrentUser,
     SessionDep,
     require_permission,
@@ -50,11 +53,6 @@ from app.modules.auth.service import (
     PermissionService,
     UserService,
 )
-
-# slowapi 限流装饰器从 app.main 中绑定的 limiter 上获取
-# 但为了避免循环依赖，这里使用全局 limiter 单例
-# 真正的 main.py 会调用 limiter.init_app(app) 与 add_exception_handler
-from app.core.config import settings  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Router

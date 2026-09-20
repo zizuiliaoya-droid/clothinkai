@@ -29,7 +29,6 @@ from app.modules.product.exceptions import (
 from app.modules.product.models import Sku
 from app.modules.product.schemas import SkuCreate, SkuUpdate
 
-
 # ---------------------------------------------------------------------------
 # BR-U02-13 sourcing_type 与价格一致性
 # ---------------------------------------------------------------------------

@@ -24,13 +24,11 @@ from typing import ClassVar
 
 from app.core.exceptions import IllegalStateTransitionError
 from app.core.state_machine import TransitionRule
-
 from app.modules.promotion.enums import (
     PublishStatus,
     RecallStatus,
     SettlementStatus,
 )
-
 
 # 角色常量（与 legacy_field_permissions 一致；U09 后切到 Permission 体系）
 _ROLE_PR = "pr"
@@ -127,9 +125,7 @@ class PublishStatusMachine:
         )
 
     @classmethod
-    def get_allowed_transitions(
-        cls, from_state: str | PublishStatus
-    ) -> list[tuple[str, str]]:
+    def get_allowed_transitions(cls, from_state: str | PublishStatus) -> list[tuple[str, str]]:
         """返回从某状态可达的所有 (action, to_state)，供前端展示按钮。"""
         from_v = from_state.value if isinstance(from_state, PublishStatus) else from_state
         return [(t.action, t.to_state) for t in cls.transitions if t.from_state == from_v]
@@ -197,9 +193,7 @@ class RecallStatusMachine:
         )
 
     @classmethod
-    def get_allowed_transitions(
-        cls, from_state: str | RecallStatus
-    ) -> list[tuple[str, str]]:
+    def get_allowed_transitions(cls, from_state: str | RecallStatus) -> list[tuple[str, str]]:
         from_v = from_state.value if isinstance(from_state, RecallStatus) else from_state
         return [(t.action, t.to_state) for t in cls.transitions if t.from_state == from_v]
 
@@ -279,9 +273,7 @@ class SettlementStatusMachine:
         )
 
     @classmethod
-    def get_allowed_transitions(
-        cls, from_state: str | SettlementStatus
-    ) -> list[tuple[str, str]]:
+    def get_allowed_transitions(cls, from_state: str | SettlementStatus) -> list[tuple[str, str]]:
         from_v = from_state.value if isinstance(from_state, SettlementStatus) else from_state
         return [(t.action, t.to_state) for t in cls.transitions if t.from_state == from_v]
 

@@ -54,9 +54,7 @@ class TestPublishStatusMachine:
             )
 
     def test_get_allowed_from_unpublished(self) -> None:
-        actions = PublishStatusMachine.get_allowed_transitions(
-            PublishStatus.UNPUBLISHED
-        )
+        actions = PublishStatusMachine.get_allowed_transitions(PublishStatus.UNPUBLISHED)
         action_names = {a for a, _ in actions}
         assert {"publish", "cancel", "mark_abnormal", "delete"} <= action_names
 
@@ -78,9 +76,7 @@ class TestRecallStatusMachine:
 
     def test_success_is_terminal(self) -> None:
         """召回成功后无后续转移."""
-        actions = RecallStatusMachine.get_allowed_transitions(
-            RecallStatus.RECALLED_SUCCESS
-        )
+        actions = RecallStatusMachine.get_allowed_transitions(RecallStatus.RECALLED_SUCCESS)
         assert actions == []
 
     def test_not_recalled_cannot_skip_to_success(self) -> None:
@@ -112,9 +108,7 @@ class TestSettlementStatusMachine:
         SettlementStatusMachine.assert_can_transition(from_state, to_state, action)
 
     def test_paid_is_terminal(self) -> None:
-        actions = SettlementStatusMachine.get_allowed_transitions(
-            SettlementStatus.PAID
-        )
+        actions = SettlementStatusMachine.get_allowed_transitions(SettlementStatus.PAID)
         assert actions == []
 
     def test_not_reviewed_cannot_directly_approve(self) -> None:
@@ -127,6 +121,4 @@ class TestSettlementStatusMachine:
 
     def test_string_arg_works_too(self) -> None:
         """assert_can_transition 同时接受 Enum 和 str."""
-        SettlementStatusMachine.assert_can_transition(
-            "未核查", "待核查", "auto_advance"
-        )
+        SettlementStatusMachine.assert_can_transition("未核查", "待核查", "auto_advance")

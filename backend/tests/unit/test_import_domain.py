@@ -18,7 +18,6 @@ from app.modules.importer.domain import (
 )
 from app.modules.importer.exceptions import ImportMappingInvalidError
 
-
 # ---------------------------------------------------------------------------
 # csv_safe（CSV injection 防护）
 # ---------------------------------------------------------------------------
@@ -53,9 +52,7 @@ def test_csv_safe_only_prefixes_first_char():
 
 def test_compute_sha256_known_value():
     # echo -n "hello" | sha256sum
-    expected = (
-        "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
-    )
+    expected = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
     digest, size = compute_sha256(io.BytesIO(b"hello"))
     assert digest == expected
     assert size == 5
@@ -126,16 +123,12 @@ def test_validate_mapping_config_empty_raises():
 
 def test_validate_mapping_config_bad_type_raises():
     with pytest.raises(ImportMappingInvalidError):
-        validate_mapping_config(
-            [{"source_col": "a", "target_field": "b", "type": "weird"}]
-        )
+        validate_mapping_config([{"source_col": "a", "target_field": "b", "type": "weird"}])
 
 
 def test_validate_mapping_config_date_requires_transform():
     with pytest.raises(ImportMappingInvalidError):
-        validate_mapping_config(
-            [{"source_col": "a", "target_field": "b", "type": "date"}]
-        )
+        validate_mapping_config([{"source_col": "a", "target_field": "b", "type": "date"}])
 
 
 def test_validate_mapping_config_duplicate_target_raises():

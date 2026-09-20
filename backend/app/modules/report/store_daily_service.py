@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import date
-from typing import Any, Mapping
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import func
@@ -36,9 +37,7 @@ class StoreDailyService:
                 date_from=time_range[0],
                 date_to=time_range[1],
             )
-        extra_by_date = await self._aggregate_extra(
-            tenant_id, time_range[0], time_range[1]
-        )
+        extra_by_date = await self._aggregate_extra(tenant_id, time_range[0], time_range[1])
         result = []
         for r in rows:
             row = self._to_row(r)
@@ -60,15 +59,22 @@ class StoreDailyService:
             "WHERE tenant_id = :t AND date BETWEEN :f AND :to AND extra IS NOT NULL"
         )
         rows = (
-            await self._session.execute(
-                sql, {"t": str(tenant_id), "f": date_from, "to": date_to}
-            )
+            await self._session.execute(sql, {"t": str(tenant_id), "f": date_from, "to": date_to})
         ).all()
         agg: dict[str, dict[str, Decimal]] = defaultdict(lambda: defaultdict(Decimal))
         # 非指标列（ID/文本类）不参与按日求和
         skip = {
-            "统计日期", "日期", "商品ID", "主商品ID", "货号", "商品名称",
-            "商品简称", "商商品简称称", "商品类型", "商品状态", "商品标签",
+            "统计日期",
+            "日期",
+            "商品ID",
+            "主商品ID",
+            "货号",
+            "商品名称",
+            "商品简称",
+            "商商品简称称",
+            "商品类型",
+            "商品状态",
+            "商品标签",
         }
         for d, extra in rows:
             if not isinstance(extra, dict):
@@ -84,8 +90,7 @@ class StoreDailyService:
                 agg[day][k] += num
         # Decimal → str（保留两位以内）
         return {
-            day: {k: format(val, "f") for k, val in fields.items()}
-            for day, fields in agg.items()
+            day: {k: format(val, "f") for k, val in fields.items()} for day, fields in agg.items()
         }
 
     @staticmethod
@@ -108,9 +113,7 @@ class StoreDailyService:
         user: User,
     ) -> StoreDaily:
         set_fields = {
-            k: v
-            for k, v in payload.model_dump(exclude_unset=True).items()
-            if v is not None
+            k: v for k, v in payload.model_dump(exclude_unset=True).items() if v is not None
         }
         stmt = (
             pg_insert(StoreDaily)

@@ -12,18 +12,14 @@ class TestBloggerApiContract:
     async def test_list_requires_auth(self) -> None:
         from app.main import app
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.get("/api/bloggers/")
         assert resp.status_code == 401
 
     async def test_create_requires_auth(self) -> None:
         from app.main import app
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.post(
                 "/api/bloggers/",
                 json={"xiaohongshu_id": "X", "nickname": "x"},
@@ -34,9 +30,7 @@ class TestBloggerApiContract:
         """无效 xiaohongshu_id 格式 → 401（auth 先于 schema） 或 422."""
         from app.main import app
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.post(
                 "/api/bloggers/",
                 json={
@@ -50,9 +44,7 @@ class TestBloggerApiContract:
     async def test_openapi_exposes_blogger_endpoints(self) -> None:
         from app.main import app
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.get("/api/openapi.json")
         assert resp.status_code == 200
         spec = resp.json()

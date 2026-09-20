@@ -14,11 +14,10 @@ from decimal import Decimal
 from typing import Any
 
 import pytest
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.tenancy import tenant_id_ctx
-from app.modules.finance.enums import ExtraItemType, SettlementStatus
+from app.modules.finance.enums import ExtraItemType
 from app.modules.finance.exceptions import (
     ExtraItemNotAllowedError,
     FieldPermissionDenied,
@@ -55,7 +54,9 @@ class TestReview:
             style = await product_factory.style()
             blogger = await blogger_factory.blogger()
             s = await settlement_factory.settlement(
-                style=style, blogger=blogger, pr=pr,
+                style=style,
+                blogger=blogger,
+                pr=pr,
                 settlement_status="待核查",
             )
             svc = SettlementService(session)
@@ -85,7 +86,9 @@ class TestReview:
             style = await product_factory.style()
             blogger = await blogger_factory.blogger()
             s = await settlement_factory.settlement(
-                style=style, blogger=blogger, pr=pr,
+                style=style,
+                blogger=blogger,
+                pr=pr,
                 settlement_status="待核查",
             )
             svc = SettlementService(session)
@@ -115,14 +118,14 @@ class TestReview:
             style = await product_factory.style()
             blogger = await blogger_factory.blogger()
             s = await settlement_factory.settlement(
-                style=style, blogger=blogger, pr=user,
+                style=style,
+                blogger=blogger,
+                pr=user,
                 settlement_status="待核查",
             )
             svc = SettlementService(session)
             with pytest.raises(SelfReviewForbiddenError):
-                await svc.review(
-                    s.id, SettlementReviewRequest(action=ReviewAction.APPROVE), user
-                )
+                await svc.review(s.id, SettlementReviewRequest(action=ReviewAction.APPROVE), user)
         finally:
             tenant_id_ctx.reset(token)
 
@@ -147,9 +150,11 @@ class TestExtraItem:
             style = await product_factory.style()
             blogger = await blogger_factory.blogger()
             s = await settlement_factory.settlement(
-                style=style, blogger=blogger,
+                style=style,
+                blogger=blogger,
                 settlement_status="待付款",
-                amount=Decimal("500.00"), total_amount=Decimal("500.00"),
+                amount=Decimal("500.00"),
+                total_amount=Decimal("500.00"),
             )
             svc = SettlementService(session)
             resp = await svc.add_extra_item(
@@ -179,7 +184,8 @@ class TestExtraItem:
             style = await product_factory.style()
             blogger = await blogger_factory.blogger()
             s = await settlement_factory.settlement(
-                style=style, blogger=blogger,
+                style=style,
+                blogger=blogger,
                 settlement_status="待核查",  # 非待付款
             )
             svc = SettlementService(session)
@@ -210,7 +216,9 @@ class TestExtraItem:
             style = await product_factory.style()
             blogger = await blogger_factory.blogger()
             s = await settlement_factory.settlement(
-                style=style, blogger=blogger, settlement_status="待付款",
+                style=style,
+                blogger=blogger,
+                settlement_status="待付款",
             )
             svc = SettlementService(session)
             with pytest.raises(FieldPermissionDenied):
@@ -245,7 +253,9 @@ class TestFillPaymentAndResubmit:
             style = await product_factory.style()
             blogger = await blogger_factory.blogger()
             s = await settlement_factory.settlement(
-                style=style, blogger=blogger, settlement_status="待付款",
+                style=style,
+                blogger=blogger,
+                settlement_status="待付款",
             )
             svc = SettlementService(session)
             resp = await svc.fill_payment_amount(
@@ -258,7 +268,7 @@ class TestFillPaymentAndResubmit:
         finally:
             tenant_id_ctx.reset(token)
 
-    async def test_fill_payment_denied_for_finance(
+    async def test_fill_payment_allowed_for_finance(
         self,
         session: AsyncSession,
         tenant_a: Any,
@@ -268,24 +278,25 @@ class TestFillPaymentAndResubmit:
         blogger_factory: Any,
         settlement_factory: Any,
     ) -> None:
-        """财务可见金额但不可写 payment_amount。"""
+        """财务角色可写 payment_amount（9d5e0c5：财务账号需能走完整结款流程）。"""
         token = tenant_id_ctx.set(tenant_a.id)
         try:
             user = await factory.user(tenant_a, roles=[finance_role])
             style = await product_factory.style()
             blogger = await blogger_factory.blogger()
             s = await settlement_factory.settlement(
-                style=style, blogger=blogger, settlement_status="待付款",
+                style=style,
+                blogger=blogger,
+                settlement_status="待付款",
             )
             svc = SettlementService(session)
-            with pytest.raises(FieldPermissionDenied):
-                await svc.fill_payment_amount(
-                    s.id,
-                    SettlementPaymentAmountRequest(
-                        payment_amount=Decimal("480.00")
-                    ),
-                    user,
-                )
+            resp = await svc.fill_payment_amount(
+                s.id,
+                SettlementPaymentAmountRequest(payment_amount=Decimal("480.00")),
+                user,
+            )
+            assert resp.settlement_status == "待财务付款"
+            assert resp.payment_amount == Decimal("480.00")
         finally:
             tenant_id_ctx.reset(token)
 
@@ -305,7 +316,9 @@ class TestFillPaymentAndResubmit:
             style = await product_factory.style()
             blogger = await blogger_factory.blogger()
             s = await settlement_factory.settlement(
-                style=style, blogger=blogger, settlement_status="已驳回",
+                style=style,
+                blogger=blogger,
+                settlement_status="已驳回",
             )
             svc = SettlementService(session)
             resp = await svc.resubmit(s.id, user)

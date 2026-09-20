@@ -27,7 +27,6 @@ def test_last_7d():
 
 
 def test_last_30d():
-    today = get_today()
     f, t = resolve_time_range("last_30d")
     assert (t - f).days == 29
 
@@ -42,7 +41,7 @@ def test_this_month():
 def test_last_month():
     f, t = resolve_time_range("last_month")
     assert f.day == 1
-    assert (f.replace(day=1) <= t)
+    assert f.replace(day=1) <= t
     # 上月末的下一天是本月 1 日
     assert (t + timedelta(days=1)).day == 1
 

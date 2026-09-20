@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import UTC, timedelta
 from typing import Any
 
 import pytest
@@ -17,7 +17,7 @@ from app.modules.wecom.scan_service import WecomScanService
 async def _seed_contact(session, tenant_id, blogger_id, external="ext_1") -> None:
     tok = tenant_id_ctx.set(tenant_id)
     try:
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         session.add(
             WecomContact(
@@ -25,7 +25,7 @@ async def _seed_contact(session, tenant_id, blogger_id, external="ext_1") -> Non
                 blogger_id=blogger_id,
                 external_userid=external,
                 matched_wechat="wx",
-                bound_at=datetime.now(timezone.utc),
+                bound_at=datetime.now(UTC),
             )
         )
         await session.flush()
@@ -47,9 +47,7 @@ class TestWecomScan:
         tok = tenant_id_ctx.set(tenant_a.id)
         try:
             today = get_today()
-            style = await product_factory.style(
-                style_name="连衣裙", short_name="连衣裙A"
-            )
+            style = await product_factory.style(style_name="连衣裙", short_name="连衣裙A")
             blogger = await blogger_factory.blogger(nickname="小美")
             await promotion_factory.promotion(
                 style=style,

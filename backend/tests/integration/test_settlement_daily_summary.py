@@ -41,24 +41,28 @@ class TestDailySummaryAsOf:
             # 3 待核查 + 2 待付款 + 1 已付款
             for _ in range(3):
                 await settlement_factory.settlement(
-                    style=style, blogger=blogger,
-                    settlement_status="待核查", total_amount=Decimal("100.00"),
+                    style=style,
+                    blogger=blogger,
+                    settlement_status="待核查",
+                    total_amount=Decimal("100.00"),
                 )
             for _ in range(2):
                 await settlement_factory.settlement(
-                    style=style, blogger=blogger,
-                    settlement_status="待付款", total_amount=Decimal("200.00"),
+                    style=style,
+                    blogger=blogger,
+                    settlement_status="待付款",
+                    total_amount=Decimal("200.00"),
                 )
             await settlement_factory.settlement(
-                style=style, blogger=blogger,
-                settlement_status="已付款", total_amount=Decimal("500.00"),
+                style=style,
+                blogger=blogger,
+                settlement_status="已付款",
+                total_amount=Decimal("500.00"),
             )
             await session.flush()
 
             svc = SettlementService(session)
-            resp = await svc.get_daily_summary_as_of(
-                date_value=get_today(), user=user
-            )
+            resp = await svc.get_daily_summary_as_of(date_value=get_today(), user=user)
             assert resp.kind == "as_of"
             assert resp.as_of.pending_review.count == 3
             assert resp.as_of.pending_payment.count == 2
@@ -81,9 +85,7 @@ class TestDailySummaryAsOf:
             user = await factory.user(tenant_a, roles=[pr_role])
             svc = SettlementService(session)
             with pytest.raises(FieldPermissionDenied):
-                await svc.get_daily_summary_as_of(
-                    date_value=get_today(), user=user
-                )
+                await svc.get_daily_summary_as_of(date_value=get_today(), user=user)
         finally:
             tenant_id_ctx.reset(token)
 
@@ -109,15 +111,15 @@ class TestDailySummaryActivity:
             blogger = await blogger_factory.blogger()
             for _ in range(4):
                 await settlement_factory.settlement(
-                    style=style, blogger=blogger,
-                    settlement_status="待核查", total_amount=Decimal("150.00"),
+                    style=style,
+                    blogger=blogger,
+                    settlement_status="待核查",
+                    total_amount=Decimal("150.00"),
                 )
             await session.flush()
 
             svc = SettlementService(session)
-            resp = await svc.get_daily_summary_activity(
-                date_value=get_today(), user=user
-            )
+            resp = await svc.get_daily_summary_activity(date_value=get_today(), user=user)
             assert resp.kind == "activity"
             assert resp.activity.newly_created.count == 4
             assert resp.activity.newly_created.total_amount == Decimal("600.00")
@@ -141,15 +143,15 @@ class TestDailySummaryActivity:
             style = await product_factory.style()
             blogger = await blogger_factory.blogger()
             await settlement_factory.settlement(
-                style=style, blogger=blogger,
-                settlement_status="待核查", total_amount=Decimal("100.00"),
+                style=style,
+                blogger=blogger,
+                settlement_status="待核查",
+                total_amount=Decimal("100.00"),
             )
             await session.flush()
 
             svc = SettlementService(session)
-            resp = await svc.get_daily_summary_activity(
-                date_value=None, user=user
-            )
+            resp = await svc.get_daily_summary_activity(date_value=None, user=user)
             assert resp.date == get_today()
             assert resp.activity.newly_created.count >= 1
         finally:

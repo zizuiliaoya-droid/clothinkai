@@ -49,7 +49,6 @@ from app.modules.promotion.schemas import (
     PromotionWarehouseWaybillRequest,
 )
 
-
 router = APIRouter(prefix="/api", tags=["promotion"])
 
 
@@ -122,9 +121,7 @@ async def list_promotions(
         only_dual_platform=only_dual_platform,
         is_hit=is_hit,
     )
-    return await service.list_promotions(
-        filters=filters, page=page, page_size=page_size, user=user
-    )
+    return await service.list_promotions(filters=filters, page=page, page_size=page_size, user=user)
 
 
 @router.get(
@@ -309,7 +306,7 @@ async def start_recall_promotion(
 )
 async def recall_success(
     promotion_id: UUID,
-    payload: PromotionRecallResultRequest,  # noqa: ARG001  -- 预留 remark
+    payload: PromotionRecallResultRequest,
     user: CurrentActiveUser,
     service: PromotionServiceDep,
 ) -> PromotionResponse:
@@ -324,7 +321,7 @@ async def recall_success(
 )
 async def recall_failure(
     promotion_id: UUID,
-    payload: PromotionRecallResultRequest,  # noqa: ARG001  -- 预留 remark
+    payload: PromotionRecallResultRequest,
     user: CurrentActiveUser,
     service: PromotionServiceDep,
 ) -> PromotionResponse:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -44,8 +45,9 @@ class TestChangePassword:
             user = await factory.user(  # type: ignore[attr-defined]
                 tenant_a, password_hash=hash_password(OLD_PASSWORD)
             )
-            with patch("app.modules.auth.service.cache", stub_cache), patch(
-                "app.core.security.permissions.cache", stub_cache
+            with (
+                patch("app.modules.auth.service.cache", stub_cache),
+                patch("app.core.security.permissions.cache", stub_cache),
             ):
                 svc = AuthService(session)
                 await svc.change_password(user.id, OLD_PASSWORD, NEW_PASSWORD)
@@ -103,8 +105,9 @@ class TestChangePassword:
                 tenant_a, password_hash=hash_password(OLD_PASSWORD)
             )
             old_iat = user.password_changed_at
-            with patch("app.modules.auth.service.cache", stub_cache), patch(
-                "app.core.security.permissions.cache", stub_cache
+            with (
+                patch("app.modules.auth.service.cache", stub_cache),
+                patch("app.core.security.permissions.cache", stub_cache),
             ):
                 svc = AuthService(session)
                 await svc.change_password(user.id, OLD_PASSWORD, NEW_PASSWORD)
@@ -123,7 +126,7 @@ class TestChangePassword:
                 tenant_a, password_hash=hash_password(OLD_PASSWORD)
             )
             # 手工塞一个未吊销的 refresh_token
-            from datetime import datetime, timedelta, timezone
+            from datetime import datetime, timedelta
             from uuid import uuid4
 
             session.add(
@@ -131,14 +134,15 @@ class TestChangePassword:
                     tenant_id=tenant_a.id,
                     user_id=user.id,
                     jti=uuid4().hex,
-                    issued_at=datetime.now(timezone.utc),
-                    expires_at=datetime.now(timezone.utc) + timedelta(days=7),
+                    issued_at=datetime.now(UTC),
+                    expires_at=datetime.now(UTC) + timedelta(days=7),
                 )
             )
             await session.flush()
 
-            with patch("app.modules.auth.service.cache", stub_cache), patch(
-                "app.core.security.permissions.cache", stub_cache
+            with (
+                patch("app.modules.auth.service.cache", stub_cache),
+                patch("app.core.security.permissions.cache", stub_cache),
             ):
                 svc = AuthService(session)
                 await svc.change_password(user.id, OLD_PASSWORD, NEW_PASSWORD)

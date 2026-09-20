@@ -104,9 +104,7 @@ class TestCustomFieldPermission:
             assert (await svc.get_sku(sku.id, fin_user)).cost_price == Decimal("88.00")
 
             # revoke → 撤销优先级最高 → 屏蔽
-            await PermissionService(session).revoke(
-                fin_user.id, _COST_READ, actor_id=admin.id
-            )
+            await PermissionService(session).revoke(fin_user.id, _COST_READ, actor_id=admin.id)
             assert (await svc.get_sku(sku.id, fin_user)).cost_price is None
         finally:
             tenant_id_ctx.reset(token)
@@ -166,8 +164,6 @@ class TestCustomFieldPermission:
             await _ensure_perm(session, _COST_READ)
             admin = await factory.user(tenant_a, roles=[admin_role])
             with pytest.raises(ResourceNotFoundError):
-                await PermissionService(session).grant(
-                    uuid4(), _COST_READ, actor_id=admin.id
-                )
+                await PermissionService(session).grant(uuid4(), _COST_READ, actor_id=admin.id)
         finally:
             tenant_id_ctx.reset(token)

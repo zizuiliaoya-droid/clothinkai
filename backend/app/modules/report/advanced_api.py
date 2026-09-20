@@ -10,9 +10,9 @@ from fastapi import APIRouter, Path, Query, status
 
 from app.modules.auth.deps import CurrentActiveUser, require_permission
 from app.modules.report.advanced_schemas import (
-    PrWorkProgress,
     ProductionReport,
     ProductionTrend,
+    PrWorkProgress,
     StoreDailyManualUpdate,
     StoreDailyRow,
     TargetCreate,

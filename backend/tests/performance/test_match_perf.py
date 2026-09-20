@@ -100,9 +100,7 @@ class TestMatchPerformance:
                        ILIKE '%' || :keyword || '%'
                 LIMIT 20
             """)
-            result = await session.execute(
-                explain_sql, {"tid": tenant_a.id, "keyword": "波点"}
-            )
+            result = await session.execute(explain_sql, {"tid": tenant_a.id, "keyword": "波点"})
             plan = result.scalar_one()
             plan_str = str(plan).lower()
             assert "idx_style_search_trgm" in plan_str or "gin" in plan_str, (

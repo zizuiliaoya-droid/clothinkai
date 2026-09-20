@@ -14,61 +14,60 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
-from typing import AsyncIterator
+from datetime import UTC, datetime
 
 import sentry_sdk
-import structlog
-from fastapi import FastAPI, Request, status
+from fastapi import FastAPI, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from prometheus_fastapi_instrumentator import Instrumentator
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
+from sentry_sdk.types import Event, Hint
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 
-from app.core.cache import close_redis
+from app.core.attachment_api import router as attachment_router
+from app.core.cache import check_redis_health, close_redis
 from app.core.config import settings
 from app.core.db import (
     AsyncSessionBypass,
     check_db_health,
     dispose_engines,
 )
-from app.core.cache import check_redis_health
 from app.core.errors import register_error_handlers
 from app.core.logging import configure_logging
 from app.core.middleware.request_id import RequestIdMiddleware
 from app.core.middleware.tenancy import TenancyContextMiddleware
 from app.core.tenancy import bypass_rls_ctx
+from app.modules.ai.api import router as ai_router
 from app.modules.auth.api import router as auth_router
 from app.modules.blogger.api import router as blogger_router
-from app.modules.product.api import router as product_router
-from app.modules.product.dict_api import router as dict_router
-from app.modules.promotion.api import router as promotion_router
+from app.modules.collect.crawler_api import router as crawler_router
+from app.modules.collect.daily_data_api import router as daily_data_router
+from app.modules.collect.data_quality_api import router as data_quality_router
+from app.modules.collect.worker_token_api import router as worker_token_router
+from app.modules.credential.api import router as credential_router
+from app.modules.design.api import router as design_router
 from app.modules.finance.api import router as finance_router
 from app.modules.finance.order_adjustment_api import router as order_adjustment_router
-from app.core.attachment_api import router as attachment_router
 from app.modules.importer.api import router as import_router
-from app.modules.report.api import router as report_router
+from app.modules.product.api import router as product_router
+from app.modules.product.dict_api import router as dict_router
+from app.modules.product.platform_product_api import router as platform_product_router
+from app.modules.promotion.api import router as promotion_router
 from app.modules.report.advanced_api import router as report_advanced_router
-from app.modules.ai.api import router as ai_router
+from app.modules.report.api import router as report_router
 from app.modules.report.bi_api import router as bi_router
 from app.modules.report.export_api import router as report_export_router
-from app.modules.design.api import router as design_router
-from app.modules.product.platform_product_api import router as platform_product_router
-from app.modules.credential.api import router as credential_router
-from app.modules.collect.crawler_api import router as crawler_router
-from app.modules.collect.worker_token_api import router as worker_token_router
-from app.modules.collect.data_quality_api import router as data_quality_router
-from app.modules.collect.daily_data_api import router as daily_data_router
+from app.modules.wecom.alert_api import router as wecom_alert_router
 from app.modules.wecom.api import router as wecom_router
 from app.modules.wecom.callback_api import router as wecom_callback_router
 from app.modules.wecom.notification_api import router as notification_router
-from app.modules.wecom.alert_api import router as wecom_alert_router
 
 log = logging.getLogger(__name__)
 
@@ -121,7 +120,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # 初始化管理员
     try:
         await _ensure_initial_admin()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         log.exception("ensure_initial_admin_failed")
         sentry_sdk.capture_exception(exc)
 
@@ -162,7 +161,7 @@ def register_event_listeners() -> None:
     clear_handlers()
 
     try:
-        from app.modules.finance.listeners import register as register_finance  # type: ignore[import-not-found]
+        from app.modules.finance.listeners import register as register_finance
     except ModuleNotFoundError:
         log.warning(
             "u05_finance_module_not_found_skipping_listener_registration. "
@@ -178,19 +177,13 @@ def register_event_listeners() -> None:
     try:
         register_finance()
     except Exception as exc:
-        log.exception(
-            "listener_registration_failed", extra={"module": "finance"}
-        )
-        raise RuntimeError(
-            "U05 finance listener registration failed, refusing to start"
-        ) from exc
+        log.exception("listener_registration_failed", extra={"module": "finance"})
+        raise RuntimeError("U05 finance listener registration failed, refusing to start") from exc
 
     # 第 2 步：U04 promotion 反向 listener（通知类 SettlementPaid，FB5）
     # 缺失不阻塞（required_handler=False）；存在但注册失败 fail fast
     try:
-        from app.modules.promotion.listeners import (  # type: ignore[import-not-found]
-            register as register_promotion_listeners,
-        )
+        from app.modules.promotion.listeners import register as register_promotion_listeners
     except ModuleNotFoundError:
         log.warning(
             "promotion_listeners_module_not_found_skipping. "
@@ -201,19 +194,13 @@ def register_event_listeners() -> None:
     try:
         register_promotion_listeners()
     except Exception as exc:
-        log.exception(
-            "listener_registration_failed", extra={"module": "promotion"}
-        )
-        raise RuntimeError(
-            "U04 promotion listener registration failed, refusing to start"
-        ) from exc
+        log.exception("listener_registration_failed", extra={"module": "promotion"})
+        raise RuntimeError("U04 promotion listener registration failed, refusing to start") from exc
 
     # 第 3 步：U15 wecom 反向 listener（通知类 PromotionPublished，S09 控评通知）
     # 缺失不阻塞（required_handler=False）；存在但注册失败 fail fast
     try:
-        from app.modules.wecom.listeners import (  # type: ignore[import-not-found]
-            register as register_wecom_listeners,
-        )
+        from app.modules.wecom.listeners import register as register_wecom_listeners
     except ModuleNotFoundError:
         log.warning(
             "wecom_listeners_module_not_found_skipping. "
@@ -224,12 +211,8 @@ def register_event_listeners() -> None:
     try:
         register_wecom_listeners()
     except Exception as exc:
-        log.exception(
-            "listener_registration_failed", extra={"module": "wecom"}
-        )
-        raise RuntimeError(
-            "U15 wecom listener registration failed, refusing to start"
-        ) from exc
+        log.exception("listener_registration_failed", extra={"module": "wecom"})
+        raise RuntimeError("U15 wecom listener registration failed, refusing to start") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -252,14 +235,14 @@ def register_import_adapters() -> None:
     from app.modules.importer.registry import ImportAdapterRegistry
 
     adapter_modules = [
-        "app.modules.importer.adapters.style_sku",   # U06b
-        "app.modules.importer.adapters.blogger",      # U06c
-        "app.modules.importer.adapters.promotion",    # U06d
-        "app.modules.importer.adapters.settlement",   # U06e
+        "app.modules.importer.adapters.style_sku",  # U06b
+        "app.modules.importer.adapters.blogger",  # U06c
+        "app.modules.importer.adapters.promotion",  # U06d
+        "app.modules.importer.adapters.settlement",  # U06e
         "app.modules.importer.adapters.order_adjustment",  # U16 拍单/刷单
-        "app.modules.importer.adapters.qianniu",       # U13
-        "app.modules.importer.adapters.wanxiangtai",   # U13
-        "app.modules.importer.adapters.huitun",        # U13
+        "app.modules.importer.adapters.qianniu",  # U13
+        "app.modules.importer.adapters.wanxiangtai",  # U13
+        "app.modules.importer.adapters.huitun",  # U13
     ]
     for mod_name in adapter_modules:
         try:
@@ -283,7 +266,7 @@ def register_import_adapters() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _strip_sensitive_for_sentry(event: dict, _hint: dict) -> dict:
+def _strip_sensitive_for_sentry(event: Event, _hint: Hint) -> Event:
     """过滤可能泄露的敏感字段。"""
     sensitive = (
         "password",
@@ -344,16 +327,20 @@ async def _ensure_initial_admin() -> None:
 
             # 找是否已有管理员
             existing_admin = (
-                await session.execute(
-                    select(User)
-                    .join(UserRole, UserRole.user_id == User.id)
-                    .where(
-                        User.tenant_id == tenant.id,
-                        User.deleted_at.is_(None),
-                        UserRole.role_id == admin_role.id,
+                (
+                    await session.execute(
+                        select(User)
+                        .join(UserRole, UserRole.user_id == User.id)
+                        .where(
+                            User.tenant_id == tenant.id,
+                            User.deleted_at.is_(None),
+                            UserRole.role_id == admin_role.id,
+                        )
                     )
                 )
-            ).scalars().first()
+                .scalars()
+                .first()
+            )
             if existing_admin is not None:
                 log.info("initial_admin_exists")
                 return
@@ -367,7 +354,7 @@ async def _ensure_initial_admin() -> None:
                 display_name="Initial Admin",
                 status="active",
                 password_must_change=True,
-                password_changed_at=datetime.now(timezone.utc),
+                password_changed_at=datetime.now(UTC),
             )
             session.add(user)
             await session.flush()
@@ -403,7 +390,9 @@ def create_app() -> FastAPI:
 
     # ----- Limiter（slowapi）-----
     app.state.limiter = limiter
-    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+    # slowapi 的处理器签名是 (Request, RateLimitExceeded)，Starlette 声明要
+    # (Request, Exception)：属第三方签名不匹配（逆变位置），运行时正确。
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
 
     # ----- 中间件（注册顺序与执行顺序相反）-----
     # 内层（最后注册 → 最先执行）
@@ -442,9 +431,7 @@ def create_app() -> FastAPI:
         if not await check_redis_health():
             checks["redis"] = "error"
         overall = "ok" if all(v == "ok" for v in checks.values()) else "error"
-        status_code = (
-            status.HTTP_200_OK if overall == "ok" else status.HTTP_503_SERVICE_UNAVAILABLE
-        )
+        status_code = status.HTTP_200_OK if overall == "ok" else status.HTTP_503_SERVICE_UNAVAILABLE
         return JSONResponse(
             content={"status": overall, "checks": checks},
             status_code=status_code,
@@ -465,7 +452,9 @@ def create_app() -> FastAPI:
     app.include_router(notification_router)  # U07 站内通知 /api/notifications
     app.include_router(wecom_alert_router)  # U15 企微预警配置 /api/wecom/alert-config
     app.include_router(report_router)  # U08 发文进度看板 /api/reports/publish-progress
-    app.include_router(report_advanced_router)  # U14 报表进阶 /api/reports/{work-progress,targets,store-daily,production}
+    app.include_router(
+        report_advanced_router
+    )  # U14 报表进阶 /api/reports/{work-progress,targets,store-daily,production}
     app.include_router(bi_router)  # U17 BI 看板 /api/reports/bi
     app.include_router(report_export_router)  # U17 报表导出 /api/reports/{type}/export
     app.include_router(ai_router)  # U18 AI 决策建议 /api/ai

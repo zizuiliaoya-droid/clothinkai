@@ -35,12 +35,8 @@ class OrderAdjustmentRepository:
     def add(self, row: OrderAdjustment) -> None:
         self._s.add(row)
 
-    async def get_by_promotion(
-        self, promotion_id: UUID
-    ) -> OrderAdjustment | None:
-        stmt = select(OrderAdjustment).where(
-            OrderAdjustment.promotion_id == promotion_id
-        )
+    async def get_by_promotion(self, promotion_id: UUID) -> OrderAdjustment | None:
+        stmt = select(OrderAdjustment).where(OrderAdjustment.promotion_id == promotion_id)
         return (await self._s.execute(stmt)).scalar_one_or_none()
 
     async def exists_order_no(self, order_no: str) -> bool:
@@ -61,11 +57,7 @@ class OrderAdjustmentRepository:
         stmt = select(OrderAdjustment)
         if order_type is not None:
             stmt = stmt.where(OrderAdjustment.order_type == order_type)
-        stmt = (
-            stmt.order_by(OrderAdjustment.created_at.desc())
-            .limit(limit)
-            .offset(offset)
-        )
+        stmt = stmt.order_by(OrderAdjustment.created_at.desc()).limit(limit).offset(offset)
         return (await self._s.execute(stmt)).scalars().all()
 
 
@@ -99,11 +91,7 @@ class BalanceRecordRepository:
             stmt = stmt.where(BalanceRecord.record_date >= date_from)
         if date_to is not None:
             stmt = stmt.where(BalanceRecord.record_date <= date_to)
-        stmt = (
-            stmt.order_by(BalanceRecord.created_at.asc())
-            .limit(limit)
-            .offset(offset)
-        )
+        stmt = stmt.order_by(BalanceRecord.created_at.asc()).limit(limit).offset(offset)
         return (await self._s.execute(stmt)).scalars().all()
 
 

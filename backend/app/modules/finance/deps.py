@@ -24,12 +24,8 @@ def get_balance_service(session: SessionDep) -> BalanceService:
     return BalanceService(session)
 
 
-SettlementServiceDep = Annotated[
-    SettlementService, Depends(get_settlement_service)
-]
-OrderAdjustmentServiceDep = Annotated[
-    OrderAdjustmentService, Depends(get_order_adjustment_service)
-]
+SettlementServiceDep = Annotated[SettlementService, Depends(get_settlement_service)]
+OrderAdjustmentServiceDep = Annotated[OrderAdjustmentService, Depends(get_order_adjustment_service)]
 BalanceServiceDep = Annotated[BalanceService, Depends(get_balance_service)]
 
 

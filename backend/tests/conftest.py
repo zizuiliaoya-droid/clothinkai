@@ -8,7 +8,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import os
 from collections.abc import AsyncIterator
 from typing import Any
@@ -21,13 +20,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 # 预先导入所有模块的 ORM models，确保 Base.metadata 完整 —— 否则跨模块外键
 # （如 settlement.promotion_id → promotion.id / attachment.id）在 mapper 配置时
 # 报 NoReferencedTableError。app 启动靠 router 链式 import 全部 models，测试需显式补齐。
-import app.core.attachment  # noqa: F401, E402
-import app.modules.auth.models  # noqa: F401, E402
-import app.modules.blogger.models  # noqa: F401, E402
-import app.modules.finance.models  # noqa: F401, E402
-import app.modules.finance.order_adjustment_models  # noqa: F401, E402  (U16 order_adjustment/balance_record)
-import app.modules.product.models  # noqa: F401, E402
-import app.modules.promotion.models  # noqa: F401, E402
+import app.core.attachment
+import app.modules.auth.models
+import app.modules.blogger.models
+import app.modules.finance.models
+import app.modules.finance.order_adjustment_models
+import app.modules.product.models
+import app.modules.promotion.models
 
 # 测试用的 DB URL 通过环境变量注入；CI 由 docker-compose / pytest-postgresql 提供
 TEST_DATABASE_URL = os.getenv(
@@ -53,9 +52,7 @@ async def engine() -> AsyncIterator[Any]:
     """
     from sqlalchemy.pool import NullPool
 
-    eng = create_async_engine(
-        TEST_DATABASE_URL, echo=False, future=True, poolclass=NullPool
-    )
+    eng = create_async_engine(TEST_DATABASE_URL, echo=False, future=True, poolclass=NullPool)
     yield eng
     await eng.dispose()
 
@@ -86,6 +83,31 @@ async def session(engine: Any) -> AsyncIterator[AsyncSession]:
         if transaction.is_active:
             await transaction.rollback()
         await connection.close()
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _dispose_global_engines() -> AsyncIterator[None]:
+    """每个测试结束后 dispose ``app.core.db`` 的全局引擎。
+
+    上面的 ``engine`` fixture 用 NullPool 规避了跨事件循环复用连接的问题，但
+    **只覆盖走 fixture 的测试**。通过 ASGITransport 直接打 ``app.main.app`` 的
+    API 测试走的是模块级 ``engine_app`` / ``engine_bypass``，两者带真实连接池且
+    跨测试常驻。pytest-asyncio 每个测试新建事件循环（``asyncio_default_fixture_loop_scope
+    = "function"``），池中残留的 asyncpg 连接仍绑定在上一个已关闭的循环上，
+    下个测试复用即报::
+
+        RuntimeError: Task ... got Future ... attached to a different loop
+
+    表现为单跑通过、全量套件里失败的诡异用例。故每个测试结束统一回收全局池。
+    """
+    yield
+    from app.core.db import engine_app, engine_bypass
+
+    for eng in (engine_app, engine_bypass):
+        try:
+            await eng.dispose()
+        except Exception:  # teardown 阶段的清理失败不应掩盖用例本身的结果
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -121,9 +143,7 @@ async def admin_role(session: AsyncSession) -> Any:
 
     from app.modules.auth.models import Role
 
-    role = (
-        await session.execute(select(Role).where(Role.code == "admin"))
-    ).scalar_one_or_none()
+    role = (await session.execute(select(Role).where(Role.code == "admin"))).scalar_one_or_none()
     if role is None:
         role = Role(id=uuid4(), code="admin", name="管理员", is_system=True)
         session.add(role)
@@ -137,9 +157,7 @@ async def designer_role(session: AsyncSession) -> Any:
 
     from app.modules.auth.models import Role
 
-    role = (
-        await session.execute(select(Role).where(Role.code == "designer"))
-    ).scalar_one_or_none()
+    role = (await session.execute(select(Role).where(Role.code == "designer"))).scalar_one_or_none()
     if role is None:
         role = Role(id=uuid4(), code="designer", name="设计师", is_system=True)
         session.add(role)
@@ -176,9 +194,7 @@ async def factory(session: AsyncSession) -> Any:
             await session.flush()
             roles = kwargs.get("roles", [])
             for role in roles:
-                session.add(
-                    UserRole(tenant_id=tenant.id, user_id=user.id, role_id=role.id)
-                )
+                session.add(UserRole(tenant_id=tenant.id, user_id=user.id, role_id=role.id))
             await session.flush()
             return user
 
@@ -201,9 +217,7 @@ async def follower_role(session: AsyncSession) -> Any:
         await session.execute(select(Role).where(Role.code == "merchandiser"))
     ).scalar_one_or_none()
     if role is None:
-        role = Role(
-            id=uuid4(), code="merchandiser", name="跟单", is_system=True
-        )
+        role = Role(id=uuid4(), code="merchandiser", name="跟单", is_system=True)
         session.add(role)
         await session.flush()
     return role
@@ -215,9 +229,7 @@ async def finance_role(session: AsyncSession) -> Any:
 
     from app.modules.auth.models import Role
 
-    role = (
-        await session.execute(select(Role).where(Role.code == "finance"))
-    ).scalar_one_or_none()
+    role = (await session.execute(select(Role).where(Role.code == "finance"))).scalar_one_or_none()
     if role is None:
         role = Role(id=uuid4(), code="finance", name="财务", is_system=True)
         session.add(role)
@@ -232,9 +244,7 @@ async def pr_role(session: AsyncSession) -> Any:
 
     from app.modules.auth.models import Role
 
-    role = (
-        await session.execute(select(Role).where(Role.code == "pr"))
-    ).scalar_one_or_none()
+    role = (await session.execute(select(Role).where(Role.code == "pr"))).scalar_one_or_none()
     if role is None:
         role = Role(id=uuid4(), code="pr", name="PR", is_system=True)
         session.add(role)
@@ -254,16 +264,10 @@ async def product_factory(session: AsyncSession, tenant_a: Any) -> Any:
             self.default_tenant = default_tenant
 
         async def assign_role(self, user: Any, role: Any) -> None:
-            session.add(
-                UserRole(
-                    tenant_id=user.tenant_id, user_id=user.id, role_id=role.id
-                )
-            )
+            session.add(UserRole(tenant_id=user.tenant_id, user_id=user.id, role_id=role.id))
             await session.flush()
 
-        async def brand(
-            self, tenant: Any | None = None, **kw: Any
-        ) -> Brand:
+        async def brand(self, tenant: Any | None = None, **kw: Any) -> Brand:
             t = tenant or self.default_tenant
             tok = tenant_id_ctx.set(t.id)
             try:
@@ -279,9 +283,7 @@ async def product_factory(session: AsyncSession, tenant_a: Any) -> Any:
             finally:
                 tenant_id_ctx.reset(tok)
 
-        async def style(
-            self, tenant: Any | None = None, **kw: Any
-        ) -> Style:
+        async def style(self, tenant: Any | None = None, **kw: Any) -> Style:
             t = tenant or self.default_tenant
             tok = tenant_id_ctx.set(t.id)
             try:
@@ -374,9 +376,7 @@ async def blogger_factory(session: AsyncSession, tenant_a: Any) -> Any:
         def __init__(self, default_tenant: Any) -> None:
             self.default_tenant = default_tenant
 
-        async def blogger(
-            self, tenant: Any | None = None, **kw: Any
-        ) -> Blogger:
+        async def blogger(self, tenant: Any | None = None, **kw: Any) -> Blogger:
             from decimal import Decimal
 
             t = tenant or self.default_tenant
@@ -384,9 +384,7 @@ async def blogger_factory(session: AsyncSession, tenant_a: Any) -> Any:
             try:
                 b = Blogger(
                     tenant_id=t.id,
-                    xiaohongshu_id=kw.get(
-                        "xiaohongshu_id", f"XHS{uuid4().hex[:8]}"
-                    ),
+                    xiaohongshu_id=kw.get("xiaohongshu_id", f"XHS{uuid4().hex[:8]}"),
                     nickname=kw.get("nickname", "测试博主"),
                     platform=kw.get("platform", "小红书"),
                     wechat=kw.get("wechat"),
@@ -480,20 +478,14 @@ async def promotion_factory(session: AsyncSession, tenant_a: Any) -> Any:
                     quote_amount=kw.get("quote_amount", Decimal("500.00")),
                     cost_snapshot=kw.get("cost_snapshot"),
                     platform=kw.get("platform", "小红书"),
-                    cooperation_date=kw.get(
-                        "cooperation_date", _date(2026, 5, 26)
-                    ),
+                    cooperation_date=kw.get("cooperation_date", _date(2026, 5, 26)),
                     scheduled_publish_date=kw.get("scheduled_publish_date"),
                     actual_publish_date=kw.get("actual_publish_date"),
                     publish_url=kw.get("publish_url"),
                     note_title=kw.get("note_title"),
                     remark=kw.get("remark"),
-                    publish_status=kw.get(
-                        "publish_status", PublishStatus.UNPUBLISHED.value
-                    ),
-                    recall_status=kw.get(
-                        "recall_status", RecallStatus.NOT_RECALLED.value
-                    ),
+                    publish_status=kw.get("publish_status", PublishStatus.UNPUBLISHED.value),
+                    recall_status=kw.get("recall_status", RecallStatus.NOT_RECALLED.value),
                     settlement_status=kw.get(
                         "settlement_status",
                         SettlementStatus.NOT_REVIEWED.value,
@@ -552,9 +544,7 @@ async def attachment_factory(session: AsyncSession, tenant_a: Any) -> Any:
         def __init__(self, default_tenant: Any) -> None:
             self.default_tenant = default_tenant
 
-        async def attachment(
-            self, tenant: Any | None = None, **kw: Any
-        ) -> Attachment:
+        async def attachment(self, tenant: Any | None = None, **kw: Any) -> Attachment:
             t = tenant or self.default_tenant
             tok = tenant_id_ctx.set(t.id)
             try:
@@ -562,9 +552,7 @@ async def attachment_factory(session: AsyncSession, tenant_a: Any) -> Any:
                     id=kw.get("id", uuid4()),
                     tenant_id=t.id,
                     bucket=kw.get("bucket", "private"),
-                    r2_key=kw.get(
-                        "r2_key", f"{t.id}/settlement_proof/{uuid4().hex}/proof.jpg"
-                    ),
+                    r2_key=kw.get("r2_key", f"{t.id}/settlement_proof/{uuid4().hex}/proof.jpg"),
                     purpose=kw.get("purpose", "settlement_proof"),
                     filename=kw.get("filename", "proof.jpg"),
                     mime_type=kw.get("mime_type", "image/jpeg"),
@@ -616,8 +604,7 @@ async def settlement_factory(session: AsyncSession, tenant_a: Any) -> Any:
                 internal_code=f"DE{uuid4().hex[:12].upper()}",
                 style_code_snapshot=getattr(style, "style_code", "ST000"),
                 style_short_name_snapshot=(
-                    getattr(style, "short_name", None)
-                    or getattr(style, "style_name", "测试款式")
+                    getattr(style, "short_name", None) or getattr(style, "style_name", "测试款式")
                 ),
                 quote_amount=Decimal("500.00"),
                 platform="小红书",
@@ -661,16 +648,12 @@ async def settlement_factory(session: AsyncSession, tenant_a: Any) -> Any:
                     blogger_id=blogger.id,
                     style_id=style.id,
                     pr_id=kw.get("pr_id", pr.id if pr else None),
-                    settlement_no=kw.get(
-                        "settlement_no", f"TES{uuid4().hex[:12]}"
-                    ),
+                    settlement_no=kw.get("settlement_no", f"TES{uuid4().hex[:12]}"),
                     amount=kw.get("amount", Decimal("500.00")),
                     total_amount=kw.get("total_amount", Decimal("500.00")),
                     payment_amount=kw.get("payment_amount"),
                     payment_date=kw.get("payment_date"),
-                    payment_proof_attachment_id=kw.get(
-                        "payment_proof_attachment_id"
-                    ),
+                    payment_proof_attachment_id=kw.get("payment_proof_attachment_id"),
                     note_title=kw.get("note_title"),
                     remark=kw.get("remark"),
                     settlement_status=kw.get(
@@ -718,15 +701,15 @@ async def cross_unit_event_bus() -> AsyncIterator[Any]:
 # ---------------------------------------------------------------------------
 
 # 显式导入 importer ORM models（跨模块 FK mapper 配置完整性）
-import app.modules.importer.models  # noqa: F401, E402
+import app.modules.ai.models  # noqa: E402  (U18 ai_advice_log)
+import app.modules.collect.models  # noqa: E402  (U13 采集 5 表)
+import app.modules.credential.models  # noqa: E402  (U12 credential)
+import app.modules.importer.models  # noqa: E402
+import app.modules.product.bundle_models  # noqa: E402  (U17 bundle_product/bundle_item)
+import app.modules.report.user_preference_models  # noqa: E402  (U17 user_preference)
+import app.modules.report.work_progress_models  # noqa: E402  (U14 target_planning/store_daily)
+import app.modules.wecom.alert_models  # noqa: E402  (U15 wecom_alert_config/log)
 import app.modules.wecom.models  # noqa: F401, E402  (U07 wecom 5 表)
-import app.modules.credential.models  # noqa: F401, E402  (U12 credential)
-import app.modules.collect.models  # noqa: F401, E402  (U13 采集 5 表)
-import app.modules.report.work_progress_models  # noqa: F401, E402  (U14 target_planning/store_daily)
-import app.modules.report.user_preference_models  # noqa: F401, E402  (U17 user_preference)
-import app.modules.product.bundle_models  # noqa: F401, E402  (U17 bundle_product/bundle_item)
-import app.modules.ai.models  # noqa: F401, E402  (U18 ai_advice_log)
-import app.modules.wecom.alert_models  # noqa: F401, E402  (U15 wecom_alert_config/log)
 
 
 class FakeImportAdapter:
@@ -813,9 +796,7 @@ async def import_batch_factory(session: AsyncSession, tenant_a: Any) -> Any:
                     source=kw.get("source", "fake_source"),
                     file_hash=kw.get("file_hash", uuid4().hex),
                     original_filename=kw.get("original_filename", "test.csv"),
-                    file_r2_key=kw.get(
-                        "file_r2_key", f"imports/{t.id}/{uuid4()}/test.csv"
-                    ),
+                    file_r2_key=kw.get("file_r2_key", f"imports/{t.id}/{uuid4()}/test.csv"),
                     file_bucket=kw.get("file_bucket", "private"),
                     mapping_version=kw.get("mapping_version"),
                     status=kw.get("status", "processing"),

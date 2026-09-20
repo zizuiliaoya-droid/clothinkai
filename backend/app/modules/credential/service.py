@@ -10,7 +10,6 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -60,12 +59,8 @@ class CredentialService:
     # ------------------------------------------------------------------ #
     # helpers
     # ------------------------------------------------------------------ #
-    async def _require(
-        self, credential_id: UUID, *, for_update: bool = False
-    ) -> Credential:
-        cred = await self._repo.get_by_id(
-            credential_id, for_update=for_update
-        )
+    async def _require(self, credential_id: UUID, *, for_update: bool = False) -> Credential:
+        cred = await self._repo.get_by_id(credential_id, for_update=for_update)
         if cred is None:
             raise CredentialNotFound(f"凭据 {credential_id} 不存在")
         return cred
@@ -78,15 +73,11 @@ class CredentialService:
     # ------------------------------------------------------------------ #
     # create
     # ------------------------------------------------------------------ #
-    async def create(
-        self, payload: CredentialCreate, user: User
-    ) -> CredentialPublic:
+    async def create(self, payload: CredentialCreate, user: User) -> CredentialPublic:
         if not payload.privacy_consent:
             raise PrivacyConsentRequired()
 
-        ciphertext = encrypt_credential(
-            user.tenant_id, payload.password.get_secret_value()
-        )
+        ciphertext = encrypt_credential(user.tenant_id, payload.password.get_secret_value())
         cred = Credential(
             platform=payload.platform.value,
             username=payload.username,
@@ -268,10 +259,7 @@ class CredentialService:
         cred.last_failure_reason = error_reason
         cred.last_failure_at = datetime.now(UTC)
         notify_needed = False
-        if (
-            cred.consecutive_failures >= CONSECUTIVE_FAILURE_THRESHOLD
-            and cred.status != "paused"
-        ):
+        if cred.consecutive_failures >= CONSECUTIVE_FAILURE_THRESHOLD and cred.status != "paused":
             cred.status = "paused"
             credential_auto_paused_total.labels(cred.platform).inc()
             notify_needed = True
@@ -282,9 +270,7 @@ class CredentialService:
                 await self.notify_failure(credential_id, error_reason)
         return notify_needed
 
-    async def notify_failure(
-        self, credential_id: UUID, error_reason: str
-    ) -> None:
+    async def notify_failure(self, credential_id: UUID, error_reason: str) -> None:
         """在业务事务提交后发送自动暂停通知，失败不回滚状态。"""
         try:
             cred = await self._require(credential_id)
@@ -300,15 +286,13 @@ class CredentialService:
                 type=NotificationType.CREDENTIAL_FAILURE.value,
             )
             await self._session.commit()
-        except Exception:  # noqa: BLE001 通知失败不影响凭据状态
+        except Exception:
             log.warning(
                 "credential_failure_notify_failed credential_id=%s",
                 str(credential_id),
             )
 
-    async def report_success(
-        self, credential_id: UUID, *, commit: bool = True
-    ) -> None:
+    async def report_success(self, credential_id: UUID, *, commit: bool = True) -> None:
         cred = await self._require(credential_id, for_update=True)
         cred.consecutive_failures = 0
         await self._session.flush()

@@ -110,8 +110,7 @@ settlement_state_transitions_total: Counter = Counter(
 
 settlement_created_via_event_total: Counter = Counter(
     "settlement_created_via_event_total",
-    "Total settlement creation outcomes via SettlementRequested handler "
-    "(FB1+FB3+FB6 三重幂等)",
+    "Total settlement creation outcomes via SettlementRequested handler " "(FB1+FB3+FB6 三重幂等)",
     labelnames=("result",),  # created / duplicate_skipped / error
 )
 

@@ -12,9 +12,7 @@ class TestCrawlerApiContract:
     async def test_poll_requires_worker_token(self) -> None:
         from app.main import app
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.post("/api/crawler/tasks/poll")
         # 无 X-Worker-Token → 401
         assert resp.status_code == 401
@@ -22,9 +20,7 @@ class TestCrawlerApiContract:
     async def test_worker_token_admin_requires_auth(self) -> None:
         from app.main import app
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             list_resp = await ac.get("/api/crawler/worker-tokens/")
             issue_resp = await ac.post(
                 "/api/crawler/worker-tokens/",
@@ -36,18 +32,14 @@ class TestCrawlerApiContract:
     async def test_data_quality_summary_requires_auth(self) -> None:
         from app.main import app
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.get("/api/data-quality/summary")
         assert resp.status_code == 401
 
     async def test_openapi_exposes_crawler_endpoints(self) -> None:
         from app.main import app
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.get("/api/openapi.json")
         assert resp.status_code == 200
         paths = resp.json().get("paths", {})
@@ -56,13 +48,11 @@ class TestCrawlerApiContract:
         assert "/api/crawler/tasks/{task_id}/result" in paths
         assert "/api/crawler/worker-tokens/" in paths
         worker_token_get = paths["/api/crawler/worker-tokens/"]["get"]
-        item_ref = worker_token_get["responses"]["200"]["content"][
-            "application/json"
-        ]["schema"]["items"]["$ref"]
+        item_ref = worker_token_get["responses"]["200"]["content"]["application/json"]["schema"][
+            "items"
+        ]["$ref"]
         schema_name = item_ref.rsplit("/", 1)[-1]
-        public_fields = set(
-            resp.json()["components"]["schemas"][schema_name]["properties"]
-        )
+        public_fields = set(resp.json()["components"]["schemas"][schema_name]["properties"])
         assert "token" not in public_fields
         assert "token_hash" not in public_fields
         assert "/api/data-quality/summary" in paths

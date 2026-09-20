@@ -37,7 +37,8 @@ async def test_daily_summary_as_of_smoke_perf(
         statuses = ["待核查", "待付款", "待财务付款", "已付款", "已驳回"]
         for i in range(2000):
             await settlement_factory.settlement(
-                style=style, blogger=blogger,
+                style=style,
+                blogger=blogger,
                 settlement_status=statuses[i % 5],
                 total_amount=Decimal("100.00"),
             )
@@ -47,9 +48,7 @@ async def test_daily_summary_as_of_smoke_perf(
         max_ms = 0.0
         for _ in range(5):
             start = time.perf_counter()
-            await repo.daily_summary_as_of(
-                tenant_id=tenant_a.id, date_value=get_today()
-            )
+            await repo.daily_summary_as_of(tenant_id=tenant_a.id, date_value=get_today())
             max_ms = max(max_ms, (time.perf_counter() - start) * 1000)
         assert max_ms < 1000, f"as_of summary perf: {max_ms:.0f}ms"
     finally:
@@ -70,9 +69,10 @@ async def test_daily_summary_activity_smoke_perf(
     try:
         style = await product_factory.style()
         blogger = await blogger_factory.blogger()
-        for i in range(2000):
+        for _i in range(2000):
             await settlement_factory.settlement(
-                style=style, blogger=blogger,
+                style=style,
+                blogger=blogger,
                 settlement_status="待核查",
                 total_amount=Decimal("100.00"),
             )
@@ -82,9 +82,7 @@ async def test_daily_summary_activity_smoke_perf(
         max_ms = 0.0
         for _ in range(5):
             start = time.perf_counter()
-            await repo.daily_summary_activity(
-                tenant_id=tenant_a.id, date_value=get_today()
-            )
+            await repo.daily_summary_activity(tenant_id=tenant_a.id, date_value=get_today())
             max_ms = max(max_ms, (time.perf_counter() - start) * 1000)
         # activity 含 audit JOIN，阈值放宽到 1.5s
         assert max_ms < 1500, f"activity summary perf: {max_ms:.0f}ms"

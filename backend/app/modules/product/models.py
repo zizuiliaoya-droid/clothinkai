@@ -25,7 +25,6 @@ from uuid import UUID
 
 from sqlalchemy import (
     CheckConstraint,
-    DateTime,
     ForeignKey,
     Index,
     Integer,
@@ -41,7 +40,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.core.db import TenantScopedModel
 
 if TYPE_CHECKING:
-    from datetime import datetime
+    pass
 
 
 # ---------------------------------------------------------------------------
@@ -56,9 +55,7 @@ class Brand(TenantScopedModel):
 
     brand_code: Mapped[str] = mapped_column(String(32), nullable=False)
     brand_name: Mapped[str] = mapped_column(String(128), nullable=False)
-    is_active: Mapped[bool] = mapped_column(
-        nullable=False, server_default=text("true")
-    )
+    is_active: Mapped[bool] = mapped_column(nullable=False, server_default=text("true"))
 
     __table_args__ = (
         Index(
@@ -84,15 +81,12 @@ class Style(TenantScopedModel):
     style_code: Mapped[str] = mapped_column(String(64), nullable=False)
     style_name: Mapped[str] = mapped_column(String(255), nullable=False)
     short_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    qianniu_product_id: Mapped[str | None] = mapped_column(
-        String(64), nullable=True
-    )
-    """千牛（生意参谋）商品ID：用于把投产/BI 的千牛日报数据按此 ID 关联到款式。"""
-    qianniu_product_id: Mapped[str | None] = mapped_column(
-        String(64), nullable=True
-    )
-    """千牛（生意参谋）平台商品ID。用于投产报表/BI 按此 ID 关联千牛支付数据。
-    一个货号（款式）对应一个千牛商品ID，其下可有多个 SKU。"""
+    qianniu_product_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    """千牛（生意参谋）平台商品ID。
+
+    用于把投产报表 / BI 的千牛日报数据按此 ID 关联到款式。
+    一个货号（款式）对应一个千牛商品ID，其下可有多个 SKU。
+    """
     brand_id: Mapped[UUID | None] = mapped_column(
         PGUUID(as_uuid=True),
         ForeignKey("brand.id", ondelete="SET NULL"),
@@ -107,9 +101,7 @@ class Style(TenantScopedModel):
     tag_color: Mapped[list[str]] = mapped_column(
         JSONB, nullable=False, server_default=text("'[]'::jsonb")
     )
-    main_image_key: Mapped[str | None] = mapped_column(
-        String(512), nullable=True
-    )
+    main_image_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
     """R2 对象键（main_image），格式如 ``{tenant_id}/styles/{style_id}/main/{filename}``。
 
     业务通过 ``AttachmentService.get_public_url(key)`` 解析为公开 URL。
@@ -123,12 +115,8 @@ class Style(TenantScopedModel):
     design_status: Mapped[str] = mapped_column(
         String(16), nullable=False, server_default=text("'大货'")
     )
-    is_active: Mapped[bool] = mapped_column(
-        nullable=False, server_default=text("true")
-    )
-    is_deleted: Mapped[bool] = mapped_column(
-        nullable=False, server_default=text("false")
-    )
+    is_active: Mapped[bool] = mapped_column(nullable=False, server_default=text("true"))
+    is_deleted: Mapped[bool] = mapped_column(nullable=False, server_default=text("false"))
 
     __table_args__ = (
         # 部分唯一索引：软删后 style_code 释放
@@ -172,28 +160,16 @@ class Sku(TenantScopedModel):
     sku_code: Mapped[str] = mapped_column(String(64), nullable=False)
     color: Mapped[str] = mapped_column(String(64), nullable=False)
     size: Mapped[str] = mapped_column(String(32), nullable=False)
-    cost_price: Mapped[Decimal | None] = mapped_column(
-        Numeric(10, 2), nullable=True
-    )
-    purchase_price: Mapped[Decimal | None] = mapped_column(
-        Numeric(10, 2), nullable=True
-    )
-    base_price: Mapped[Decimal | None] = mapped_column(
-        Numeric(10, 2), nullable=True
-    )
-    tag_price: Mapped[Decimal | None] = mapped_column(
-        Numeric(10, 2), nullable=True
-    )
+    cost_price: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+    purchase_price: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+    base_price: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+    tag_price: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
     """吊牌价（U10a 跟单填写，S10）。U02 阶段为空，migration 013 追加列。"""
     sourcing_type: Mapped[str] = mapped_column(
         String(8), nullable=False, server_default=text("'自产'")
     )
-    is_active: Mapped[bool] = mapped_column(
-        nullable=False, server_default=text("true")
-    )
-    is_deleted: Mapped[bool] = mapped_column(
-        nullable=False, server_default=text("false")
-    )
+    is_active: Mapped[bool] = mapped_column(nullable=False, server_default=text("true"))
+    is_deleted: Mapped[bool] = mapped_column(nullable=False, server_default=text("false"))
 
     __table_args__ = (
         Index(
@@ -248,15 +224,9 @@ class StyleDetailImage(TenantScopedModel):
     )
     attachment_key: Mapped[str] = mapped_column(String(512), nullable=False)
     """R2 对象键，格式 ``{tenant_id}/styles/{style_id}/details/{sort_order}/{filename}``。"""
-    sort_order: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default=text("0")
-    )
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
 
-    __table_args__ = (
-        Index(
-            "idx_sdi_style", "tenant_id", "style_id", "sort_order"
-        ),
-    )
+    __table_args__ = (Index("idx_sdi_style", "tenant_id", "style_id", "sort_order"),)
 
 
 __all__ = [

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import func
@@ -26,9 +27,7 @@ class TargetPlanningService:
         self._repo = TargetPlanningRepository(session)
         self._audit = AuditService(session)
 
-    async def set_target(
-        self, payload: TargetCreate, user: User
-    ) -> TargetPlanning:
+    async def set_target(self, payload: TargetCreate, user: User) -> TargetPlanning:
         stmt = (
             pg_insert(TargetPlanning)
             .values(
@@ -40,7 +39,10 @@ class TargetPlanningService:
             )
             .on_conflict_do_update(
                 index_elements=[
-                    "tenant_id", "pr_id", "style_id", "period_month",
+                    "tenant_id",
+                    "pr_id",
+                    "style_id",
+                    "period_month",
                 ],
                 set_={"min_target": payload.min_target, "updated_at": func.now()},
             )
@@ -63,13 +65,9 @@ class TargetPlanningService:
         await self._session.commit()
         return target
 
-    async def list_with_actuals(
-        self, tenant_id: UUID, month: str
-    ) -> list[TargetWithActual]:
+    async def list_with_actuals(self, tenant_id: UUID, month: str) -> list[TargetWithActual]:
         with report_query_duration_seconds.labels("target").time():
-            rows = await self._repo.list_with_actuals(
-                tenant_id=tenant_id, month=month
-            )
+            rows = await self._repo.list_with_actuals(tenant_id=tenant_id, month=month)
         return [self._to_row(r) for r in rows]
 
     @staticmethod

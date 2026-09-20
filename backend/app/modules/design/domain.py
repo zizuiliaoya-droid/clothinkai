@@ -8,23 +8,19 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+from app.modules.design.enums import REJECT_PREVIOUS, TERMINAL_STATUSES
 from app.modules.design.enums import DesignStatus as DS
-from app.modules.design.enums import TERMINAL_STATUSES, REJECT_PREVIOUS
 
 # 状态 → (角色 → 可执行动作) 矩阵（available_actions）
 _STATUS_ACTIONS: dict[str, dict[str, tuple[str, ...]]] = {
     DS.DESIGNING.value: {"designer": ("submit_fabric",)},
-    DS.PATTERNING.value: {
-        "pattern_maker": ("submit_pattern", "submit_grading", "reject")
-    },
+    DS.PATTERNING.value: {"pattern_maker": ("submit_pattern", "submit_grading", "reject")},
     DS.CRAFTING.value: {"merchandiser": ("submit_craft", "reject")},
     DS.COMPLETING.value: {
         "design_assistant": ("complete_fabric", "submit_costing"),
         "merchandiser": ("reject",),
     },
-    DS.PRICING.value: {
-        "merchandiser": ("set_tag_price", "confirm_price", "reject")
-    },
+    DS.PRICING.value: {"merchandiser": ("set_tag_price", "confirm_price", "reject")},
 }
 
 
