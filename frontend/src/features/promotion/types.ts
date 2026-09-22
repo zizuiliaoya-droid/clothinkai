@@ -167,4 +167,8 @@ export interface PromotionListFilters {
   is_active?: boolean;
   only_dual_platform?: boolean;
   is_hit?: boolean;
+  /** source_extra['打单地址'] 是否已填（仓库打单用，服务端筛选）。 */
+  has_print_address?: boolean;
+  /** source_extra['发货单号'] 是否已填（已打单 / 待打单，服务端筛选）。 */
+  has_waybill?: boolean;
 }

@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 import builtins
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
@@ -136,6 +136,33 @@ class StyleRepository:
         )
         items = (await self._session.execute(stmt)).scalars().all()
         return items, total
+
+    # ----------------------- 套装（同千牛ID 分组） ----------------------- #
+
+    async def suite_members_by_platform_id(
+        self, platform_ids: Collection[str]
+    ) -> dict[str, builtins.list[str]]:
+        """按千牛商品ID 聚合同组款名，组内按货号升序。
+
+        店铺里一个千牛商品ID 就是一个销售链接，因此多个款式共用同一个千牛ID
+        即构成一个套装。这里包含已停用款（套装的构成是既成事实，不随启停变化），
+        只排除软删。返回 ``{千牛ID: [款名, ...]}``，供上层拼接套装名称。
+        """
+        ids = [pid for pid in dict.fromkeys(platform_ids) if pid]
+        if not ids:
+            return {}
+        stmt = (
+            select(Style.qianniu_product_id, Style.style_name)
+            .where(
+                Style.is_deleted.is_(False),
+                Style.qianniu_product_id.in_(ids),
+            )
+            .order_by(Style.qianniu_product_id, Style.style_code)
+        )
+        grouped: dict[str, builtins.list[str]] = {}
+        for platform_id, style_name in (await self._session.execute(stmt)).all():
+            grouped.setdefault(platform_id, []).append(style_name)
+        return grouped
 
     # ----------------------- match (BR-U02-50/51) ----------------------- #
 
@@ -271,6 +298,7 @@ class SkuRepository:
                 Sku.cost_price,
                 Sku.purchase_price,
                 Sku.tag_price,
+                Sku.sourcing_type,
                 Sku.is_active,
                 Style.id.label("style_id"),
                 Style.style_code,

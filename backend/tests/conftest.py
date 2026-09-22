@@ -292,6 +292,7 @@ async def product_factory(session: AsyncSession, tenant_a: Any) -> Any:
                     style_code=kw.get("style_code", f"ST{uuid4().hex[:6]}"),
                     style_name=kw.get("style_name", "测试款式"),
                     short_name=kw.get("short_name"),
+                    qianniu_product_id=kw.get("qianniu_product_id"),
                     brand_id=kw.get("brand_id"),
                     category=kw.get("category", "连衣裙"),
                     season=kw.get("season"),
@@ -492,6 +493,8 @@ async def promotion_factory(session: AsyncSession, tenant_a: Any) -> Any:
                     ),
                     is_active=kw.get("is_active", True),
                     like_count=kw.get("like_count"),
+                    # 列 NOT NULL + server_default '{}'，显式传 None 会违反约束
+                    source_extra=kw.get("source_extra") or {},
                 )
                 session.add(p)
                 await session.flush()

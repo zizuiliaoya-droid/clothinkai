@@ -311,6 +311,8 @@ class PromotionListFilters(BaseModel):
     is_active: bool | None = True
     only_dual_platform: bool = False
     is_hit: bool | None = None
+    has_print_address: bool | None = None
+    has_waybill: bool | None = None
 
 
 __all__ = [

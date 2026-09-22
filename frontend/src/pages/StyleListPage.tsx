@@ -9,6 +9,7 @@ import {
   Space,
   Table,
   Tag,
+  Tooltip,
   Typography,
   Upload,
   message,
@@ -100,9 +101,14 @@ export function StyleListPage() {
     queryKey: ["dict-items", "season"],
     queryFn: () => listDictItems("season"),
   });
+  const { data: colors } = useQuery({
+    queryKey: ["dict-items", "color"],
+    queryFn: () => listDictItems("color"),
+  });
 
   const categoryOptions = (categories ?? []).map((c) => ({ label: c.value, value: c.value }));
   const seasonOptions = (seasons ?? []).map((s) => ({ label: s.value, value: s.value }));
+  const colorOptions = (colors ?? []).map((c) => ({ label: c.value, value: c.value }));
   const brandOptions =
     brands?.items.map((b) => ({ label: b.brand_name, value: b.id })) ?? [];
 
@@ -190,6 +196,7 @@ export function StyleListPage() {
       category: record.category,
       season: record.season,
       gender: record.gender as StyleCreate["gender"],
+      tag_color: record.tag_color ?? [],
       remark: record.remark,
     });
     setOpen(true);
@@ -211,8 +218,40 @@ export function StyleListPage() {
     { title: "货号", dataIndex: "style_code", width: 140, fixed: "left" },
     { title: "款名", dataIndex: "style_name" },
     { title: "千牛商品ID", dataIndex: "qianniu_product_id", width: 130, render: (v) => v || "—" },
+    {
+      title: "套装名称",
+      dataIndex: "suite_name",
+      width: 200,
+      render: (v: string | null) =>
+        v ? (
+          <Tooltip title={v}>
+            <Tag color="blue" style={{ maxWidth: 184, overflow: "hidden", textOverflow: "ellipsis" }}>
+              {v}
+            </Tag>
+          </Tooltip>
+        ) : (
+          <Typography.Text type="secondary">单件</Typography.Text>
+        ),
+    },
     { title: "类目", dataIndex: "category", width: 90 },
     { title: "季节", dataIndex: "season", width: 70, render: (v) => v || "—" },
+    {
+      title: "颜色明细",
+      dataIndex: "tag_color",
+      width: 180,
+      render: (v: string[] | null) =>
+        v && v.length > 0 ? (
+          <Space size={[0, 4]} wrap>
+            {v.map((c) => (
+              <Tag key={c} style={{ marginInlineEnd: 4 }}>
+                {c}
+              </Tag>
+            ))}
+          </Space>
+        ) : (
+          "—"
+        ),
+    },
     {
       title: "状态",
       dataIndex: "is_active",
@@ -305,6 +344,7 @@ export function StyleListPage() {
         loading={isLoading}
         columns={columns}
         dataSource={data?.items ?? []}
+        scroll={{ x: 1500 }}
         pagination={{
           current: data?.page ?? 1,
           pageSize: data?.page_size ?? 10,
@@ -328,7 +368,11 @@ export function StyleListPage() {
         <Form
           form={form}
           layout="vertical"
-          onFinish={(v) => saveMutation.mutate(v)}
+          onFinish={(v) =>
+            // 多选清空后 antd 给 undefined，axios 会整个省掉该字段 →
+            // 后端 PATCH 语义视为"未修改"，颜色清不掉。这里显式归一为空数组。
+            saveMutation.mutate({ ...v, tag_color: v.tag_color ?? [] })
+          }
           style={{ marginTop: 16 }}
         >
           <Form.Item
@@ -345,8 +389,12 @@ export function StyleListPage() {
           >
             <Input placeholder="款式名称" />
           </Form.Item>
-          <Form.Item name="qianniu_product_id" label="千牛商品ID">
-            <Input placeholder="生意参谋商品ID（用于关联投产数据，可选）" allowClear />
+          <Form.Item
+            name="qianniu_product_id"
+            label="千牛商品ID"
+            extra="用于关联投产数据。多个款式填相同的千牛ID 即视为一个套装，套装名称自动按货号顺序拼接款名。"
+          >
+            <Input placeholder="生意参谋商品ID（可选）" allowClear />
           </Form.Item>
           <Form.Item label="款式主图">
             <Space align="start" size="middle" wrap>
@@ -432,6 +480,19 @@ export function StyleListPage() {
               />
             </Form.Item>
           </Space>
+          <Form.Item
+            name="tag_color"
+            label="颜色明细"
+            extra="该款实际生产的颜色，可多选。颜色值在上方「管理字典」→「颜色」中维护。"
+          >
+            <Select
+              mode="multiple"
+              allowClear
+              placeholder="选择颜色（可多选）"
+              options={colorOptions}
+              notFoundContent="暂无颜色，请先在「管理字典」中添加"
+            />
+          </Form.Item>
           <Form.Item name="remark" label="备注">
             <Input.TextArea rows={2} placeholder="备注（可选）" />
           </Form.Item>

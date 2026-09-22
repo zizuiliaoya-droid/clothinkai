@@ -563,6 +563,8 @@ class PromotionService:
             only_dual_platform=filters.only_dual_platform,
             is_hit=filters.is_hit,
             hit_threshold=HIT_THRESHOLD_LIKE_COUNT,
+            has_print_address=filters.has_print_address,
+            has_waybill=filters.has_waybill,
         )
 
         rows, total = await self._repo.list_with_cte(

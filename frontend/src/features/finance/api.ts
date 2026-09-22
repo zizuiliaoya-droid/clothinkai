@@ -150,18 +150,38 @@ import type {
   BalanceRecord,
   BrushingCreate,
   OrderAdjustment,
+  OrderAdjustmentFilters,
+  OrderAdjustmentPage,
 } from "./types";
 
-export async function listOrderAdjustments(params: {
-  order_type?: string;
-  limit?: number;
-  offset?: number;
-} = {}): Promise<OrderAdjustment[]> {
-  const resp = await apiClient.get<OrderAdjustment[]>(
+export async function listOrderAdjustments(
+  params: OrderAdjustmentFilters = {},
+): Promise<OrderAdjustmentPage> {
+  const resp = await apiClient.get<OrderAdjustmentPage>(
     "/api/finance/order-adjustments",
     { params }
   );
   return resp.data;
+}
+
+/** 上传博主收款码（后端代传到私有桶）。 */
+export async function uploadOrderPaymentQr(
+  rowId: string,
+  file: File,
+): Promise<OrderAdjustment> {
+  const body = new FormData();
+  body.append("image", file, file.name);
+  const resp = await apiClient.post<OrderAdjustment>(
+    `/api/finance/order-adjustments/${rowId}/payment-qr/upload`,
+    body,
+  );
+  return resp.data;
+}
+
+export async function removeOrderPaymentQr(rowId: string): Promise<void> {
+  await apiClient.delete(
+    `/api/finance/order-adjustments/${rowId}/payment-qr`,
+  );
 }
 
 export async function createBrushing(

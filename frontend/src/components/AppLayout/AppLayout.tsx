@@ -119,8 +119,10 @@ export function AppLayout() {
       label: "财务管理",
       children: [
         { key: "/settlements", label: <Link to="/settlements">财务结款</Link> },
-        { key: "/tao-orders", label: <Link to="/tao-orders">拍单</Link> },
-        { key: "/brush-orders", label: <Link to="/brush-orders">刷单</Link> },
+        {
+          key: "/order-adjustments",
+          label: <Link to="/order-adjustments">拍单 / 刷单</Link>,
+        },
         { key: "/balance", label: <Link to="/balance">余额核对</Link> },
       ],
     },

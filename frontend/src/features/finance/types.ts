@@ -190,11 +190,38 @@ export interface OrderAdjustment {
   style_name: string | null;
   blogger_identifier: string | null;
   amount: string;
+  payment_amount: string | null;
+  payment_date: string | null;
   exclude_from_roi: boolean;
   status: string;
   promotion_id: string | null;
   remark: string | null;
+  payment_qr_attachment_id: string | null;
+  /** 收款码短时签名 URL（私有桶，附件上传完成后才有值）。 */
+  payment_qr_signed_url: string | null;
   duplicate: boolean;
+}
+
+export interface OrderAdjustmentPage {
+  items: OrderAdjustment[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface OrderAdjustmentFilters {
+  page?: number;
+  page_size?: number;
+  order_type?: string;
+  status?: string;
+  keyword?: string;
+  style_id?: string;
+  order_date_from?: string;
+  order_date_to?: string;
+  amount_min?: number;
+  amount_max?: number;
+  exclude_from_roi?: boolean;
+  has_payment_qr?: boolean;
 }
 
 export interface BrushingCreate {

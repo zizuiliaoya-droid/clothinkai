@@ -157,8 +157,53 @@ ALLOWED_PURPOSES: frozenset[str] = frozenset(
     {
         "settlement_proof",  # U05 付款截图（FB4）
         "promotion_payment_qr",  # 站外推广博主收款码（私有）
+        "order_adjustment_payment_qr",  # 刷单/拍单博主收款码（私有）
     }
 )
+
+
+# ---------------------------------------------------------------------------
+# 图片上传载荷校验
+# ---------------------------------------------------------------------------
+
+
+IMAGE_MIME_SIGNATURES: dict[str, tuple[bytes, ...]] = {
+    "image/jpeg": (b"\xff\xd8\xff",),
+    "image/png": (b"\x89PNG\r\n\x1a\n",),
+}
+"""图片格式的魔数前缀。WebP 需要校验偏移位置，单独处理。"""
+
+
+def check_image_payload(
+    *,
+    data: bytes,
+    mime_type: str | None,
+    filename: str | None,
+    max_bytes: int,
+    label: str = "图片",
+) -> str | None:
+    """校验图片上传载荷，通过返回 ``None``，否则返回面向用户的失败原因。
+
+    只声明 MIME 是不够的 —— 必须核对魔数，否则任意文件改个扩展名就能当图片存进来。
+    这里返回字符串而不是抛异常，好让各模块包装成自己的领域异常。
+    """
+    allowed = {"image/jpeg", "image/png", "image/webp"}
+    if mime_type not in allowed:
+        return f"{label}仅支持 JPG、PNG、WebP 格式"
+    if not data:
+        return f"{label}文件不能为空"
+    if len(data) > max_bytes:
+        return f"{label}文件不能超过 {max_bytes // (1024 * 1024)}MB"
+    if filename is not None and len(filename) > 255:
+        return f"{label}文件名不能超过 255 个字符"
+
+    if mime_type == "image/webp":
+        valid = len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP"
+    else:
+        valid = any(data.startswith(sig) for sig in IMAGE_MIME_SIGNATURES[mime_type])
+    if not valid:
+        return f"{label}内容与声明的格式不一致"
+    return None
 
 
 # ---------------------------------------------------------------------------

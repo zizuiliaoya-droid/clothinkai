@@ -23,6 +23,7 @@ from app.modules.promotion.exceptions import (
 )
 from app.modules.promotion.schemas import (
     PromotionCreate,
+    PromotionListFilters,
     PromotionUpdate,
 )
 from app.modules.promotion.service import PromotionService
@@ -364,5 +365,167 @@ class TestUpdatePromotion:
                     PromotionUpdate(remark="x"),
                     user,
                 )
+        finally:
+            tenant_id_ctx.reset(token)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+class TestWarehouseFilters:
+    """仓库打单的服务端筛选（source_extra 打单地址 / 发货单号）。
+
+    回归用户反馈「仓库打单页每次加载都很慢」：原实现拉一页 100 条推广后在浏览器里
+    过滤打单地址，既慢又会漏掉第 101 条以后的打单单。筛选必须落在服务端。
+    """
+
+    async def _seed(
+        self,
+        *,
+        factory: Any,
+        tenant_a: Any,
+        admin_role: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> Any:
+        user = await factory.user(tenant_a, roles=[admin_role])
+        style = await product_factory.style()
+        blogger = await blogger_factory.blogger()
+        # 1) 有地址、无单号 → 待打单
+        await promotion_factory.promotion(
+            style=style,
+            blogger=blogger,
+            pr=user,
+            internal_code="WH_PENDING",
+            source_extra={"打单地址": "浙江省杭州市某路 1 号"},
+        )
+        # 2) 有地址、有单号 → 已打单
+        await promotion_factory.promotion(
+            style=style,
+            blogger=blogger,
+            pr=user,
+            internal_code="WH_DONE",
+            source_extra={"打单地址": "广东省广州市某路 2 号", "发货单号": "SF123456"},
+        )
+        # 3) 无地址 → 不该出现在仓库打单页
+        await promotion_factory.promotion(
+            style=style,
+            blogger=blogger,
+            pr=user,
+            internal_code="WH_NO_ADDR",
+            source_extra={},
+        )
+        # 4) 地址只有空白 → 等同于没填
+        await promotion_factory.promotion(
+            style=style,
+            blogger=blogger,
+            pr=user,
+            internal_code="WH_BLANK_ADDR",
+            source_extra={"打单地址": "   "},
+        )
+        return user
+
+    async def test_has_print_address_excludes_blank_and_missing(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            user = await self._seed(
+                factory=factory,
+                tenant_a=tenant_a,
+                admin_role=admin_role,
+                product_factory=product_factory,
+                blogger_factory=blogger_factory,
+                promotion_factory=promotion_factory,
+            )
+            svc = PromotionService(session)
+            page = await svc.list_promotions(
+                filters=PromotionListFilters(has_print_address=True),
+                page=1,
+                page_size=50,
+                user=user,
+            )
+            codes = {p.internal_code for p in page.items}
+            assert codes == {"WH_PENDING", "WH_DONE"}
+            assert page.total == 2
+        finally:
+            tenant_id_ctx.reset(token)
+
+    async def test_pending_and_done_buckets(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            user = await self._seed(
+                factory=factory,
+                tenant_a=tenant_a,
+                admin_role=admin_role,
+                product_factory=product_factory,
+                blogger_factory=blogger_factory,
+                promotion_factory=promotion_factory,
+            )
+            svc = PromotionService(session)
+
+            pending = await svc.list_promotions(
+                filters=PromotionListFilters(has_print_address=True, has_waybill=False),
+                page=1,
+                page_size=50,
+                user=user,
+            )
+            assert {p.internal_code for p in pending.items} == {"WH_PENDING"}
+
+            done = await svc.list_promotions(
+                filters=PromotionListFilters(has_print_address=True, has_waybill=True),
+                page=1,
+                page_size=50,
+                user=user,
+            )
+            assert {p.internal_code for p in done.items} == {"WH_DONE"}
+        finally:
+            tenant_id_ctx.reset(token)
+
+    async def test_filters_absent_returns_everything(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        """不传这两个筛选时行为不变（其它页面不受影响）。"""
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            user = await self._seed(
+                factory=factory,
+                tenant_a=tenant_a,
+                admin_role=admin_role,
+                product_factory=product_factory,
+                blogger_factory=blogger_factory,
+                promotion_factory=promotion_factory,
+            )
+            svc = PromotionService(session)
+            page = await svc.list_promotions(
+                filters=PromotionListFilters(),
+                page=1,
+                page_size=50,
+                user=user,
+            )
+            assert page.total == 4
         finally:
             tenant_id_ctx.reset(token)
