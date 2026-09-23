@@ -332,3 +332,130 @@ class TestListStyles:
             assert page.total == 25
         finally:
             tenant_id_ctx.reset(token)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+class TestSuiteName:
+    """套装名称（方案 A）：同千牛商品ID 的款式构成一个套装。
+
+    店铺里一个千牛商品ID 就是一个销售链接，所以共用千牛ID 即同一个销售单元。
+    套装名称按货号升序拼接款名，套装内每一行拿到的名称必须完全一致。
+    """
+
+    async def test_shared_platform_id_forms_suite(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
+    ) -> None:
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            await product_factory.style(
+                style_code="SUITE_B",
+                style_name="卡其毛衣马甲",
+                qianniu_product_id="1074568657697",
+            )
+            await product_factory.style(
+                style_code="SUITE_A",
+                style_name="木耳边打底衫",
+                qianniu_product_id="1074568657697",
+            )
+            user = await factory.user(tenant_a, roles=[admin_role])
+            svc = StyleService(session)
+
+            page = await svc.list_styles(
+                filters=StyleListFilters(keyword="SUITE_"),
+                page=1,
+                page_size=50,
+                user=user,
+            )
+            names = {i.style_code: i.suite_name for i in page.items}
+            assert len(names) == 2
+            # 按货号升序 → SUITE_A 的款名在前；两行取到同一个套装名
+            assert names["SUITE_A"] == "木耳边打底衫+卡其毛衣马甲"
+            assert names["SUITE_B"] == "木耳边打底衫+卡其毛衣马甲"
+        finally:
+            tenant_id_ctx.reset(token)
+
+    async def test_single_style_has_no_suite_name(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
+    ) -> None:
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            await product_factory.style(
+                style_code="SOLO001",
+                style_name="单件连衣裙",
+                qianniu_product_id="9999999999",
+            )
+            user = await factory.user(tenant_a, roles=[admin_role])
+            svc = StyleService(session)
+
+            page = await svc.list_styles(
+                filters=StyleListFilters(keyword="SOLO001"),
+                page=1,
+                page_size=50,
+                user=user,
+            )
+            assert page.items[0].suite_name is None
+        finally:
+            tenant_id_ctx.reset(token)
+
+    async def test_no_platform_id_has_no_suite_name(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
+    ) -> None:
+        """未填千牛ID 的款式不参与套装分组（不能把一堆 NULL 归成一个巨型套装）。"""
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            await product_factory.style(style_code="NOPID1", style_name="甲")
+            await product_factory.style(style_code="NOPID2", style_name="乙")
+            user = await factory.user(tenant_a, roles=[admin_role])
+            svc = StyleService(session)
+
+            page = await svc.list_styles(
+                filters=StyleListFilters(keyword="NOPID"),
+                page=1,
+                page_size=50,
+                user=user,
+            )
+            assert len(page.items) == 2
+            assert all(i.suite_name is None for i in page.items)
+        finally:
+            tenant_id_ctx.reset(token)
+
+    async def test_single_style_response_includes_suite_name(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
+    ) -> None:
+        """单条读取路径（get_style）也要带套装名，前端任何入口拿到的 Style 都一致。"""
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            a = await product_factory.style(
+                style_code="PAIR_A", style_name="上衣", qianniu_product_id="8888888888"
+            )
+            await product_factory.style(
+                style_code="PAIR_B", style_name="裤子", qianniu_product_id="8888888888"
+            )
+            user = await factory.user(tenant_a, roles=[admin_role])
+            svc = StyleService(session)
+
+            response = await svc.get_style(a.id, user)
+            assert response.suite_name == "上衣+裤子"
+        finally:
+            tenant_id_ctx.reset(token)

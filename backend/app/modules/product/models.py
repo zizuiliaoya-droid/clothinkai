@@ -92,8 +92,10 @@ class Style(TenantScopedModel):
         ForeignKey("brand.id", ondelete="SET NULL"),
         nullable=True,
     )
-    category: Mapped[str] = mapped_column(String(32), nullable=False)
-    season: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # 类目/季节自 migration 027 起由 dict_item 维护（value 是 varchar(64)），
+    # 这两列跟着放宽到 64，否则字典里能选的值保存时会被拒。
+    category: Mapped[str] = mapped_column(String(64), nullable=False)
+    season: Mapped[str | None] = mapped_column(String(64), nullable=True)
     gender: Mapped[str | None] = mapped_column(String(8), nullable=True)
     tags: Mapped[list[str]] = mapped_column(
         JSONB, nullable=False, server_default=text("'[]'::jsonb")

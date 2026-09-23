@@ -97,6 +97,8 @@ async def list_promotions(
     is_active: bool | None = True,
     only_dual_platform: bool = False,
     is_hit: bool | None = None,
+    has_print_address: bool | None = None,
+    has_waybill: bool | None = None,
 ) -> PromotionPage:
     """EP05-S03 / S05 / S06 列表 + CTE 衍生字段（urge_status / dual_platform）."""
     from datetime import date
@@ -120,6 +122,8 @@ async def list_promotions(
         is_active=is_active,
         only_dual_platform=only_dual_platform,
         is_hit=is_hit,
+        has_print_address=has_print_address,
+        has_waybill=has_waybill,
     )
     return await service.list_promotions(filters=filters, page=page, page_size=page_size, user=user)
 

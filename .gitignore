@@ -61,6 +61,9 @@ docker-compose.override.yml
 /.tmp/
 backend/backups/
 
+# MS Office 打开文档时生成的 owner file（~$ 前缀），历史上误提交过一次
+~$*
+
 # Alembic local
 backend/alembic/versions/__pycache__/
 

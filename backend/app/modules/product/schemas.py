@@ -66,9 +66,10 @@ class StyleBase(BaseModel):
     short_name: str | None = Field(default=None, max_length=64)
     qianniu_product_id: str | None = Field(default=None, max_length=64)
     brand_id: UUID | None = None
-    # 类目/季节改为可维护字典（dict_item），后端不再限制为固定枚举，仅做长度校验
-    category: str = Field(min_length=1, max_length=32)
-    season: str | None = Field(default=None, max_length=32)
+    # 类目/季节改为可维护字典（dict_item），后端不再限制为固定枚举，仅做长度校验。
+    # 上限与 dict_item.value 一致（64），否则字典里能选的值在这里会被拒。
+    category: str = Field(min_length=1, max_length=64)
+    season: str | None = Field(default=None, max_length=64)
     gender: _GenderField | None = None
     tags: list[str] = Field(default_factory=list, max_length=20)
     tag_color: list[str] = Field(default_factory=list, max_length=20)
@@ -91,15 +92,34 @@ def _normalize_platform_id(v: str | None) -> str | None:
     return cleaned or None
 
 
+def _normalize_tag_items(v: list[str] | None) -> list[str] | None:
+    """规范化 tags / tag_color 列表项：去空白、拒空串与超长项、按序去重。
+
+    颜色明细（``tag_color``）会进入列表展示与套装汇总，重复项只会让展示变脏，
+    这里顺手去重并保持录入顺序。
+    """
+    if v is None:
+        return None
+    if any(len(t) > 32 or not t.strip() for t in v):
+        raise ValueError("每个 tag 长度需 1-32")
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in v:
+        item = raw.strip()
+        if item not in seen:
+            seen.add(item)
+            out.append(item)
+    return out
+
+
 class StyleCreate(StyleBase):
     style_code: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_\-]+$")
 
     @field_validator("tags", "tag_color")
     @classmethod
     def _validate_tag_items(cls, v: list[str]) -> list[str]:
-        if any(len(t) > 32 or not t.strip() for t in v):
-            raise ValueError("每个 tag 长度需 1-32")
-        return [t.strip() for t in v]
+        normalized = _normalize_tag_items(v)
+        return normalized if normalized is not None else []
 
     @field_validator("qianniu_product_id")
     @classmethod
@@ -119,8 +139,8 @@ class StyleUpdate(BaseModel):
     short_name: str | None = Field(default=None, max_length=64)
     qianniu_product_id: str | None = Field(default=None, max_length=64)
     brand_id: UUID | None = None
-    category: str | None = Field(default=None, min_length=1, max_length=32)
-    season: str | None = Field(default=None, max_length=32)
+    category: str | None = Field(default=None, min_length=1, max_length=64)
+    season: str | None = Field(default=None, max_length=64)
     gender: _GenderField | None = None
     tags: list[str] | None = Field(default=None, max_length=20)
     tag_color: list[str] | None = Field(default=None, max_length=20)
@@ -129,6 +149,11 @@ class StyleUpdate(BaseModel):
     owner_id: UUID | None = None
     design_status: _DesignStatusField | None = None
     is_active: bool | None = None
+
+    @field_validator("tags", "tag_color")
+    @classmethod
+    def _validate_tag_items(cls, v: list[str] | None) -> list[str] | None:
+        return _normalize_tag_items(v)
 
     @field_validator("qianniu_product_id")
     @classmethod
@@ -144,6 +169,8 @@ class StyleResponse(BaseModel):
     style_name: str
     short_name: str | None = None
     qianniu_product_id: str | None = None
+    suite_name: str | None = None
+    """套装名称（派生，非存储字段）：同千牛ID 的款名按货号升序用 + 连接；单件为 None。"""
     brand_id: UUID | None = None
     category: str
     season: str | None = None
@@ -174,6 +201,8 @@ class SkuBase(BaseModel):
     cost_price: _PriceField | None = None
     purchase_price: _PriceField | None = None
     base_price: _PriceField | None = None
+    tag_price: _PriceField | None = None
+    """市场吊牌价。成本表导入模板本来就带这一列，手动维护也走同一个字段。"""
     sourcing_type: _SourcingTypeField = SourcingType.SELF_PRODUCED
 
 
@@ -195,6 +224,7 @@ class SkuUpdate(BaseModel):
     cost_price: _PriceField | None = None
     purchase_price: _PriceField | None = None
     base_price: _PriceField | None = None
+    tag_price: _PriceField | None = None
     sourcing_type: _SourcingTypeField | None = None
     is_active: bool | None = None
 
@@ -217,6 +247,7 @@ class SkuResponse(BaseModel):
     cost_price: Decimal | None = None
     purchase_price: Decimal | None = None
     base_price: Decimal | None = None
+    tag_price: Decimal | None = None
     sourcing_type: str
     is_active: bool
     is_deleted: bool
@@ -299,6 +330,8 @@ class CostTableRow(BaseModel):
     purchase_price: Decimal | None = None
     tag_price: Decimal | None = None
     brand_name: str | None = None
+    sourcing_type: str
+    """采购方式。前端编辑时要据此决定成本价/采购价哪个必填（BR-U02-13）。"""
     is_active: bool
 
 

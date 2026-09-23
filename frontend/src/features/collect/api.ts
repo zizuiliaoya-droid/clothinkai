@@ -41,24 +41,28 @@ export interface DailyPage<T> {
   page_size: number;
 }
 
-export async function listQianniu(params: {
-  page?: number;
-  page_size?: number;
-  date_from?: string;
-  date_to?: string;
-} = {}): Promise<DailyPage<QianniuRow>> {
+/**
+ * 日报列表查询参数。
+ *
+ * 除分页外还支持 date_from/date_to、platform_id 关键词、
+ * 各 typed 数值列的 `<field>_min` / `<field>_max` 区间，以及 sort_by/sort_dir。
+ * 字段组合随表而异（千牛 visitors/pay_amount/pay_orders，
+ * 万相台 cost/impressions/clicks/gmv），故用开放的键值形态。
+ */
+export type DailyQueryParams = Record<string, string | number | undefined>;
+
+export async function listQianniu(
+  params: DailyQueryParams = {},
+): Promise<DailyPage<QianniuRow>> {
   const resp = await apiClient.get<DailyPage<QianniuRow>>("/api/qianniu", {
     params,
   });
   return resp.data;
 }
 
-export async function listAdDaily(params: {
-  page?: number;
-  page_size?: number;
-  date_from?: string;
-  date_to?: string;
-} = {}): Promise<DailyPage<AdRow>> {
+export async function listAdDaily(
+  params: DailyQueryParams = {},
+): Promise<DailyPage<AdRow>> {
   const resp = await apiClient.get<DailyPage<AdRow>>("/api/ad-daily", {
     params,
   });

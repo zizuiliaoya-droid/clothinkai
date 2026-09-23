@@ -55,6 +55,11 @@ class PromotionListFilters:
     only_dual_platform: bool = False
     is_hit: bool | None = None
     hit_threshold: int = 1000
+    # 仓库打单用：按 source_extra 里的「打单地址」/「发货单号」是否已填筛选。
+    # 这两个筛选必须在服务端做 —— 打单单量只占推广总量的极小比例，
+    # 客户端过滤会既慢（要拉全量）又漏（只看得到当前页）。
+    has_print_address: bool | None = None
+    has_waybill: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -533,6 +538,13 @@ class PromotionRepository:
                 "OR style_short_name_snapshot ILIKE :kw)"
             )
             params["kw"] = f"%{filters.keyword}%"
+        # 表达式与 idx_promotion_print_address 部分索引的谓词保持一致，否则不命中索引。
+        if filters.has_print_address is not None:
+            op = "<>" if filters.has_print_address else "="
+            clauses.append(f"COALESCE(BTRIM(source_extra->>'打单地址'), '') {op} ''")
+        if filters.has_waybill is not None:
+            op = "<>" if filters.has_waybill else "="
+            clauses.append(f"COALESCE(BTRIM(source_extra->>'发货单号'), '') {op} ''")
 
         where_extra = ""
         if clauses:

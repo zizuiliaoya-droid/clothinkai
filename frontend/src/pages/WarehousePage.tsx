@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import {
   Button,
   Card,
@@ -29,25 +29,37 @@ function se(p: Promotion, k: string): string {
  * 仓库打完单后回传发货单号（写入 source_extra['发货单号']）→ 视为已打单。
  * 避免逐条翻找。数据源复用站外推广 + source_extra，无需额外建单。
  */
+/** 分桶 → 服务端 has_waybill 参数。全部则不限制。 */
+function waybillParam(bucket: Bucket): boolean | undefined {
+  if (bucket === "已打单") return true;
+  if (bucket === "待打单") return false;
+  return undefined;
+}
+
 export function WarehousePage() {
   const qc = useQueryClient();
   const [bucket, setBucket] = useState<Bucket>("待打单");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
   const [target, setTarget] = useState<Promotion | null>(null);
   const [form] = Form.useForm();
 
+  // 筛选全部交给服务端。此前是拉一页 100 条再在浏览器里过滤打单地址，
+  // 结果第 101 条以后的打单单根本看不到，而且每次都要让后端算完整页的
+  // 催单状态与 dual_platform 子查询 —— 这就是页面慢的原因。
   const { data, isLoading } = useQuery({
-    queryKey: ["promotions", "warehouse"],
-    queryFn: () => listPromotions({ page: 1, page_size: 100, is_active: true }),
+    queryKey: ["promotions", "warehouse", bucket, page, pageSize],
+    queryFn: () =>
+      listPromotions({
+        page,
+        page_size: pageSize,
+        is_active: true,
+        has_print_address: true,
+        has_waybill: waybillParam(bucket),
+      }),
   });
 
-  const rows = useMemo(() => {
-    const all = data?.items ?? [];
-    const withAddr = all.filter((p) => se(p, "打单地址").trim() !== "");
-    if (bucket === "全部") return withAddr;
-    if (bucket === "已打单")
-      return withAddr.filter((p) => se(p, "发货单号").trim() !== "");
-    return withAddr.filter((p) => se(p, "发货单号").trim() === "");
-  }, [data, bucket]);
+  const rows = data?.items ?? [];
 
   const saveMutation = useMutation({
     mutationFn: ({ id, waybill }: { id: string; waybill: string }) =>
@@ -112,7 +124,10 @@ export function WarehousePage() {
       extra={
         <Segmented
           value={bucket}
-          onChange={(v) => setBucket(v as Bucket)}
+          onChange={(v) => {
+            setBucket(v as Bucket);
+            setPage(1);
+          }}
           options={["待打单", "已打单", "全部"]}
         />
       }
@@ -124,7 +139,17 @@ export function WarehousePage() {
         columns={columns}
         dataSource={rows}
         scroll={{ x: 1100 }}
-        pagination={{ pageSize: 20, showTotal: (t) => `共 ${t} 条` }}
+        pagination={{
+          current: data?.page ?? 1,
+          pageSize: data?.page_size ?? pageSize,
+          total: data?.total ?? 0,
+          showSizeChanger: true,
+          showTotal: (t) => `共 ${t} 条`,
+          onChange: (p, ps) => {
+            setPage(p);
+            setPageSize(ps);
+          },
+        }}
       />
 
       <Modal

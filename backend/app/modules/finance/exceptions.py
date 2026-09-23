@@ -166,6 +166,18 @@ class BalanceTypeFieldMismatchError(ValidationError):
     code = "BALANCE_TYPE_FIELD_MISMATCH"
 
 
+class OrderAdjustmentNotFoundError(ResourceNotFoundError):
+    """拍单 / 刷单单据不存在（或跨租户被 RLS 过滤）。"""
+
+    code = "ORDER_ADJUSTMENT_NOT_FOUND"
+
+
+class InvalidOrderPaymentQrError(ValidationError):
+    """收款码图片不符合要求（格式 / 大小 / 内容与声明格式不一致）。"""
+
+    code = "INVALID_ORDER_PAYMENT_QR"
+
+
 __all__ = [
     "AmountExpressionInvalidError",
     "AttachmentNotReadyError",
@@ -178,6 +190,8 @@ __all__ = [
     "InvalidAttachmentMimeError",
     "InvalidAttachmentPurposeError",
     "InvalidAttachmentReferenceError",
+    "InvalidOrderPaymentQrError",
+    "OrderAdjustmentNotFoundError",
     "PaymentAmountRequiredError",
     "PaymentFieldMissingError",
     "ReviewReasonRequiredError",

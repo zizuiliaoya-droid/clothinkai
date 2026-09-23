@@ -53,6 +53,12 @@ class OrderAdjustment(TenantScopedModel):
         ForeignKey("attachment.id", ondelete="RESTRICT"),
         nullable=True,
     )
+    payment_qr_attachment_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("attachment.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    """博主收款码（私有桶）。与 payment_proof 区分：收款码是打款前的凭据，凭证是打款后的截图。"""
     exclude_from_roi: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")
     )
@@ -78,6 +84,11 @@ class OrderAdjustment(TenantScopedModel):
             "tenant_id",
             "style_id",
             "exclude_from_roi",
+        ),
+        Index(
+            "idx_order_adjustment_payment_qr",
+            "payment_qr_attachment_id",
+            postgresql_where=text("payment_qr_attachment_id IS NOT NULL"),
         ),
         CheckConstraint("amount >= 0", name="ck_order_adjustment_amount_nonneg"),
         CheckConstraint("order_type IN ('拍单','刷单')", name="ck_order_adjustment_type"),

@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping, Sequence
 from typing import Any
 from uuid import UUID
 
@@ -31,6 +32,7 @@ from app.modules.finance.order_adjustment_repository import OrderAdjustmentRepos
 from app.modules.product.domain import (
     build_sku_audit_changes,
     build_style_audit_changes,
+    build_suite_name,
     compute_sku_changes,
     compute_style_changes,
     validate_sku_prices,
@@ -389,8 +391,12 @@ class StyleService:
         user: User,
     ) -> StylePage:
         items, total = await self._styles.list(filters=filters, page=page, page_size=page_size)
+        # 套装名称一次性批量取（按本页出现的千牛ID），避免逐条查成 N+1。
+        suite_members = await self._styles.suite_members_by_platform_id(
+            [s.qianniu_product_id for s in items if s.qianniu_product_id]
+        )
         return StylePage(
-            items=[await self._to_response(s, user) for s in items],
+            items=[await self._to_response(s, user, suite_members=suite_members) for s in items],
             total=total,
             page=page,
             page_size=page_size,
@@ -444,8 +450,22 @@ class StyleService:
 
     # ----------------------- private ----------------------- #
 
-    async def _to_response(self, style: Style, _user: User) -> StyleResponse:
-        """Style 无字段级权限差异（cost_price 等不在 Style 表）."""
+    async def _to_response(
+        self,
+        style: Style,
+        _user: User,
+        *,
+        suite_members: Mapping[str, Sequence[str]] | None = None,
+    ) -> StyleResponse:
+        """Style 无字段级权限差异（cost_price 等不在 Style 表）.
+
+        ``suite_members`` 由列表路径预先批量查好传入；单条路径不传，这里自行查一次。
+        """
+        platform_id = style.qianniu_product_id
+        if suite_members is None and platform_id:
+            suite_members = await self._styles.suite_members_by_platform_id([platform_id])
+        suite_name = build_suite_name((suite_members or {}).get(platform_id or "", ()))
+
         main_url: str | None = None
         if style.main_image_key and attachment_service.is_configured:
             try:
@@ -460,6 +480,7 @@ class StyleService:
             style_name=style.style_name,
             short_name=style.short_name,
             qianniu_product_id=style.qianniu_product_id,
+            suite_name=suite_name,
             brand_id=style.brand_id,
             category=style.category,
             season=style.season,
@@ -525,6 +546,7 @@ class SkuService:
             cost_price=payload.cost_price,
             purchase_price=payload.purchase_price,
             base_price=payload.base_price,
+            tag_price=payload.tag_price,
             sourcing_type=payload.sourcing_type.value,
         )
         self._skus.add(sku)
@@ -584,6 +606,7 @@ class SkuService:
                 purchase_price=r.purchase_price,
                 tag_price=r.tag_price,
                 brand_name=r.brand_name,
+                sourcing_type=r.sourcing_type,
                 is_active=r.is_active,
             )
             for r in rows
@@ -681,6 +704,7 @@ class SkuService:
             "cost_price": payload.cost_price,
             "purchase_price": payload.purchase_price,
             "base_price": payload.base_price,
+            "tag_price": payload.tag_price,
             "sourcing_type": payload.sourcing_type.value,
             "is_active": True,
             "is_deleted": False,
@@ -794,6 +818,7 @@ class SkuService:
             cost_price=sku.cost_price if can_see_cost else None,
             purchase_price=sku.purchase_price if can_see_purchase else None,
             base_price=sku.base_price,
+            tag_price=sku.tag_price,
             sourcing_type=sku.sourcing_type,
             is_active=sku.is_active,
             is_deleted=sku.is_deleted,

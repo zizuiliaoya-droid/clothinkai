@@ -166,6 +166,13 @@ function AppRoutes() {
             importSource="qianniu"
             importLabel="导入千牛数据"
             importColumns={["统计日期", "商品ID", "商品访客数", "支付金额", "支付件数"]}
+            idLabel="商品ID"
+            sortableFields={["date", "platform_id", "visitors", "pay_amount", "pay_orders"]}
+            numericFilters={[
+              { key: "visitors", label: "访客数" },
+              { key: "pay_amount", label: "支付金额", precision: 2 },
+              { key: "pay_orders", label: "支付件数" },
+            ]}
             typedColumns={[
               { title: "统计日期", dataIndex: "date", width: 110, fixed: "left" },
               { title: "商品ID", dataIndex: "platform_id", width: 130 },
@@ -184,6 +191,14 @@ function AppRoutes() {
             importSource="wanxiangtai"
             importLabel="导入站内推广数据"
             importColumns={["日期", "主体ID", "花费", "展现量", "点击量", "总成交金额"]}
+            idLabel="主体ID"
+            sortableFields={["date", "platform_id", "cost", "impressions", "clicks", "gmv"]}
+            numericFilters={[
+              { key: "cost", label: "花费", precision: 2 },
+              { key: "impressions", label: "展现量" },
+              { key: "clicks", label: "点击量" },
+              { key: "gmv", label: "成交金额", precision: 2 },
+            ]}
             typedColumns={[
               { title: "日期", dataIndex: "date", width: 110, fixed: "left" },
               { title: "主体ID", dataIndex: "platform_id", width: 130 },
@@ -201,8 +216,10 @@ function AppRoutes() {
         <Route path="/warehouse-orders" element={<WarehousePage />} />
         {/* 财务管理 */}
         <Route path="/settlements" element={<SettlementListPage />} />
-        <Route path="/tao-orders" element={<OrderAdjustmentPage orderType="拍单" />} />
-        <Route path="/brush-orders" element={<OrderAdjustmentPage orderType="刷单" />} />
+        <Route path="/order-adjustments" element={<OrderAdjustmentPage />} />
+        {/* 拍单/刷单已合并为一页，旧链接重定向过去（书签与历史记录不至于 404） */}
+        <Route path="/tao-orders" element={<Navigate to="/order-adjustments" replace />} />
+        <Route path="/brush-orders" element={<Navigate to="/order-adjustments" replace />} />
         <Route path="/balance" element={<BalancePage />} />
         {/* 报表与分析 */}
         <Route path="/store-daily" element={<StoreDailyPage />} />

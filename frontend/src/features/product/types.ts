@@ -47,6 +47,8 @@ export interface Style {
   style_name: string;
   short_name: string | null;
   qianniu_product_id?: string | null;
+  /** 套装名称（后端派生）：同千牛ID 的款名按货号升序用 + 连接；单件为 null。 */
+  suite_name: string | null;
   brand_id: string | null;
   category: string;
   season: string | null;
@@ -125,6 +127,7 @@ export interface Sku {
   cost_price: string | null;
   purchase_price: string | null;
   base_price: string | null;
+  tag_price: string | null;
   sourcing_type: string;
   is_active: boolean;
   is_deleted: boolean;
@@ -140,6 +143,7 @@ export interface SkuCreate {
   cost_price?: string | null;
   purchase_price?: string | null;
   base_price?: string | null;
+  tag_price?: string | null;
   sourcing_type?: SourcingType;
 }
 
@@ -150,6 +154,7 @@ export interface SkuUpdate {
   cost_price?: string | null;
   purchase_price?: string | null;
   base_price?: string | null;
+  tag_price?: string | null;
   sourcing_type?: SourcingType;
   is_active?: boolean;
 }
@@ -216,6 +221,8 @@ export interface CostTableRow {
   purchase_price: string | null;
   tag_price: string | null;
   brand_name: string | null;
+  /** 采购方式。决定成本价/采购价哪个必填（BR-U02-13）。 */
+  sourcing_type: string;
   is_active: boolean;
 }
 

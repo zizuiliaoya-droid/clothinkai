@@ -32,11 +32,39 @@ class OrderAdjustmentResponse(BaseModel):
     style_name: str | None = None
     blogger_identifier: str | None = None
     amount: Decimal
+    payment_amount: Decimal | None = None
+    payment_date: date | None = None
     exclude_from_roi: bool
     status: str
     promotion_id: UUID | None = None
     remark: str | None = None
+    payment_qr_attachment_id: UUID | None = None
+    payment_qr_signed_url: str | None = None
+    """收款码的短时签名 URL（私有桶，附件 ready 时才有值）。"""
     duplicate: bool = False
+
+
+class OrderAdjustmentListFilters(BaseModel):
+    """拍单/刷单列表筛选。合并页面后两种单据同表展示，筛选必须落在服务端。"""
+
+    order_type: str | None = None
+    status: str | None = None
+    keyword: str | None = Field(default=None, max_length=64)
+    """匹配订单号 / 博主ID或微信ID。"""
+    style_id: UUID | None = None
+    order_date_from: date | None = None
+    order_date_to: date | None = None
+    amount_min: Decimal | None = Field(default=None, ge=0)
+    amount_max: Decimal | None = Field(default=None, ge=0)
+    exclude_from_roi: bool | None = None
+    has_payment_qr: bool | None = None
+
+
+class OrderAdjustmentPage(BaseModel):
+    items: list[OrderAdjustmentResponse]
+    total: int
+    page: int
+    page_size: int
 
 
 class BalanceRecordCreate(BaseModel):
@@ -62,5 +90,7 @@ __all__ = [
     "BalanceRecordCreate",
     "BalanceRecordResponse",
     "BrushingCreate",
+    "OrderAdjustmentListFilters",
+    "OrderAdjustmentPage",
     "OrderAdjustmentResponse",
 ]

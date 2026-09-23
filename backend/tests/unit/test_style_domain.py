@@ -9,13 +9,18 @@ from __future__ import annotations
 
 from uuid import uuid4
 
+import pytest
+from pydantic import ValidationError
+
 from app.modules.product.domain import (
     STYLE_SENSITIVE_FIELDS,
+    SUITE_NAME_SEPARATOR,
     build_style_audit_changes,
+    build_suite_name,
     compute_style_changes,
 )
 from app.modules.product.models import Style
-from app.modules.product.schemas import StyleUpdate
+from app.modules.product.schemas import StyleCreate, StyleUpdate
 
 
 class TestStyleAuditChanges:
@@ -79,3 +84,65 @@ class TestComputeStyleChanges:
         payload = StyleUpdate(remark="新备注")
         changes = compute_style_changes(style, payload)
         assert set(changes.keys()) == {"remark"}
+
+
+class TestTagColorNormalization:
+    """颜色明细（tag_color）录入校验。
+
+    该字段此前全链路可用但前端无录入入口，所有款式都是空数组；开放录入后
+    Create / Update 两条路径都必须做同样的清洗，否则编辑能写进空串与超长值。
+    """
+
+    def test_create_strips_and_dedupes(self) -> None:
+        payload = StyleCreate(
+            style_code="ST001",
+            style_name="测试款式",
+            category="连衣裙",
+            tag_color=[" 卡其 ", "黑色", "卡其"],
+        )
+        assert payload.tag_color == ["卡其", "黑色"]
+
+    def test_update_strips_and_dedupes(self) -> None:
+        payload = StyleUpdate(tag_color=["黑色", " 黑色", "米白"])
+        assert payload.tag_color == ["黑色", "米白"]
+
+    def test_update_allows_explicit_clear(self) -> None:
+        payload = StyleUpdate(tag_color=[])
+        assert payload.tag_color == []
+        assert "tag_color" in payload.model_fields_set
+
+    def test_update_untouched_stays_none(self) -> None:
+        payload = StyleUpdate(style_name="改名")
+        assert payload.tag_color is None
+        assert "tag_color" not in payload.model_fields_set
+
+    @pytest.mark.parametrize("bad", [[""], ["   "], ["x" * 33]])
+    def test_rejects_blank_and_overlong(self, bad: list[str]) -> None:
+        with pytest.raises(ValidationError):
+            StyleUpdate(tag_color=bad)
+        with pytest.raises(ValidationError):
+            StyleCreate(
+                style_code="ST002",
+                style_name="测试款式",
+                category="连衣裙",
+                tag_color=bad,
+            )
+
+
+class TestBuildSuiteName:
+    """套装名称拼接（同千牛ID 分组，方案 A：套装整体是一个销售单元）。"""
+
+    def test_two_members_joined(self) -> None:
+        assert build_suite_name(["木耳边打底衫", "卡其毛衣马甲"]) == "木耳边打底衫+卡其毛衣马甲"
+
+    def test_three_members_joined(self) -> None:
+        assert build_suite_name(["A", "B", "C"]) == "A+B+C"
+
+    def test_single_member_is_not_a_suite(self) -> None:
+        assert build_suite_name(["只有一款"]) is None
+
+    def test_empty_returns_none(self) -> None:
+        assert build_suite_name([]) is None
+
+    def test_separator_constant(self) -> None:
+        assert SUITE_NAME_SEPARATOR == "+"

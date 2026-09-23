@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 from app.modules.product.enums import SourcingType
@@ -38,6 +39,27 @@ SKU_SENSITIVE_FIELDS: frozenset[str] = frozenset(
 
 SKU_SENSITIVE_VALUE_FIELDS: frozenset[str] = frozenset({"cost_price", "purchase_price"})
 """SKU 表 audit_log 不存历史值的字段（仅记 ``*_changed: true``）。"""
+
+
+# ---------------------------------------------------------------------------
+# 套装名称（同千牛ID 分组）
+# ---------------------------------------------------------------------------
+
+
+SUITE_NAME_SEPARATOR = "+"
+"""套装名称的款名连接符（款名A+款名B）。"""
+
+
+def build_suite_name(member_names: Sequence[str]) -> str | None:
+    """由套装成员款名拼出套装名称；单件返回 ``None``。
+
+    成员顺序由调用方保证（按货号升序），这样同一个套装的每一行拿到的名称一致。
+    只有一个成员时它就是单品而非套装，返回 ``None`` 让前端显示「—」；
+    这也是「哪些款是一起卖的」这个判断的唯一依据。
+    """
+    if len(member_names) < 2:
+        return None
+    return SUITE_NAME_SEPARATOR.join(member_names)
 
 
 # ---------------------------------------------------------------------------
@@ -78,7 +100,7 @@ def validate_sku_prices(payload: SkuCreate | SkuUpdate) -> None:
     Pydantic 已在 schema 层做 ``ge=0`` + ``max_digits=10`` + ``decimal_places=2``，
     此处仅作为 service 层二次防线（防绕过 Pydantic 直接构造 dict）。
     """
-    for field in ("cost_price", "purchase_price", "base_price"):
+    for field in ("cost_price", "purchase_price", "base_price", "tag_price"):
         value = getattr(payload, field, None)
         if value is None:
             continue
@@ -200,8 +222,10 @@ __all__ = [
     "SKU_SENSITIVE_FIELDS",
     "SKU_SENSITIVE_VALUE_FIELDS",
     "STYLE_SENSITIVE_FIELDS",
+    "SUITE_NAME_SEPARATOR",
     "build_sku_audit_changes",
     "build_style_audit_changes",
+    "build_suite_name",
     "compute_sku_changes",
     "compute_style_changes",
     "validate_sku_prices",
