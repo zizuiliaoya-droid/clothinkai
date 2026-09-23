@@ -66,9 +66,10 @@ class StyleBase(BaseModel):
     short_name: str | None = Field(default=None, max_length=64)
     qianniu_product_id: str | None = Field(default=None, max_length=64)
     brand_id: UUID | None = None
-    # 类目/季节改为可维护字典（dict_item），后端不再限制为固定枚举，仅做长度校验
-    category: str = Field(min_length=1, max_length=32)
-    season: str | None = Field(default=None, max_length=32)
+    # 类目/季节改为可维护字典（dict_item），后端不再限制为固定枚举，仅做长度校验。
+    # 上限与 dict_item.value 一致（64），否则字典里能选的值在这里会被拒。
+    category: str = Field(min_length=1, max_length=64)
+    season: str | None = Field(default=None, max_length=64)
     gender: _GenderField | None = None
     tags: list[str] = Field(default_factory=list, max_length=20)
     tag_color: list[str] = Field(default_factory=list, max_length=20)
@@ -138,8 +139,8 @@ class StyleUpdate(BaseModel):
     short_name: str | None = Field(default=None, max_length=64)
     qianniu_product_id: str | None = Field(default=None, max_length=64)
     brand_id: UUID | None = None
-    category: str | None = Field(default=None, min_length=1, max_length=32)
-    season: str | None = Field(default=None, max_length=32)
+    category: str | None = Field(default=None, min_length=1, max_length=64)
+    season: str | None = Field(default=None, max_length=64)
     gender: _GenderField | None = None
     tags: list[str] | None = Field(default=None, max_length=20)
     tag_color: list[str] | None = Field(default=None, max_length=20)

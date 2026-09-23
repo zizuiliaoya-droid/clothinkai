@@ -19,7 +19,8 @@ class DesignCreate(BaseModel):
     style_code: str = Field(..., min_length=1, max_length=64)
     style_name: str = Field(..., min_length=1, max_length=255)
     main_image_key: str | None = Field(default=None, max_length=512)
-    category: str = Field(default="连衣裙", max_length=32)
+    # 直接写入 style.category，长度上限与 dict_item.value / StyleBase 保持一致
+    category: str = Field(default="连衣裙", max_length=64)
     short_name: str | None = Field(default=None, max_length=64)
 
 
