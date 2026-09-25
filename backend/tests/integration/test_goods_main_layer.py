@@ -97,7 +97,13 @@ class TestGoodsStyleRelation:
     async def test_style_can_belong_to_multiple_goods(
         self, session: AsyncSession, tenant_a: Any, product_factory: Any
     ) -> None:
-        """一件衣服既单卖又进套装 —— 这正是需要关联表而非单个外键的原因。"""
+        """一件衣服既单卖又进套装 —— 这正是需要关联表而非单个外键的原因。
+
+        注意合法形态是"一个非套装商品 + 若干套装"。同一款式挂在**多个非套装商品**
+        下不是目标形态（站外推广费原生挂在款式上，会重复归集），由 038 收敛成
+        "一个商品挂多条链接"。库层面表达不了这个约束（判定条件在 goods_main 上），
+        所以靠迁移与服务层保证。
+        """
         tok = tenant_id_ctx.set(tenant_a.id)
         try:
             style = await product_factory.style(style_code="GS_SHARED")
