@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+from collections.abc import Sequence
 from datetime import date
 from decimal import Decimal
 from typing import Any
@@ -119,7 +120,8 @@ class ReportExportService:
         time_range: tuple[date, date],
         *,
         exclude_brushing: bool = True,
-        season: str | None = None,
+        seasons: Sequence[str] | None = None,
+        categories: Sequence[str] | None = None,
         granularity: str = "day",
     ) -> StreamingResponse:
         if report_type not in _REPORT_TYPES:
@@ -132,7 +134,8 @@ class ReportExportService:
             report_type,
             time_range,
             exclude_brushing=exclude_brushing,
-            season=season,
+            seasons=seasons,
+            categories=categories,
             granularity=granularity,
         )
         wb = Workbook(write_only=True)
@@ -158,7 +161,8 @@ class ReportExportService:
         time_range: tuple[date, date],
         *,
         exclude_brushing: bool,
-        season: str | None,
+        seasons: Sequence[str] | None,
+        categories: Sequence[str] | None,
         granularity: str,
     ) -> tuple[list[str], list[list[Any]]]:
         if report_type == "production":
@@ -166,7 +170,8 @@ class ReportExportService:
                 tenant_id,
                 time_range,
                 exclude_brushing=exclude_brushing,
-                season=season,
+                seasons=seasons,
+                categories=categories,
             )
             extra_keys = sorted({key for row in report.items for key in row.extra})
             rows = [

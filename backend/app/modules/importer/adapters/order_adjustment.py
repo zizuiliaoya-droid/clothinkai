@@ -73,6 +73,7 @@ _DEFAULT_COLUMNS: list[dict[str, Any]] = [
 ]
 
 _TRUE_TOKENS = frozenset({"1", "true", "t", "y", "yes", "是", "剔除", "排除", "需剔除"})
+_FALSE_TOKENS = frozenset({"0", "false", "f", "n", "no", "否", "不剔除", "不排除", "保留"})
 
 
 def _to_date(raw: Any) -> date | str | None:
@@ -96,10 +97,21 @@ def _to_decimal(raw: Any) -> Decimal | str | None:
         return str(raw)
 
 
-def _to_bool(raw: Any) -> bool:
-    if raw is None:
+def _to_bool(raw: Any) -> bool | None:
+    """三态解析：未填 / 无法识别 → ``None``，由调用方按单据类型取默认值。
+
+    原先未填一律当 False，结果 Excel 导入的刷单全部 ``exclude_from_roi=false``，
+    投产报表的「剔除刷单」一条都匹配不上 —— 功能形同虚设。区分「没填」和
+    「明确填了否」之后，没填的才能落到按单据类型的默认值上。
+    """
+    if raw is None or str(raw).strip() == "":
+        return None
+    token = str(raw).strip().lower()
+    if token in _TRUE_TOKENS:
+        return True
+    if token in _FALSE_TOKENS:
         return False
-    return str(raw).strip().lower() in _TRUE_TOKENS
+    return None
 
 
 class OrderAdjustmentImportAdapter:
@@ -110,6 +122,9 @@ class OrderAdjustmentImportAdapter:
     def __init__(self, source: str, order_type: str) -> None:
         self.source = source
         self.order_type = order_type
+        # 「是否剔除ROI」列未填时的默认值：刷单本身就是要从投产口径里剔掉的虚假成交，
+        # 拍单是真实的店铺下单，该计入销售额。
+        self.default_exclude_from_roi = order_type == "刷单"
 
     # ----------------------- parse_row（纯函数）----------------------- #
 
@@ -182,7 +197,11 @@ class OrderAdjustmentImportAdapter:
             blogger_identifier=parsed.get("blogger_identifier"),
             style_id=style_id,
             amount=parsed["amount"],
-            exclude_from_roi=bool(parsed.get("exclude_from_roi")),
+            exclude_from_roi=(
+                self.default_exclude_from_roi
+                if parsed.get("exclude_from_roi") is None
+                else bool(parsed["exclude_from_roi"])
+            ),
             remark=parsed.get("remark"),
         )
         session.add(row)

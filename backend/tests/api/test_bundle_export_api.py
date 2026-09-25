@@ -142,7 +142,8 @@ class TestBundleExportApiContract:
             "production",
             period,
             exclude_brushing=True,
-            season=None,
+            seasons=None,
+            categories=None,
             granularity="day",
         )
         assert production_headers[:2] == ["货号", "款名"]
@@ -158,7 +159,8 @@ class TestBundleExportApiContract:
             "store-daily",
             period,
             exclude_brushing=True,
-            season=None,
+            seasons=None,
+            categories=None,
             granularity="week",
         )
         assert store_headers[:7] == [
@@ -179,7 +181,8 @@ class TestBundleExportApiContract:
             "work-progress",
             period,
             exclude_brushing=True,
-            season=None,
+            seasons=None,
+            categories=None,
             granularity="day",
         )
         assert len(work_headers) == len(work_rows[0]) == 20

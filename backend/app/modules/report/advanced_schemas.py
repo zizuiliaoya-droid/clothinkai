@@ -26,6 +26,8 @@ class PrWorkProgress(BaseModel):
     recall_due_count: int
     recall_success_count: int
     recall_complete_rate: Decimal | None = None
+    effective_quote_count: int
+    """有效约稿量 = 约稿量 − 召回 − 取消，是完成率/超时率的分母（PRD 第 9 章）。"""
     overdue_rate: Decimal | None = None
     month_complete_rate: Decimal | None = None
     hit_count: int

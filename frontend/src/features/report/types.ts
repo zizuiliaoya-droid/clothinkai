@@ -4,6 +4,8 @@ export interface PrWorkProgress {
   pr_id: string | null;
   pr_name: string;
   quote_count: number;
+  /** 有效约稿量 = 约稿量 − 召回 − 取消，是完成率/超时率的分母。 */
+  effective_quote_count: number;
   in_schedule_count: number;
   urge_count: number;
   important_urge_count: number;

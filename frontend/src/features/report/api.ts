@@ -73,7 +73,10 @@ export async function getProduction(
     date_from?: string;
     date_to?: string;
     exclude_brushing?: boolean;
-    season?: string;
+    /** 季节多选（PRD 第 4 章）。axios 已配 indexes:null，会序列化成重复键。 */
+    season?: string[];
+    /** 类目多选。 */
+    category?: string[];
   } = {}
 ): Promise<ProductionReport> {
   const resp = await apiClient.get<ProductionReport>(
@@ -119,7 +122,8 @@ export interface ReportExportParams {
   date_from?: string;
   date_to?: string;
   exclude_brushing?: boolean;
-  season?: string;
+  season?: string[];
+  category?: string[];
   granularity?: TimeGranularity;
 }
 

@@ -144,7 +144,98 @@ class TestWorkProgress:
             assert row.quote_count == 2
             assert row.publish_count == 1
             assert row.hit_count == 1  # like 600 >= HIT_STAT_THRESHOLD(500)
+            assert row.effective_quote_count == 2  # 无召回、无取消
             assert row.month_complete_rate == Decimal("0.5000")
+        finally:
+            tenant_id_ctx.reset(tok)
+
+    async def test_complete_and_overdue_rate_exclude_recall_and_cancel(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        pr_role: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        """PRD 第 9 章：完成率/超时率分母 = 约稿量 − 召回量 − 取消量。
+
+        用裸约稿量做分母会把已取消、已召回的单也当成「还能发布」，完成率被系统性低估。
+        """
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            pr = await factory.user(tenant_a, roles=[pr_role])
+            style = await product_factory.style()
+            blogger = await blogger_factory.blogger()
+            common = {"style": style, "blogger": blogger, "pr": pr}
+            day = date(2026, 6, 10)
+
+            # 有效 2 单：1 已发布 + 1 未发布
+            await promotion_factory.promotion(
+                **common, cooperation_date=day, publish_status="已发布", like_count=10
+            )
+            await promotion_factory.promotion(
+                **common, cooperation_date=day, publish_status="未发布"
+            )
+            # 取消 1 单
+            await promotion_factory.promotion(
+                **common, cooperation_date=day, publish_status="已取消"
+            )
+            # 召回 1 单
+            await promotion_factory.promotion(
+                **common, cooperation_date=day, publish_status="未发布", recall_status="召回成功"
+            )
+            # 既取消又召回 1 单 —— 相减法会把它扣两次，FILTER 只扣一次
+            await promotion_factory.promotion(
+                **common, cooperation_date=day, publish_status="已取消", recall_status="召回成功"
+            )
+            await session.commit()
+
+            rows = await WorkProgressService(session).get_for_month(tenant_a.id, "2026-06")
+            row = next(r for r in rows if r.pr_id == pr.id)
+
+            assert row.quote_count == 5
+            assert row.cancel_count == 2
+            assert row.recall_due_count == 2
+            # 5 单里只有 2 单既未取消也未召回
+            assert row.effective_quote_count == 2
+            # 完成率 = 1 已发布 / 2 有效，而不是 1/5
+            assert row.month_complete_rate == Decimal("0.5000")
+        finally:
+            tenant_id_ctx.reset(tok)
+
+    async def test_rates_are_null_when_all_recalled_or_cancelled(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        pr_role: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        """有效约稿量被扣成 0 时，比率置空而不是报除零。"""
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            pr = await factory.user(tenant_a, roles=[pr_role])
+            style = await product_factory.style()
+            blogger = await blogger_factory.blogger()
+            await promotion_factory.promotion(
+                style=style,
+                blogger=blogger,
+                pr=pr,
+                cooperation_date=date(2026, 7, 5),
+                publish_status="已取消",
+            )
+            await session.commit()
+
+            rows = await WorkProgressService(session).get_for_month(tenant_a.id, "2026-07")
+            row = next(r for r in rows if r.pr_id == pr.id)
+            assert row.quote_count == 1
+            assert row.effective_quote_count == 0
+            assert row.month_complete_rate is None
+            assert row.overdue_rate is None
         finally:
             tenant_id_ctx.reset(tok)
 

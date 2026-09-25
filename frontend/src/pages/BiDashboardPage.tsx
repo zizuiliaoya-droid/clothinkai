@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Alert,
   Card,
@@ -20,6 +20,7 @@ import {
   useReportTimeRange,
 } from "@/components/ReportTimeRangeFilter/ReportTimeRangeFilter";
 import { StyleImageThumbnail } from "@/components/StyleImageThumbnail/StyleImageThumbnail";
+import { useFilterMemory } from "@/features/preference/useFilterMemory";
 import { getBiDashboard } from "@/features/report/api";
 import type {
   BiStylePerformance,
@@ -94,15 +95,39 @@ function ProgressCell({ value, emptyText }: { value: string | null; emptyText: s
   );
 }
 
+/** 记忆到 user_preference 的筛选形态；自定义日期区间不记。 */
+interface BiFilterMemory {
+  preset: TimePreset;
+  granularity: TimeGranularity;
+}
+
 export function BiDashboardPage() {
   const [preset, setPreset] = useState<TimePreset>("last_30d");
   const [range, setRange] = useState<ReportDateRange>(null);
   const [granularity, setGranularity] = useState<TimeGranularity>("day");
+
+  const memory = useFilterMemory<BiFilterMemory>("bi_dashboard");
+  const restoredRef = useRef(false);
+  useEffect(() => {
+    if (!memory.ready || restoredRef.current) return;
+    restoredRef.current = true;
+    if (memory.restored?.preset) setPreset(memory.restored.preset);
+    if (memory.restored?.granularity) setGranularity(memory.restored.granularity);
+  }, [memory.ready, memory.restored]);
+
+  useEffect(() => {
+    if (!restoredRef.current) return;
+    memory.persist({ preset, granularity });
+    // persist 每次渲染都是新函数，不进依赖，否则每次渲染都会触发保存。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preset, granularity]);
+
   const { dateFrom, dateTo, enabled } = useReportTimeRange(preset, range);
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ["bi-dashboard", preset, dateFrom, dateTo, granularity],
-    enabled,
+    // 等偏好回填完再查，避免先用默认值查一次、回填后又查一次。
+    enabled: enabled && memory.ready,
     queryFn: () =>
       getBiDashboard({
         preset,

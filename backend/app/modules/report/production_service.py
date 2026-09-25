@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -50,7 +50,8 @@ class ProductionService:
         time_range: tuple[date, date],
         *,
         exclude_brushing: bool = True,
-        season: str | None = None,
+        seasons: Sequence[str] | None = None,
+        categories: Sequence[str] | None = None,
     ) -> ProductionReport:
         cur_from, cur_to = time_range
         span = cur_to - cur_from
@@ -62,14 +63,16 @@ class ProductionService:
                 date_from=cur_from,
                 date_to=cur_to,
                 exclude_brushing=exclude_brushing,
-                season=season,
+                seasons=seasons,
+                categories=categories,
             )
             prev_rows = await self._repo.aggregate_by_style(
                 tenant_id=tenant_id,
                 date_from=prev_from,
                 date_to=prev_to,
                 exclude_brushing=exclude_brushing,
-                season=season,
+                seasons=seasons,
+                categories=categories,
             )
             extra_by_style = await self._aggregate_extra(tenant_id, cur_from, cur_to)
         items = []

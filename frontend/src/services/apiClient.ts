@@ -34,6 +34,11 @@ export const apiClient = axios.create({
   baseURL: API_BASE_URL,
   timeout: 30_000,
   withCredentials: false,
+  paramsSerializer: {
+    // axios 默认把数组序列化成 `season[]=a&season[]=b`，FastAPI 的 `list[str]` 查询参数
+    // 只认重复键 `season=a&season=b`，不配这个多选筛选会静默收不到值。
+    indexes: null,
+  },
 });
 
 // 请求拦截器：注入 Authorization
