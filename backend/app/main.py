@@ -64,6 +64,7 @@ from app.modules.report.advanced_api import router as report_advanced_router
 from app.modules.report.api import router as report_router
 from app.modules.report.bi_api import router as bi_router
 from app.modules.report.export_api import router as report_export_router
+from app.modules.report.preference_api import router as preference_router
 from app.modules.wecom.alert_api import router as wecom_alert_router
 from app.modules.wecom.api import router as wecom_router
 from app.modules.wecom.callback_api import router as wecom_callback_router
@@ -465,6 +466,7 @@ def create_app() -> FastAPI:
     app.include_router(worker_token_router)  # U13 Worker Token /api/crawler/worker-tokens
     app.include_router(data_quality_router)  # U13 数据质量看板 /api/data-quality
     app.include_router(daily_data_router)  # 千牛/站内日报列表 /api/qianniu /api/ad-daily
+    app.include_router(preference_router)  # 页面筛选记忆 /api/preferences/filters
 
     return app
 

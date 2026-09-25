@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import date
 from typing import Any
 from uuid import UUID
@@ -49,6 +49,13 @@ class WorkProgressRepository:
               COUNT(*) FILTER (WHERE p.recall_status IN ('召回中','召回成功','召回失败'))
                 AS recall_due_count,
               COUNT(*) FILTER (WHERE p.recall_status='召回成功') AS recall_success_count,
+              -- 完成率/超时率的分母：约稿量扣掉召回与取消。
+              -- 用 FILTER 一次算出，而不是 quote_count - recall_due - cancel ——
+              -- 同一单据可能既已取消又进过召回，相减会把它扣两次。
+              COUNT(*) FILTER (
+                WHERE p.publish_status <> '已取消'
+                  AND p.recall_status = '未召回'
+              ) AS effective_quote_count,
               COUNT(*) FILTER (WHERE p.publish_status='已发布'
                                AND p.like_count >= :hit_stat) AS hit_count,
               {_LIKE} AS like_count,
@@ -152,22 +159,31 @@ class ProductionRepository:
         date_from: date,
         date_to: date,
         exclude_brushing: bool = False,
-        season: str | None = None,
+        seasons: Sequence[str] | None = None,
+        categories: Sequence[str] | None = None,
     ) -> list[Mapping[str, Any]]:
-        """按款式聚合；EXISTS/LATERAL 保证每条日报只映射一次。"""
+        """按款式聚合；EXISTS/LATERAL 保证每条日报只映射一次。
+
+        ``seasons`` / ``categories`` 为多选（PRD 第 4 章），空列表与 None 同义：不筛。
+        """
         brushing_sub = (
             """
+            -- 剔除与否只看 exclude_from_roi，不再叠加 order_type 判断：
+            -- 标记本身就是「要不要进投产口径」的唯一开关，两个条件并列反而容易漏
+            -- （历史上导入的刷单标记全是 false，这个子查询一条都匹配不到）。
             - COALESCE((
                 SELECT SUM(oa.amount) FROM order_adjustment oa
                 WHERE oa.tenant_id = :tenant_id AND oa.style_id = s.id
-                  AND oa.order_type = '刷单' AND oa.exclude_from_roi = true
+                  AND oa.exclude_from_roi = true
                   AND oa.order_date BETWEEN :date_from AND :date_to
               ), 0)
             """
             if exclude_brushing
             else ""
         )
-        season_clause = "AND s.season = :season" if season else ""
+        # = ANY(:param) 走数组绑定参数，不把值拼进 SQL
+        season_clause = "AND s.season = ANY(:seasons)" if seasons else ""
+        category_clause = "AND s.category = ANY(:categories)" if categories else ""
         sql = text(
             f"""
             SELECT
@@ -182,7 +198,15 @@ class ProductionRepository:
                   ELSE 0
                 END
               ), 0) AS refund_amount,
-              COALESCE(SUM((q.extra->>'add_cart_count')::int), 0) AS add_cart_count,
+              -- 与 refund_amount 同样加正则守卫：extra 是导入来的 JSONB，
+              -- 出现 "1,234"、"-" 这类字面量时直接 ::int 会让整条报表查询报错。
+              COALESCE(SUM(
+                CASE
+                  WHEN COALESCE(q.extra->>'add_cart_count', '') ~ '^-?[0-9]+$'
+                  THEN (q.extra->>'add_cart_count')::int
+                  ELSE 0
+                END
+              ), 0) AS add_cart_count,
               COALESCE(MAX(promo.promo_cost), 0) AS promo_cost,
               COALESCE(MAX(ad.ad_spend), 0) AS ad_spend
             FROM style s
@@ -245,6 +269,7 @@ class ProductionRepository:
             ) promo ON promo.style_id = s.id
             WHERE s.tenant_id = :tenant_id AND s.is_deleted = false
               {season_clause}
+              {category_clause}
             GROUP BY s.id, s.style_code, s.style_name, s.main_image_key
             HAVING COALESCE(SUM(q.pay_amount), 0) > 0
                 OR COALESCE(MAX(promo.promo_cost), 0) > 0
@@ -252,9 +277,15 @@ class ProductionRepository:
             ORDER BY pay_amount DESC
             """
         )
-        params = {"tenant_id": tenant_id, "date_from": date_from, "date_to": date_to}
-        if season:
-            params["season"] = season
+        params: dict[str, Any] = {
+            "tenant_id": tenant_id,
+            "date_from": date_from,
+            "date_to": date_to,
+        }
+        if seasons:
+            params["seasons"] = list(seasons)
+        if categories:
+            params["categories"] = list(categories)
         return as_mappings((await self._s.execute(sql, params)).mappings().all())
 
     async def daily_trend_by_style(
@@ -341,7 +372,7 @@ class ProductionRepository:
               WHERE :exclude_brushing = true
                 AND oa.tenant_id = :tenant_id
                 AND oa.style_id = :style_id
-                AND oa.order_type = '刷单'
+                -- 与 aggregate_by_style 同口径：只看 exclude_from_roi
                 AND oa.exclude_from_roi = true
                 AND oa.order_date BETWEEN :date_from AND :date_to
               GROUP BY {brushing_bucket}
@@ -407,7 +438,8 @@ class ProductionRepository:
             )
             SELECT d AS date, pay_amount, refund_amount, confirmed_amount,
                    promo_cost, ad_spend, total_spend,
-                   CASE WHEN total_spend = 0 THEN NULL
+                   -- 与 services.metric.common.safe_div 同口径：分母 ≤ 0 置 NULL
+                   CASE WHEN total_spend <= 0 THEN NULL
                         ELSE ROUND(confirmed_amount / total_spend, 4)
                    END AS net_roi
             FROM calculated

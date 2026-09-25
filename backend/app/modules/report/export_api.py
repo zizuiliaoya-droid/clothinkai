@@ -31,7 +31,8 @@ async def export_report(
     date_from: _FromQ = None,
     date_to: _ToQ = None,
     exclude_brushing: bool = True,
-    season: Annotated[str | None, Query(max_length=64)] = None,
+    season: Annotated[list[str] | None, Query(description="季节多选")] = None,
+    category: Annotated[list[str] | None, Query(description="类目多选")] = None,
     granularity: Annotated[str, Query(pattern=r"^(day|week|month|year)$")] = "day",
 ) -> StreamingResponse:
     tr = resolve_time_range(preset, date_from, date_to)
@@ -40,7 +41,8 @@ async def export_report(
         report_type,
         tr,
         exclude_brushing=exclude_brushing,
-        season=season,
+        seasons=season,
+        categories=category,
         granularity=granularity,
     )
 

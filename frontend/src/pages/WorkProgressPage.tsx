@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button, Card, DatePicker, Space, Table, Typography, message } from "antd";
 import { DownloadOutlined } from "@ant-design/icons";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import type { ColumnsType } from "antd/es/table";
 import dayjs from "dayjs";
+import { useFilterMemory } from "@/features/preference/useFilterMemory";
 import { exportReport, getWorkProgress } from "@/features/report/api";
 import type { PrWorkProgress } from "@/features/report/types";
 import { extractErrorMessage } from "@/services/apiClient";
@@ -14,8 +15,25 @@ const pct = (v: string | null) =>
 export function WorkProgressPage() {
   const [month, setMonth] = useState(dayjs().format("YYYY-MM"));
 
+  const memory = useFilterMemory<{ month: string }>("pr_work_progress");
+  const restoredRef = useRef(false);
+  useEffect(() => {
+    if (!memory.ready || restoredRef.current) return;
+    restoredRef.current = true;
+    if (memory.restored?.month) setMonth(memory.restored.month);
+  }, [memory.ready, memory.restored]);
+
+  useEffect(() => {
+    if (!restoredRef.current) return;
+    memory.persist({ month });
+    // persist 每次渲染都是新函数，不进依赖，否则每次渲染都会触发保存。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [month]);
+
   const { data, isLoading } = useQuery({
     queryKey: ["work-progress", month],
+    // 等偏好回填完再查，避免先用当月查一次、回填后又查一次。
+    enabled: memory.ready,
     queryFn: () => getWorkProgress(month),
   });
   const exportMutation = useMutation({

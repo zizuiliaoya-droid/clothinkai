@@ -49,6 +49,7 @@ class WorkProgressService:
     def _to_row(self, r: Mapping[str, Any]) -> PrWorkProgress:
         quote = int(r["quote_count"])
         publish = int(r["publish_count"])
+        effective_quote = int(r["effective_quote_count"])
         return PrWorkProgress(
             pr_id=r["pr_id"],
             pr_name=r["pr_name"],
@@ -66,8 +67,11 @@ class WorkProgressService:
             recall_complete_rate=safe_div(
                 r["recall_success_count"], r["recall_due_count"], quantize=_Q4
             ),
-            overdue_rate=safe_div(r["overdue_count"], quote, quantize=_Q4),
-            month_complete_rate=safe_div(publish, quote, quantize=_Q4),
+            effective_quote_count=effective_quote,
+            # PRD 第 9 章：超时率 / 完成率的分母要扣掉召回量与取消量。
+            # 用裸约稿量做分母会把已取消、已召回的单也算成「待发布」，完成率被系统性低估。
+            overdue_rate=safe_div(r["overdue_count"], effective_quote, quantize=_Q4),
+            month_complete_rate=safe_div(publish, effective_quote, quantize=_Q4),
             hit_count=int(r["hit_count"]),
             hit_rate=safe_div(r["hit_count"], publish, quantize=_Q4),
             like_count=int(r["like_count"]),

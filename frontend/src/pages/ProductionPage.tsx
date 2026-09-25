@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Button,
   Card,
@@ -28,6 +28,7 @@ import {
   type ReportDateRange,
   useReportTimeRange,
 } from "@/components/ReportTimeRangeFilter/ReportTimeRangeFilter";
+import { useFilterMemory } from "@/features/preference/useFilterMemory";
 import { extractErrorMessage } from "@/services/apiClient";
 
 const money = (v: string | null) => (v == null ? "—" : `¥${v}`);
@@ -46,11 +47,20 @@ function trendLabel(value: string, granularity: TimeGranularity): string {
   return value;
 }
 
+/** 记忆到 user_preference 的筛选形态。日期区间不记（每次进来通常想看最新）。 */
+interface ProductionFilterMemory {
+  preset: TimePreset;
+  season: string[];
+  category: string[];
+  exclude_brushing: boolean;
+}
+
 export function ProductionPage() {
   const [preset, setPreset] = useState<TimePreset>("last_30d");
   const [range, setRange] = useState<ReportDateRange>(null);
   const [excludeBrushing, setExcludeBrushing] = useState(true);
-  const [season, setSeason] = useState<string | undefined>(undefined);
+  const [season, setSeason] = useState<string[]>([]);
+  const [category, setCategory] = useState<string[]>([]);
   const [trendStyle, setTrendStyle] = useState<ProductionRow | null>(null);
   const [trendGranularity, setTrendGranularity] = useState<TimeGranularity>("day");
 
@@ -59,6 +69,43 @@ export function ProductionPage() {
     queryFn: () => listDictItems("season"),
   });
   const seasonOptions = (seasons ?? []).map((s) => ({ label: s.value, value: s.value }));
+  const { data: categories } = useQuery({
+    queryKey: ["dict-items", "category"],
+    queryFn: () => listDictItems("category"),
+  });
+  const categoryOptions = (categories ?? []).map((c) => ({
+    label: c.value,
+    value: c.value,
+  }));
+
+  // 筛选记忆：回填上次的选择，之后变更自动保存（节流）。
+  const memory = useFilterMemory<ProductionFilterMemory>("product_roi");
+  const restoredRef = useRef(false);
+  useEffect(() => {
+    if (!memory.ready || restoredRef.current) return;
+    restoredRef.current = true;
+    const saved = memory.restored;
+    if (!saved) return;
+    if (saved.preset) setPreset(saved.preset);
+    if (saved.season) setSeason(saved.season);
+    if (saved.category) setCategory(saved.category);
+    if (typeof saved.exclude_brushing === "boolean") {
+      setExcludeBrushing(saved.exclude_brushing);
+    }
+  }, [memory.ready, memory.restored]);
+
+  useEffect(() => {
+    // 回填完成前不要把默认值写回去，否则会把用户存的偏好冲掉。
+    if (!restoredRef.current) return;
+    memory.persist({
+      preset,
+      season,
+      category,
+      exclude_brushing: excludeBrushing,
+    });
+    // memory.persist 每次渲染都是新函数，不进依赖，否则每次渲染都会触发保存。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preset, season, category, excludeBrushing]);
 
   const { dateFrom: df, dateTo: dt, enabled } = useReportTimeRange(preset, range);
 
@@ -84,15 +131,17 @@ export function ProductionPage() {
   });
 
   const { data, isLoading } = useQuery({
-    queryKey: ["production", preset, df, dt, excludeBrushing, season],
-    enabled,
+    queryKey: ["production", preset, df, dt, excludeBrushing, season, category],
+    // 等偏好回填完再查，避免先用默认值查一次、回填后又查一次。
+    enabled: enabled && memory.ready,
     queryFn: () =>
       getProduction({
         preset,
         date_from: df,
         date_to: dt,
         exclude_brushing: excludeBrushing,
-        season,
+        season: season.length ? season : undefined,
+        category: category.length ? category : undefined,
       }),
   });
   const exportMutation = useMutation({
@@ -102,7 +151,8 @@ export function ProductionPage() {
         date_from: df,
         date_to: dt,
         exclude_brushing: excludeBrushing,
-        season,
+        season: season.length ? season : undefined,
+        category: category.length ? category : undefined,
       }),
     onSuccess: (filename) => message.success(`已导出 ${filename}`),
     onError: (error) => message.error(extractErrorMessage(error, "导出失败")),
@@ -186,12 +236,26 @@ export function ProductionPage() {
         <span style={{ marginLeft: 12 }}>季节/系列：</span>
         <Select
           aria-label="季节或系列"
+          mode="multiple"
           value={season}
-          style={{ width: 140 }}
+          style={{ minWidth: 180, maxWidth: 320 }}
           placeholder="全部"
           allowClear
+          maxTagCount="responsive"
           options={seasonOptions}
-          onChange={(v) => setSeason(v)}
+          onChange={(v: string[]) => setSeason(v)}
+        />
+        <span style={{ marginLeft: 12 }}>类目：</span>
+        <Select
+          aria-label="类目"
+          mode="multiple"
+          value={category}
+          style={{ minWidth: 180, maxWidth: 320 }}
+          placeholder="全部"
+          allowClear
+          maxTagCount="responsive"
+          options={categoryOptions}
+          onChange={(v: string[]) => setCategory(v)}
         />
         <span style={{ marginLeft: 12 }}>剔除刷单：</span>
         <Switch

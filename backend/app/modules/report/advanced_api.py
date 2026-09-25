@@ -134,11 +134,16 @@ async def get_production(
     date_from: _FromQ = None,
     date_to: _ToQ = None,
     exclude_brushing: bool = True,
-    season: Annotated[str | None, Query(max_length=64)] = None,
+    season: Annotated[list[str] | None, Query(description="季节多选")] = None,
+    category: Annotated[list[str] | None, Query(description="类目多选")] = None,
 ) -> ProductionReport:
     tr = resolve_time_range(preset, date_from, date_to)
     return await service.get_report(
-        user.tenant_id, tr, exclude_brushing=exclude_brushing, season=season
+        user.tenant_id,
+        tr,
+        exclude_brushing=exclude_brushing,
+        seasons=season,
+        categories=category,
     )
 
 
