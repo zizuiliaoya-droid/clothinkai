@@ -78,6 +78,9 @@ coverage/
 .playwright-mcp/
 local-dashboard.png
 
+# 临时工作目录（部署脚本、提交信息草稿等）
+.tmp-zeabur/
+
 # 本地存储回退（R2 未配置时；dev only）
 backend/.local_storage/
 

@@ -709,6 +709,7 @@ import app.modules.collect.models  # noqa: E402  (U13 采集 5 表)
 import app.modules.credential.models  # noqa: E402  (U12 credential)
 import app.modules.importer.models  # noqa: E402
 import app.modules.product.bundle_models  # noqa: E402  (U17 bundle_product/bundle_item)
+import app.modules.product.goods_models  # noqa: E402  (goods_main/goods_style_item)
 import app.modules.report.user_preference_models  # noqa: E402  (U17 user_preference)
 import app.modules.report.work_progress_models  # noqa: E402  (U14 target_planning/store_daily)
 import app.modules.wecom.alert_models  # noqa: E402  (U15 wecom_alert_config/log)
