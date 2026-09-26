@@ -68,6 +68,14 @@ class Promotion(TenantScopedModel):
         ForeignKey("sku.id", ondelete="RESTRICT"),
         nullable=True,
     )
+    # 这次推广是为哪个商品做的。款式既单卖又进套装时，只有 PR 知道推的是哪个，
+    # 所以落库而不是在报表里按货号字典序猜（那样新建商品会让历史归属突然跳走）。
+    # 可空：历史数据与「款式还没归到商品」的异常情况下，报表回落到兜底规则。
+    goods_main_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("goods_main.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
     blogger_id: Mapped[UUID] = mapped_column(
         PGUUID(as_uuid=True),
         ForeignKey("blogger.id", ondelete="RESTRICT"),
@@ -168,6 +176,13 @@ class Promotion(TenantScopedModel):
             "idx_promotion_style",
             "tenant_id",
             "style_id",
+            "publish_status",
+        ),
+        # 投产报表按商品聚合推广费
+        Index(
+            "idx_promotion_goods",
+            "tenant_id",
+            "goods_main_id",
             "publish_status",
         ),
         # 排序 + urge 计算

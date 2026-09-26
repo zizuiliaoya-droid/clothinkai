@@ -26,6 +26,7 @@ from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.metrics import promotion_sequence_lock_duration_seconds
+from app.modules.product.goods_models import GoodsStyleItem
 from app.modules.promotion.exceptions import SequenceOverflowError
 from app.modules.promotion.models import Promotion
 from app.modules.promotion.urge_calculator import URGE_STATUS_SQL_EXPR
@@ -64,12 +65,14 @@ class PromotionListFilters:
 
 @dataclass(frozen=True)
 class PromotionListRow:
-    """list_with_cte 返回的轻量行（含计算字段和款式主图 key）。"""
+    """list_with_cte 返回的轻量行（含计算字段、款式主图 key 与商品归属）。"""
 
     promotion: Promotion
     urge_status: str
     dual_platform: bool
     style_main_image_key: str | None = None
+    goods_code: str | None = None
+    goods_is_suit: bool = False
 
 
 @dataclass(frozen=True)
@@ -269,6 +272,40 @@ class PromotionRepository:
         result = await self._session.execute(stmt)
         return bool(result.scalar_one())
 
+    # ----------------------- 商品归属 ----------------------- #
+
+    async def resolve_owner_goods_id(self, style_id: UUID) -> UUID | None:
+        """推定主商品：非套装优先、货号次之。没归到任何商品时返回 None。
+
+        与报表兜底 SQL 同序，保证不传 goods_main_id 时行为与旧口径一致。
+        """
+        sql = text(
+            """
+            SELECT g.id
+            FROM goods_style_item gi
+            JOIN goods_main g ON g.id = gi.goods_main_id
+            WHERE gi.style_id = :style_id AND gi.is_active = true
+              AND g.is_deleted = false
+            ORDER BY g.is_suit, g.goods_code
+            LIMIT 1
+            """
+        )
+        result: UUID | None = (
+            await self._session.execute(sql, {"style_id": style_id})
+        ).scalar_one_or_none()
+        return result
+
+    async def goods_contains_style(self, *, goods_main_id: UUID, style_id: UUID) -> bool:
+        """商品是否包含该款式 —— 防止把推广挂到不相干的商品上。"""
+        stmt = select(
+            exists().where(
+                GoodsStyleItem.goods_main_id == goods_main_id,
+                GoodsStyleItem.style_id == style_id,
+                GoodsStyleItem.is_active.is_(True),
+            )
+        )
+        return bool((await self._session.execute(stmt)).scalar_one())
+
     # ----------------------- write ----------------------- #
 
     def add(self, promotion: Promotion) -> None:
@@ -460,6 +497,8 @@ class PromotionRepository:
         WITH base AS (
             SELECT p.*,
                    s.main_image_key AS style_main_image_key,
+                   g.goods_code AS goods_code,
+                   COALESCE(g.is_suit, false) AS goods_is_suit,
                    {URGE_STATUS_SQL_EXPR.strip()} AS urge_status,
                    EXISTS (
                        SELECT 1 FROM promotion p2
@@ -473,6 +512,8 @@ class PromotionRepository:
             FROM promotion p
             LEFT JOIN style s
               ON s.id = p.style_id AND s.tenant_id = p.tenant_id
+            LEFT JOIN goods_main g
+              ON g.id = p.goods_main_id AND g.tenant_id = p.tenant_id
             WHERE p.tenant_id = :tenant_id
         )
         SELECT * FROM base WHERE 1=1
@@ -578,6 +619,7 @@ class PromotionRepository:
                         "tenant_id",
                         "style_id",
                         "sku_id",
+                        "goods_main_id",
                         "blogger_id",
                         "pr_id",
                         "internal_code",
@@ -620,6 +662,8 @@ class PromotionRepository:
                     urge_status=row["urge_status"],
                     dual_platform=bool(row["dual_platform_calc"]),
                     style_main_image_key=row["style_main_image_key"],
+                    goods_code=row["goods_code"],
+                    goods_is_suit=bool(row["goods_is_suit"]),
                 )
             )
         return rows, total

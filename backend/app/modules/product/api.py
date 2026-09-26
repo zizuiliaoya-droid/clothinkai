@@ -18,10 +18,12 @@ from uuid import UUID
 
 from fastapi import APIRouter, File, Query, UploadFile, status
 from fastapi.responses import Response
+from sqlalchemy import text
 
 from app.core.exceptions import ValidationError
 from app.modules.auth.deps import (
     CurrentActiveUser,
+    SessionDep,
     require_permission,
 )
 from app.modules.product.brand_schemas import (
@@ -34,6 +36,7 @@ from app.modules.product.deps import (
     SkuServiceDep,
     StyleServiceDep,
 )
+from app.modules.product.goods_schemas import GoodsOption
 from app.modules.product.repository import StyleListFilters
 from app.modules.product.schemas import (
     CostTablePage,
@@ -134,6 +137,39 @@ async def list_styles(
         include_inactive=include_inactive,
     )
     return await service.list_styles(filters=filters, page=page, page_size=page_size, user=user)
+
+
+@router.get(
+    "/styles/{style_id}/goods",
+    response_model=list[GoodsOption],
+    dependencies=[require_permission("product", "read")],
+)
+async def list_goods_for_style(
+    user: CurrentActiveUser,
+    session: SessionDep,
+    style_id: UUID,
+) -> list[GoodsOption]:
+    """款式归属的商品（单品 / 套装），非套装优先、货号次之。
+
+    录推广时用来确认「这笔推广是为哪个商品做的」。返回多条说明该款式既单卖又进套装，
+    需要人工指定；只有一条时前端直接用它，不打扰用户。
+    """
+    sql = text(
+        """
+        SELECT g.id AS goods_main_id, g.goods_code, g.goods_title, g.is_suit
+        FROM goods_style_item gi
+        JOIN goods_main g ON g.id = gi.goods_main_id
+        WHERE gi.tenant_id = :tenant_id
+          AND gi.style_id = :style_id
+          AND gi.is_active = true
+          AND g.is_deleted = false
+        ORDER BY g.is_suit, g.goods_code
+        """
+    )
+    rows = (
+        await session.execute(sql, {"tenant_id": user.tenant_id, "style_id": style_id})
+    ).mappings()
+    return [GoodsOption.model_validate(dict(row)) for row in rows]
 
 
 @router.get(

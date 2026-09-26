@@ -737,6 +737,57 @@ class TestProduction:
         finally:
             tenant_id_ctx.reset(tok)
 
+    async def test_promo_follows_explicit_goods_attribution(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        pr_role: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        """推广记录自己记了商品归属时，报表按它走，不再按「主商品」推定。
+
+        这是让业务能纠正归属的关键：PR 说这笔推广是为套装做的，报表就得算给套装，
+        哪怕推定规则会选单品。
+        """
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            pr = await factory.user(tenant_a, roles=[pr_role])
+            blogger = await blogger_factory.blogger()
+            shared = await product_factory.style(style_code="ATTR_SHARED")
+            partner = await product_factory.style(style_code="ATTR_PARTNER")
+            solo = await _goods(session, tenant_a, shared, code="ATTR-SOLO")
+            suit = await _goods(session, tenant_a, shared, partner, code="ATTR-SUIT", is_suit=True)
+            solo_pp = await _platform_product(session, tenant_a, shared, goods=solo)
+            suit_pp = await _platform_product(session, tenant_a, shared, goods=suit)
+            day = date(2026, 6, 13)
+            await _qianniu(session, tenant_a, solo_pp, day, pay="100.00")
+            await _qianniu(session, tenant_a, suit_pp, day, pay="900.00")
+            # 推定规则会选 ATTR-SOLO（非套装优先），这里显式指定套装
+            await promotion_factory.promotion(
+                style=shared,
+                blogger=blogger,
+                pr=pr,
+                cooperation_date=day,
+                quote_amount=Decimal("400.00"),
+                publish_status="已发布",
+                goods_main_id=suit.id,
+            )
+            await session.commit()
+
+            report = await ProductionService(session).get_report(tenant_a.id, (day, day))
+            by_code = {r.goods_code: r for r in report.items}
+            assert by_code["ATTR-SUIT"].promo_cost == Decimal("400.00")
+            assert by_code["ATTR-SOLO"].promo_cost == Decimal("0")
+            assert sum(r.promo_cost for r in report.items) == Decimal("400.00")
+
+            trend = await ProductionService(session).get_trend(tenant_a.id, suit.id, (day, day))
+            assert trend.points[0].promo_cost == Decimal("400.00")
+        finally:
+            tenant_id_ctx.reset(tok)
+
     async def test_style_in_both_solo_and_suit_does_not_double_count_promo(
         self,
         session: AsyncSession,

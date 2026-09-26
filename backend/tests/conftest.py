@@ -461,6 +461,9 @@ async def promotion_factory(session: AsyncSession, tenant_a: Any) -> Any:
                     tenant_id=t.id,
                     style_id=style.id,
                     sku_id=kw.get("sku_id"),
+                    # 不默认推定商品归属：工厂保持"未指定"，让报表走兜底路径，
+                    # 需要显式归属的测试自己传 goods_main_id
+                    goods_main_id=kw.get("goods_main_id"),
                     blogger_id=blogger.id,
                     pr_id=kw.get("pr_id", pr.id if pr else None),
                     internal_code=kw.get(

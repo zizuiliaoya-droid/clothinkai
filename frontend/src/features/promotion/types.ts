@@ -48,12 +48,16 @@ export interface Promotion {
   internal_code: string;
   style_id: string;
   sku_id: string | null;
+  goods_main_id: string | null;
   blogger_id: string;
   pr_id: string | null;
   // 快照
   style_code_snapshot: string;
   style_short_name_snapshot: string;
   style_main_image_url: string | null;
+  // 商品归属（实时取，不做快照 —— 归属可改）
+  goods_code: string | null;
+  goods_is_suit: boolean;
   quote_amount: string | null; // Decimal as string；敏感
   cost_snapshot: string | null; // 敏感
   // 业务字段
@@ -103,6 +107,8 @@ export interface PromotionDuplicateWarning {
 export interface PromotionCreate {
   style_id: string;
   sku_id?: string | null;
+  /** 这次推广归属的商品。不传由后端取主商品（非套装优先）。 */
+  goods_main_id?: string | null;
   blogger_id: string;
   platform: string;
   cooperation_date: string;
@@ -114,6 +120,8 @@ export interface PromotionCreate {
 
 export interface PromotionUpdate {
   sku_id?: string | null;
+  /** 商品归属可改：录错、或套装是推广录完之后才建的。 */
+  goods_main_id?: string | null;
   platform?: string;
   scheduled_publish_date?: string | null;
   quote_amount?: string | null;
