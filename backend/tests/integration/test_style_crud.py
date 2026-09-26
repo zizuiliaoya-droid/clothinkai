@@ -336,14 +336,39 @@ class TestListStyles:
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-class TestSuiteName:
-    """套装名称（方案 A）：同千牛商品ID 的款式构成一个套装。
+class TestGoodsAttribution:
+    """款式的商品归属：套装来自 goods_main.is_suit，不再按共用千牛ID 推断。
 
-    店铺里一个千牛商品ID 就是一个销售链接，所以共用千牛ID 即同一个销售单元。
-    套装名称按货号升序拼接款名，套装内每一行拿到的名称必须完全一致。
+    千牛ID 属于平台链接层（运维视图维护），款式管理页只关心「这件衣服归哪个商品」。
     """
 
-    async def test_shared_platform_id_forms_suite(
+    @staticmethod
+    async def _goods(
+        session: AsyncSession, tenant: Any, *styles: Any, code: str, is_suit: bool = False
+    ) -> Any:
+        from app.modules.product.goods_models import GoodsMain, GoodsStyleItem
+
+        goods = GoodsMain(
+            tenant_id=tenant.id,
+            goods_code=code,
+            goods_title="+".join(s.style_name for s in styles) if is_suit else code,
+            is_suit=is_suit,
+        )
+        session.add(goods)
+        await session.flush()
+        for idx, style in enumerate(styles):
+            session.add(
+                GoodsStyleItem(
+                    tenant_id=tenant.id,
+                    goods_main_id=goods.id,
+                    style_id=style.id,
+                    sort_order=idx,
+                )
+            )
+        await session.flush()
+        return goods
+
+    async def test_suit_members_share_suite_name(
         self,
         session: AsyncSession,
         tenant_a: Any,
@@ -351,18 +376,12 @@ class TestSuiteName:
         admin_role: Any,
         product_factory: Any,
     ) -> None:
+        """套装内每一行拿到同一个套装标题，且主商品就是套装本身。"""
         token = tenant_id_ctx.set(tenant_a.id)
         try:
-            await product_factory.style(
-                style_code="SUITE_B",
-                style_name="卡其毛衣马甲",
-                qianniu_product_id="1074568657697",
-            )
-            await product_factory.style(
-                style_code="SUITE_A",
-                style_name="木耳边打底衫",
-                qianniu_product_id="1074568657697",
-            )
+            a = await product_factory.style(style_code="SUITE_A", style_name="木耳边打底衫")
+            b = await product_factory.style(style_code="SUITE_B", style_name="卡其毛衣马甲")
+            await self._goods(session, tenant_a, a, b, code="SUIT-1", is_suit=True)
             user = await factory.user(tenant_a, roles=[admin_role])
             svc = StyleService(session)
 
@@ -372,15 +391,16 @@ class TestSuiteName:
                 page_size=50,
                 user=user,
             )
-            names = {i.style_code: i.suite_name for i in page.items}
-            assert len(names) == 2
-            # 按货号升序 → SUITE_A 的款名在前；两行取到同一个套装名
-            assert names["SUITE_A"] == "木耳边打底衫+卡其毛衣马甲"
-            assert names["SUITE_B"] == "木耳边打底衫+卡其毛衣马甲"
+            rows = {i.style_code: i for i in page.items}
+            assert len(rows) == 2
+            for code in ("SUITE_A", "SUITE_B"):
+                assert rows[code].goods_code == "SUIT-1"
+                assert rows[code].goods_is_suit is True
+                assert rows[code].suite_name == "木耳边打底衫+卡其毛衣马甲"
         finally:
             tenant_id_ctx.reset(token)
 
-    async def test_single_style_has_no_suite_name(
+    async def test_solo_style_has_no_suite_name(
         self,
         session: AsyncSession,
         tenant_a: Any,
@@ -390,11 +410,8 @@ class TestSuiteName:
     ) -> None:
         token = tenant_id_ctx.set(tenant_a.id)
         try:
-            await product_factory.style(
-                style_code="SOLO001",
-                style_name="单件连衣裙",
-                qianniu_product_id="9999999999",
-            )
+            style = await product_factory.style(style_code="SOLO001", style_name="单件连衣裙")
+            await self._goods(session, tenant_a, style, code="SOLO001")
             user = await factory.user(tenant_a, roles=[admin_role])
             svc = StyleService(session)
 
@@ -404,11 +421,13 @@ class TestSuiteName:
                 page_size=50,
                 user=user,
             )
+            assert page.items[0].goods_code == "SOLO001"
+            assert page.items[0].goods_is_suit is False
             assert page.items[0].suite_name is None
         finally:
             tenant_id_ctx.reset(token)
 
-    async def test_no_platform_id_has_no_suite_name(
+    async def test_style_without_goods_returns_nulls(
         self,
         session: AsyncSession,
         tenant_a: Any,
@@ -416,26 +435,27 @@ class TestSuiteName:
         admin_role: Any,
         product_factory: Any,
     ) -> None:
-        """未填千牛ID 的款式不参与套装分组（不能把一堆 NULL 归成一个巨型套装）。"""
+        """还没归到商品的款式不报错，归属字段留空供前端提示「未归属」。"""
         token = tenant_id_ctx.set(tenant_a.id)
         try:
-            await product_factory.style(style_code="NOPID1", style_name="甲")
-            await product_factory.style(style_code="NOPID2", style_name="乙")
+            await product_factory.style(style_code="NOGOODS1", style_name="甲")
+            await product_factory.style(style_code="NOGOODS2", style_name="乙")
             user = await factory.user(tenant_a, roles=[admin_role])
             svc = StyleService(session)
 
             page = await svc.list_styles(
-                filters=StyleListFilters(keyword="NOPID"),
+                filters=StyleListFilters(keyword="NOGOODS"),
                 page=1,
                 page_size=50,
                 user=user,
             )
             assert len(page.items) == 2
+            assert all(i.goods_code is None for i in page.items)
             assert all(i.suite_name is None for i in page.items)
         finally:
             tenant_id_ctx.reset(token)
 
-    async def test_single_style_response_includes_suite_name(
+    async def test_style_in_both_solo_and_suit_shows_both(
         self,
         session: AsyncSession,
         tenant_a: Any,
@@ -443,19 +463,45 @@ class TestSuiteName:
         admin_role: Any,
         product_factory: Any,
     ) -> None:
-        """单条读取路径（get_style）也要带套装名，前端任何入口拿到的 Style 都一致。"""
+        """既单卖又进套装时：主商品是单品，套装名另外给出，两个信息都要看得到。
+
+        生产上 260419 就是这个形态 —— 它有自己的销售链接，同时和 260415 组成套装。
+        """
         token = tenant_id_ctx.set(tenant_a.id)
         try:
-            a = await product_factory.style(
-                style_code="PAIR_A", style_name="上衣", qianniu_product_id="8888888888"
-            )
-            await product_factory.style(
-                style_code="PAIR_B", style_name="裤子", qianniu_product_id="8888888888"
-            )
+            shared = await product_factory.style(style_code="DUAL_A", style_name="打底衫")
+            partner = await product_factory.style(style_code="DUAL_B", style_name="马甲")
+            await self._goods(session, tenant_a, shared, code="DUAL_A")
+            await self._goods(session, tenant_a, shared, partner, code="SUIT-DUAL", is_suit=True)
+            user = await factory.user(tenant_a, roles=[admin_role])
+            svc = StyleService(session)
+
+            response = await svc.get_style(shared.id, user)
+            assert response.goods_code == "DUAL_A"
+            assert response.goods_is_suit is False
+            assert response.suite_name == "打底衫+马甲"
+        finally:
+            tenant_id_ctx.reset(token)
+
+    async def test_single_read_path_includes_attribution(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
+    ) -> None:
+        """单条读取路径（get_style）也要带归属，前端任何入口拿到的 Style 都一致。"""
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            a = await product_factory.style(style_code="PAIR_A", style_name="上衣")
+            b = await product_factory.style(style_code="PAIR_B", style_name="裤子")
+            await self._goods(session, tenant_a, a, b, code="SUIT-PAIR", is_suit=True)
             user = await factory.user(tenant_a, roles=[admin_role])
             svc = StyleService(session)
 
             response = await svc.get_style(a.id, user)
+            assert response.goods_code == "SUIT-PAIR"
             assert response.suite_name == "上衣+裤子"
         finally:
             tenant_id_ctx.reset(token)

@@ -13,7 +13,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from typing import Any
 
 from app.modules.product.enums import SourcingType
@@ -47,19 +46,12 @@ SKU_SENSITIVE_VALUE_FIELDS: frozenset[str] = frozenset({"cost_price", "purchase_
 
 
 SUITE_NAME_SEPARATOR = "+"
-"""套装名称的款名连接符（款名A+款名B）。"""
+"""套装标题的成员款名连接符（款名A+款名B）。
 
-
-def build_suite_name(member_names: Sequence[str]) -> str | None:
-    """由套装成员款名拼出套装名称；单件返回 ``None``。
-
-    成员顺序由调用方保证（按货号升序），这样同一个套装的每一行拿到的名称一致。
-    只有一个成员时它就是单品而非套装，返回 ``None`` 让前端显示「—」；
-    这也是「哪些款是一起卖的」这个判断的唯一依据。
-    """
-    if len(member_names) < 2:
-        return None
-    return SUITE_NAME_SEPARATOR.join(member_names)
+套装标题现在由 migration 生成并存进 ``goods_main.goods_title``（037 / 041 的
+``string_agg(..., '+' ORDER BY style_code)``），不再在 Python 里按千牛ID 现拼。
+这个常量留作两侧约定的单一出处。
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -225,7 +217,6 @@ __all__ = [
     "SUITE_NAME_SEPARATOR",
     "build_sku_audit_changes",
     "build_style_audit_changes",
-    "build_suite_name",
     "compute_sku_changes",
     "compute_style_changes",
     "validate_sku_prices",

@@ -11,13 +11,13 @@
 from __future__ import annotations
 
 import builtins
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
 import sqlalchemy as sa
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -137,32 +137,45 @@ class StyleRepository:
         items = (await self._session.execute(stmt)).scalars().all()
         return items, total
 
-    # ----------------------- 套装（同千牛ID 分组） ----------------------- #
+    # ----------------------- 商品归属（goods_main） ----------------------- #
 
-    async def suite_members_by_platform_id(
-        self, platform_ids: Collection[str]
-    ) -> dict[str, builtins.list[str]]:
-        """按千牛商品ID 聚合同组款名，组内按货号升序。
+    async def goods_by_style_ids(
+        self, style_ids: Collection[UUID]
+    ) -> dict[UUID, Mapping[str, Any]]:
+        """按款式批量取商品归属，一次查完避免 N+1。
 
-        店铺里一个千牛商品ID 就是一个销售链接，因此多个款式共用同一个千牛ID
-        即构成一个套装。这里包含已停用款（套装的构成是既成事实，不随启停变化），
-        只排除软删。返回 ``{千牛ID: [款名, ...]}``，供上层拼接套装名称。
+        套装不再由「多个款式共用同一个千牛ID」推断 —— 那只是历史上的表达方式，
+        现在套装是 ``goods_main`` 里的一等公民（``is_suit``）。千牛ID 属于平台链接层，
+        款式管理页不再关心。
+
+        返回每个款式的：
+        - ``goods_code`` / ``goods_title`` / ``goods_is_suit``：主商品（非套装优先、
+          货号次之，与推广和链接的归属推定同序）
+        - ``suite_name``：该款式所属套装的标题；不在任何套装里则为 None。
+          一个款式可以既单卖又进套装（生产上 260419 就是），那时主商品是单品，
+          套装名另外给出，两个信息都要让人看到。
         """
-        ids = [pid for pid in dict.fromkeys(platform_ids) if pid]
+        ids = list(dict.fromkeys(style_ids))
         if not ids:
             return {}
-        stmt = (
-            select(Style.qianniu_product_id, Style.style_name)
-            .where(
-                Style.is_deleted.is_(False),
-                Style.qianniu_product_id.in_(ids),
-            )
-            .order_by(Style.qianniu_product_id, Style.style_code)
+        sql = text(
+            """
+            SELECT gi.style_id,
+                   (array_agg(g.goods_code ORDER BY g.is_suit, g.goods_code))[1] AS goods_code,
+                   (array_agg(g.goods_title ORDER BY g.is_suit, g.goods_code))[1] AS goods_title,
+                   (array_agg(g.is_suit ORDER BY g.is_suit, g.goods_code))[1] AS goods_is_suit,
+                   (array_agg(g.goods_title ORDER BY g.goods_code)
+                      FILTER (WHERE g.is_suit))[1] AS suite_name
+            FROM goods_style_item gi
+            JOIN goods_main g ON g.id = gi.goods_main_id
+            WHERE gi.style_id = ANY(:style_ids)
+              AND gi.is_active = true
+              AND g.is_deleted = false
+            GROUP BY gi.style_id
+            """
         )
-        grouped: dict[str, builtins.list[str]] = {}
-        for platform_id, style_name in (await self._session.execute(stmt)).all():
-            grouped.setdefault(platform_id, []).append(style_name)
-        return grouped
+        rows = (await self._session.execute(sql, {"style_ids": ids})).mappings()
+        return {row["style_id"]: dict(row) for row in rows}
 
     # ----------------------- match (BR-U02-50/51) ----------------------- #
 

@@ -169,8 +169,16 @@ class StyleResponse(BaseModel):
     style_name: str
     short_name: str | None = None
     qianniu_product_id: str | None = None
+    """千牛商品ID —— 属于平台链接层，只在运维视图维护，业务页面不展示。"""
+    goods_code: str | None = None
+    goods_title: str | None = None
+    goods_is_suit: bool = False
+    """所属商品（派生，非存储字段）：主商品为非套装优先、货号次之。"""
     suite_name: str | None = None
-    """套装名称（派生，非存储字段）：同千牛ID 的款名按货号升序用 + 连接；单件为 None。"""
+    """所属套装的标题（派生，非存储字段）；不在任何套装里则为 None。
+
+    款式可以既单卖又进套装，那时 ``goods_code`` 是单品、``suite_name`` 另外给出。
+    """
     brand_id: UUID | None = None
     category: str
     season: str | None = None

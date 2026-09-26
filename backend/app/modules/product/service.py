@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from typing import Any
 from uuid import UUID
 
@@ -32,7 +32,6 @@ from app.modules.finance.order_adjustment_repository import OrderAdjustmentRepos
 from app.modules.product.domain import (
     build_sku_audit_changes,
     build_style_audit_changes,
-    build_suite_name,
     compute_sku_changes,
     compute_style_changes,
     validate_sku_prices,
@@ -391,12 +390,10 @@ class StyleService:
         user: User,
     ) -> StylePage:
         items, total = await self._styles.list(filters=filters, page=page, page_size=page_size)
-        # 套装名称一次性批量取（按本页出现的千牛ID），避免逐条查成 N+1。
-        suite_members = await self._styles.suite_members_by_platform_id(
-            [s.qianniu_product_id for s in items if s.qianniu_product_id]
-        )
+        # 商品归属一次性批量取，避免逐条查成 N+1。
+        goods_by_style = await self._styles.goods_by_style_ids([s.id for s in items])
         return StylePage(
-            items=[await self._to_response(s, user, suite_members=suite_members) for s in items],
+            items=[await self._to_response(s, user, goods_by_style=goods_by_style) for s in items],
             total=total,
             page=page,
             page_size=page_size,
@@ -455,16 +452,15 @@ class StyleService:
         style: Style,
         _user: User,
         *,
-        suite_members: Mapping[str, Sequence[str]] | None = None,
+        goods_by_style: Mapping[UUID, Mapping[str, Any]] | None = None,
     ) -> StyleResponse:
         """Style 无字段级权限差异（cost_price 等不在 Style 表）.
 
-        ``suite_members`` 由列表路径预先批量查好传入；单条路径不传，这里自行查一次。
+        ``goods_by_style`` 由列表路径预先批量查好传入；单条路径不传，这里自行查一次。
         """
-        platform_id = style.qianniu_product_id
-        if suite_members is None and platform_id:
-            suite_members = await self._styles.suite_members_by_platform_id([platform_id])
-        suite_name = build_suite_name((suite_members or {}).get(platform_id or "", ()))
+        if goods_by_style is None:
+            goods_by_style = await self._styles.goods_by_style_ids([style.id])
+        goods = goods_by_style.get(style.id) or {}
 
         main_url: str | None = None
         if style.main_image_key and attachment_service.is_configured:
@@ -480,7 +476,10 @@ class StyleService:
             style_name=style.style_name,
             short_name=style.short_name,
             qianniu_product_id=style.qianniu_product_id,
-            suite_name=suite_name,
+            goods_code=goods.get("goods_code"),
+            goods_title=goods.get("goods_title"),
+            goods_is_suit=bool(goods.get("goods_is_suit")),
+            suite_name=goods.get("suite_name"),
             brand_id=style.brand_id,
             category=style.category,
             season=style.season,

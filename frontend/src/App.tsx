@@ -38,6 +38,7 @@ import { DailyDataPage } from "@/pages/DailyDataPage";
 import { CredentialPage } from "@/pages/CredentialPage";
 import { WorkerTokenPage } from "@/pages/WorkerTokenPage";
 import { DataQualityPage } from "@/pages/DataQualityPage";
+import { PlatformLinkPage } from "@/pages/PlatformLinkPage";
 import { listQianniu, listAdDaily } from "@/features/collect/api";
 import type { QianniuRow, AdRow } from "@/features/collect/api";
 import { getMe } from "@/features/auth/api";
@@ -241,6 +242,12 @@ function AppRoutes() {
         <Route path="/data-quality" element={
           <RoleRoute requireAnyRole={["admin", "platform_admin", "operations"]}>
             <DataQualityPage />
+          </RoleRoute>
+        } />
+        {/* 平台链接：绑错会让销售数据算到别的商品头上，限管理员/运营 */}
+        <Route path="/platform-links" element={
+          <RoleRoute requireAnyRole={["admin", "platform_admin", "operations"]}>
+            <PlatformLinkPage />
           </RoleRoute>
         } />
         <Route path="/settings" element={<SettingsPage />} />

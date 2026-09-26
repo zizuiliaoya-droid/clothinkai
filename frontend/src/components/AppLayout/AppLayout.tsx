@@ -7,6 +7,7 @@ import {
   DollarOutlined,
   HighlightOutlined,
   KeyOutlined,
+  LinkOutlined,
   LogoutOutlined,
   NotificationOutlined,
   SafetyCertificateOutlined,
@@ -35,6 +36,8 @@ export function AppLayout() {
   const canViewCredentials =
     isSystemAdmin || roles.includes("operations");
   const canViewDataQuality = canViewCredentials;
+  // 平台链接是运维视图：绑错一条链接，整条销售数据就记到别的商品名下
+  const canViewPlatformLinks = canViewCredentials;
 
   async function handleLogout() {
     try {
@@ -167,6 +170,15 @@ export function AppLayout() {
                 key: "/data-quality",
                 icon: <WarningOutlined />,
                 label: <Link to="/data-quality">数据质量</Link>,
+              },
+            ]
+          : []),
+        ...(canViewPlatformLinks
+          ? [
+              {
+                key: "/platform-links",
+                icon: <LinkOutlined />,
+                label: <Link to="/platform-links">平台链接</Link>,
               },
             ]
           : []),

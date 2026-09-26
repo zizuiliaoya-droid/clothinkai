@@ -191,7 +191,6 @@ export function StyleListPage() {
     form.setFieldsValue({
       style_code: record.style_code,
       style_name: record.style_name,
-      qianniu_product_id: record.qianniu_product_id,
       brand_id: record.brand_id,
       category: record.category,
       season: record.season,
@@ -217,21 +216,36 @@ export function StyleListPage() {
     },
     { title: "货号", dataIndex: "style_code", width: 140, fixed: "left" },
     { title: "款名", dataIndex: "style_name" },
-    { title: "千牛商品ID", dataIndex: "qianniu_product_id", width: 130, render: (v) => v || "—" },
     {
-      title: "套装名称",
-      dataIndex: "suite_name",
+      title: "所属商品",
+      dataIndex: "goods_code",
       width: 200,
-      render: (v: string | null) =>
-        v ? (
-          <Tooltip title={v}>
-            <Tag color="blue" style={{ maxWidth: 184, overflow: "hidden", textOverflow: "ellipsis" }}>
-              {v}
-            </Tag>
-          </Tooltip>
-        ) : (
-          <Typography.Text type="secondary">单件</Typography.Text>
-        ),
+      render: (code: string | null, record) => {
+        if (!code) {
+          return <Typography.Text type="secondary">未归属</Typography.Text>;
+        }
+        return (
+          <Space size={4} direction="vertical">
+            <Space size={4}>
+              <Tooltip title={record.goods_title ?? undefined}>
+                <span>{code}</span>
+              </Tooltip>
+              {record.goods_is_suit && <Tag color="purple">套装</Tag>}
+            </Space>
+            {/* 款式可以既单卖又进套装，那时主商品是单品、套装名另外标出来 */}
+            {record.suite_name && !record.goods_is_suit && (
+              <Tooltip title={record.suite_name}>
+                <Tag
+                  color="blue"
+                  style={{ maxWidth: 184, overflow: "hidden", textOverflow: "ellipsis" }}
+                >
+                  也在套装：{record.suite_name}
+                </Tag>
+              </Tooltip>
+            )}
+          </Space>
+        );
+      },
     },
     { title: "类目", dataIndex: "category", width: 90 },
     { title: "季节", dataIndex: "season", width: 70, render: (v) => v || "—" },
@@ -388,13 +402,6 @@ export function StyleListPage() {
             rules={[{ required: true, message: "请输入款名" }]}
           >
             <Input placeholder="款式名称" />
-          </Form.Item>
-          <Form.Item
-            name="qianniu_product_id"
-            label="千牛商品ID"
-            extra="用于关联投产数据。多个款式填相同的千牛ID 即视为一个套装，套装名称自动按货号顺序拼接款名。"
-          >
-            <Input placeholder="生意参谋商品ID（可选）" allowClear />
           </Form.Item>
           <Form.Item label="款式主图">
             <Space align="start" size="middle" wrap>
