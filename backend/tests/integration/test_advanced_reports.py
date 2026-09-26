@@ -737,6 +737,59 @@ class TestProduction:
         finally:
             tenant_id_ctx.reset(tok)
 
+    async def test_style_in_both_solo_and_suit_does_not_double_count_promo(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        pr_role: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        """款式既单卖又进套装时，同一笔推广费只能算给一个商品。
+
+        生产上 260419（木耳边打底衫）就是这个形态：它有自己的独立销售链接，
+        同时又和 260415 组成套装。推广费挂在款式上，如果两个商品都算就会让
+        全店总花费翻倍、投产比虚低。取主商品（非套装优先）保证总额不重复。
+        """
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            pr = await factory.user(tenant_a, roles=[pr_role])
+            blogger = await blogger_factory.blogger()
+            shared = await product_factory.style(style_code="DUAL_SHARED", style_name="打底衫")
+            partner = await product_factory.style(style_code="DUAL_PARTNER", style_name="马甲")
+            solo = await _goods(session, tenant_a, shared, code="DUAL-SOLO")
+            suit = await _goods(session, tenant_a, shared, partner, code="DUAL-SUIT", is_suit=True)
+            solo_pp = await _platform_product(session, tenant_a, shared, goods=solo)
+            suit_pp = await _platform_product(session, tenant_a, shared, goods=suit)
+            day = date(2026, 6, 12)
+            await _qianniu(session, tenant_a, solo_pp, day, pay="400.00")
+            await _qianniu(session, tenant_a, suit_pp, day, pay="1000.00")
+            await promotion_factory.promotion(
+                style=shared,
+                blogger=blogger,
+                pr=pr,
+                cooperation_date=day,
+                quote_amount=Decimal("250.00"),
+                publish_status="已发布",
+            )
+            await session.commit()
+
+            report = await ProductionService(session).get_report(tenant_a.id, (day, day))
+            by_code = {r.goods_code: r for r in report.items}
+            assert "DUAL-SOLO" in by_code and "DUAL-SUIT" in by_code
+            # 销售额各归各的链接
+            assert by_code["DUAL-SOLO"].pay_amount == Decimal("400.00")
+            assert by_code["DUAL-SUIT"].pay_amount == Decimal("1000.00")
+            # 推广费只算一次，落在非套装的那个商品上
+            assert by_code["DUAL-SOLO"].promo_cost == Decimal("250.00")
+            assert by_code["DUAL-SUIT"].promo_cost == Decimal("0")
+            total_promo = sum(r.promo_cost for r in report.items)
+            assert total_promo == Decimal("250.00"), "全店推广费不能因为一款两归属而翻倍"
+        finally:
+            tenant_id_ctx.reset(tok)
+
     async def test_suit_sharing_qianniu_id_without_link_still_merges(
         self,
         session: AsyncSession,
