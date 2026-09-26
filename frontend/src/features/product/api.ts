@@ -128,6 +128,25 @@ export async function matchByKeyword(
 }
 
 // ---------------------------------------------------------------------------
+// Goods（商品 / 套装）
+// ---------------------------------------------------------------------------
+
+export interface GoodsOption {
+  goods_main_id: string;
+  goods_code: string;
+  goods_title: string;
+  is_suit: boolean;
+}
+
+/** 款式归属的商品，非套装优先。返回多条说明该款既单卖又进套装，需要人工指定归属。 */
+export async function listGoodsForStyle(styleId: string): Promise<GoodsOption[]> {
+  const resp = await apiClient.get<GoodsOption[]>(
+    `/api/styles/${styleId}/goods`
+  );
+  return resp.data;
+}
+
+// ---------------------------------------------------------------------------
 // Sku
 // ---------------------------------------------------------------------------
 

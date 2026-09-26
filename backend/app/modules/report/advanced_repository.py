@@ -304,22 +304,24 @@ class ProductionRepository:
               GROUP BY mapped_a.goods_main_id
             ) ad ON ad.goods_main_id = g.id
             LEFT JOIN (
-              -- 推广记录挂在款式上，要先归到商品。同一款式若既单卖又进套装，
-              -- LATERAL 只取主商品，避免同一笔报价被两个商品重复统计。
-              SELECT owner.goods_main_id, SUM(p.quote_amount) AS promo_cost
+              -- 推广记录自己记了商品归属（PR 录入时指定，可人工纠正）。
+              -- 归属为空时回落到「主商品」推定：非套装优先、货号次之。兜底只是为了
+              -- 兼容历史数据与「款式还没归到商品」的异常，不是常规路径。
+              SELECT COALESCE(p.goods_main_id, owner.goods_main_id) AS goods_main_id,
+                     SUM(p.quote_amount) AS promo_cost
               FROM promotion p
-              JOIN LATERAL (
+              LEFT JOIN LATERAL (
                 SELECT gi.goods_main_id
                 FROM goods_style_item gi
                 JOIN goods_main gg ON gg.id = gi.goods_main_id
                 WHERE gi.style_id = p.style_id AND gi.is_active = true
                 ORDER BY gg.is_suit, gg.goods_code
                 LIMIT 1
-              ) owner ON true
+              ) owner ON p.goods_main_id IS NULL
               WHERE p.tenant_id = :tenant_id
                 AND p.cooperation_date BETWEEN :date_from AND :date_to
                 AND p.is_active = true AND p.publish_status = '已发布'
-              GROUP BY owner.goods_main_id
+              GROUP BY COALESCE(p.goods_main_id, owner.goods_main_id)
             ) promo ON promo.goods_main_id = g.id
             WHERE g.tenant_id = :tenant_id AND g.is_deleted = false
               {season_clause}
@@ -474,13 +476,15 @@ class ProductionRepository:
                 AND p.is_active = true
                 AND p.publish_status = '已发布'
                 AND p.cooperation_date BETWEEN :date_from AND :date_to
-                AND (
+                -- 与 aggregate_by_goods 同口径：先看推广记录自己的商品归属，
+                -- 为空才回落到主商品推定
+                AND COALESCE(p.goods_main_id, (
                   SELECT gi.goods_main_id FROM goods_style_item gi
                   JOIN goods_main gg ON gg.id = gi.goods_main_id
                   WHERE gi.style_id = p.style_id AND gi.is_active = true
                   ORDER BY gg.is_suit, gg.goods_code
                   LIMIT 1
-                ) = :goods_id
+                )) = :goods_id
               GROUP BY {promo_bucket}
             ),
             aggregated AS (
@@ -842,21 +846,21 @@ class BiRepository:
         """已发布推广费按商品归集，与 aggregate_by_goods 的 promo 子查询同口径。"""
         sql = text(
             """
-            SELECT owner.goods_main_id AS goods_id,
+            SELECT COALESCE(p.goods_main_id, owner.goods_main_id) AS goods_id,
                    COALESCE(SUM(p.quote_amount), 0) AS external_spend
             FROM promotion p
-            JOIN LATERAL (
+            LEFT JOIN LATERAL (
               SELECT gi.goods_main_id
               FROM goods_style_item gi
               JOIN goods_main gg ON gg.id = gi.goods_main_id
               WHERE gi.style_id = p.style_id AND gi.is_active = true
               ORDER BY gg.is_suit, gg.goods_code
               LIMIT 1
-            ) owner ON true
+            ) owner ON p.goods_main_id IS NULL
             WHERE p.tenant_id = :tenant_id AND p.is_active = true
               AND p.publish_status = '已发布'
               AND p.cooperation_date BETWEEN :date_from AND :date_to
-            GROUP BY owner.goods_main_id
+            GROUP BY COALESCE(p.goods_main_id, owner.goods_main_id)
             """
         )
         return as_mappings(

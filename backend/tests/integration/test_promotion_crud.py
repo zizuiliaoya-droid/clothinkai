@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.tenancy import tenant_id_ctx
 from app.modules.promotion.exceptions import (
     InvalidBloggerReferenceError,
+    InvalidGoodsReferenceError,
     InvalidStyleReferenceError,
     PromotionNotFoundError,
 )
@@ -181,6 +182,185 @@ class TestCreatePromotion:
                         cooperation_date=date(2026, 5, 26),
                     ),
                     user,
+                )
+        finally:
+            tenant_id_ctx.reset(token)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+class TestGoodsAttribution:
+    """商品归属：决定这笔推广费算给哪个商品的投产比。"""
+
+    @staticmethod
+    async def _goods(
+        session: AsyncSession, tenant: Any, *styles: Any, code: str, is_suit: bool = False
+    ) -> Any:
+        from app.modules.product.goods_models import GoodsMain, GoodsStyleItem
+
+        goods = GoodsMain(
+            tenant_id=tenant.id,
+            goods_code=code,
+            goods_title=code,
+            is_suit=is_suit,
+        )
+        session.add(goods)
+        await session.flush()
+        for idx, style in enumerate(styles):
+            session.add(
+                GoodsStyleItem(
+                    tenant_id=tenant.id,
+                    goods_main_id=goods.id,
+                    style_id=style.id,
+                    sort_order=idx,
+                )
+            )
+        await session.flush()
+        return goods
+
+    async def test_auto_resolves_main_goods_when_not_given(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+    ) -> None:
+        """不传归属时取主商品（非套装优先），保证旧客户端与 Excel 导入行为不变。"""
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            user = await factory.user(tenant_a, roles=[admin_role])
+            style = await product_factory.style(style_code="GA_AUTO")
+            partner = await product_factory.style(style_code="GA_PARTNER")
+            solo = await self._goods(session, tenant_a, style, code="GA-SOLO")
+            await self._goods(session, tenant_a, style, partner, code="GA-SUIT", is_suit=True)
+            blogger = await blogger_factory.blogger(quote=Decimal("100.00"))
+            resp = await PromotionService(session).create_promotion(
+                PromotionCreate(
+                    style_id=style.id,
+                    blogger_id=blogger.id,
+                    platform="小红书",
+                    cooperation_date=date(2026, 6, 20),
+                ),
+                user,
+            )
+            assert resp.goods_main_id == solo.id
+            assert resp.goods_code == "GA-SOLO"
+            assert resp.goods_is_suit is False
+        finally:
+            tenant_id_ctx.reset(token)
+
+    async def test_explicit_goods_is_kept(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+    ) -> None:
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            user = await factory.user(tenant_a, roles=[admin_role])
+            style = await product_factory.style(style_code="GA_EXP")
+            partner = await product_factory.style(style_code="GA_EXP_P")
+            await self._goods(session, tenant_a, style, code="GA-EXP-SOLO")
+            suit = await self._goods(
+                session, tenant_a, style, partner, code="GA-EXP-SUIT", is_suit=True
+            )
+            blogger = await blogger_factory.blogger(quote=Decimal("100.00"))
+            resp = await PromotionService(session).create_promotion(
+                PromotionCreate(
+                    style_id=style.id,
+                    goods_main_id=suit.id,
+                    blogger_id=blogger.id,
+                    platform="小红书",
+                    cooperation_date=date(2026, 6, 20),
+                ),
+                user,
+            )
+            assert resp.goods_main_id == suit.id
+            assert resp.goods_is_suit is True
+        finally:
+            tenant_id_ctx.reset(token)
+
+    async def test_goods_not_containing_style_rejected(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+    ) -> None:
+        """不能把推广挂到不含该款式的商品上。"""
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            user = await factory.user(tenant_a, roles=[admin_role])
+            style = await product_factory.style(style_code="GA_BAD")
+            other = await product_factory.style(style_code="GA_OTHER")
+            await self._goods(session, tenant_a, style, code="GA-BAD-OWN")
+            unrelated = await self._goods(session, tenant_a, other, code="GA-UNRELATED")
+            blogger = await blogger_factory.blogger(quote=Decimal("100.00"))
+            with pytest.raises(InvalidGoodsReferenceError):
+                await PromotionService(session).create_promotion(
+                    PromotionCreate(
+                        style_id=style.id,
+                        goods_main_id=unrelated.id,
+                        blogger_id=blogger.id,
+                        platform="小红书",
+                        cooperation_date=date(2026, 6, 20),
+                    ),
+                    user,
+                )
+        finally:
+            tenant_id_ctx.reset(token)
+
+    async def test_update_goods_attribution(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+    ) -> None:
+        """归属可改 —— 录错或套装后建都要能修，改完投产报表跟着变。"""
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            user = await factory.user(tenant_a, roles=[admin_role])
+            style = await product_factory.style(style_code="GA_UPD")
+            partner = await product_factory.style(style_code="GA_UPD_P")
+            solo = await self._goods(session, tenant_a, style, code="GA-UPD-SOLO")
+            suit = await self._goods(
+                session, tenant_a, style, partner, code="GA-UPD-SUIT", is_suit=True
+            )
+            blogger = await blogger_factory.blogger(quote=Decimal("100.00"))
+            svc = PromotionService(session)
+            created = await svc.create_promotion(
+                PromotionCreate(
+                    style_id=style.id,
+                    blogger_id=blogger.id,
+                    platform="小红书",
+                    cooperation_date=date(2026, 6, 20),
+                ),
+                user,
+            )
+            assert created.goods_main_id == solo.id
+
+            updated = await svc.update_promotion(
+                created.id, PromotionUpdate(goods_main_id=suit.id), user
+            )
+            assert updated.goods_main_id == suit.id
+            assert updated.goods_code == "GA-UPD-SUIT"
+            assert updated.goods_is_suit is True
+
+            with pytest.raises(InvalidGoodsReferenceError):
+                other = await product_factory.style(style_code="GA_UPD_X")
+                unrelated = await self._goods(session, tenant_a, other, code="GA-UPD-X")
+                await svc.update_promotion(
+                    created.id, PromotionUpdate(goods_main_id=unrelated.id), user
                 )
         finally:
             tenant_id_ctx.reset(token)

@@ -54,6 +54,12 @@ class PromotionBase(BaseModel):
 
     style_id: UUID
     sku_id: UUID | None = None
+    goods_main_id: UUID | None = None
+    """这次推广归属的商品（套装或单品）。
+
+    不传就由服务端取该款式的主商品（非套装优先），保持与导入及旧客户端的兼容。
+    款式既单卖又进套装时前端会要求显式选择 —— 那种情况系统猜不准。
+    """
     blogger_id: UUID
     platform: str = Field(min_length=1, max_length=16)
     cooperation_date: date
@@ -76,11 +82,15 @@ class PromotionUpdate(BaseModel):
     """部分更新（PATCH 语义）。
 
     禁止修改：style_id / blogger_id / cooperation_date / 三个状态字段（走专门接口）。
+
+    ``goods_main_id`` 可改：归属录错、或者套装是推广录完之后才建的，都要能修正。
+    改动会即时反映到投产报表的推广费归属上。
     """
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
     sku_id: UUID | None = None
+    goods_main_id: UUID | None = None
     platform: str | None = Field(default=None, min_length=1, max_length=16)
     scheduled_publish_date: date | None = None
     quote_amount: _QuoteField | None = None
@@ -222,6 +232,7 @@ class PromotionResponse(BaseModel):
     internal_code: str
     style_id: UUID
     sku_id: UUID | None = None
+    goods_main_id: UUID | None = None
     blogger_id: UUID
     pr_id: UUID | None = None
 
@@ -229,6 +240,9 @@ class PromotionResponse(BaseModel):
     style_code_snapshot: str
     style_short_name_snapshot: str
     style_main_image_url: str | None = None
+    # 商品归属实时取，不做快照 —— 归属可改，快照会过期
+    goods_code: str | None = None
+    goods_is_suit: bool = False
     quote_amount: Decimal | None = None  # 敏感
     cost_snapshot: Decimal | None = None  # 敏感
 

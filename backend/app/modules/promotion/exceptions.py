@@ -70,6 +70,12 @@ class InvalidBloggerReferenceError(ValidationError):
     code = "INVALID_BLOGGER_REFERENCE"
 
 
+class InvalidGoodsReferenceError(ValidationError):
+    """goods_main_id 不存在 / 不包含该款式（创建与编辑时校验）。"""
+
+    code = "INVALID_GOODS_REFERENCE"
+
+
 class InvalidPaymentQrAttachmentError(ValidationError):
     """收款码附件不存在、跨租户或属性不符合要求。"""
 

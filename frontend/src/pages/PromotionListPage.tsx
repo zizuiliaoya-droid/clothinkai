@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Button,
   Card,
@@ -41,7 +41,12 @@ import type {
   PromotionCreate,
   PromotionListFilters,
 } from "@/features/promotion/types";
-import { listStyles, listSkusByStyle } from "@/features/product/api";
+import {
+  listStyles,
+  listSkusByStyle,
+  listGoodsForStyle,
+  type GoodsOption,
+} from "@/features/product/api";
 import { listBloggers } from "@/features/blogger/api";
 import { extractErrorMessage } from "@/services/apiClient";
 import { useAuthStore } from "@/stores/authStore";
@@ -100,6 +105,11 @@ export function PromotionListPage() {
   const [extraForm] = Form.useForm();
   const [paymentQrFile, setPaymentQrFile] = useState<File | null>(null);
   const [paymentQrUploading, setPaymentQrUploading] = useState(false);
+  // 新建推广时选中的款式 → 拉它归属的商品。只有一个就自动填，多个才需要人工选。
+  const [formStyleId, setFormStyleId] = useState<string | null>(null);
+  // 改归属：目标推广 + 它所属款式的商品候选
+  const [goodsTarget, setGoodsTarget] = useState<Promotion | null>(null);
+  const [goodsForm] = Form.useForm();
   // §11：颜色及规格按货号联动——当前推广所属款式的 SKU 颜色+尺码组合
   const [colorSizeOptions, setColorSizeOptions] = useState<
     { label: string; value: string }[]
@@ -112,6 +122,16 @@ export function PromotionListPage() {
   const { data: styles } = useQuery({
     queryKey: ["styles", "options"],
     queryFn: () => listStyles({ page: 1, page_size: 100 }),
+  });
+  const { data: formGoods } = useQuery({
+    queryKey: ["goods", "by-style", formStyleId],
+    enabled: !!formStyleId,
+    queryFn: () => listGoodsForStyle(formStyleId!),
+  });
+  const { data: targetGoods } = useQuery({
+    queryKey: ["goods", "by-style", goodsTarget?.style_id],
+    enabled: !!goodsTarget,
+    queryFn: () => listGoodsForStyle(goodsTarget!.style_id),
   });
   const { data: bloggers } = useQuery({
     queryKey: ["bloggers", "options"],
@@ -128,6 +148,20 @@ export function PromotionListPage() {
       label: `${b.nickname} (${b.xiaohongshu_id})`,
       value: b.id,
     })) ?? [];
+  const goodsOptions = (formGoods ?? []).map((g: GoodsOption) => ({
+    label: `${g.goods_code} ${g.goods_title}${g.is_suit ? "（套装）" : ""}`,
+    value: g.goods_main_id,
+  }));
+  // 款式只归属一个商品时不必打扰用户，直接用它
+  const goodsChoiceNeeded = (formGoods?.length ?? 0) > 1;
+
+  // 选完款式后自动带出商品；有歧义时清空让用户显式选
+  useEffect(() => {
+    if (!formGoods) return;
+    form.setFieldsValue({
+      goods_main_id: formGoods.length === 1 ? formGoods[0].goods_main_id : undefined,
+    });
+  }, [formGoods, form]);
 
   const createMutation = useMutation({
     mutationFn: (values: PromotionCreate) => createPromotion(values),
@@ -179,6 +213,24 @@ export function PromotionListPage() {
     },
     onError: (err) => message.error(extractErrorMessage(err)),
   });
+
+  const updateGoodsMutation = useMutation({
+    mutationFn: ({ id, goods_main_id }: { id: string; goods_main_id: string }) =>
+      updatePromotion(id, { goods_main_id }),
+    onSuccess: () => {
+      message.success("归属商品已更新，投产报表的推广费会跟着调整");
+      setGoodsTarget(null);
+      goodsForm.resetFields();
+      void qc.invalidateQueries({ queryKey: ["promotions"] });
+    },
+    onError: (err) => message.error(extractErrorMessage(err)),
+  });
+
+  function openGoods(record: Promotion) {
+    setGoodsTarget(record);
+    goodsForm.resetFields();
+    goodsForm.setFieldsValue({ goods_main_id: record.goods_main_id ?? undefined });
+  }
 
   function openExtra(record: Promotion) {
     setExtraTarget(record);
@@ -276,6 +328,7 @@ export function PromotionListPage() {
   function handleCreate(values: Record<string, unknown>) {
     const payload: PromotionCreate = {
       style_id: values.style_id as string,
+      goods_main_id: (values.goods_main_id as string) || null,
       blogger_id: values.blogger_id as string,
       platform: values.platform as string,
       cooperation_date: dayjs(values.cooperation_date as dayjs.Dayjs).format(
@@ -302,6 +355,20 @@ export function PromotionListPage() {
     },
     { title: "货号", dataIndex: "style_code_snapshot", width: 110, fixed: "left" },
     { title: "品名", dataIndex: "style_short_name_snapshot", width: 130, render: (v) => v || "—" },
+    {
+      title: "归属商品",
+      dataIndex: "goods_code",
+      width: 150,
+      render: (code: string | null, row: Promotion) =>
+        code ? (
+          <Space size={4}>
+            <span>{code}</span>
+            {row.goods_is_suit && <Tag color="purple">套装</Tag>}
+          </Space>
+        ) : (
+          "—"
+        ),
+    },
     { title: "合作平台", dataIndex: "platform", width: 90 },
     { title: "合作日期", dataIndex: "cooperation_date", width: 110 },
     {
@@ -366,6 +433,11 @@ export function PromotionListPage() {
             key: "extra",
             label: "录入信息",
             onClick: () => openExtra(record),
+          },
+          {
+            key: "goods",
+            label: "改归属商品",
+            onClick: () => openGoods(record),
           },
           {
             key: "publish",
@@ -499,8 +571,19 @@ export function PromotionListPage() {
               filterOption={(i, o) =>
                 (o?.label ?? "").toString().includes(i)
               }
+              onChange={(v: string) => setFormStyleId(v)}
             />
           </Form.Item>
+          {goodsChoiceNeeded && (
+            <Form.Item
+              name="goods_main_id"
+              label="归属商品"
+              tooltip="这个款式既单卖又进了套装，推广费要算给哪个商品由你决定"
+              rules={[{ required: true, message: "请选择这次推广归属的商品" }]}
+            >
+              <Select placeholder="选择归属商品" options={goodsOptions} />
+            </Form.Item>
+          )}
           <Form.Item
             name="blogger_id"
             label="博主"
@@ -549,6 +632,53 @@ export function PromotionListPage() {
           <Form.Item name="remark" label="备注">
             <Input.TextArea rows={2} placeholder="备注（可选）" />
           </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={
+          goodsTarget
+            ? `改归属商品 · ${goodsTarget.style_code_snapshot} ${goodsTarget.style_short_name_snapshot}`
+            : "改归属商品"
+        }
+        open={!!goodsTarget}
+        onCancel={() => setGoodsTarget(null)}
+        onOk={() => goodsForm.submit()}
+        confirmLoading={updateGoodsMutation.isPending}
+        destroyOnHidden
+        width={520}
+      >
+        <Form
+          form={goodsForm}
+          layout="vertical"
+          style={{ marginTop: 16 }}
+          onFinish={(values: { goods_main_id: string }) => {
+            if (!goodsTarget) return;
+            updateGoodsMutation.mutate({
+              id: goodsTarget.id,
+              goods_main_id: values.goods_main_id,
+            });
+          }}
+        >
+          <Form.Item
+            name="goods_main_id"
+            label="归属商品"
+            tooltip="决定这笔推广费算给哪个商品的投产比。只能选包含该款式的商品。"
+            rules={[{ required: true, message: "请选择归属商品" }]}
+          >
+            <Select
+              placeholder="选择归属商品"
+              options={(targetGoods ?? []).map((g: GoodsOption) => ({
+                label: `${g.goods_code} ${g.goods_title}${g.is_suit ? "（套装）" : ""}`,
+                value: g.goods_main_id,
+              }))}
+            />
+          </Form.Item>
+          {(targetGoods?.length ?? 0) <= 1 && (
+            <Typography.Text type="secondary">
+              该款式只归属一个商品，无需调整。
+            </Typography.Text>
+          )}
         </Form>
       </Modal>
 

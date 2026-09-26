@@ -24,6 +24,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
+from sqlalchemy import text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import events as event_bus
@@ -64,6 +65,7 @@ from app.modules.promotion.exceptions import (
     CancelReasonRequiredError,
     FieldPermissionDenied,
     InvalidBloggerReferenceError,
+    InvalidGoodsReferenceError,
     InvalidPaymentQrAttachmentError,
     InvalidSkuReferenceError,
     InvalidStyleReferenceError,
@@ -165,6 +167,23 @@ class PromotionService:
                     },
                 )
 
+        # 商品归属：传了就校验商品确实包含该款式；没传就推定主商品（非套装优先），
+        # 与报表兜底同序，保证旧客户端与 Excel 导入的行为不变。
+        goods_main_id = payload.goods_main_id
+        if goods_main_id is not None:
+            if not await self._repo.goods_contains_style(
+                goods_main_id=goods_main_id, style_id=payload.style_id
+            ):
+                raise InvalidGoodsReferenceError(
+                    f"商品 {goods_main_id} 不包含款式 {payload.style_id}",
+                    details={
+                        "goods_main_id": str(goods_main_id),
+                        "style_id": str(payload.style_id),
+                    },
+                )
+        else:
+            goods_main_id = await self._repo.resolve_owner_goods_id(payload.style_id)
+
         blogger = await self._blogger_repo.get_by_id(payload.blogger_id)
         if blogger is None:
             raise InvalidBloggerReferenceError(f"博主 {payload.blogger_id} 不存在或已删除")
@@ -205,6 +224,7 @@ class PromotionService:
         promotion = Promotion(
             style_id=payload.style_id,
             sku_id=payload.sku_id,
+            goods_main_id=goods_main_id,
             blogger_id=payload.blogger_id,
             pr_id=user.id,
             internal_code=internal_code,
@@ -298,6 +318,23 @@ class PromotionService:
                 raise InvalidSkuReferenceError(
                     f"SKU {payload.sku_id} 不存在或不属于款式 {promotion.style_id}"
                 )
+
+        # 商品归属改了同样要校验包含关系（款式不可改，所以只校验新商品含旧款式）
+        if (
+            "goods_main_id" in payload.model_fields_set
+            and payload.goods_main_id is not None
+            and payload.goods_main_id != promotion.goods_main_id
+            and not await self._repo.goods_contains_style(
+                goods_main_id=payload.goods_main_id, style_id=promotion.style_id
+            )
+        ):
+            raise InvalidGoodsReferenceError(
+                f"商品 {payload.goods_main_id} 不包含款式 {promotion.style_id}",
+                details={
+                    "goods_main_id": str(payload.goods_main_id),
+                    "style_id": str(promotion.style_id),
+                },
+            )
 
         changes = compute_promotion_changes(promotion, payload)
         if not changes:
@@ -595,6 +632,9 @@ class PromotionService:
                 attachment_refs=attachment_refs.get(row.promotion.id),
                 style_main_image_key=row.style_main_image_key,
                 style_main_image_preloaded=True,
+                goods_code=row.goods_code,
+                goods_is_suit=row.goods_is_suit,
+                goods_preloaded=True,
             )
             for row in rows
         ]
@@ -1093,6 +1133,9 @@ class PromotionService:
         attachment_refs: PromotionAttachmentRefs | None = None,
         style_main_image_key: str | None = None,
         style_main_image_preloaded: bool = False,
+        goods_code: str | None = None,
+        goods_is_suit: bool | None = None,
+        goods_preloaded: bool = False,
     ) -> PromotionResponse:
         """组装响应：字段权限过滤 + 衍生字段计算.
 
@@ -1144,6 +1187,22 @@ class PromotionService:
         if not style_main_image_preloaded:
             style = await self._style_repo.get_by_id(promotion.style_id)
             resolved_style_image_key = style.main_image_key if style is not None else None
+
+        # 商品归属实时取（不做快照，因为归属可改）。列表查询已 JOIN 出来，避免 N+1。
+        resolved_goods_code = goods_code
+        resolved_goods_is_suit = bool(goods_is_suit)
+        if not goods_preloaded and promotion.goods_main_id is not None:
+            goods_row = (
+                await self._session.execute(
+                    sa_text("SELECT goods_code, is_suit FROM goods_main WHERE id = :gid"),
+                    {"gid": promotion.goods_main_id},
+                )
+            ).one_or_none()
+            if goods_row is not None:
+                resolved_goods_code, resolved_goods_is_suit = (
+                    goods_row[0],
+                    bool(goods_row[1]),
+                )
         style_main_image_url: str | None = None
         if resolved_style_image_key:
             try:
@@ -1195,11 +1254,14 @@ class PromotionService:
             internal_code=promotion.internal_code,
             style_id=promotion.style_id,
             sku_id=promotion.sku_id,
+            goods_main_id=promotion.goods_main_id,
             blogger_id=promotion.blogger_id,
             pr_id=promotion.pr_id,
             style_code_snapshot=promotion.style_code_snapshot,
             style_short_name_snapshot=promotion.style_short_name_snapshot,
             style_main_image_url=style_main_image_url,
+            goods_code=resolved_goods_code,
+            goods_is_suit=resolved_goods_is_suit,
             quote_amount=(promotion.quote_amount if can_see_quote else None),
             cost_snapshot=(promotion.cost_snapshot if can_see_cost else None),
             platform=promotion.platform,
