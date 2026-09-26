@@ -64,7 +64,7 @@ class BiService:
             date_to=date_to,
             granularity=granularity,
         )
-        published_rows = await self._repo.published_spend_by_style(
+        published_rows = await self._repo.published_spend_by_goods(
             tenant_id=tenant_id, date_from=date_from, date_to=date_to
         )
         production = await self._production.get_report(tenant_id, time_range, exclude_brushing=True)
@@ -72,11 +72,11 @@ class BiService:
         store = self._store_summary(store_row)
         promotion = self._promotion_summary(promotion_row)
         workload = [self._workload_row(row) for row in workload_rows]
-        published_by_style = {
-            row["style_id"]: Decimal(str(row["external_spend"] or 0)) for row in published_rows
+        published_by_goods = {
+            row["goods_id"]: Decimal(str(row["external_spend"] or 0)) for row in published_rows
         }
         styles = [
-            self._style_row(row, published_by_style.get(row.style_id, Decimal("0")))
+            self._goods_row(row, published_by_goods.get(row.goods_id, Decimal("0")))
             for row in production.items
         ]
         trend = [BiTrendPoint.model_validate(row) for row in trend_rows]
@@ -88,7 +88,7 @@ class BiService:
         )[:_TOP_N]
         sales_top = sorted(styles, key=lambda row: row.sales_amount, reverse=True)[:_TOP_N]
         cards: list[dict[str, Any]] = [
-            {"key": "style_count", "label": "在投款式", "value": len(styles)},
+            {"key": "style_count", "label": "在投商品", "value": len(styles)},
             {"key": "pay_amount", "label": "支付额", "value": str(store.sales_amount)},
             {"key": "store_days", "label": "店铺天数", "value": len(trend)},
         ]
@@ -106,8 +106,8 @@ class BiService:
             },
             {
                 "type": "bar",
-                "title": "款式净投产比 Top10",
-                "labels": [row.style_code for row in roi_top],
+                "title": "商品净投产比 Top10",
+                "labels": [row.goods_code for row in roi_top],
                 "series": [
                     {
                         "name": "净投产比",
@@ -117,8 +117,8 @@ class BiService:
             },
             {
                 "type": "pie",
-                "title": "款式支付额占比 Top10",
-                "labels": [row.style_code for row in sales_top],
+                "title": "商品支付额占比 Top10",
+                "labels": [row.goods_code for row in sales_top],
                 "series": [
                     {
                         "name": "支付额",
@@ -194,13 +194,14 @@ class BiService:
         )
 
     @staticmethod
-    def _style_row(row: ProductionRow, external_spend: Decimal) -> BiStylePerformance:
+    def _goods_row(row: ProductionRow, external_spend: Decimal) -> BiStylePerformance:
         internal = row.ad_spend
         total = internal + external_spend
         return BiStylePerformance(
-            style_id=row.style_id,
-            style_code=row.style_code,
-            style_name=row.style_name,
+            goods_id=row.goods_id,
+            goods_code=row.goods_code,
+            goods_title=row.goods_title,
+            is_suit=row.is_suit,
             main_image_url=row.main_image_url,
             sales_amount=row.pay_amount,
             refund_amount=row.refund_amount,

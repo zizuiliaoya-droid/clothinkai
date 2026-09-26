@@ -89,7 +89,8 @@ class AnomalyAlertService:
         self, tenant_id: UUID, alert_type: str, row: Any, detail: dict, cfg: Any
     ) -> int:
         period_key = get_today().isoformat()
-        entity_ref = str(row.style_id)
+        # 投产报表已按商品聚合，去重键跟着换成商品ID（entity_type 也从 style 改为 goods）
+        entity_ref = str(row.goods_id)
         if await self._log_repo.exists(
             alert_type=alert_type, entity_ref=entity_ref, period_key=period_key
         ):
@@ -123,10 +124,10 @@ class AnomalyAlertService:
             self._log_repo.add(
                 WecomAlertLog(
                     alert_type=alert_type,
-                    entity_type="style",
+                    entity_type="goods",
                     entity_ref=entity_ref,
                     period_key=period_key,
-                    detail={**detail, "style_code": row.style_code},
+                    detail={**detail, "goods_code": row.goods_code},
                 )
             )
             await self._s.flush()  # 成功才落 log（IntegrityError 并发 → deduped）
@@ -147,9 +148,12 @@ class AnomalyAlertService:
 
     @staticmethod
     def _render(alert_type: str, row: Any, detail: dict) -> str:
+        styles = "、".join(row.style_codes) if row.style_codes else row.goods_code
+        suit_tag = "（套装）" if row.is_suit else ""
         return (
             f"**异常预警·{_TITLES.get(alert_type, alert_type)}**\n"
-            f"> 款号：{row.style_code} {row.style_name}\n"
+            f"> 商品：{row.goods_code} {row.goods_title}{suit_tag}\n"
+            f"> 含款号：{styles}\n"
             f"> 当前值：{detail['value']}（阈值：{detail['threshold']}）\n"
             f"> 建议：{_ADVICE.get(alert_type, '请关注')}"
         )

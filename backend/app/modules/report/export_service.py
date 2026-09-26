@@ -47,8 +47,9 @@ _WORK_HEADERS = [
     "CPL",
 ]
 _PRODUCTION_HEADERS = [
-    "货号",
-    "款名",
+    "商品编码",
+    "商品名称",
+    "含款号",
     "支付额",
     "退款额",
     "退货率",
@@ -176,8 +177,9 @@ class ReportExportService:
             extra_keys = sorted({key for row in report.items for key in row.extra})
             rows = [
                 [
-                    row.style_code,
-                    row.style_name,
+                    row.goods_code,
+                    row.goods_title,
+                    ",".join(row.style_codes),
                     row.pay_amount,
                     row.refund_amount,
                     row.return_rate,

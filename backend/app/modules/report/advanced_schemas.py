@@ -89,9 +89,14 @@ class StoreDailyManualUpdate(BaseModel):
 
 
 class ProductionRow(BaseModel):
-    style_id: UUID
-    style_code: str
-    style_name: str
+    """投产报表一行 = 一个商品（PRD V1.4 第 3 章），套装合并成一行。"""
+
+    goods_id: UUID
+    goods_code: str
+    goods_title: str
+    is_suit: bool = False
+    # 商品含哪些款式货号；单品就是它自己那一个，套装是多个
+    style_codes: list[str] = Field(default_factory=list)
     main_image_url: str | None = None
     pay_amount: Decimal
     refund_amount: Decimal
@@ -104,8 +109,8 @@ class ProductionRow(BaseModel):
     add_cart_cost: Decimal | None = None
     net_roi: Decimal | None = None
     unit_deal_cost: Decimal | None = None
-    # 千牛/站内导入数据按款式汇总的其余指标（对齐 final.xlsx 投产报表 70 列；
-    # SUM qianniu_daily.extra + ad_daily.extra 的数值列，按 platform_product→style 归集）
+    # 千牛/站内导入数据按商品汇总的其余指标（对齐 final.xlsx 投产报表 70 列；
+    # SUM qianniu_daily.extra + ad_daily.extra 的数值列，按 platform_product→商品归集）
     extra: dict = Field(default_factory=dict)
 
 
@@ -115,7 +120,7 @@ class ProductionReport(BaseModel):
 
 
 class ProductionTrendPoint(BaseModel):
-    """单款趋势桶；date 为日值或周/月/年桶的起始日期。"""
+    """单个商品的趋势桶；date 为日值或周/月/年桶的起始日期。"""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -174,9 +179,12 @@ class BiWorkloadRow(BaseModel):
 
 
 class BiStylePerformance(BaseModel):
-    style_id: UUID
-    style_code: str
-    style_name: str
+    """BI 看板的商品表现行；沿用类名但主体已是商品（套装合并）。"""
+
+    goods_id: UUID
+    goods_code: str
+    goods_title: str
+    is_suit: bool = False
     main_image_url: str | None = None
     sales_amount: Decimal
     refund_amount: Decimal

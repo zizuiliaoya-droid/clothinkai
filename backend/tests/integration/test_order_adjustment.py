@@ -28,6 +28,7 @@ from app.modules.finance.order_adjustment_schemas import (
     OrderAdjustmentListFilters,
 )
 from app.modules.finance.order_adjustment_service import OrderAdjustmentService
+from app.modules.product.goods_models import GoodsMain, GoodsStyleItem
 from app.modules.product.platform_product_models import PlatformProduct
 from app.modules.report.production_service import ProductionService
 
@@ -118,11 +119,27 @@ class TestRoiIsolation:
         tok = tenant_id_ctx.set(tenant_a.id)
         try:
             style = await product_factory.style()
+            # 投产报表按商品聚合，款式要先归到商品（复刻 037/038 回填后的形态）
+            goods = GoodsMain(
+                tenant_id=tenant_a.id,
+                goods_code=f"G{uuid4().hex[:8]}",
+                goods_title=style.style_name,
+            )
+            session.add(goods)
+            await session.flush()
+            session.add(
+                GoodsStyleItem(
+                    tenant_id=tenant_a.id,
+                    goods_main_id=goods.id,
+                    style_id=style.id,
+                )
+            )
             pp = PlatformProduct(
                 tenant_id=tenant_a.id,
                 platform="千牛",
                 platform_id=f"P{uuid4().hex[:8]}",
                 style_id=style.id,
+                goods_main_id=goods.id,
             )
             session.add(pp)
             await session.flush()
@@ -156,8 +173,8 @@ class TestRoiIsolation:
             svc = ProductionService(session)
             excl = await svc.get_report(tenant_a.id, (day, day), exclude_brushing=True)
             incl = await svc.get_report(tenant_a.id, (day, day), exclude_brushing=False)
-            excl_row = next(r for r in excl.items if r.style_id == style.id)
-            incl_row = next(r for r in incl.items if r.style_id == style.id)
+            excl_row = next(r for r in excl.items if r.goods_id == goods.id)
+            incl_row = next(r for r in incl.items if r.goods_id == goods.id)
             assert excl_row.pay_amount == Decimal("800.00")  # 1000 - 200
             assert incl_row.pay_amount == Decimal("1000.00")
         finally:

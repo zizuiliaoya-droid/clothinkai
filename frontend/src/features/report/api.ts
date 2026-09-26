@@ -87,7 +87,7 @@ export async function getProduction(
 }
 
 export async function getProductionTrend(
-  styleId: string,
+  goodsId: string,
   params: {
     preset?: string;
     date_from?: string;
@@ -98,7 +98,7 @@ export async function getProductionTrend(
 ): Promise<ProductionTrend> {
   const resp = await apiClient.get<ProductionTrend>(
     "/api/reports/production/trend",
-    { params: { style_id: styleId, ...params } }
+    { params: { goods_id: goodsId, ...params } }
   );
   return resp.data;
 }

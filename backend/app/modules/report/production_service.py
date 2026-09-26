@@ -58,7 +58,7 @@ class ProductionService:
         prev_to = cur_from - timedelta(days=1)
         prev_from = prev_to - span
         with report_query_duration_seconds.labels("production").time():
-            cur_rows = await self._repo.aggregate_by_style(
+            cur_rows = await self._repo.aggregate_by_goods(
                 tenant_id=tenant_id,
                 date_from=cur_from,
                 date_to=cur_to,
@@ -66,7 +66,7 @@ class ProductionService:
                 seasons=seasons,
                 categories=categories,
             )
-            prev_rows = await self._repo.aggregate_by_style(
+            prev_rows = await self._repo.aggregate_by_goods(
                 tenant_id=tenant_id,
                 date_from=prev_from,
                 date_to=prev_to,
@@ -74,11 +74,11 @@ class ProductionService:
                 seasons=seasons,
                 categories=categories,
             )
-            extra_by_style = await self._aggregate_extra(tenant_id, cur_from, cur_to)
+            extra_by_goods = await self._aggregate_extra(tenant_id, cur_from, cur_to)
         items = []
         for r in cur_rows:
             row = self._to_row(r, exclude_brushing)
-            row.extra = extra_by_style.get(str(r["style_id"]), {})
+            row.extra = extra_by_goods.get(str(r["goods_id"]), {})
             items.append(row)
         return ProductionReport(
             items=items,
@@ -88,15 +88,15 @@ class ProductionService:
     async def get_trend(
         self,
         tenant_id: UUID,
-        style_id: UUID,
+        goods_id: UUID,
         time_range: tuple[date, date],
         *,
         granularity: str = "day",
         exclude_brushing: bool = True,
     ) -> ProductionTrend:
-        rows = await self._repo.daily_trend_by_style(
+        rows = await self._repo.daily_trend_by_goods(
             tenant_id=tenant_id,
-            style_id=style_id,
+            goods_id=goods_id,
             date_from=time_range[0],
             date_to=time_range[1],
             granularity=granularity,
@@ -131,17 +131,17 @@ class ProductionService:
     async def _aggregate_extra(
         self, tenant_id: UUID, date_from: date, date_to: date
     ) -> dict[str, dict[str, Any]]:
-        """按款式 SUM 千牛/站内 extra 的数值列（对齐 final.xlsx 投产报表 70 列）。"""
-        rows = await self._repo.fetch_extra_by_style(
+        """按商品 SUM 千牛/站内 extra 的数值列（对齐 final.xlsx 投产报表 70 列）。"""
+        rows = await self._repo.fetch_extra_by_goods(
             tenant_id=tenant_id, date_from=date_from, date_to=date_to
         )
         agg: dict[str, dict[str, Decimal]] = defaultdict(lambda: defaultdict(Decimal))
         for r in rows:
-            sid = r["style_id"]
+            gid = r["goods_id"]
             extra = r["extra"]
-            if sid is None or not isinstance(extra, dict):
+            if gid is None or not isinstance(extra, dict):
                 continue
-            key = str(sid)
+            key = str(gid)
             for k, v in extra.items():
                 if k in _EXTRA_SKIP or v is None or v == "":
                     continue
@@ -151,7 +151,7 @@ class ProductionService:
                     continue
                 agg[key][k] += num
         return {
-            sid: {k: format(val, "f") for k, val in fields.items()} for sid, fields in agg.items()
+            gid: {k: format(val, "f") for k, val in fields.items()} for gid, fields in agg.items()
         }
 
     @staticmethod
@@ -170,10 +170,13 @@ class ProductionService:
                 )
             except Exception:
                 main_image_url = None
+        style_codes_raw = r.get("style_codes")
         return ProductionRow(
-            style_id=r["style_id"],
-            style_code=r["style_code"],
-            style_name=r["style_name"],
+            goods_id=r["goods_id"],
+            goods_code=r["goods_code"],
+            goods_title=r["goods_title"],
+            is_suit=bool(r.get("is_suit")),
+            style_codes=style_codes_raw.split(",") if style_codes_raw else [],
             main_image_url=main_image_url,
             pay_amount=pay,
             refund_amount=refund,

@@ -50,8 +50,9 @@ class TestBundleExportApiContract:
         dangerous_header = '=HYPERLINK("https://invalid.example","x")'
         dangerous_text = "  +SUM(1,1)"
         production_row = SimpleNamespace(
-            style_code="S001",
-            style_name=dangerous_text,
+            goods_code="S001",
+            goods_title=dangerous_text,
+            style_codes=["S001"],
             pay_amount=Decimal("100"),
             refund_amount=Decimal("10"),
             return_rate=Decimal("0.1"),
@@ -146,10 +147,11 @@ class TestBundleExportApiContract:
             categories=None,
             granularity="day",
         )
-        assert production_headers[:2] == ["货号", "款名"]
+        assert production_headers[:3] == ["商品编码", "商品名称", "含款号"]
         assert production_headers[-1] == dangerous_header
-        assert len(production_headers) == len(production_rows[0]) == 14
-        assert isinstance(module._cell(production_rows[0][2]), float)
+        # 13 个固定列 + 含款号 + 1 个动态 extra
+        assert len(production_headers) == len(production_rows[0]) == 15
+        assert isinstance(module._cell(production_rows[0][3]), float)
         assert isinstance(module._cell(production_rows[0][-1]), float)
         assert module._cell(dangerous_header) == f"'{dangerous_header}"
         assert module._cell(dangerous_text) == f"'{dangerous_text}"
@@ -201,7 +203,9 @@ class TestBundleExportApiContract:
         response = await service.export(uuid4(), "production", period, granularity="day")
         body = b"".join([chunk async for chunk in response.body_iterator])
         worksheet = load_workbook(io.BytesIO(body), data_only=False).active
-        assert worksheet.cell(1, 14).value == f"'{dangerous_header}"
-        assert worksheet.cell(1, 14).data_type != "f"
+        # 危险表头是唯一的动态 extra 列，落在固定列之后（最后一列）
+        last_col = worksheet.max_column
+        assert worksheet.cell(1, last_col).value == f"'{dangerous_header}"
+        assert worksheet.cell(1, last_col).data_type != "f"
         assert worksheet.cell(2, 2).value == f"'{dangerous_text}"
         assert worksheet.cell(2, 2).data_type != "f"

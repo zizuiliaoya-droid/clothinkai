@@ -28,8 +28,8 @@ class TestParseAdvice:
 class TestSummarizeProduction:
     def test_summary_aggregates(self) -> None:
         items = [
-            SimpleNamespace(style_code="A", pay_amount=Decimal("100"), net_roi=Decimal("2.0")),
-            SimpleNamespace(style_code="B", pay_amount=Decimal("50"), net_roi=None),
+            SimpleNamespace(goods_code="A", pay_amount=Decimal("100"), net_roi=Decimal("2.0")),
+            SimpleNamespace(goods_code="B", pay_amount=Decimal("50"), net_roi=None),
         ]
         report = SimpleNamespace(items=items)
         s = AiAdvisoryService._summarize_production(report)

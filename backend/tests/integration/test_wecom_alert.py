@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.security.crypto import encrypt_credential
 from app.core.tenancy import tenant_id_ctx
 from app.modules.collect.models import QianniuDaily
+from app.modules.product.goods_models import GoodsMain, GoodsStyleItem
 from app.modules.product.platform_product_models import PlatformProduct
 from app.modules.promotion.urge_calculator import get_today
 from app.modules.wecom.alert_config_service import AlertConfigService
@@ -52,11 +53,21 @@ async def _high_return_style(
     # 不能硬编码固定日期，否则测试会随时间推移失效。
     day = day or get_today()
     style = await product_factory.style(tenant=tenant)
+    # 异常预警读的是投产报表，报表按商品聚合 → 款式必须先归到商品
+    goods = GoodsMain(
+        tenant_id=tenant.id,
+        goods_code=f"G{uuid4().hex[:8]}",
+        goods_title=style.style_name,
+    )
+    session.add(goods)
+    await session.flush()
+    session.add(GoodsStyleItem(tenant_id=tenant.id, goods_main_id=goods.id, style_id=style.id))
     pp = PlatformProduct(
         tenant_id=tenant.id,
         platform="千牛",
         platform_id=f"P{uuid4().hex[:8]}",
         style_id=style.id,
+        goods_main_id=goods.id,
     )
     session.add(pp)
     await session.flush()
