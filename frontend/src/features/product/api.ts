@@ -147,6 +147,80 @@ export async function listGoodsForStyle(styleId: string): Promise<GoodsOption[]>
 }
 
 // ---------------------------------------------------------------------------
+// PlatformProduct（平台链接，运维视图）
+// ---------------------------------------------------------------------------
+
+export interface PlatformLink {
+  id: string;
+  platform: string;
+  platform_id: string;
+  style_id: string;
+  sku_id: string | null;
+  goods_main_id: string | null;
+  channel: string;
+  title: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+  goods_code: string | null;
+  goods_title: string | null;
+  goods_is_suit: boolean;
+  style_code: string | null;
+  style_name: string | null;
+}
+
+export interface PlatformLinkPage {
+  items: PlatformLink[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface PlatformLinkFilters {
+  style_id?: string;
+  goods_main_id?: string;
+  platform?: string;
+  channel?: string;
+  keyword?: string;
+  unmapped_only?: boolean;
+  page?: number;
+  page_size?: number;
+}
+
+export interface PlatformLinkUpdate {
+  style_id?: string;
+  sku_id?: string | null;
+  goods_main_id?: string;
+  channel?: string;
+  title?: string | null;
+  is_active?: boolean;
+}
+
+export async function listPlatformLinks(
+  filters: PlatformLinkFilters = {}
+): Promise<PlatformLinkPage> {
+  const resp = await apiClient.get<PlatformLinkPage>("/api/platform-products/", {
+    params: filters,
+  });
+  return resp.data;
+}
+
+export async function updatePlatformLink(
+  id: string,
+  payload: PlatformLinkUpdate
+): Promise<PlatformLink> {
+  const resp = await apiClient.put<PlatformLink>(
+    `/api/platform-products/${id}`,
+    payload
+  );
+  return resp.data;
+}
+
+export async function deletePlatformLink(id: string): Promise<void> {
+  await apiClient.delete(`/api/platform-products/${id}`);
+}
+
+// ---------------------------------------------------------------------------
 // Sku
 // ---------------------------------------------------------------------------
 

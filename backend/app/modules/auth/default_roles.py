@@ -47,6 +47,16 @@ IMPORTER_READ = "importer.*:read"
 IMPORTER_BATCH_READ = "importer.batch:read"
 IMPORTER_BATCH_WRITE = "importer.batch:write"
 IMPORTER_MAPPING_WRITE = "importer.mapping:write"
+# 运维视图：平台链接（千牛ID / 万相台主体ID 与商品、渠道的绑定）。
+#
+# 刻意用 ops. 开头而不是 product. —— has() 的前缀通配只看第一段，
+# 挂在 product 下会被跟单/运营的 product.*:* 与 product.*:read 命中，挡不住人。
+#
+# 也刻意写成两条具体 scope 而不是 ops.platform_link:*：has() 的通配形式只支持
+# 「第一段.*:action」，ops.platform_link:* 匹配不上 has("ops.platform_link", "read")，
+# 授了等于没授。要用通配就得写 ops.*:*，那又把未来所有 ops.* 权限一并放开了。
+OPS_PLATFORM_LINK_READ = "ops.platform_link:read"
+OPS_PLATFORM_LINK_WRITE = "ops.platform_link:write"
 
 
 # ---------------------------------------------------------------------------
@@ -161,7 +171,7 @@ DEFAULT_ROLES: tuple[RoleSpec, ...] = (
     RoleSpec(
         code="operations",
         name="运营",
-        description="只读访问报表与店铺数据",
+        description="只读访问报表与店铺数据，并维护平台链接映射",
         permissions=(
             REPORT_READ,
             PROMOTION_READ,
@@ -170,6 +180,9 @@ DEFAULT_ROLES: tuple[RoleSpec, ...] = (
             IMPORTER_READ,
             WECOM_MESSAGE_READ,
             NOTIFICATION_READ,
+            # 平台链接是运维职责：千牛ID 绑错款式会让整条销售数据算到别的商品上
+            OPS_PLATFORM_LINK_READ,
+            OPS_PLATFORM_LINK_WRITE,
         ),
     ),
     RoleSpec(

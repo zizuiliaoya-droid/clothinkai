@@ -16,7 +16,6 @@ from app.modules.product.domain import (
     STYLE_SENSITIVE_FIELDS,
     SUITE_NAME_SEPARATOR,
     build_style_audit_changes,
-    build_suite_name,
     compute_style_changes,
 )
 from app.modules.product.models import Style
@@ -129,20 +128,13 @@ class TestTagColorNormalization:
             )
 
 
-class TestBuildSuiteName:
-    """套装名称拼接（同千牛ID 分组，方案 A：套装整体是一个销售单元）。"""
+class TestSuiteNameSeparator:
+    """套装标题的连接符约定。
 
-    def test_two_members_joined(self) -> None:
-        assert build_suite_name(["木耳边打底衫", "卡其毛衣马甲"]) == "木耳边打底衫+卡其毛衣马甲"
-
-    def test_three_members_joined(self) -> None:
-        assert build_suite_name(["A", "B", "C"]) == "A+B+C"
-
-    def test_single_member_is_not_a_suite(self) -> None:
-        assert build_suite_name(["只有一款"]) is None
-
-    def test_empty_returns_none(self) -> None:
-        assert build_suite_name([]) is None
+    标题本身由 migration 037 / 041 生成并存进 goods_main.goods_title
+    （``string_agg(..., '+' ORDER BY style_code)``），不再在 Python 里按千牛ID 现拼。
+    这个常量是两侧共用的约定，改它要同步改那两个迁移。
+    """
 
     def test_separator_constant(self) -> None:
         assert SUITE_NAME_SEPARATOR == "+"
