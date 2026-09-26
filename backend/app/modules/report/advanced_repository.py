@@ -152,7 +152,7 @@ class ProductionRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._s = session
 
-    async def aggregate_by_style(
+    async def aggregate_by_goods(
         self,
         *,
         tenant_id: UUID,
@@ -162,33 +162,64 @@ class ProductionRepository:
         seasons: Sequence[str] | None = None,
         categories: Sequence[str] | None = None,
     ) -> list[Mapping[str, Any]]:
-        """按款式聚合；EXISTS/LATERAL 保证每条日报只映射一次。
+        """按商品/套装聚合；EXISTS/LATERAL 保证每条日报只映射一次。
+
+        对齐 PRD V1.4 第 3 章：报表主体是「商品」而不是「款式」。套装（多个款式共用
+        一条销售链接）合并成一行，销售额只算一次；套装的站外推广费与刷单剔除按成员
+        款式求和。
 
         ``seasons`` / ``categories`` 为多选（PRD 第 4 章），空列表与 None 同义：不筛。
         """
+        # 款式理论上可以同时属于单品商品与套装（库层面表达不了这个约束），那时同一笔
+        # 调整会被两个商品各减一次。取「主商品」（非套装优先、货号次之）保证只归一处，
+        # 宁可归属有偏差也不让总额虚高。彻底的解法是给 order_adjustment 直接记
+        # goods_main_id，留给后续批次。
         brushing_sub = (
             """
             -- 剔除与否只看 exclude_from_roi，不再叠加 order_type 判断：
-            -- 标记本身就是「要不要进投产口径」的唯一开关，两个条件并列反而容易漏
-            -- （历史上导入的刷单标记全是 false，这个子查询一条都匹配不到）。
+            -- 标记本身就是「要不要进投产口径」的唯一开关，两个条件并列反而容易漏。
             - COALESCE((
                 SELECT SUM(oa.amount) FROM order_adjustment oa
-                WHERE oa.tenant_id = :tenant_id AND oa.style_id = s.id
+                WHERE oa.tenant_id = :tenant_id
                   AND oa.exclude_from_roi = true
                   AND oa.order_date BETWEEN :date_from AND :date_to
+                  AND (
+                    SELECT gi.goods_main_id FROM goods_style_item gi
+                    JOIN goods_main gg ON gg.id = gi.goods_main_id
+                    WHERE gi.style_id = oa.style_id AND gi.is_active = true
+                    ORDER BY gg.is_suit, gg.goods_code
+                    LIMIT 1
+                  ) = g.id
               ), 0)
             """
             if exclude_brushing
             else ""
         )
         # = ANY(:param) 走数组绑定参数，不把值拼进 SQL
-        season_clause = "AND s.season = ANY(:seasons)" if seasons else ""
-        category_clause = "AND s.category = ANY(:categories)" if categories else ""
+        season_clause = "AND g.season = ANY(:seasons)" if seasons else ""
+        category_clause = "AND g.category = ANY(:categories)" if categories else ""
         sql = text(
             f"""
             SELECT
-              s.id AS style_id, s.style_code AS style_code, s.style_name AS style_name,
-              s.main_image_key AS main_image_key,
+              g.id AS goods_id, g.goods_code AS goods_code,
+              g.goods_title AS goods_title, g.is_suit AS is_suit,
+              -- 商品自己没配主图时借用成员款式的（040 建的最小档案都没有主图）
+              COALESCE(g.main_image_key, (
+                SELECT ms.main_image_key
+                FROM goods_style_item mi
+                JOIN style ms ON ms.id = mi.style_id
+                WHERE mi.goods_main_id = g.id AND mi.is_active = true
+                  AND ms.main_image_key IS NOT NULL
+                ORDER BY mi.sort_order, ms.style_code
+                LIMIT 1
+              )) AS main_image_key,
+              -- 套装要让人看出含哪几款；单品就是它自己的货号
+              (
+                SELECT string_agg(cs.style_code, ',' ORDER BY ci.sort_order, cs.style_code)
+                FROM goods_style_item ci
+                JOIN style cs ON cs.id = ci.style_id
+                WHERE ci.goods_main_id = g.id AND ci.is_active = true
+              ) AS style_codes,
               (COALESCE(SUM(q.pay_amount), 0){brushing_sub}) AS pay_amount,
               COALESCE(SUM(
                 CASE
@@ -209,15 +240,15 @@ class ProductionRepository:
               ), 0) AS add_cart_count,
               COALESCE(MAX(promo.promo_cost), 0) AS promo_cost,
               COALESCE(MAX(ad.ad_spend), 0) AS ad_spend
-            FROM style s
+            FROM goods_main g
             LEFT JOIN qianniu_daily q
-              ON q.tenant_id = s.tenant_id
+              ON q.tenant_id = g.tenant_id
               AND q.date BETWEEN :date_from AND :date_to
               AND (
                 EXISTS (
                   SELECT 1 FROM platform_product mapped_q
                   WHERE mapped_q.tenant_id = q.tenant_id
-                    AND mapped_q.style_id = s.id
+                    AND mapped_q.goods_main_id = g.id
                     AND mapped_q.platform = '千牛'
                     AND (
                       (q.platform_product_id IS NOT NULL
@@ -227,29 +258,41 @@ class ProductionRepository:
                     )
                 )
                 OR (
+                  -- 兜底：链接没建，但款式上手填了千牛ID。
+                  -- 护栏从「同一千牛ID 只能绑一个款式」放宽成「只能落在一个商品」——
+                  -- 多个款式共用一条链接正是套装的形态，以前会被挡掉，现在能正常合并。
                   q.platform_product_id IS NULL
-                  AND s.qianniu_product_id IS NOT NULL
-                  AND q.platform_id_snapshot = s.qianniu_product_id
                   AND NOT EXISTS (
                     SELECT 1 FROM platform_product any_q
                     WHERE any_q.tenant_id = q.tenant_id
                       AND any_q.platform = '千牛'
                       AND any_q.platform_id = q.platform_id_snapshot
                   )
-                  AND (
-                    SELECT COUNT(*) FROM style legacy_s
-                    WHERE legacy_s.tenant_id = q.tenant_id
+                  AND EXISTS (
+                    SELECT 1 FROM goods_style_item li
+                    JOIN style legacy_s ON legacy_s.id = li.style_id
+                    WHERE li.goods_main_id = g.id AND li.is_active = true
                       AND legacy_s.is_deleted = false
                       AND legacy_s.qianniu_product_id = q.platform_id_snapshot
+                  )
+                  AND (
+                    SELECT COUNT(DISTINCT li2.goods_main_id)
+                    FROM style legacy_s2
+                    JOIN goods_style_item li2
+                      ON li2.style_id = legacy_s2.id AND li2.is_active = true
+                    WHERE legacy_s2.tenant_id = q.tenant_id
+                      AND legacy_s2.is_deleted = false
+                      AND legacy_s2.qianniu_product_id = q.platform_id_snapshot
                   ) = 1
                 )
               )
             LEFT JOIN (
-              SELECT mapped_a.style_id, SUM(a.cost) AS ad_spend
+              SELECT mapped_a.goods_main_id, SUM(a.cost) AS ad_spend
               FROM ad_daily a
               JOIN platform_product mapped_a
                 ON mapped_a.tenant_id = a.tenant_id
                 AND mapped_a.platform = '万相台'
+                AND mapped_a.goods_main_id IS NOT NULL
                 AND (
                   (a.platform_product_id IS NOT NULL
                    AND mapped_a.id = a.platform_product_id)
@@ -258,19 +301,30 @@ class ProductionRepository:
                 )
               WHERE a.tenant_id = :tenant_id
                 AND a.date BETWEEN :date_from AND :date_to
-              GROUP BY mapped_a.style_id
-            ) ad ON ad.style_id = s.id
+              GROUP BY mapped_a.goods_main_id
+            ) ad ON ad.goods_main_id = g.id
             LEFT JOIN (
-              SELECT style_id, SUM(quote_amount) AS promo_cost FROM promotion
-              WHERE tenant_id = :tenant_id
-                AND cooperation_date BETWEEN :date_from AND :date_to
-                AND is_active = true AND publish_status = '已发布'
-              GROUP BY style_id
-            ) promo ON promo.style_id = s.id
-            WHERE s.tenant_id = :tenant_id AND s.is_deleted = false
+              -- 推广记录挂在款式上，要先归到商品。同一款式若既单卖又进套装，
+              -- LATERAL 只取主商品，避免同一笔报价被两个商品重复统计。
+              SELECT owner.goods_main_id, SUM(p.quote_amount) AS promo_cost
+              FROM promotion p
+              JOIN LATERAL (
+                SELECT gi.goods_main_id
+                FROM goods_style_item gi
+                JOIN goods_main gg ON gg.id = gi.goods_main_id
+                WHERE gi.style_id = p.style_id AND gi.is_active = true
+                ORDER BY gg.is_suit, gg.goods_code
+                LIMIT 1
+              ) owner ON true
+              WHERE p.tenant_id = :tenant_id
+                AND p.cooperation_date BETWEEN :date_from AND :date_to
+                AND p.is_active = true AND p.publish_status = '已发布'
+              GROUP BY owner.goods_main_id
+            ) promo ON promo.goods_main_id = g.id
+            WHERE g.tenant_id = :tenant_id AND g.is_deleted = false
               {season_clause}
               {category_clause}
-            GROUP BY s.id, s.style_code, s.style_name, s.main_image_key
+            GROUP BY g.id, g.goods_code, g.goods_title, g.is_suit, g.main_image_key
             HAVING COALESCE(SUM(q.pay_amount), 0) > 0
                 OR COALESCE(MAX(promo.promo_cost), 0) > 0
                 OR COALESCE(MAX(ad.ad_spend), 0) > 0
@@ -288,17 +342,17 @@ class ProductionRepository:
             params["categories"] = list(categories)
         return as_mappings((await self._s.execute(sql, params)).mappings().all())
 
-    async def daily_trend_by_style(
+    async def daily_trend_by_goods(
         self,
         *,
         tenant_id: UUID,
-        style_id: UUID,
+        goods_id: UUID,
         date_from: date,
         date_to: date,
         granularity: str = "day",
         exclude_brushing: bool = True,
     ) -> list[Mapping[str, Any]]:
-        """按日/周/月/年汇总单款投产指标，与投产主表保持相同口径。"""
+        """按日/周/月/年汇总单个商品的投产指标，与投产主表保持相同口径。"""
         bucket_templates = {
             "day": "{column}",
             "week": "date_trunc('week', {column})::date",
@@ -327,15 +381,15 @@ class ProductionRepository:
                          ELSE 0
                        END
                      ), 0) AS refund_amount
-              FROM style s
+              FROM goods_main g
               JOIN qianniu_daily q
-                ON q.tenant_id = s.tenant_id
+                ON q.tenant_id = g.tenant_id
                 AND q.date BETWEEN :date_from AND :date_to
                 AND (
                   EXISTS (
                     SELECT 1 FROM platform_product mapped_q
                     WHERE mapped_q.tenant_id = q.tenant_id
-                      AND mapped_q.style_id = s.id
+                      AND mapped_q.goods_main_id = g.id
                       AND mapped_q.platform = '千牛'
                       AND (
                         (q.platform_product_id IS NOT NULL
@@ -346,23 +400,31 @@ class ProductionRepository:
                   )
                   OR (
                     q.platform_product_id IS NULL
-                    AND s.qianniu_product_id IS NOT NULL
-                    AND q.platform_id_snapshot = s.qianniu_product_id
                     AND NOT EXISTS (
                       SELECT 1 FROM platform_product any_q
                       WHERE any_q.tenant_id = q.tenant_id
                         AND any_q.platform = '千牛'
                         AND any_q.platform_id = q.platform_id_snapshot
                     )
-                    AND (
-                      SELECT COUNT(*) FROM style legacy_s
-                      WHERE legacy_s.tenant_id = q.tenant_id
+                    AND EXISTS (
+                      SELECT 1 FROM goods_style_item li
+                      JOIN style legacy_s ON legacy_s.id = li.style_id
+                      WHERE li.goods_main_id = g.id AND li.is_active = true
                         AND legacy_s.is_deleted = false
                         AND legacy_s.qianniu_product_id = q.platform_id_snapshot
+                    )
+                    AND (
+                      SELECT COUNT(DISTINCT li2.goods_main_id)
+                      FROM style legacy_s2
+                      JOIN goods_style_item li2
+                        ON li2.style_id = legacy_s2.id AND li2.is_active = true
+                      WHERE legacy_s2.tenant_id = q.tenant_id
+                        AND legacy_s2.is_deleted = false
+                        AND legacy_s2.qianniu_product_id = q.platform_id_snapshot
                     ) = 1
                   )
                 )
-              WHERE s.id = :style_id AND s.tenant_id = :tenant_id
+              WHERE g.id = :goods_id AND g.tenant_id = :tenant_id
               GROUP BY {sales_bucket}
             ),
             brushing AS (
@@ -371,10 +433,17 @@ class ProductionRepository:
               FROM order_adjustment oa
               WHERE :exclude_brushing = true
                 AND oa.tenant_id = :tenant_id
-                AND oa.style_id = :style_id
-                -- 与 aggregate_by_style 同口径：只看 exclude_from_roi
+                -- 与 aggregate_by_goods 同口径：只看 exclude_from_roi，
+                -- 并且同一笔调整只归主商品，不重复计入套装与单品两处。
                 AND oa.exclude_from_roi = true
                 AND oa.order_date BETWEEN :date_from AND :date_to
+                AND (
+                  SELECT gi.goods_main_id FROM goods_style_item gi
+                  JOIN goods_main gg ON gg.id = gi.goods_main_id
+                  WHERE gi.style_id = oa.style_id AND gi.is_active = true
+                  ORDER BY gg.is_suit, gg.goods_code
+                  LIMIT 1
+                ) = :goods_id
               GROUP BY {brushing_bucket}
             ),
             ads AS (
@@ -386,7 +455,7 @@ class ProductionRepository:
                 AND EXISTS (
                   SELECT 1 FROM platform_product mapped_a
                   WHERE mapped_a.tenant_id = a.tenant_id
-                    AND mapped_a.style_id = :style_id
+                    AND mapped_a.goods_main_id = :goods_id
                     AND mapped_a.platform = '万相台'
                     AND (
                       (a.platform_product_id IS NOT NULL
@@ -402,10 +471,16 @@ class ProductionRepository:
                      COALESCE(SUM(p.quote_amount), 0) AS promo_cost
               FROM promotion p
               WHERE p.tenant_id = :tenant_id
-                AND p.style_id = :style_id
                 AND p.is_active = true
                 AND p.publish_status = '已发布'
                 AND p.cooperation_date BETWEEN :date_from AND :date_to
+                AND (
+                  SELECT gi.goods_main_id FROM goods_style_item gi
+                  JOIN goods_main gg ON gg.id = gi.goods_main_id
+                  WHERE gi.style_id = p.style_id AND gi.is_active = true
+                  ORDER BY gg.is_suit, gg.goods_code
+                  LIMIT 1
+                ) = :goods_id
               GROUP BY {promo_bucket}
             ),
             aggregated AS (
@@ -452,7 +527,7 @@ class ProductionRepository:
                     sql,
                     {
                         "tenant_id": tenant_id,
-                        "style_id": style_id,
+                        "goods_id": goods_id,
                         "date_from": date_from,
                         "date_to": date_to,
                         "exclude_brushing": exclude_brushing,
@@ -463,17 +538,22 @@ class ProductionRepository:
             .all()
         )
 
-    async def fetch_extra_by_style(
+    async def fetch_extra_by_goods(
         self, *, tenant_id: UUID, date_from: date, date_to: date
     ) -> list[Mapping[str, Any]]:
-        """按款式拉取千牛/站内 extra，显式 ID 优先并限制平台，避免重复归集。"""
+        """按商品拉取千牛/站内 extra，显式 ID 优先并限制平台，避免重复归集。
+
+        套装的成员款式共用一条链接，归集到同一个商品后 extra 只累加一次；
+        原先按款式归集时同一份 extra 会被每个成员款式各算一遍。
+        """
         sql = text(
             """
-            SELECT pp.style_id AS style_id, q.extra AS extra, 'qianniu' AS src
+            SELECT pp.goods_main_id AS goods_id, q.extra AS extra, 'qianniu' AS src
             FROM qianniu_daily q
             JOIN platform_product pp
               ON pp.tenant_id = q.tenant_id
               AND pp.platform = '千牛'
+              AND pp.goods_main_id IS NOT NULL
               AND (
                 (q.platform_product_id IS NOT NULL
                  AND pp.id = q.platform_product_id)
@@ -484,35 +564,47 @@ class ProductionRepository:
               AND q.date BETWEEN :date_from AND :date_to
               AND q.extra IS NOT NULL
             UNION ALL
-            SELECT s.id AS style_id, q.extra AS extra, 'qianniu' AS src
-            FROM qianniu_daily q
-            JOIN style s
-              ON s.tenant_id = q.tenant_id
-              AND s.is_deleted = false
-              AND s.qianniu_product_id IS NOT NULL
-              AND s.qianniu_product_id = q.platform_id_snapshot
-            WHERE q.tenant_id = :tenant_id
-              AND q.date BETWEEN :date_from AND :date_to
-              AND q.extra IS NOT NULL
-              AND q.platform_product_id IS NULL
-              AND NOT EXISTS (
-                SELECT 1 FROM platform_product pp
-                WHERE pp.tenant_id = q.tenant_id
-                  AND pp.platform = '千牛'
-                  AND pp.platform_id = q.platform_id_snapshot
-              )
-              AND (
-                SELECT COUNT(*) FROM style legacy_s
-                WHERE legacy_s.tenant_id = q.tenant_id
-                  AND legacy_s.is_deleted = false
-                  AND legacy_s.qianniu_product_id = q.platform_id_snapshot
-              ) = 1
+            -- 套装走兜底路径时每个成员款式都会命中，但它们指向同一个商品。
+            -- 按 (日报, 商品) 去重，否则同一份 extra 会被累加多次。
+            SELECT goods_id, extra, 'qianniu' AS src
+            FROM (
+              SELECT DISTINCT q.id AS daily_id,
+                     li.goods_main_id AS goods_id,
+                     q.extra AS extra
+              FROM qianniu_daily q
+              JOIN style s
+                ON s.tenant_id = q.tenant_id
+                AND s.is_deleted = false
+                AND s.qianniu_product_id IS NOT NULL
+                AND s.qianniu_product_id = q.platform_id_snapshot
+              JOIN goods_style_item li ON li.style_id = s.id AND li.is_active = true
+              WHERE q.tenant_id = :tenant_id
+                AND q.date BETWEEN :date_from AND :date_to
+                AND q.extra IS NOT NULL
+                AND q.platform_product_id IS NULL
+                AND NOT EXISTS (
+                  SELECT 1 FROM platform_product pp
+                  WHERE pp.tenant_id = q.tenant_id
+                    AND pp.platform = '千牛'
+                    AND pp.platform_id = q.platform_id_snapshot
+                )
+                AND (
+                  SELECT COUNT(DISTINCT li2.goods_main_id)
+                  FROM style legacy_s
+                  JOIN goods_style_item li2
+                    ON li2.style_id = legacy_s.id AND li2.is_active = true
+                  WHERE legacy_s.tenant_id = q.tenant_id
+                    AND legacy_s.is_deleted = false
+                    AND legacy_s.qianniu_product_id = q.platform_id_snapshot
+                ) = 1
+            ) legacy_extra
             UNION ALL
-            SELECT pp.style_id AS style_id, a.extra AS extra, 'ad' AS src
+            SELECT pp.goods_main_id AS goods_id, a.extra AS extra, 'ad' AS src
             FROM ad_daily a
             JOIN platform_product pp
               ON pp.tenant_id = a.tenant_id
               AND pp.platform = '万相台'
+              AND pp.goods_main_id IS NOT NULL
               AND (
                 (a.platform_product_id IS NOT NULL
                  AND pp.id = a.platform_product_id)
@@ -744,17 +836,27 @@ class BiRepository:
             .all()
         )
 
-    async def published_spend_by_style(
+    async def published_spend_by_goods(
         self, *, tenant_id: UUID, date_from: date, date_to: date
     ) -> list[Mapping[str, Any]]:
+        """已发布推广费按商品归集，与 aggregate_by_goods 的 promo 子查询同口径。"""
         sql = text(
             """
-            SELECT p.style_id, COALESCE(SUM(p.quote_amount), 0) AS external_spend
+            SELECT owner.goods_main_id AS goods_id,
+                   COALESCE(SUM(p.quote_amount), 0) AS external_spend
             FROM promotion p
+            JOIN LATERAL (
+              SELECT gi.goods_main_id
+              FROM goods_style_item gi
+              JOIN goods_main gg ON gg.id = gi.goods_main_id
+              WHERE gi.style_id = p.style_id AND gi.is_active = true
+              ORDER BY gg.is_suit, gg.goods_code
+              LIMIT 1
+            ) owner ON true
             WHERE p.tenant_id = :tenant_id AND p.is_active = true
               AND p.publish_status = '已发布'
               AND p.cooperation_date BETWEEN :date_from AND :date_to
-            GROUP BY p.style_id
+            GROUP BY owner.goods_main_id
             """
         )
         return as_mappings(

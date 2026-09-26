@@ -90,9 +90,11 @@ export interface StoreDailyRow {
 }
 
 export interface ProductionRow {
-  style_id: string;
-  style_code: string;
-  style_name: string;
+  goods_id: string;
+  goods_code: string;
+  goods_title: string;
+  is_suit: boolean;
+  style_codes: string[];
   main_image_url: string | null;
   pay_amount: string;
   refund_amount: string;
@@ -175,9 +177,10 @@ export interface BiWorkloadRow {
 }
 
 export interface BiStylePerformance {
-  style_id: string;
-  style_code: string;
-  style_name: string;
+  goods_id: string;
+  goods_code: string;
+  goods_title: string;
+  is_suit: boolean;
   main_image_url: string | null;
   sales_amount: string;
   refund_amount: string;

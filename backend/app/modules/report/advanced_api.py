@@ -155,7 +155,7 @@ async def get_production(
 async def get_production_trend(
     user: CurrentActiveUser,
     service: ProductionServiceDep,
-    style_id: UUID,
+    goods_id: UUID,
     preset: _PresetQ = "last_30d",
     date_from: _FromQ = None,
     date_to: _ToQ = None,
@@ -165,11 +165,11 @@ async def get_production_trend(
     ] = "day",
     exclude_brushing: bool = True,
 ) -> ProductionTrend:
-    """单款投产趋势；date 表示日或周/月/年桶的起始日期。"""
+    """单个商品的投产趋势；date 表示日或周/月/年桶的起始日期。"""
     tr = resolve_time_range(preset, date_from, date_to)
     return await service.get_trend(
         user.tenant_id,
-        style_id,
+        goods_id,
         tr,
         granularity=granularity,
         exclude_brushing=exclude_brushing,

@@ -8,6 +8,7 @@ import {
   Statistic,
   Switch,
   Table,
+  Tag,
   Typography,
   message,
 } from "antd";
@@ -61,7 +62,7 @@ export function ProductionPage() {
   const [excludeBrushing, setExcludeBrushing] = useState(true);
   const [season, setSeason] = useState<string[]>([]);
   const [category, setCategory] = useState<string[]>([]);
-  const [trendStyle, setTrendStyle] = useState<ProductionRow | null>(null);
+  const [trendGoods, setTrendGoods] = useState<ProductionRow | null>(null);
   const [trendGranularity, setTrendGranularity] = useState<TimeGranularity>("day");
 
   const { data: seasons } = useQuery({
@@ -112,16 +113,16 @@ export function ProductionPage() {
   const { data: trend, isLoading: trendLoading } = useQuery({
     queryKey: [
       "production-trend",
-      trendStyle?.style_id,
+      trendGoods?.goods_id,
       preset,
       df,
       dt,
       trendGranularity,
       excludeBrushing,
     ],
-    enabled: !!trendStyle && enabled,
+    enabled: !!trendGoods && enabled,
     queryFn: () =>
-      getProductionTrend(trendStyle!.style_id, {
+      getProductionTrend(trendGoods!.goods_id, {
         preset,
         date_from: df,
         date_to: dt,
@@ -166,11 +167,31 @@ export function ProductionPage() {
       width: 68,
       fixed: "left",
       render: (src: string | null, row) => (
-        <StyleImageThumbnail src={src} alt={`${row.style_code} 款式主图`} />
+        <StyleImageThumbnail src={src} alt={`${row.goods_code} 商品主图`} />
       ),
     },
-    { title: "货号", dataIndex: "style_code", width: 120, fixed: "left" },
-    { title: "款名", dataIndex: "style_name", width: 150 },
+    {
+      title: "商品编码",
+      dataIndex: "goods_code",
+      width: 130,
+      fixed: "left",
+      render: (code: string, row: ProductionRow) =>
+        row.is_suit ? (
+          <Space size={4}>
+            <span>{code}</span>
+            <Tag color="purple">套装</Tag>
+          </Space>
+        ) : (
+          code
+        ),
+    },
+    { title: "商品名称", dataIndex: "goods_title", width: 180, ellipsis: true },
+    {
+      title: "含款号",
+      dataIndex: "style_codes",
+      width: 140,
+      render: (codes: string[]) => (codes?.length ? codes.join("、") : "—"),
+    },
     { title: "支付金额", dataIndex: "pay_amount", width: 110, render: money },
     { title: "退款金额", dataIndex: "refund_amount", width: 110, render: money },
     { title: "退货退款率", dataIndex: "return_rate", width: 110, render: pct },
@@ -188,7 +209,7 @@ export function ProductionPage() {
       width: 80,
       fixed: "right",
       render: (_: unknown, row: ProductionRow) => (
-        <Button type="link" size="small" onClick={() => setTrendStyle(row)}>
+        <Button type="link" size="small" onClick={() => setTrendGoods(row)}>
           折线图
         </Button>
       ),
@@ -273,7 +294,7 @@ export function ProductionPage() {
         </Button>
       </Space>
       <Table
-        rowKey="style_id"
+        rowKey="goods_id"
         size="small"
         loading={isLoading}
         columns={columns}
@@ -284,12 +305,12 @@ export function ProductionPage() {
 
       <Modal
         title={
-          trendStyle
-            ? `投产趋势 · ${trendStyle.style_code} ${trendStyle.style_name}`
+          trendGoods
+            ? `投产趋势 · ${trendGoods.goods_code} ${trendGoods.goods_title}`
             : "投产趋势"
         }
-        open={!!trendStyle}
-        onCancel={() => setTrendStyle(null)}
+        open={!!trendGoods}
+        onCancel={() => setTrendGoods(null)}
         footer={null}
         width={780}
         destroyOnHidden

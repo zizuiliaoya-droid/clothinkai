@@ -184,7 +184,7 @@ class AiAdvisoryService:
             "pay_amount_total": str(pay_total),
             "top_styles": [
                 {
-                    "style_code": r.style_code,
+                    "style_code": r.goods_code,
                     "pay_amount": str(r.pay_amount),
                     "net_roi": str(r.net_roi) if r.net_roi is not None else None,
                 }

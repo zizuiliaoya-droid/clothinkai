@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.tenancy import tenant_id_ctx
 from app.modules.collect.models import AdDaily, QianniuDaily
 from app.modules.finance.order_adjustment_models import OrderAdjustment
+from app.modules.product.goods_models import GoodsMain, GoodsStyleItem
 from app.modules.product.platform_product_models import PlatformProduct
 from app.modules.report.advanced_repository import ProductionRepository
 from app.modules.report.advanced_schemas import (
@@ -33,14 +34,53 @@ from app.modules.report.work_progress_service import WorkProgressService
 pytestmark = pytest.mark.asyncio
 
 
+async def _goods(
+    session: AsyncSession,
+    tenant: Any,
+    *styles: Any,
+    code: str | None = None,
+    is_suit: bool = False,
+) -> GoodsMain:
+    """建一个商品并挂上款式，复刻 037/038/040 回填后的生产形态。
+
+    投产报表按商品聚合，款式必须先归到商品才会出现在报表里。
+    """
+    goods = GoodsMain(
+        tenant_id=tenant.id,
+        goods_code=code or f"G{uuid4().hex[:8]}",
+        goods_title=styles[0].style_name if styles else "测试商品",
+        is_suit=is_suit,
+    )
+    session.add(goods)
+    await session.flush()
+    for idx, style in enumerate(styles):
+        session.add(
+            GoodsStyleItem(
+                tenant_id=tenant.id,
+                goods_main_id=goods.id,
+                style_id=style.id,
+                sort_order=idx,
+            )
+        )
+    await session.flush()
+    return goods
+
+
 async def _platform_product(
-    session: AsyncSession, tenant: Any, style: Any, platform: str = "千牛"
+    session: AsyncSession,
+    tenant: Any,
+    style: Any,
+    platform: str = "千牛",
+    goods: GoodsMain | None = None,
 ) -> PlatformProduct:
+    if goods is None:
+        goods = await _goods(session, tenant, style)
     pp = PlatformProduct(
         tenant_id=tenant.id,
         platform=platform,
         platform_id=f"P{uuid4().hex[:8]}",
         style_id=style.id,
+        goods_main_id=goods.id,
     )
     session.add(pp)
     await session.flush()
@@ -404,8 +444,11 @@ class TestProduction:
             pr = await factory.user(tenant_a, roles=[pr_role])
             style = await product_factory.style()
             blogger = await blogger_factory.blogger()
-            pp = await _platform_product(session, tenant_a, style)
-            ad_pp = await _platform_product(session, tenant_a, style, platform="万相台")
+            goods = await _goods(session, tenant_a, style)
+            pp = await _platform_product(session, tenant_a, style, goods=goods)
+            ad_pp = await _platform_product(
+                session, tenant_a, style, platform="万相台", goods=goods
+            )
             cur = date(2026, 5, 20)
             prev = date(2026, 5, 19)  # 上一周期（跨度 0 天 → 前一天）
             # 本期：支付 1000 退款 100 + 广告 200 + promotion 500
@@ -460,11 +503,11 @@ class TestProduction:
             assert row.return_rate == Decimal("0.1000")
             # 上一周期独立计算
             assert report.previous is not None
-            prev_rows = [p for p in report.previous if p.style_id == style.id]
+            prev_rows = [p for p in report.previous if p.goods_id == goods.id]
             assert prev_rows and prev_rows[0].pay_amount == Decimal("800.00")
 
             trend = await ProductionService(session).get_trend(
-                tenant_a.id, style.id, (cur, cur), granularity="day"
+                tenant_a.id, goods.id, (cur, cur), granularity="day"
             )
             assert len(trend.points) == 1
             point = trend.points[0]
@@ -488,7 +531,8 @@ class TestProduction:
         tok = tenant_id_ctx.set(tenant_a.id)
         try:
             style = await product_factory.style()
-            pp = await _platform_product(session, tenant_a, style)
+            goods = await _goods(session, tenant_a, style)
+            pp = await _platform_product(session, tenant_a, style, goods=goods)
             day = date(2026, 5, 21)
             await _qianniu(
                 session,
@@ -501,7 +545,7 @@ class TestProduction:
             await session.commit()
 
             trend = await ProductionService(session).get_trend(
-                tenant_a.id, style.id, (day, day), granularity="day"
+                tenant_a.id, goods.id, (day, day), granularity="day"
             )
             assert len(trend.points) == 1
             point = trend.points[0]
@@ -522,20 +566,26 @@ class TestProduction:
             style = await product_factory.style()
             other_style = await product_factory.style()
             style.qianniu_product_id = "LEGACY-ID"
-            pp1 = await _platform_product(session, tenant_a, style)
-            await _platform_product(session, tenant_a, style)
+            goods = await _goods(session, tenant_a, style)
+            other_goods = await _goods(session, tenant_a, other_style)
+            pp1 = await _platform_product(session, tenant_a, style, goods=goods)
+            await _platform_product(session, tenant_a, style, goods=goods)
             conflicting_q = PlatformProduct(
                 tenant_id=tenant_a.id,
                 platform="千牛",
                 platform_id="LEGACY-ID",
                 style_id=other_style.id,
+                goods_main_id=other_goods.id,
             )
-            ad_pp = await _platform_product(session, tenant_a, style, platform="万相台")
+            ad_pp = await _platform_product(
+                session, tenant_a, style, platform="万相台", goods=goods
+            )
             cross_platform_ad = PlatformProduct(
                 tenant_id=tenant_a.id,
                 platform="千牛",
                 platform_id="SHARED-AD-ID",
                 style_id=other_style.id,
+                goods_main_id=other_goods.id,
             )
             session.add_all([conflicting_q, cross_platform_ad])
             await session.flush()
@@ -573,11 +623,14 @@ class TestProduction:
                     status="待付款",
                 )
             )
-            # legacy snapshot 同时命中两个款式时不得归入任一款式，避免重复统计。
+            # legacy snapshot 命中的款式落在两个不同商品时不得归入任一商品，
+            # 避免同一条日报被两个商品各算一次。
             legacy_a = await product_factory.style()
             legacy_b = await product_factory.style()
             legacy_a.qianniu_product_id = "AMBIGUOUS-LEGACY-ID"
             legacy_b.qianniu_product_id = "AMBIGUOUS-LEGACY-ID"
+            await _goods(session, tenant_a, legacy_a)
+            await _goods(session, tenant_a, legacy_b)
             session.add(
                 QianniuDaily(
                     tenant_id=tenant_a.id,
@@ -595,27 +648,135 @@ class TestProduction:
             service = ProductionService(session)
             included = await service.get_report(tenant_a.id, (day, day), exclude_brushing=False)
             excluded = await service.get_report(tenant_a.id, (day, day), exclude_brushing=True)
-            extra_rows = await ProductionRepository(session).fetch_extra_by_style(
+            extra_rows = await ProductionRepository(session).fetch_extra_by_goods(
                 tenant_id=tenant_a.id, date_from=day, date_to=day
             )
             assert len(extra_rows) == 2
-            assert all(row["style_id"] == style.id for row in extra_rows)
+            assert all(row["goods_id"] == goods.id for row in extra_rows)
             assert len(included.items) == 1
             assert len(excluded.items) == 1
-            assert included.items[0].style_id == style.id
+            assert included.items[0].goods_id == goods.id
             assert included.items[0].pay_amount == Decimal("100.00")
             assert included.items[0].ad_spend == Decimal("20.00")
             assert excluded.items[0].pay_amount == Decimal("70.00")
 
             trend_included = await service.get_trend(
-                tenant_a.id, style.id, (day, day), exclude_brushing=False
+                tenant_a.id, goods.id, (day, day), exclude_brushing=False
             )
             trend_excluded = await service.get_trend(
-                tenant_a.id, style.id, (day, day), exclude_brushing=True
+                tenant_a.id, goods.id, (day, day), exclude_brushing=True
             )
             assert trend_included.points[0].pay_amount == Decimal("100.00")
             assert trend_included.points[0].ad_spend == Decimal("20.00")
             assert trend_excluded.points[0].pay_amount == Decimal("70.00")
+        finally:
+            tenant_id_ctx.reset(tok)
+
+    async def test_suit_merges_into_one_row_and_sums_member_costs(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        pr_role: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        """套装：两款共用一条链接 → 报表一行，销售额算一次，成员推广费求和。
+
+        这是按商品聚合的核心价值。按款式聚合时同一条链接的销售额会被两个款式
+        各算一遍（总额翻倍），而套装本来只卖出了那么多。
+        """
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            pr = await factory.user(tenant_a, roles=[pr_role])
+            blogger = await blogger_factory.blogger()
+            top = await product_factory.style(style_code="SUIT_TOP", style_name="上衣")
+            skirt = await product_factory.style(style_code="SUIT_SKIRT", style_name="半裙")
+            suit = await _goods(session, tenant_a, top, skirt, code="SUIT-1", is_suit=True)
+            pp = await _platform_product(session, tenant_a, top, goods=suit)
+            day = date(2026, 6, 10)
+            await _qianniu(
+                session,
+                tenant_a,
+                pp,
+                day,
+                pay="2000.00",
+                extra={"refund_amount": "100.00", "add_cart_count": 30},
+            )
+            # 两个成员款式各有一笔已发布推广，套装的站外花费应当是两者之和。
+            for style in (top, skirt):
+                await promotion_factory.promotion(
+                    style=style,
+                    blogger=blogger,
+                    pr=pr,
+                    cooperation_date=day,
+                    quote_amount=Decimal("300.00"),
+                    publish_status="已发布",
+                )
+            await session.commit()
+
+            report = await ProductionService(session).get_report(tenant_a.id, (day, day))
+            rows = [r for r in report.items if r.goods_id == suit.id]
+            assert len(rows) == 1, "套装必须合并成一行"
+            row = rows[0]
+            assert row.is_suit is True
+            assert sorted(row.style_codes) == ["SUIT_SKIRT", "SUIT_TOP"]
+            assert row.goods_code == "SUIT-1"
+            # 销售额只算一次，不因为两个成员款式而翻倍
+            assert row.pay_amount == Decimal("2000.00")
+            assert row.refund_amount == Decimal("100.00")
+            assert row.add_cart_count == 30
+            # 站外推广费 = 两个成员款式之和
+            assert row.promo_cost == Decimal("600.00")
+
+            trend = await ProductionService(session).get_trend(tenant_a.id, suit.id, (day, day))
+            assert len(trend.points) == 1
+            assert trend.points[0].pay_amount == Decimal("2000.00")
+            assert trend.points[0].promo_cost == Decimal("600.00")
+        finally:
+            tenant_id_ctx.reset(tok)
+
+    async def test_suit_sharing_qianniu_id_without_link_still_merges(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+    ) -> None:
+        """兜底路径也要支持套装：两款手填同一个千牛ID、没建链接，仍合并成一行。
+
+        旧口径的护栏是「同一千牛ID 只能绑一个款式」，这种数据会被整条丢掉；
+        现在放宽成「只能落在一个商品」，套装能正常统计。
+        """
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            a = await product_factory.style(style_code="SQN_A", style_name="外套")
+            b = await product_factory.style(style_code="SQN_B", style_name="马甲")
+            a.qianniu_product_id = "SUIT-QN-ID"
+            b.qianniu_product_id = "SUIT-QN-ID"
+            suit = await _goods(session, tenant_a, a, b, code="SUIT-QN", is_suit=True)
+            day = date(2026, 6, 11)
+            session.add(
+                QianniuDaily(
+                    tenant_id=tenant_a.id,
+                    platform_product_id=None,
+                    platform_id_snapshot="SUIT-QN-ID",
+                    date=day,
+                    visitors=50,
+                    pay_amount=Decimal("1500.00"),
+                    pay_orders=5,
+                    extra={"add_cart_count": 12},
+                )
+            )
+            await session.commit()
+
+            report = await ProductionService(session).get_report(tenant_a.id, (day, day))
+            rows = [r for r in report.items if r.goods_id == suit.id]
+            assert len(rows) == 1
+            assert rows[0].pay_amount == Decimal("1500.00")
+            # extra 只累加一次，不因为两个成员款式而翻倍
+            assert rows[0].add_cart_count == 12
+            assert rows[0].extra.get("add_cart_count") == "12"
         finally:
             tenant_id_ctx.reset(tok)
 

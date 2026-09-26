@@ -9,6 +9,7 @@ import {
   Space,
   Statistic,
   Table,
+  Tag,
   Typography,
 } from "antd";
 import { useQuery } from "@tanstack/react-query";
@@ -170,11 +171,25 @@ export function BiDashboardPage() {
       width: 68,
       fixed: "left",
       render: (src: string | null, row) => (
-        <StyleImageThumbnail src={src} alt={`${row.style_code} 款式主图`} />
+        <StyleImageThumbnail src={src} alt={`${row.goods_code} 商品主图`} />
       ),
     },
-    { title: "货号", dataIndex: "style_code", width: 120, fixed: "left" },
-    { title: "款名", dataIndex: "style_name", width: 150 },
+    {
+      title: "商品编码",
+      dataIndex: "goods_code",
+      width: 130,
+      fixed: "left",
+      render: (code: string, row: BiStylePerformance) =>
+        row.is_suit ? (
+          <Space size={4}>
+            <span>{code}</span>
+            <Tag color="purple">套装</Tag>
+          </Space>
+        ) : (
+          code
+        ),
+    },
+    { title: "商品名称", dataIndex: "goods_title", width: 180, ellipsis: true },
     {
       title: "销售额",
       dataIndex: "sales_amount",
@@ -339,9 +354,9 @@ export function BiDashboardPage() {
         />
       </Card>
 
-      <Card title="单款表现">
+      <Card title="单品表现">
         <Table<BiStylePerformance>
-          rowKey="style_id"
+          rowKey="goods_id"
           size="small"
           loading={isLoading}
           columns={styleColumns}
