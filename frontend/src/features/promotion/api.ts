@@ -171,3 +171,18 @@ export async function reviewPromotion(
   );
   return resp.data;
 }
+
+/**
+ * 上传博主寄回衣服单号。寄拍模式审核通过的前提 —— 没有单号后端会拒绝过审。
+ * 与仓库发货单号是两个方向：那个寄给博主，这个博主寄回来。
+ */
+export async function setReturnWaybill(
+  promotionId: string,
+  returnWaybill: string
+): Promise<Promotion> {
+  const resp = await apiClient.post<Promotion>(
+    `/api/promotions/${promotionId}/return-waybill`,
+    { return_waybill: returnWaybill }
+  );
+  return resp.data;
+}

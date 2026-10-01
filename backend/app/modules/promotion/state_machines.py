@@ -218,13 +218,24 @@ class SettlementStatusMachine:
             to_state=SettlementStatus.PENDING_REVIEW.value,
             actor_roles=(_ROLE_SYSTEM,),
         ),
-        # 待核查 → 待付款
+        # 待核查 → 待付款（寄拍 / 送拍：有博主服务费要付）
         TransitionRule(
             from_state=SettlementStatus.PENDING_REVIEW.value,
             action="approve",
             to_state=SettlementStatus.PENDING_PAYMENT.value,
             actor_roles=(_ROLE_PR_MANAGER, _ROLE_ADMIN),
             side_effects=("emit_settlement_requested",),
+        ),
+        # 待核查 → 已付款（置换：以货换推广，没有钱要付）
+        #
+        # PRD 模块二硬约束：置换审核通过直接到「已结款」，跳过待财务付款、财务付款、
+        # PR 通知博主整套流程。这里刻意不发 SettlementRequested —— 发了 finance 会建一张
+        # 金额为 0 的结款单，财务侧多出一堆不需要处理的单子。
+        TransitionRule(
+            from_state=SettlementStatus.PENDING_REVIEW.value,
+            action="approve_barter",
+            to_state=SettlementStatus.PAID.value,
+            actor_roles=(_ROLE_PR_MANAGER, _ROLE_ADMIN),
         ),
         # 待核查 → 已驳回
         TransitionRule(

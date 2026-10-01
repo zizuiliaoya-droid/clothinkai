@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.events import subscribe
 from app.core.exceptions import MissingRequiredHandlerError
 from app.core.tenancy import tenant_id_ctx
-from app.modules.promotion.enums import ReviewAction
+from app.modules.promotion.enums import RejectReasonCategory, ReviewAction
 from app.modules.promotion.exceptions import (
     ReviewReasonRequiredError,
     SelfReviewForbiddenError,
@@ -175,11 +175,17 @@ class TestReviewReject:
             svc = PromotionService(session)
             response = await svc.review(
                 promotion.id,
-                PromotionReviewRequest(action=ReviewAction.REJECT, review_reason="链接无法访问"),
+                PromotionReviewRequest(
+                    action=ReviewAction.REJECT,
+                    review_reason="链接无法访问",
+                    # PRD 改动 5：驳回原因必须三选一
+                    review_reason_category=RejectReasonCategory.LATE_PUBLISH,
+                ),
                 reviewer,
             )
             assert response.settlement_status == "已驳回"
             assert response.review_reason == "链接无法访问"
+            assert response.review_reason_category == "延迟发文"
         finally:
             tenant_id_ctx.reset(token)
 

@@ -74,6 +74,8 @@ from app.modules.promotion.exceptions import (
     InvalidStyleReferenceError,
     PromotionNotFoundError,
     PublishUrlRequiredError,
+    RejectReasonCategoryRequiredError,
+    ReturnWaybillRequiredError,
     ReviewReasonRequiredError,
     SelfReviewForbiddenError,
     StateTransitionConflictError,
@@ -107,6 +109,7 @@ from app.modules.promotion.schemas import (
     PromotionPublishRequest,
     PromotionRecallStartRequest,
     PromotionResponse,
+    PromotionReturnWaybillRequest,
     PromotionReviewRequest,
     PromotionUpdate,
     PromotionWarehouseWaybillRequest,
@@ -197,14 +200,20 @@ class PromotionService:
         # 3. 取 tenant_code 用于 internal_code 前缀
         tenant_code = await self._get_tenant_code(user.tenant_id)
 
+        # 合作日期 = 建单当天，服务端定（PRD 改动 5：自动生成、不可改）。
+        # 人工录入时不该能挑日期 —— 日期往前挑会改掉 internal_code 的序列段，
+        # 也会让这单落进已经对过账的区间。
+        # Excel 导入走的是 importer 适配器，那条路径保留传入日期，否则导历史数据没法用。
+        cooperation_date = get_today()
+
         # 4. 序列号原子获取（FB2）
         next_seq = await self._repo.next_internal_sequence(
             tenant_id=user.tenant_id,
-            date_key=payload.cooperation_date,
+            date_key=cooperation_date,
         )
         internal_code = format_internal_code(
             tenant_code=tenant_code,
-            cooperation_date=payload.cooperation_date,
+            cooperation_date=cooperation_date,
             sequence=next_seq,
         )
 
@@ -245,7 +254,7 @@ class PromotionService:
             cooperation_mode=payload.cooperation_mode.value,
             return_shipping_fee=payload.return_shipping_fee,
             platform=payload.platform,
-            cooperation_date=payload.cooperation_date,
+            cooperation_date=cooperation_date,
             scheduled_publish_date=payload.scheduled_publish_date,
             note_title=payload.note_title,
             remark=payload.remark,
@@ -1002,12 +1011,35 @@ class PromotionService:
                 details={"publish_status": promotion.publish_status},
             )
 
+        is_barter = promotion.cooperation_mode == CooperationMode.BARTER.value
         if payload.action == ReviewAction.APPROVE:
-            to_state = SettlementStatus.PENDING_PAYMENT.value
-            action_name = "approve"
+            # 寄拍硬门槛：没有博主寄回衣服单号不许往财务走。
+            # PRD 原文「不上传单号财务看不到单据，禁止结款」，且明确要求后端校验。
+            if (
+                promotion.cooperation_mode == CooperationMode.CONSIGNMENT.value
+                and not (promotion.return_waybill or "").strip()
+            ):
+                raise ReturnWaybillRequiredError(
+                    "寄拍模式需要先上传博主寄回衣服单号才能通过审核",
+                    details={
+                        "promotion_id": str(promotion_id),
+                        "cooperation_mode": promotion.cooperation_mode,
+                    },
+                )
+            if is_barter:
+                # 置换没有博主服务费，审核通过即结清，跳过待付款与财务付款
+                to_state = SettlementStatus.PAID.value
+                action_name = "approve_barter"
+            else:
+                to_state = SettlementStatus.PENDING_PAYMENT.value
+                action_name = "approve"
         else:  # REJECT
             if not payload.review_reason:
                 raise ReviewReasonRequiredError("驳回时 review_reason 必填")
+            if payload.review_reason_category is None:
+                raise RejectReasonCategoryRequiredError(
+                    "驳回时必须选择原因分类（延迟发文 / 流量差补发 / 衣服未寄回）"
+                )
             to_state = SettlementStatus.REJECTED.value
             action_name = "reject"
 
@@ -1029,6 +1061,11 @@ class PromotionService:
                 "reviewed_at": now,
                 "review_action": payload.action.value,
                 "review_reason": payload.review_reason,
+                "review_reason_category": (
+                    payload.review_reason_category.value
+                    if payload.review_reason_category is not None
+                    else None
+                ),
             },
         )
         if updated is None:
@@ -1050,12 +1087,19 @@ class PromotionService:
             after={
                 "settlement_status": to_state,
                 "review_action": payload.action.value,
+                "cooperation_mode": promotion.cooperation_mode,
+                "review_reason_category": (
+                    payload.review_reason_category.value
+                    if payload.review_reason_category is not None
+                    else None
+                ),
             },
             user_id=user.id,
         )
 
-        # approve 时发强一致事件（FB1）
-        if payload.action == ReviewAction.APPROVE:
+        # 审核通过且需要付款时才发强一致事件（FB1）。
+        # 置换直接到已付款，不建结款单 —— 发了 finance 会多出一堆金额为 0 的单子。
+        if payload.action == ReviewAction.APPROVE and not is_barter:
             event = SettlementRequested(
                 event_id=uuid4(),
                 timestamp=now,
@@ -1084,6 +1128,35 @@ class PromotionService:
 
         await self._session.commit()
         return await self._to_response(updated, user)
+
+    async def set_return_waybill(
+        self,
+        promotion_id: UUID,
+        payload: PromotionReturnWaybillRequest,
+        user: User,
+    ) -> PromotionResponse:
+        """上传博主寄回衣服单号（寄拍模式审核通过的前提）。
+
+        不限制状态：PR 可能在发货后就拿到了单号，也可能审核被拦住之后才补。
+        真正的门槛在 ``review()`` 里 —— 没有单号就通不过审核。
+        """
+        promotion = await self._repo.get_by_id(promotion_id)
+        if promotion is None:
+            raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
+
+        before = promotion.return_waybill
+        promotion.return_waybill = payload.return_waybill
+        await self._session.flush()
+        await self._audit.log(
+            action="promotion.return_waybill.update",
+            resource="promotion",
+            resource_id=promotion_id,
+            before={"return_waybill_present": bool(before)},
+            after={"return_waybill_present": True},
+            user_id=user.id,
+        )
+        await self._session.commit()
+        return await self._to_response(promotion, user)
 
     # ============================================================
     # 软停用 / 内部 API
@@ -1362,6 +1435,7 @@ class PromotionService:
             total_promo_cost=(
                 promotion.total_promo_cost if (can_see_quote and can_see_cost) else None
             ),
+            return_waybill=promotion.return_waybill,
             platform=promotion.platform,
             cooperation_date=promotion.cooperation_date,
             scheduled_publish_date=promotion.scheduled_publish_date,
@@ -1379,6 +1453,7 @@ class PromotionService:
             reviewed_at=promotion.reviewed_at,
             review_action=promotion.review_action,
             review_reason=promotion.review_reason,
+            review_reason_category=promotion.review_reason_category,
             is_active=promotion.is_active,
             created_at=promotion.created_at,
             updated_at=promotion.updated_at,

@@ -33,6 +33,7 @@ from app.modules.promotion.enums import (
     CooperationMode,
     PublishStatus,
     RecallStatus,
+    RejectReasonCategory,
     ReviewAction,
     SettlementStatus,
 )
@@ -68,7 +69,14 @@ class PromotionBase(BaseModel):
     """
     blogger_id: UUID
     platform: str = Field(min_length=1, max_length=16)
-    cooperation_date: date
+    cooperation_date: date | None = None
+    """合作日期。
+
+    HTTP 建单时**忽略此字段**，服务端一律取建单当天（PRD 改动 5：自动生成、不可改）。
+    保留它只为兼容旧客户端的请求体，不报错但也不生效。Excel 导入走另一条路径，
+    那里仍然按文件里的日期落库 —— 不然历史数据导不进来。
+    """
+
     scheduled_publish_date: date | None = None
     quote_amount: _QuoteField | None = None
     """创建时若为 None 则从 blogger.quote 快照；后续编辑可修改。
@@ -205,12 +213,30 @@ class PromotionReviewRequest(BaseModel):
 
     action: ReviewAction
     review_reason: str | None = Field(default=None, max_length=2000)
+    review_reason_category: RejectReasonCategory | None = None
+    """驳回原因分类，驳回时必填（PRD 改动 5 三选一）。审核通过时忽略。"""
 
     @model_validator(mode="after")
     def _require_reason_on_reject(self) -> PromotionReviewRequest:
-        if self.action == ReviewAction.REJECT and not self.review_reason:
-            raise ValueError("驳回时 review_reason 必填")
+        if self.action == ReviewAction.REJECT:
+            if not self.review_reason:
+                raise ValueError("驳回时 review_reason 必填")
+            if self.review_reason_category is None:
+                raise ValueError("驳回时 review_reason_category 必填（三选一）")
         return self
+
+
+class PromotionReturnWaybillRequest(BaseModel):
+    """上传博主寄回衣服单号。
+
+    寄拍模式审核通过后用这个接口补单号，补完才能流转到待财务付款。
+    与仓库发货单号（``PromotionWarehouseWaybillRequest``）是两个方向：
+    那个是寄给博主，这个是博主寄回来。
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    return_waybill: str = Field(min_length=1, max_length=128)
 
 
 class PromotionUpdateLikeRequest(BaseModel):
@@ -273,6 +299,9 @@ class PromotionResponse(BaseModel):
     """站外推广成本 = 博主服务费 + 样品成本 + 寄回运费。数据库生成列，与 quote_amount
     同样受读权限门控 —— 它是三项金额之和，能看到它等于能推算出金额。"""
 
+    return_waybill: str | None = None
+    """博主寄回衣服单号。寄拍模式没有它就不能流转到待财务付款。"""
+
     # 业务字段
     platform: str
     cooperation_date: date
@@ -295,6 +324,7 @@ class PromotionResponse(BaseModel):
     reviewed_at: datetime | None = None
     review_action: str | None = None
     review_reason: str | None = None
+    review_reason_category: str | None = None
 
     # 通用
     is_active: bool
