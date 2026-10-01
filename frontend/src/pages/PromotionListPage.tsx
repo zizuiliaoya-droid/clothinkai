@@ -4,6 +4,7 @@ import {
   Button,
   Card,
   DatePicker,
+  Drawer,
   Dropdown,
   Form,
   Input,
@@ -13,6 +14,7 @@ import {
   Space,
   Table,
   Tag,
+  Timeline,
   Tooltip,
   Typography,
   Upload,
@@ -32,6 +34,8 @@ import {
   cancelPromotion,
   confirmRetrospective,
   createPromotion,
+  promotionAmountLog,
+  uploadBrandComment,
   listPromotions,
   publishPromotion,
   recallFailurePromotion,
@@ -126,6 +130,75 @@ const retroColor: Record<string, string> = {
   已完成: "green",
 };
 
+const AMOUNT_FIELD_LABEL: Record<string, string> = {
+  quote_amount: "博主服务费",
+  cost_snapshot: "样品成本",
+  return_shipping_fee: "寄回运费",
+};
+
+/** 「模式兜底」标红：那是系统按合作模式改写的，不是人填错了。 */
+const amountSourceColor: Record<string, string> = {
+  手动编辑: "blue",
+  模式初始化: "default",
+  模式兜底: "orange",
+};
+
+function fmtAmount(v: string | null): string {
+  return v == null ? "—" : `¥${Number(v).toFixed(2)}`;
+}
+
+/**
+ * 金额改动记录（PRD 第 10 节第 14 条：成本修改可追溯）。
+ *
+ * 后端按**字段级**权限门控，看不到金额的角色（运营等）会拿到 403 ——
+ * 这里把 403 显示成「无权查看」而不是报错弹窗。
+ */
+function AmountLogPanel({ promotionId }: { promotionId: string | null }) {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["promotion-amount-log", promotionId],
+    queryFn: () => promotionAmountLog(promotionId as string),
+    enabled: !!promotionId,
+  });
+
+  if (isLoading) return <Typography.Text type="secondary">加载中…</Typography.Text>;
+  if (error) {
+    return (
+      <Typography.Text type="secondary">
+        无权查看金额改动记录（需要有报价字段的读权限）
+      </Typography.Text>
+    );
+  }
+  if ((data?.length ?? 0) === 0) {
+    return <Typography.Text type="secondary">这单金额没有改动过</Typography.Text>;
+  }
+  return (
+    <Timeline
+      items={(data ?? []).map((r) => ({
+        color: r.change_source === "模式兜底" ? "orange" : "blue",
+        children: (
+          <Space direction="vertical" size={2}>
+            <Space size={6}>
+              <Typography.Text strong>
+                {AMOUNT_FIELD_LABEL[r.field_name] ?? r.field_name}
+              </Typography.Text>
+              <Tag color={amountSourceColor[r.change_source]}>
+                {r.change_source}
+              </Tag>
+            </Space>
+            <Typography.Text>
+              {fmtAmount(r.before_value)} → {fmtAmount(r.after_value)}
+            </Typography.Text>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {dayjs(r.created_at).format("YYYY-MM-DD HH:mm")}
+              {r.changed_by_name ? ` · ${r.changed_by_name}` : ""}
+            </Typography.Text>
+          </Space>
+        ),
+      }))}
+    />
+  );
+}
+
 /** 驳回原因分类，三选一必填（PRD 改动 5）。 */
 const REJECT_CATEGORIES: RejectReasonCategory[] = [
   "延迟发文",
@@ -185,6 +258,8 @@ export function PromotionListPage() {
     null
   );
   const [retroConfirmForm] = Form.useForm();
+  const [brandCommentFile, setBrandCommentFile] = useState<File | null>(null);
+  const [amountLogTarget, setAmountLogTarget] = useState<Promotion | null>(null);
   const [recallTarget, setRecallTarget] = useState<Promotion | null>(null);
   const [recallForm] = Form.useForm();
   // §11：颜色及规格按货号联动——当前推广所属款式的 SKU 颜色+尺码组合
@@ -252,19 +327,29 @@ export function PromotionListPage() {
   });
 
   const publishMutation = useMutation({
-    mutationFn: ({
+    // 截图和发布是两个请求，但 UI 上是一步。先传图再发布 —— 顺序不能反，
+    // 后端 publish 会检查截图存在
+    mutationFn: async ({
       id,
       publish_url,
       actual_publish_date,
+      brandCommentFile,
     }: {
       id: string;
       publish_url: string;
       actual_publish_date: string;
-    }) => publishPromotion(id, { publish_url, actual_publish_date }),
+      brandCommentFile?: File;
+    }) => {
+      if (brandCommentFile) {
+        await uploadBrandComment(id, brandCommentFile);
+      }
+      return publishPromotion(id, { publish_url, actual_publish_date });
+    },
     onSuccess: () => {
       message.success("已标记发布");
       setPublishOpen(false);
       setPublishTarget(null);
+      setBrandCommentFile(null);
       publishForm.resetFields();
       void qc.invalidateQueries({ queryKey: ["promotions"] });
     },
@@ -275,6 +360,7 @@ export function PromotionListPage() {
     setPublishTarget(record);
     publishForm.resetFields();
     publishForm.setFieldsValue({ actual_publish_date: dayjs() });
+    setBrandCommentFile(null);
     setPublishOpen(true);
   }
 
@@ -829,6 +915,13 @@ export function PromotionListPage() {
               setRetroConfirmTarget(record);
               retroConfirmForm.resetFields();
             },
+          },
+          {
+            // 金额改动记录。后端按字段级权限门控 —— 看不到金额的角色会拿到 403，
+            // 所以这里不按角色隐藏菜单项，让后端给出一致的拒绝
+            key: "amount-log",
+            label: "金额改动记录",
+            onClick: () => setAmountLogTarget(record),
           },
         ];
         return (
@@ -1473,6 +1566,20 @@ export function PromotionListPage() {
         )}
       </Modal>
 
+      <Drawer
+        title={
+          amountLogTarget
+            ? `金额改动记录 · ${amountLogTarget.internal_code}`
+            : "金额改动记录"
+        }
+        width={560}
+        open={!!amountLogTarget}
+        onClose={() => setAmountLogTarget(null)}
+        destroyOnHidden
+      >
+        <AmountLogPanel promotionId={amountLogTarget?.id ?? null} />
+      </Drawer>
+
       <Modal
         title="标记发布"
         open={publishOpen}
@@ -1487,12 +1594,19 @@ export function PromotionListPage() {
           style={{ marginTop: 16 }}
           onFinish={(v) => {
             if (!publishTarget) return;
+            // 后端的硬门槛：没有品牌词评论截图 publish 直接 422。
+            // 这里先拦一次给出清楚的提示，省掉一次无谓的往返
+            if (!publishTarget.brand_comment_attachment_id && !brandCommentFile) {
+              message.error("请先上传品牌词评论截图");
+              return;
+            }
             publishMutation.mutate({
               id: publishTarget.id,
               publish_url: v.publish_url,
               actual_publish_date: dayjs(v.actual_publish_date).format(
                 "YYYY-MM-DD"
               ),
+              brandCommentFile: brandCommentFile ?? undefined,
             });
           }}
         >
@@ -1512,6 +1626,31 @@ export function PromotionListPage() {
             rules={[{ required: true, message: "请选择发布日期" }]}
           >
             <DatePicker style={{ width: "100%" }} />
+          </Form.Item>
+          <Form.Item
+            label="品牌词评论截图"
+            required
+            extra={
+              publishTarget?.brand_comment_attachment_id
+                ? "已上传过。重新选择会覆盖旧图。"
+                : "提交发布审核必传。截图里要能看到品牌词相关评论。"
+            }
+          >
+            <Upload
+              accept="image/png,image/jpeg,image/webp"
+              maxCount={1}
+              beforeUpload={(file) => {
+                setBrandCommentFile(file as unknown as File);
+                return false;
+              }}
+              onRemove={() => setBrandCommentFile(null)}
+            >
+              <Button icon={<UploadOutlined />}>
+                {publishTarget?.brand_comment_attachment_id
+                  ? "重新上传"
+                  : "选择截图"}
+              </Button>
+            </Upload>
           </Form.Item>
         </Form>
       </Modal>

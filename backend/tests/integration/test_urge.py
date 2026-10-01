@@ -53,6 +53,8 @@ async def _promo(
         pr=pr,
         scheduled_publish_date=scheduled,
         publish_status=publish_status,
+        # publish 要求品牌词评论截图（PRD 改动 5），测自动关闭要走真的 publish
+        brand_comment=True,
     )
 
 

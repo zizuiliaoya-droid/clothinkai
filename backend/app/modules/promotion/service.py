@@ -50,10 +50,12 @@ from app.modules.product.models import Sku
 from app.modules.product.repository import SkuRepository, StyleRepository
 from app.modules.promotion.domain import (
     build_promotion_audit_changes,
+    compute_amount_changes,
     compute_promotion_changes,
     format_internal_code,
 )
 from app.modules.promotion.enums import (
+    AMOUNT_LOG_FIELDS,
     CooperationMode,
     PublishStatus,
     RecallStatus,
@@ -66,6 +68,7 @@ from app.modules.promotion.events import (
     SettlementRequested,
 )
 from app.modules.promotion.exceptions import (
+    BrandCommentScreenshotRequiredError,
     CancelReasonRequiredError,
     CooperationModeImmutableError,
     FieldPermissionDenied,
@@ -96,7 +99,11 @@ from app.modules.promotion.metrics_calculator import (
     calculate_effective_like_count,
     calculate_is_hit,
 )
-from app.modules.promotion.models import BloggerRetrospective, Promotion
+from app.modules.promotion.models import (
+    BloggerRetrospective,
+    Promotion,
+    PromotionAmountLog,
+)
 from app.modules.promotion.repository import (
     PromotionAttachmentRefs,
     PromotionRepository,
@@ -105,6 +112,7 @@ from app.modules.promotion.repository import (
     PromotionListFilters as RepoPromotionListFilters,
 )
 from app.modules.promotion.schemas import (
+    PromotionAmountLogResponse,
     PromotionCancelRequest,
     PromotionCreate,
     PromotionDuplicateWarning,
@@ -347,6 +355,10 @@ class PromotionService:
         if promotion is None:
             raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
 
+        # 金额时间线的「更新前」快照必须在这里取 —— 下面补合作模式那一步就会改成本，
+        # 等到算 changes 时拿到的已经是中间值了。
+        amount_before = self._amount_snapshot(promotion)
+
         # 字段写权限
         await self._check_amount_write_permission(payload, user)
 
@@ -418,6 +430,17 @@ class PromotionService:
         self._enforce_mode_costs(promotion)
 
         await self._session.flush()
+
+        # 金额时间线：只记净变更（PRD 第 10 节第 14 条）。
+        # audit 那边继续只记 *_changed 标记 —— 理由见 domain.PROMOTION_SENSITIVE_VALUE_FIELDS。
+        self._log_amount_changes(
+            promotion_id=promotion_id,
+            tenant_id=user.tenant_id,
+            user_id=user.id,
+            before=amount_before,
+            after=self._amount_snapshot(promotion),
+            payload=payload,
+        )
 
         # 审计：仅敏感字段 + 敏感值脱敏
         audit_changes = build_promotion_audit_changes(changes)
@@ -722,17 +745,27 @@ class PromotionService:
         payload: PromotionPublishRequest,
         user: User,
     ) -> PromotionResponse:
-        """EP05-S07: 发布."""
+        """EP05-S07: 发布（= PRD 说的「提交发布审核」）。"""
         promotion = await self._repo.get_by_id(promotion_id)
         if promotion is None:
             raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
 
-        # 业务前置校验（友好错误）
+        # 业务前置校验（友好错误）。
+        # 顺序要紧：状态机先判。已发布的单再点一次发布，该说「状态不对」而不是
+        # 「缺截图」—— 后者会让人去补一张根本不需要的图。
         PublishStatusMachine.assert_can_transition(
             from_state=promotion.publish_status,
             to_state=PublishStatus.PUBLISHED.value,
             action="publish",
         )
+
+        # PRD 改动 5：品牌词评论截图在提交发布审核时必传。
+        # 后端拦，不只靠前端 —— 和寄拍寄回单号同一个处理方式。
+        if promotion.brand_comment_attachment_id is None:
+            raise BrandCommentScreenshotRequiredError(
+                "提交发布审核前必须上传品牌词评论截图",
+                details={"promotion_id": str(promotion_id)},
+            )
 
         # 乐观并发 UPDATE（FB7）
         updated = await self._repo.update_state(
@@ -1582,6 +1615,167 @@ class PromotionService:
             return Decimal("0"), sample_cost
         return quote_amount, sample_cost
 
+    async def _signed_url_for(self, attachment_id: UUID | None) -> str | None:
+        """给私有附件现签一个读 URL。签名失败不抛错 —— 一张图打不开不该让整条响应 500。"""
+        if attachment_id is None:
+            return None
+        key = (
+            await self._session.execute(
+                sa_text("SELECT r2_key FROM attachment WHERE id = :aid AND status = 'ready'"),
+                {"aid": attachment_id},
+            )
+        ).scalar_one_or_none()
+        if not key:
+            return None
+        try:
+            return self._attachment_service.get_signed_url("private", str(key), expires_in=900)
+        except Exception:
+            log.warning(
+                "promotion_attachment_signed_url_failed",
+                extra={"attachment_id": str(attachment_id)},
+            )
+            return None
+
+    @staticmethod
+    def _amount_snapshot(promotion: Promotion) -> dict[str, Decimal | None]:
+        """取金额字段快照，给时间线算净变更用。"""
+        return {f: getattr(promotion, f, None) for f in AMOUNT_LOG_FIELDS}
+
+    def _log_amount_changes(
+        self,
+        *,
+        promotion_id: UUID,
+        tenant_id: UUID,
+        user_id: UUID,
+        before: dict[str, Decimal | None],
+        after: dict[str, Decimal | None],
+        payload: PromotionUpdate,
+    ) -> None:
+        """把金额净变更写进时间线。不 commit —— 跟着调用方的事务走。"""
+        requested = {
+            f: getattr(payload, f) for f in AMOUNT_LOG_FIELDS if f in payload.model_fields_set
+        }
+        for field, old, new, source in compute_amount_changes(
+            before=before, after=after, requested=requested
+        ):
+            self._session.add(
+                PromotionAmountLog(
+                    id=uuid4(),
+                    tenant_id=tenant_id,
+                    promotion_id=promotion_id,
+                    field_name=field,
+                    before_value=old,
+                    after_value=new,
+                    change_source=source,
+                    changed_by=user_id,
+                )
+            )
+
+    async def upload_brand_comment(
+        self,
+        promotion_id: UUID,
+        *,
+        filename: str | None,
+        mime_type: str | None,
+        data: bytes,
+        user: User,
+    ) -> PromotionResponse:
+        """上传品牌词评论截图（PRD 改动 5，提交发布审核的前提）。
+
+        不限状态：PR 可能发布前就截好了，也可能被 ``publish`` 挡住之后才来补。
+        真正的门槛在 ``publish()`` 里 —— 没有截图就提交不了发布审核。
+
+        后端代传 + 失败补偿删除 R2 对象，骨架与收款码、7 天数据截图一致。
+        """
+        from fastapi.concurrency import run_in_threadpool
+
+        promotion = await self._repo.get_by_id(promotion_id)
+        if promotion is None:
+            raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
+
+        problem = check_image_payload(
+            data=data,
+            mime_type=mime_type,
+            filename=filename,
+            max_bytes=10 * 1024 * 1024,
+            label="品牌词评论截图",
+        )
+        if problem is not None:
+            raise BrandCommentScreenshotRequiredError(problem)
+
+        attachment_id: UUID | None = None
+        attachment_key: str | None = None
+        try:
+            attachment, _ = await self._attachment_service.create_upload_record(
+                session=self._session,
+                tenant_id=user.tenant_id,
+                created_by=user.id,
+                bucket="private",
+                purpose="brand_comment_screenshot",
+                filename=filename,
+                mime_type=str(mime_type),
+                size_bytes=len(data),
+            )
+            attachment_id = attachment.id
+            attachment_key = attachment.r2_key
+            await run_in_threadpool(
+                self._attachment_service.upload_bytes,
+                data,
+                bucket="private",
+                key=attachment_key,
+                content_type=str(mime_type),
+            )
+            await self._attachment_service.mark_uploaded(
+                session=self._session,
+                attachment_id=attachment_id,
+                tenant_id=user.tenant_id,
+            )
+            old_id = promotion.brand_comment_attachment_id
+            promotion.brand_comment_attachment_id = attachment_id
+            await self._audit.log(
+                action="promotion.brand_comment.bind",
+                resource="promotion",
+                resource_id=promotion.id,
+                before={"attachment_changed": old_id is not None},
+                after={"attachment_changed": True},
+                user_id=user.id,
+            )
+            await self._session.commit()
+        except Exception:
+            await self._session.rollback()
+            if attachment_key is not None:
+                try:
+                    await run_in_threadpool(
+                        self._attachment_service.delete, "private", attachment_key
+                    )
+                except Exception:
+                    log.warning(
+                        "promotion_brand_comment_compensation_delete_failed",
+                        extra={"attachment_id": str(attachment_id)},
+                    )
+            raise
+
+        return await self._to_response(promotion, user)
+
+    async def amount_log(
+        self, promotion_id: UUID, user: User, *, limit: int = 100
+    ) -> builtins.list[PromotionAmountLogResponse]:
+        """金额变更时间线（PRD 第 10 节第 14 条）。
+
+        **读权限走字段级判定，不靠 scope。** 新建一个 ``promotion.amount_log:read``
+        挡不住运营 —— 他们持 ``promotion.*:read``，``has()`` 的前缀通配只看第一段，
+        任何 ``promotion.xxx:read`` 都会被命中，于是能读到看不见的金额。
+        这里用的是推广响应过滤金额时的同一个闸门。
+        """
+        ctx = await build_field_perm_context(user.id, self._roles, self._perms)
+        if not can_read_field("promotion", "quote_amount", ctx):
+            raise FieldPermissionDenied(field="quote_amount", entity="promotion")
+
+        rows = await self._repo.amount_log(
+            tenant_id=user.tenant_id, promotion_id=promotion_id, limit=limit
+        )
+        return [PromotionAmountLogResponse(**r) for r in rows]
+
     async def _close_urge_task(
         self, promotion_id: UUID, user: User, reason: UrgeCloseReason
     ) -> None:
@@ -1769,24 +1963,8 @@ class PromotionService:
 
         # 7 天数据截图与当前复盘文字（PRD V1.4 改动 4）。
         # 两项都只在单据真的进了复盘流程后才查，没进的单（生产上绝大多数）不多付代价。
-        metrics_url: str | None = None
-        if promotion.metrics_attachment_id is not None:
-            key = (
-                await self._session.execute(
-                    sa_text("SELECT r2_key FROM attachment WHERE id = :aid AND status = 'ready'"),
-                    {"aid": promotion.metrics_attachment_id},
-                )
-            ).scalar_one_or_none()
-            if key:
-                try:
-                    metrics_url = self._attachment_service.get_signed_url(
-                        "private", str(key), expires_in=900
-                    )
-                except Exception:
-                    log.warning(
-                        "promotion_metrics_signed_url_failed",
-                        extra={"promotion_id": str(promotion.id)},
-                    )
+        metrics_url = await self._signed_url_for(promotion.metrics_attachment_id)
+        brand_comment_url = await self._signed_url_for(promotion.brand_comment_attachment_id)
         retro_content: str | None = None
         if promotion.retro_status != RetroStatus.NOT_STARTED.value:
             retro = await self._repo.latest_retrospective(
@@ -1828,6 +2006,8 @@ class PromotionService:
             comment_count=promotion.comment_count,
             metrics_recorded_at=promotion.metrics_recorded_at,
             metrics_signed_url=metrics_url,
+            brand_comment_attachment_id=promotion.brand_comment_attachment_id,
+            brand_comment_signed_url=brand_comment_url,
             note_title=promotion.note_title,
             remark=promotion.remark,
             publish_status=promotion.publish_status,

@@ -34,6 +34,31 @@ class SettlementStatus(str, Enum):
     REJECTED = "已驳回"
 
 
+class AmountChangeSource(str, Enum):
+    """金额变更来源（金额时间线用）。
+
+    ``_enforce_mode_costs`` 会静默把置换的服务费压成 0、寄拍的样品成本压成 0。
+    没有这个标记，PR 看到金额变了会以为是自己改的 —— 而「这个 0 是谁压的」正是
+    金额级回溯要回答的问题。
+    """
+
+    MANUAL = "手动编辑"
+    MODE_INIT = "模式初始化"
+    MODE_ENFORCE = "模式兜底"
+
+
+AMOUNT_LOG_FIELDS: tuple[str, ...] = (
+    "quote_amount",
+    "cost_snapshot",
+    "return_shipping_fee",
+)
+"""进金额时间线的字段。
+
+``total_promo_cost`` 不记：它是这三项的数据库生成列，回放三项就能推出来，
+单独记一行反而可能与分项不一致。
+"""
+
+
 class RetroStatus(str, Enum):
     """复盘状态机（PRD V1.4 改动 4）。
 

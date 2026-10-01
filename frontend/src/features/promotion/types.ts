@@ -83,8 +83,15 @@ export interface Promotion {
   collect_count: number | null;
   comment_count: number | null;
   metrics_recorded_at: string | null;
-  /** 7 天数据截图签名 URL，后端现签，1 小时有效。 */
+  /** 7 天数据截图签名 URL，后端现签。 */
   metrics_signed_url: string | null;
+  /**
+   * 品牌词评论截图（PRD 改动 5）。没有它 publish 会 422。
+   *
+   * 判断「传过没有」要看 attachment_id 而不是 URL —— 签名失败时 URL 为空但图其实在。
+   */
+  brand_comment_attachment_id: string | null;
+  brand_comment_signed_url: string | null;
   note_title: string | null;
   remark: string | null;
   // 状态
@@ -189,6 +196,21 @@ export interface PromotionReviewRequest {
   review_reason?: string | null;
   /** 驳回时必填，三选一。审核通过时忽略。 */
   review_reason_category?: RejectReasonCategory | null;
+}
+
+/** 金额变更来源。「模式兜底」= 被按合作模式的硬规则改写了，不是人改的。 */
+export type AmountChangeSource = "手动编辑" | "模式初始化" | "模式兜底";
+
+/** 金额变更时间线的一条（PRD 第 10 节第 14 条）。 */
+export interface PromotionAmountLog {
+  id: string;
+  field_name: "quote_amount" | "cost_snapshot" | "return_shipping_fee";
+  before_value: string | null;
+  after_value: string | null;
+  change_source: AmountChangeSource;
+  changed_by: string | null;
+  changed_by_name: string | null;
+  created_at: string;
 }
 
 /** 复盘记录（博主档案里的一条）。 */

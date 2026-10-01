@@ -1144,6 +1144,34 @@ class TestCooperationMode:
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def _attach_brand_comment(
+    session: AsyncSession, *, tenant_id: Any, promotion_id: Any
+) -> None:
+    """给推广单挂一张品牌词评论截图（PRD 改动 5 的 publish 前提）。
+
+    直接插 attachment 行不走 R2：调用方要测的是发布之后的流程，不是上传本身。
+    """
+    from uuid import uuid4 as _uuid4
+
+    from sqlalchemy import text as _text
+
+    att_id = _uuid4()
+    await session.execute(
+        _text(
+            "INSERT INTO attachment (id, tenant_id, bucket, r2_key, purpose, filename, "
+            "mime_type, size_bytes, status, created_at, updated_at) "
+            "VALUES (:id, :t, 'private', :key, 'brand_comment_screenshot', 'bc.png', "
+            "'image/png', 128, 'ready', NOW(), NOW())"
+        ),
+        {"id": att_id, "t": tenant_id, "key": f"{tenant_id}/bc/{att_id}.png"},
+    )
+    await session.execute(
+        _text("UPDATE promotion SET brand_comment_attachment_id = :a WHERE id = :p"),
+        {"a": att_id, "p": promotion_id},
+    )
+    await session.flush()
+
+
 class TestThreeModeReviewFlow:
     """审核通过后的三个出口（PRD V1.4 模块二）。
 
@@ -1181,6 +1209,9 @@ class TestThreeModeReviewFlow:
             ),
             pr_user,
         )
+        # PRD 改动 5：publish 要求品牌词评论截图。直接插 attachment 行满足 FK ——
+        # 这里要测的是审核分支，不是上传流程。
+        await _attach_brand_comment(session, tenant_id=tenant.id, promotion_id=created.id)
         published = await svc.publish(
             created.id,
             PromotionPublishRequest(

@@ -9,6 +9,7 @@ import type {
   PromotionPage,
   PromotionPublishRequest,
   PromotionRecallStartRequest,
+  PromotionAmountLog,
   PromotionReviewRequest,
   PromotionUpdate,
   Retrospective,
@@ -251,6 +252,45 @@ export async function bloggerRetrospectives(
 ): Promise<Retrospective[]> {
   const resp = await apiClient.get<Retrospective[]>(
     `/api/bloggers/${bloggerId}/retrospectives`,
+    { params: { limit } }
+  );
+  return resp.data;
+}
+
+// ---------------------------------------------------------------------------
+// 品牌词评论截图 + 金额时间线（PRD 改动 5 / 第 10 节第 14 条）
+// ---------------------------------------------------------------------------
+
+/**
+ * 上传品牌词评论截图。不限状态，发布前后都能传。
+ *
+ * 没有这张图 publish 会 422 —— 后端的硬门槛，不是前端提示。
+ */
+export async function uploadBrandComment(
+  promotionId: string,
+  file: File
+): Promise<Promotion> {
+  const form = new FormData();
+  form.append("file", file);
+  const resp = await apiClient.post<Promotion>(
+    `/api/promotions/${promotionId}/brand-comment`,
+    form
+  );
+  return resp.data;
+}
+
+/**
+ * 金额变更时间线。
+ *
+ * 后端按字段级权限门控（看不到金额的角色会 403），所以调用方要兜 403 ——
+ * 不是所有有推广读权限的人都能看这个。
+ */
+export async function promotionAmountLog(
+  promotionId: string,
+  limit = 100
+): Promise<PromotionAmountLog[]> {
+  const resp = await apiClient.get<PromotionAmountLog[]>(
+    `/api/promotions/${promotionId}/amount-log`,
     { params: { limit } }
   );
   return resp.data;

@@ -33,6 +33,7 @@ from app.modules.promotion.enums import (
     SettlementStatus,
 )
 from app.modules.promotion.schemas import (
+    PromotionAmountLogResponse,
     PromotionCancelRequest,
     PromotionCreate,
     PromotionListFilters,
@@ -379,6 +380,55 @@ async def set_return_waybill(
     寄拍模式审核通过的前提。与仓库发货单号是两个方向：那个寄给博主，这个博主寄回来。
     """
     return await service.set_return_waybill(promotion_id, payload, user)
+
+
+@router.post(
+    "/promotions/{promotion_id}/brand-comment",
+    response_model=PromotionResponse,
+    dependencies=[require_permission("promotion", "write")],
+)
+async def upload_brand_comment(
+    promotion_id: UUID,
+    user: CurrentActiveUser,
+    service: PromotionServiceDep,
+    file: Annotated[UploadFile, File(description="品牌词评论截图（JPG / PNG / WebP）")],
+) -> PromotionResponse:
+    """上传品牌词评论截图（PRD 改动 5，提交发布审核的前提）。
+
+    不限状态：PR 可能发布前就截好了，也可能被 publish 挡住之后才来补。
+    真正的门槛在 publish —— 没有截图提交不了发布审核。
+    """
+    try:
+        data = await file.read(10 * 1024 * 1024 + 1)
+    finally:
+        await file.close()
+    return await service.upload_brand_comment(
+        promotion_id,
+        filename=file.filename,
+        mime_type=file.content_type,
+        data=data,
+        user=user,
+    )
+
+
+@router.get(
+    "/promotions/{promotion_id}/amount-log",
+    response_model=list[PromotionAmountLogResponse],
+    dependencies=[require_permission("promotion", "read")],
+)
+async def promotion_amount_log(
+    promotion_id: UUID,
+    user: CurrentActiveUser,
+    service: PromotionServiceDep,
+    limit: Annotated[int, Query(ge=1, le=200)] = 100,
+) -> list[PromotionAmountLogResponse]:
+    """金额变更时间线（PRD 第 10 节第 14 条：成本修改可追溯）。
+
+    这里的 `require_permission("promotion", "read")` 只是粗粒度闸门，**真正的门控在
+    service 里的字段级判定** —— 运营持 `promotion.*:read`，任何
+    `promotion.xxx:read` 都会被通配命中，所以不能靠新建 scope 挡住他们。
+    """
+    return await service.amount_log(promotion_id, user, limit=limit)
 
 
 # ---------------------------------------------------------------------------

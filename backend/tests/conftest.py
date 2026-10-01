@@ -433,6 +433,8 @@ async def promotion_factory(session: AsyncSession, tenant_a: Any) -> Any:
     from datetime import date as _date
     from decimal import Decimal
 
+    from sqlalchemy import text as sa_text
+
     from app.core.tenancy import tenant_id_ctx
     from app.modules.promotion.enums import (
         PublishStatus,
@@ -498,9 +500,36 @@ async def promotion_factory(session: AsyncSession, tenant_a: Any) -> Any:
                     like_count=kw.get("like_count"),
                     # 列 NOT NULL + server_default '{}'，显式传 None 会违反约束
                     source_extra=kw.get("source_extra") or {},
+                    # PRD V1.4 模块二 / 改动 4 的字段。工厂的 kwarg 清单是手写的，
+                    # 不在这里列出来的 kwarg 会被静默忽略（这个坑真实踩过）。
+                    cooperation_mode=kw.get("cooperation_mode"),
+                    return_shipping_fee=kw.get("return_shipping_fee"),
+                    return_waybill=kw.get("return_waybill"),
+                    collect_count=kw.get("collect_count"),
+                    comment_count=kw.get("comment_count"),
                 )
                 session.add(p)
                 await session.flush()
+                # PRD 改动 5：publish 要求品牌词评论截图。要测发布流程的用例传
+                # brand_comment=True，省得每处自己造 attachment 行。
+                # 这里直接插 attachment 不走 R2 —— 只为满足 FK 与「传过了」这个事实。
+                if kw.get("brand_comment"):
+                    att_id = uuid4()
+                    await session.execute(
+                        sa_text(
+                            """
+                            INSERT INTO attachment
+                              (id, tenant_id, bucket, r2_key, purpose, filename,
+                               mime_type, size_bytes, status, created_at, updated_at)
+                            VALUES
+                              (:id, :t, 'private', :key, 'brand_comment_screenshot',
+                               'bc.png', 'image/png', 128, 'ready', NOW(), NOW())
+                            """
+                        ),
+                        {"id": att_id, "t": t.id, "key": f"{t.id}/bc/{att_id}.png"},
+                    )
+                    p.brand_comment_attachment_id = att_id
+                    await session.flush()
                 return p
             finally:
                 tenant_id_ctx.reset(tok)

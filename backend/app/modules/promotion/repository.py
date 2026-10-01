@@ -507,6 +507,31 @@ class PromotionRepository:
         row = result.fetchone()
         return row[0] if row else None
 
+    # ----------------------- 金额时间线 ----------------------- #
+
+    async def amount_log(
+        self, *, tenant_id: UUID, promotion_id: UUID, limit: int = 100
+    ) -> list[Mapping[str, Any]]:
+        """某单据的金额变更时间线，倒序。"""
+        rows = (
+            await self._session.execute(
+                text(
+                    """
+                    SELECT l.id, l.field_name, l.before_value, l.after_value,
+                           l.change_source, l.changed_by, l.created_at,
+                           COALESCE(u.display_name, u.username) AS changed_by_name
+                    FROM promotion_amount_log l
+                    LEFT JOIN "user" u ON u.id = l.changed_by
+                    WHERE l.tenant_id = :tenant_id AND l.promotion_id = :promotion_id
+                    ORDER BY l.created_at DESC
+                    LIMIT :limit
+                    """
+                ),
+                {"tenant_id": tenant_id, "promotion_id": promotion_id, "limit": limit},
+            )
+        ).mappings()
+        return [dict(r) for r in rows]
+
     # ----------------------- 复盘（PRD V1.4 改动 4） ----------------------- #
 
     def add_retrospective(self, retro: BloggerRetrospective) -> None:

@@ -293,6 +293,27 @@ class RetrospectiveConfirmRequest(BaseModel):
         return self
 
 
+class PromotionAmountLogResponse(BaseModel):
+    """金额变更时间线的一条（PRD 第 10 节第 14 条）。
+
+    读取受字段级权限门控（``field.promotion.quote_amount:read``），不是靠 scope ——
+    运营持 ``promotion.*:read``，新建任何 ``promotion.xxx:read`` 都会被通配命中。
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    field_name: str
+    before_value: Decimal | None = None
+    after_value: Decimal | None = None
+    change_source: str
+    """手动编辑 / 模式初始化 / 模式兜底 —— 回答「这个 0 是我改的还是系统压的」。"""
+
+    changed_by: UUID | None = None
+    changed_by_name: str | None = None
+    created_at: datetime
+
+
 class RetrospectiveResponse(BaseModel):
     """一条复盘记录。"""
 
@@ -386,6 +407,14 @@ class PromotionResponse(BaseModel):
     metrics_signed_url: str | None = None
     """7 天数据截图的签名 URL，现签不落库。"""
 
+    brand_comment_attachment_id: UUID | None = None
+    brand_comment_signed_url: str | None = None
+    """品牌词评论截图。PRD 改动 5：没有它 publish 会 422。
+
+    attachment_id 也返回，这样前端不用靠 URL 是否为空来判断「传过没有」——
+    签名失败（R2 抖动）时 URL 为空但截图其实在。
+    """
+
     # 状态字段
     publish_status: str
     recall_status: str
@@ -469,6 +498,7 @@ __all__ = [
     "PromotionBase",
     "PromotionCancelRequest",
     "PromotionCreate",
+    "PromotionAmountLogResponse",
     "PromotionDuplicateWarning",
     "PromotionListFilters",
     "PromotionMarkAbnormalRequest",

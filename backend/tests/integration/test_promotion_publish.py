@@ -33,7 +33,9 @@ class TestPublish:
             user = await factory.user(tenant_a, roles=[admin_role])
             style = await product_factory.style()
             blogger = await blogger_factory.blogger()
-            promotion = await promotion_factory.promotion(style=style, blogger=blogger, pr=user)
+            promotion = await promotion_factory.promotion(
+                style=style, blogger=blogger, pr=user, brand_comment=True
+            )
             svc = PromotionService(session)
             response = await svc.publish(
                 promotion.id,
@@ -66,7 +68,9 @@ class TestPublish:
             user = await factory.user(tenant_a, roles=[admin_role])
             style = await product_factory.style()
             blogger = await blogger_factory.blogger()
-            promotion = await promotion_factory.promotion(style=style, blogger=blogger, pr=user)
+            promotion = await promotion_factory.promotion(
+                style=style, blogger=blogger, pr=user, brand_comment=True
+            )
             svc = PromotionService(session)
             await svc.publish(
                 promotion.id,
@@ -136,7 +140,12 @@ class TestPublish:
             style_a = await product_factory.style(tenant=tenant_a)
             blogger_a = await blogger_factory.blogger(tenant=tenant_a)
             promotion_a = await promotion_factory.promotion(
-                style=style_a, blogger=blogger_a, pr=user_a, tenant=tenant_a
+                style=style_a,
+                blogger=blogger_a,
+                pr=user_a,
+                tenant=tenant_a,
+                # 要测的是跨租户 UPDATE 0 行，不能先被「缺截图」挡住
+                brand_comment=True,
             )
         finally:
             tenant_id_ctx.reset(token_a)

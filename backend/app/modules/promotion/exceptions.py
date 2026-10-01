@@ -178,6 +178,19 @@ class RetroSelfConfirmForbiddenError(ValidationError):
     status_code = 403
 
 
+class BrandCommentScreenshotRequiredError(ValidationError):
+    """提交发布审核前必须上传品牌词评论截图。
+
+    PRD 改动 5（业务方明确保留不变）：「品牌词评论截图（PR 提交发布审核时必传）」。
+    「提交发布审核」就是 ``publish`` —— PR 把单据交给主管核查的那一步。
+
+    这是会挡业务的硬约束：没有截图发不了单。不加 DB CHECK 是因为生产有 5154 条未发布的
+    历史单，约束会把它们全卡住；门槛只在 ``publish()`` 里。
+    """
+
+    code = "BRAND_COMMENT_SCREENSHOT_REQUIRED"
+
+
 class RetroContentMissingError(ValidationError):
     """确认复盘时找不到复盘文字。
 
@@ -221,6 +234,7 @@ class ActiveDuplicatePromotionWarning(ValidationError):
 
 __all__ = [
     "ActiveDuplicatePromotionWarning",
+    "BrandCommentScreenshotRequiredError",
     "CancelReasonRequiredError",
     "CooperationModeImmutableError",
     "CooperationModeRequiredError",

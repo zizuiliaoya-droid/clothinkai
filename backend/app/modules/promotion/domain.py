@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal
 from typing import Any
 
 from app.modules.promotion.models import Promotion
@@ -52,10 +53,12 @@ PROMOTION_SENSITIVE_VALUE_FIELDS: frozenset[str] = frozenset(
 
 与 U02 BR-U02-31 同模式（cost_price / purchase_price 仅记 changed 标记）。
 
-PRD 第 10 节第 14 条要求成本修改可追溯，但这里仍然只记变更标记：audit_log 的读取面
-（``GET /auth/audit-logs``）只要 ``auth.audit:read`` 就能看全部记录，而金额本身受
-字段级权限保护（PR 看不到报价）。把金额写进 audit 等于绕过那层权限。
-真要做金额级回溯，应该是一张带权限的单据时间线表，不是放宽 audit 的脱敏。
+PRD 第 10 节第 14 条要求成本修改可追溯，但 audit 这边仍然只记变更标记：audit_log 的
+读取面（``GET /auth/audit-logs``）是单一粗粒度闸门 ``auth.audit:read``，而金额受字段级
+权限保护（``field.promotion.quote_amount:read`` 只给 admin/pr/pr_manager/finance）。
+把金额写进 audit 等于绕过字段级门控。
+
+金额级回溯由 ``PromotionAmountLog`` 专表承担，读取时套同一层字段级判定。
 """
 
 
@@ -106,6 +109,48 @@ def compute_promotion_changes(
                 "after": _serialize(new),
             }
     return changes
+
+
+def compute_amount_changes(
+    *,
+    before: dict[str, Decimal | None],
+    after: dict[str, Decimal | None],
+    requested: dict[str, Decimal | None],
+) -> list[tuple[str, Decimal | None, Decimal | None, str]]:
+    """算出一次更新里金额字段的**净变更**，并判定每条的来源。
+
+    一次 PATCH 可能经过三道手：显式传值、补合作模式时按模式初始化成本、更新后按模式
+    把恒为 0 的字段压回 0。中间态记进时间线只会让人困惑，所以只记净变更
+    （``before`` → ``after``），再用请求里的意图值反推这条变更是谁造成的：
+
+    - 请求里没传这个字段，值却变了 → ``模式初始化``（补合作模式连带改的）
+    - 请求里传了，最终值和传的一致 → ``手动编辑``
+    - 请求里传了，最终值和传的不一致 → ``模式兜底``（被按模式的硬规则改写了）
+
+    Args:
+        before: 更新前的金额快照。
+        after: 更新后的金额快照。
+        requested: 这次请求里显式传了的金额字段（没传的键不出现）。
+
+    Returns:
+        ``(field_name, before_value, after_value, change_source)`` 列表，只含真有变化的。
+    """
+    from app.modules.promotion.enums import AMOUNT_LOG_FIELDS, AmountChangeSource
+
+    result: list[tuple[str, Decimal | None, Decimal | None, str]] = []
+    for field in AMOUNT_LOG_FIELDS:
+        old = before.get(field)
+        new = after.get(field)
+        if old == new:
+            continue
+        if field not in requested:
+            source = AmountChangeSource.MODE_INIT.value
+        elif requested[field] == new:
+            source = AmountChangeSource.MANUAL.value
+        else:
+            source = AmountChangeSource.MODE_ENFORCE.value
+        result.append((field, old, new, source))
+    return result
 
 
 def compute_state_change(
@@ -175,6 +220,7 @@ __all__ = [
     "PROMOTION_SENSITIVE_FIELDS",
     "PROMOTION_SENSITIVE_VALUE_FIELDS",
     "build_promotion_audit_changes",
+    "compute_amount_changes",
     "compute_promotion_changes",
     "compute_state_change",
     "format_internal_code",
