@@ -31,6 +31,7 @@ import type {
 } from "@/features/blogger/types";
 import { extractErrorMessage } from "@/services/apiClient";
 import { ImportUploadButton } from "@/components/ImportUploadButton";
+import { BloggerHoverCard } from "@/components/BloggerHoverCard/BloggerHoverCard";
 
 const PLATFORMS = ["小红书", "抖音", "快手", "B站"];
 const TYPES = ["素人", "KOC", "KOL", "明星"];
@@ -127,7 +128,17 @@ export function BloggerListPage() {
       width: 80,
       render: (v) => v || "—",
     },
-    { title: "昵称", dataIndex: "nickname", width: 140 },
+    {
+      // 悬浮看最近合作过的款式：挑博主时不用再切页去翻推广单（PRD V1.4 改动 3）
+      title: "昵称",
+      dataIndex: "nickname",
+      width: 140,
+      render: (v: string, record: Blogger) => (
+        <BloggerHoverCard bloggerId={record.id} bloggerName={v}>
+          {v}
+        </BloggerHoverCard>
+      ),
+    },
     { title: "小红书ID", dataIndex: "xiaohongshu_id", width: 130 },
     { title: "平台", dataIndex: "platform", width: 80 },
     { title: "微信号", dataIndex: "wechat", width: 110, render: (v) => v || "—" },

@@ -152,8 +152,16 @@ class PromotionService:
     # CRUD: create
     # ============================================================
 
-    async def create_promotion(self, payload: PromotionCreate, user: User) -> PromotionResponse:
-        """EP05-S02 创建推广 + 自动 internal_code + 重复检测."""
+    async def create_promotion(
+        self, payload: PromotionCreate, user: User, *, autocommit: bool = True
+    ) -> PromotionResponse:
+        """EP05-S02 创建推广 + 自动 internal_code + 重复检测.
+
+        Args:
+            autocommit: 默认 True，HTTP 路径下自己提交。谈款审核通过时要在同一个事务里
+                「改谈款状态 + 建推广单」，那边传 False 由调用方统一提交 ——
+                否则中间失败会留下「审核通过但没有推广单」的单据。
+        """
         # 1. 引用完整性
         style = await self._style_repo.get_by_id(payload.style_id)
         if style is None:
@@ -292,7 +300,8 @@ class PromotionService:
             after=after_marker,
             user_id=user.id,
         )
-        await self._session.commit()
+        if autocommit:
+            await self._session.commit()
 
         # 9. 返回（含重复警告）
         response = await self._to_response(promotion, user)

@@ -106,6 +106,8 @@ export function AppLayout() {
       icon: <NotificationOutlined />,
       label: "推广管理",
       children: [
+        // 谈款在推广单之前：审核通过才会生成站外推广单，菜单顺序跟着流程走
+        { key: "/negotiations", label: <Link to="/negotiations">谈款审核</Link> },
         { key: "/promotions", label: <Link to="/promotions">站外推广</Link> },
         { key: "/warehouse-orders", label: <Link to="/warehouse-orders">仓库打单</Link> },
         {
