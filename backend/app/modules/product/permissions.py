@@ -51,6 +51,5 @@ GOODS_PERMISSIONS: list[tuple[str, str, str]] = [
     ("product.goods", "write", "创建 / 编辑 / 删除商品与套装成员"),
 ]
 
-# U17 套装/组合商品 scope
-SCOPE_BUNDLE_READ = "product.bundle:read"
-SCOPE_BUNDLE_WRITE = "product.bundle:write"
+# U17 的 product.bundle:* 已随 bundle_product / bundle_item 一起删除（migration 045）。
+# 套装现在是 goods_main.is_suit，权限走上面的 product.goods。
