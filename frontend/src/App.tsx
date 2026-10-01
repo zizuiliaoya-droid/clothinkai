@@ -21,6 +21,7 @@ import { GoodsPage } from "@/pages/GoodsPage";
 import { BloggerListPage } from "@/pages/BloggerListPage";
 import { PromotionListPage } from "@/pages/PromotionListPage";
 import { NegotiationPage } from "@/pages/NegotiationPage";
+import { UrgePage } from "@/pages/UrgePage";
 import { CostTablePage } from "@/pages/CostTablePage";
 import { SettlementListPage } from "@/pages/SettlementListPage";
 import { OrderAdjustmentPage } from "@/pages/OrderAdjustmentPage";
@@ -217,6 +218,8 @@ function AppRoutes() {
         {/* 推广管理 */}
         {/* 谈款审核：推广单的上游。权限靠 API 的 negotiation.*，PR 可写、主管可审 */}
         <Route path="/negotiations" element={<NegotiationPage />} />
+        {/* 催发任务：阈值配置另有 urge_config 权限，PR 看得到任务但改不了阈值 */}
+        <Route path="/urge-tasks" element={<UrgePage />} />
         <Route path="/work-progress" element={<WorkProgressPage />} />
         <Route path="/publish-target" element={<PublishTargetPage />} />
         <Route path="/publish-progress" element={<PublishProgressPage />} />

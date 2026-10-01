@@ -58,6 +58,7 @@ ignore = [
 "app/modules/promotion/repository.py" = ["S608"]
 "app/modules/report/advanced_repository.py" = ["S608"]
 "app/modules/report/repository.py" = ["S608"]
+"app/modules/urge/repository.py" = ["S608"]
 
 [tool.ruff.format]
 quote-style = "double"

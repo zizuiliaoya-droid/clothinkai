@@ -61,6 +61,7 @@ celery_app.autodiscover_tasks(
         "app.tasks.blogger_tasks",  # U11：recompute_all_blogger_tags
         "app.tasks.crawler_tasks",  # U13：schedule_daily_tasks
         "app.tasks.report_tasks",  # U14：precompute_report_cache（占位）
+        "app.tasks.urge_tasks",  # PRD 改动 2：scan_urge_tasks（催发任务，独立于企微）
     ]
 )
 
@@ -92,6 +93,15 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.cleanup_tasks.archive_audit_logs",
         "schedule": crontab(hour=4, minute=30, day_of_month="1"),
         "options": {"queue": "backup"},
+    },
+    # PRD 改动 2 催发任务扫描。00:30 UTC = 08:30 北京（上面 enable_utc=True，
+    # 所有 crontab 的 hour 都是 UTC），正好上班时看到当天要催的单。
+    # 排在企微投递之前：先把任务与留痕落下来，企微再去发消息，这样企微没配置
+    # 也有催发记录。租户列表取自 tenant 而不是 wecom_config —— 后者生产是 0 行。
+    "urge-task-scan": {
+        "task": "app.tasks.urge_tasks.scan_urge_tasks",
+        "schedule": crontab(hour=0, minute=30),
+        "options": {"queue": "default"},
     },
     # 每日 09:00 企微催发扫描（U07，与备份/清理错峰）
     "wecom-urge-scan": {

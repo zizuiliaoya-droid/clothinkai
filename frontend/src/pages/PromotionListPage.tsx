@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   Button,
   Card,
@@ -54,6 +55,7 @@ import {
   type GoodsOption,
 } from "@/features/product/api";
 import { listBloggers } from "@/features/blogger/api";
+import { urgePromotion } from "@/features/urge/api";
 import { extractErrorMessage } from "@/services/apiClient";
 import { useAuthStore } from "@/stores/authStore";
 import { ImportUploadButton } from "@/components/ImportUploadButton";
@@ -161,6 +163,8 @@ export function PromotionListPage() {
   const [rejectForm] = Form.useForm();
   const [waybillTarget, setWaybillTarget] = useState<Promotion | null>(null);
   const [waybillForm] = Form.useForm();
+  const [urgeTarget, setUrgeTarget] = useState<Promotion | null>(null);
+  const [urgeForm] = Form.useForm();
   const [recallTarget, setRecallTarget] = useState<Promotion | null>(null);
   const [recallForm] = Form.useForm();
   // §11：颜色及规格按货号联动——当前推广所属款式的 SKU 颜色+尺码组合
@@ -421,6 +425,19 @@ export function PromotionListPage() {
     onError: (err) => message.error(extractErrorMessage(err)),
   });
 
+  const urgeMutation = useMutation({
+    mutationFn: ({ id, note }: { id: string; note?: string }) =>
+      urgePromotion(id, note),
+    onSuccess: (d) => {
+      message.success(`已催发，这是第 ${d.urge_count} 次`);
+      setUrgeTarget(null);
+      urgeForm.resetFields();
+      void qc.invalidateQueries({ queryKey: ["urge-tasks"] });
+      void qc.invalidateQueries({ queryKey: ["urge-dashboard"] });
+    },
+    onError: (err) => message.error(extractErrorMessage(err)),
+  });
+
   const recallMutation = useMutation({
     mutationFn: ({
       id,
@@ -644,6 +661,17 @@ export function PromotionListPage() {
                 },
               ]
             : []),
+          {
+            // 催发任务在这里发起最顺手：PR 本来就在这页看哪单还没发出来。
+            // 带截图的催发要到催发任务页做，这里是快捷的「再催一次」
+            key: "urge",
+            label: "催发",
+            disabled: !["未发布", "异常"].includes(record.publish_status),
+            onClick: () => {
+              setUrgeTarget(record);
+              urgeForm.resetFields();
+            },
+          },
           {
             key: "recall",
             label: "召回",
@@ -1023,6 +1051,36 @@ export function PromotionListPage() {
             rules={[{ required: true, message: "请填写寄回单号" }]}
           >
             <Input placeholder="如 SF1234567890" allowClear />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={urgeTarget ? `催发 · ${urgeTarget.internal_code}` : "催发"}
+        open={!!urgeTarget}
+        onCancel={() => setUrgeTarget(null)}
+        onOk={() => urgeForm.submit()}
+        confirmLoading={urgeMutation.isPending}
+        destroyOnHidden
+      >
+        <Form
+          form={urgeForm}
+          layout="vertical"
+          style={{ marginTop: 16 }}
+          onFinish={(v: { note?: string }) => {
+            if (!urgeTarget) return;
+            urgeMutation.mutate({ id: urgeTarget.id, note: v.note });
+          }}
+        >
+          <Typography.Paragraph type="secondary">
+            记一次催发。第一次催会自动建催发任务，之后累加次数。要附聊天截图请到
+            <Link to="/urge-tasks">催发任务</Link> 页操作。
+          </Typography.Paragraph>
+          <Form.Item name="note" label="备注">
+            <Input.TextArea
+              rows={3}
+              placeholder="怎么催的、博主怎么回的（可选，会写进催发时间线）"
+            />
           </Form.Item>
         </Form>
       </Modal>
