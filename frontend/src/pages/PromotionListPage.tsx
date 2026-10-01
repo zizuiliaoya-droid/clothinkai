@@ -12,6 +12,7 @@ import {
   Space,
   Table,
   Tag,
+  Tooltip,
   Typography,
   Upload,
   message,
@@ -68,7 +69,8 @@ const SOURCE_FIELDS: SourceField[] = [
   { name: "发货单号", type: "text" },
   { name: "订单号", type: "text" },
   { name: "寄回单号", type: "text" },
-  { name: "合作方式", type: "select", options: ["送拍", "寄拍", "置换"] },
+  // 「合作方式」已提成 typed 字段 cooperation_mode，不再走 source_extra —— 它决定成本
+  // 口径与审核后的流转出口，必须是后端能校验的字段。
   { name: "合作形式", type: "select", options: ["线下", "拍单"] },
   { name: "负责PR", type: "text" },
   { name: "点赞数", type: "number" },
@@ -76,6 +78,21 @@ const SOURCE_FIELDS: SourceField[] = [
   { name: "评论数", type: "number" },
 ];
 const SOURCE_FIELD_NAMES = SOURCE_FIELDS.map((f) => f.name);
+
+/** 合作模式。单据生成后不可改，所以只在新建表单里出现。 */
+const COOPERATION_MODES = ["寄拍", "送拍", "置换"] as const;
+
+const COOPERATION_MODE_HINT: Record<string, string> = {
+  寄拍: "衣服要寄回，样品成本记 0，只有寄回运费计入成本",
+  送拍: "衣服送给博主，样品成本取商品成员款式的货品成本之和",
+  置换: "以货换推广，没有博主服务费",
+};
+
+const cooperationModeColor: Record<string, string> = {
+  寄拍: "blue",
+  送拍: "green",
+  置换: "purple",
+};
 
 const statusColor: Record<string, string> = {
   未发布: "default",
@@ -330,6 +347,7 @@ export function PromotionListPage() {
       style_id: values.style_id as string,
       goods_main_id: (values.goods_main_id as string) || null,
       blogger_id: values.blogger_id as string,
+      cooperation_mode: values.cooperation_mode as string,
       platform: values.platform as string,
       cooperation_date: dayjs(values.cooperation_date as dayjs.Dayjs).format(
         "YYYY-MM-DD"
@@ -367,6 +385,21 @@ export function PromotionListPage() {
           </Space>
         ) : (
           "—"
+        ),
+    },
+    {
+      title: "合作模式",
+      dataIndex: "cooperation_mode",
+      width: 100,
+      render: (v: string | null) =>
+        v ? (
+          <Tooltip title={COOPERATION_MODE_HINT[v]}>
+            <Tag color={cooperationModeColor[v]}>{v}</Tag>
+          </Tooltip>
+        ) : (
+          <Tooltip title="历史导入数据没有这个信息。编辑时可以补一次，补完就锁定。">
+            <Tag>未填</Tag>
+          </Tooltip>
         ),
     },
     { title: "合作平台", dataIndex: "platform", width: 90 },
@@ -598,6 +631,20 @@ export function PromotionListPage() {
               }
             />
           </Form.Item>
+          <Form.Item
+            name="cooperation_mode"
+            label="合作模式"
+            rules={[{ required: true, message: "请选择合作模式" }]}
+            tooltip="决定样品成本与博主服务费怎么算，以及审核通过后走哪个流程。单据建好后不能改。"
+          >
+            <Select
+              placeholder="选择合作模式"
+              options={COOPERATION_MODES.map((m) => ({
+                label: `${m} · ${COOPERATION_MODE_HINT[m]}`,
+                value: m,
+              }))}
+            />
+          </Form.Item>
           <Space size="large">
             <Form.Item
               name="platform"
@@ -617,7 +664,11 @@ export function PromotionListPage() {
               <DatePicker style={{ width: 180 }} />
             </Form.Item>
           </Space>
-          <Form.Item name="quote_amount" label="报价金额">
+          <Form.Item
+            name="quote_amount"
+            label="报价金额"
+            tooltip="置换模式没有博主服务费，填了也会被置 0"
+          >
             <InputNumber
               min={0}
               precision={2}

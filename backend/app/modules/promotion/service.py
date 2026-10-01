@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -52,6 +53,7 @@ from app.modules.promotion.domain import (
     format_internal_code,
 )
 from app.modules.promotion.enums import (
+    CooperationMode,
     PublishStatus,
     RecallStatus,
     ReviewAction,
@@ -63,6 +65,7 @@ from app.modules.promotion.events import (
 )
 from app.modules.promotion.exceptions import (
     CancelReasonRequiredError,
+    CooperationModeImmutableError,
     FieldPermissionDenied,
     InvalidBloggerReferenceError,
     InvalidGoodsReferenceError,
@@ -217,7 +220,14 @@ class PromotionService:
                 "blogger.quote 为空时必须显式传 quote_amount",
                 details={"field": "quote_amount"},
             )
-        cost_snapshot = sku.cost_price if sku else None
+
+        # 合作模式决定成本怎么取，后端强制覆盖前端传值（PRD 模块二硬约束）
+        quote_amount, cost_snapshot = await self._resolve_mode_costs(
+            mode=payload.cooperation_mode,
+            quote_amount=quote_amount,
+            goods_main_id=goods_main_id,
+            sku=sku,
+        )
         style_short_name = style.short_name or style.style_name
 
         # 6. 创建实体
@@ -232,6 +242,8 @@ class PromotionService:
             style_short_name_snapshot=style_short_name,
             quote_amount=quote_amount,
             cost_snapshot=cost_snapshot,
+            cooperation_mode=payload.cooperation_mode.value,
+            return_shipping_fee=payload.return_shipping_fee,
             platform=payload.platform,
             cooperation_date=payload.cooperation_date,
             scheduled_publish_date=payload.scheduled_publish_date,
@@ -257,6 +269,7 @@ class PromotionService:
         after_marker: dict[str, Any] = {
             "internal_code": internal_code,
             "publish_status": PublishStatus.UNPUBLISHED.value,
+            "cooperation_mode": payload.cooperation_mode.value,
         }
         if quote_amount is not None:
             after_marker["quote_amount_changed"] = True
@@ -307,6 +320,27 @@ class PromotionService:
         # 字段写权限
         await self._check_amount_write_permission(payload, user)
 
+        # 合作模式：空值可以补一次（历史导入数据没有这个信息），有值就锁死。
+        # PRD 的「生成后不可修改」靠这里拦，不靠前端禁用 —— 接口直接传值一样挡住。
+        if "cooperation_mode" in payload.model_fields_set and payload.cooperation_mode is not None:
+            if promotion.cooperation_mode is None:
+                promotion.cooperation_mode = payload.cooperation_mode.value
+                # 补上模式后成本口径才成立，按新模式初始化一次样品成本与服务费
+                promotion.quote_amount, promotion.cost_snapshot = await self._resolve_mode_costs(
+                    mode=payload.cooperation_mode,
+                    quote_amount=promotion.quote_amount,
+                    goods_main_id=promotion.goods_main_id,
+                    sku=None,
+                )
+            elif promotion.cooperation_mode != payload.cooperation_mode.value:
+                raise CooperationModeImmutableError(
+                    "合作模式在单据生成后不可修改",
+                    details={
+                        "current": promotion.cooperation_mode,
+                        "attempted": payload.cooperation_mode.value,
+                    },
+                )
+
         # SKU 改了重新校验
         if (
             "sku_id" in payload.model_fields_set
@@ -340,10 +374,18 @@ class PromotionService:
         if not changes:
             return await self._to_response(promotion, user)
 
-        # 应用变更
+        # 应用变更。cooperation_mode 上面已经按「空值补一次、有值锁死」处理过，
+        # 这里不能再 setattr —— 否则会把枚举对象写回去，也会绕过那段拦截。
         for field in changes:
+            if field == "cooperation_mode":
+                continue
             new_value = getattr(payload, field)
             setattr(promotion, field, new_value)
+
+        # 成本的两条硬规则在变更应用之后强制一次：PATCH 可以直接传 quote_amount /
+        # cost_snapshot，而 PRD 要求「寄拍样品成本恒 0、置换服务费恒 0」不管谁传什么。
+        # 注意只强制这两条 —— 送拍/置换的样品成本 PRD 允许 PR 手动微调，不能重算覆盖。
+        self._enforce_mode_costs(promotion)
 
         await self._session.flush()
 
@@ -1105,6 +1147,56 @@ class PromotionService:
     # Private helpers
     # ============================================================
 
+    async def _resolve_mode_costs(
+        self,
+        *,
+        mode: CooperationMode,
+        quote_amount: Decimal,
+        goods_main_id: UUID | None,
+        sku: Sku | None,
+    ) -> tuple[Decimal, Decimal | None]:
+        """按合作模式决定 (博主服务费, 样品成本)，强制覆盖调用方传值。
+
+        PRD 模块二与第 9 节公式集：
+
+        - 寄拍：衣服要寄回，样品不算成本 → ``cost_snapshot = 0``，只有寄回运费计入
+        - 送拍 / 置换：衣服给了博主 → 样品成本 = 商品成员款式的货品成本之和
+        - 置换：以货换推广 → ``quote_amount = 0``
+
+        PRD 原文强调「强制覆盖，前端传值无效」，所以这里不是校验而是改写：
+        前端传了寄拍 + 样品成本 500，照样落 0。
+
+        送拍 / 置换取不到商品成本时回落到 SKU 成本价，再取不到就留空 —— 不编造 0，
+        0 会让「这套不要钱」和「成本还没录」混在一起，报表上看不出区别。
+        """
+        if mode is CooperationMode.CONSIGNMENT:
+            return quote_amount, Decimal("0")
+
+        sample_cost: Decimal | None = None
+        if goods_main_id is not None:
+            sample_cost = await self._repo.sum_goods_sample_cost(goods_main_id)
+        if sample_cost is None and sku is not None:
+            sample_cost = sku.cost_price
+
+        if mode is CooperationMode.BARTER:
+            return Decimal("0"), sample_cost
+        return quote_amount, sample_cost
+
+    @staticmethod
+    def _enforce_mode_costs(promotion: Promotion) -> None:
+        """只强制两条不可协商的成本规则，其余保留当前值。
+
+        和 ``_resolve_mode_costs`` 的区别：那个是建单时的**初始化**（会去汇总商品成员
+        成本），这个是每次更新后的**兜底**。PRD 允许 PR 对送拍/置换的样品成本手动微调，
+        所以这里绝对不能重算汇总值去覆盖人工录入 —— 只把两个恒等于 0 的字段压回 0。
+
+        没有合作模式的历史单据不动：它们的成本口径本来就无从判断。
+        """
+        if promotion.cooperation_mode == CooperationMode.CONSIGNMENT.value:
+            promotion.cost_snapshot = Decimal("0")
+        elif promotion.cooperation_mode == CooperationMode.BARTER.value:
+            promotion.quote_amount = Decimal("0")
+
     async def _check_amount_write_permission(
         self,
         payload: PromotionCreate | PromotionUpdate,
@@ -1264,6 +1356,12 @@ class PromotionService:
             goods_is_suit=resolved_goods_is_suit,
             quote_amount=(promotion.quote_amount if can_see_quote else None),
             cost_snapshot=(promotion.cost_snapshot if can_see_cost else None),
+            cooperation_mode=promotion.cooperation_mode,
+            return_shipping_fee=(promotion.return_shipping_fee if can_see_cost else None),
+            # 站外推广成本是三项金额之和，能看到它等于能推算金额，所以两个读权限都要有
+            total_promo_cost=(
+                promotion.total_promo_cost if (can_see_quote and can_see_cost) else None
+            ),
             platform=promotion.platform,
             cooperation_date=promotion.cooperation_date,
             scheduled_publish_date=promotion.scheduled_publish_date,
