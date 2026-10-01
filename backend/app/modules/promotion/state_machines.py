@@ -1,12 +1,13 @@
-"""U04 promotion 模块状态机定义（3 个并行）。
+"""U04 promotion 模块状态机定义（4 个并行）。
 
 按 functional-design/business-rules.md §3 规则定义 transition 表，
 基于 ``app.core.state_machine.StateMachine`` 通用基类。
 
-3 个状态机：
+4 个状态机：
 1. ``PublishStatusMachine`` — publish_status (5 状态)
 2. ``RecallStatusMachine`` — recall_status (4 状态)
 3. ``SettlementStatusMachine`` — settlement_status (5 状态)
+4. ``RetroStatusMachine`` — retro_status (4 状态，PRD V1.4 改动 4)
 
 业务前置校验通过 ``assert_can_transition()`` classmethod 触发友好错误；
 service 层并发安全通过 ``UPDATE WHERE old_state RETURNING`` 实施
@@ -15,6 +16,7 @@ service 层并发安全通过 ``UPDATE WHERE old_state RETURNING`` 实施
 跨状态机校验（BR-U04-24）：
 - start_recall 前：publish_status ∈ {已发布, 已取消}
 - approve 前：publish_status="已发布"
+- record_metrics 前：settlement_status="已付款"（PRD 改动 4，结完款才复盘）
 由 service 层显式实施，不在状态机内部耦合。
 """
 
@@ -27,6 +29,7 @@ from app.core.state_machine import TransitionRule
 from app.modules.promotion.enums import (
     PublishStatus,
     RecallStatus,
+    RetroStatus,
     SettlementStatus,
 )
 
@@ -203,6 +206,79 @@ class RecallStatusMachine:
 # ---------------------------------------------------------------------------
 
 
+class RetroStatusMachine:
+    """retro_status 状态机（PRD V1.4 改动 4，第 4 个并行机器）。
+
+    跨状态机前置（由 service 显式实施，不在这里耦合）：
+    - ``record_metrics`` 前：``settlement_status = '已付款'``。复盘是结完款之后的事，
+      钱还没结清就复盘没有意义（ROI 分母都还没定）。
+    - ``record_metrics`` 要求点赞/收藏/评论三个指标 + 数据截图，PRD 原文明确列了截图。
+
+    ``reject_retro`` 不在 PRD 原文里。加它的理由：PRD 只写了「主管确认复盘内容」，
+    但主管看完觉得写得没用时，没有打回就只剩「卡死」或「硬着头皮确认」两条路。
+    打回退回待复盘，PR 重写 —— 与结款审核的驳回同一个形状。
+    """
+
+    transitions: ClassVar[tuple[TransitionRule, ...]] = (
+        # 未开始 → 待复盘（录 7 天数据）
+        TransitionRule(
+            from_state=RetroStatus.NOT_STARTED.value,
+            action="record_metrics",
+            to_state=RetroStatus.PENDING_RETRO.value,
+            actor_roles=(_ROLE_PR, _ROLE_PR_MANAGER, _ROLE_ADMIN),
+            required_fields=("like_count", "collect_count", "comment_count"),
+        ),
+        # 待复盘 → 待确认（PR 写完复盘文字提交）
+        TransitionRule(
+            from_state=RetroStatus.PENDING_RETRO.value,
+            action="submit_retro",
+            to_state=RetroStatus.PENDING_CONFIRM.value,
+            actor_roles=(_ROLE_PR, _ROLE_PR_MANAGER, _ROLE_ADMIN),
+        ),
+        # 待确认 → 已完成（主管确认，终态）
+        TransitionRule(
+            from_state=RetroStatus.PENDING_CONFIRM.value,
+            action="confirm_retro",
+            to_state=RetroStatus.COMPLETED.value,
+            actor_roles=(_ROLE_PR_MANAGER, _ROLE_ADMIN),
+        ),
+        # 待确认 → 待复盘（主管打回重写）
+        TransitionRule(
+            from_state=RetroStatus.PENDING_CONFIRM.value,
+            action="reject_retro",
+            to_state=RetroStatus.PENDING_RETRO.value,
+            actor_roles=(_ROLE_PR_MANAGER, _ROLE_ADMIN),
+        ),
+    )
+
+    @classmethod
+    def assert_can_transition(
+        cls,
+        from_state: str | RetroStatus,
+        to_state: str | RetroStatus,
+        action: str,
+    ) -> None:
+        from_v = from_state.value if isinstance(from_state, RetroStatus) else from_state
+        to_v = to_state.value if isinstance(to_state, RetroStatus) else to_state
+        for t in cls.transitions:
+            if t.from_state == from_v and t.to_state == to_v and t.action == action:
+                return
+        raise IllegalStateTransitionError(
+            f"RetroStatusMachine: 不允许从 {from_v} 通过 {action} 转移到 {to_v}",
+            details={
+                "machine": "retro_status",
+                "from_state": from_v,
+                "to_state": to_v,
+                "action": action,
+            },
+        )
+
+    @classmethod
+    def get_allowed_transitions(cls, from_state: str | RetroStatus) -> list[tuple[str, str]]:
+        from_v = from_state.value if isinstance(from_state, RetroStatus) else from_state
+        return [(t.action, t.to_state) for t in cls.transitions if t.from_state == from_v]
+
+
 class SettlementStatusMachine:
     """settlement_status 状态机（BR-U04-22）。
 
@@ -292,5 +368,6 @@ class SettlementStatusMachine:
 __all__ = [
     "PublishStatusMachine",
     "RecallStatusMachine",
+    "RetroStatusMachine",
     "SettlementStatusMachine",
 ]

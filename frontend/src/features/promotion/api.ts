@@ -11,6 +11,7 @@ import type {
   PromotionRecallStartRequest,
   PromotionReviewRequest,
   PromotionUpdate,
+  Retrospective,
 } from "./types";
 
 export async function listPromotions(
@@ -183,6 +184,74 @@ export async function setReturnWaybill(
   const resp = await apiClient.post<Promotion>(
     `/api/promotions/${promotionId}/return-waybill`,
     { return_waybill: returnWaybill }
+  );
+  return resp.data;
+}
+
+// ---------------------------------------------------------------------------
+// 复盘（PRD V1.4 改动 4）
+// ---------------------------------------------------------------------------
+
+/**
+ * 录发布满 7 天的数据，推进到「待复盘」。
+ *
+ * 走 multipart 是因为截图必传 —— 三个指标和图得在同一个请求里，分两步会出现
+ * 「数字录了图没传」的中间态。要求单据已结款。
+ */
+export async function recordMetrics(
+  promotionId: string,
+  metrics: {
+    like_count: number;
+    collect_count: number;
+    comment_count: number;
+  },
+  screenshot: File
+): Promise<Promotion> {
+  const form = new FormData();
+  form.append("like_count", String(metrics.like_count));
+  form.append("collect_count", String(metrics.collect_count));
+  form.append("comment_count", String(metrics.comment_count));
+  form.append("screenshot", screenshot);
+  const resp = await apiClient.post<Promotion>(
+    `/api/promotions/${promotionId}/metrics`,
+    form
+  );
+  return resp.data;
+}
+
+/** PR 提交复盘文字，推进到「待确认」。被打回后可以再提交，旧版留在档案里。 */
+export async function submitRetrospective(
+  promotionId: string,
+  content: string
+): Promise<Promotion> {
+  const resp = await apiClient.post<Promotion>(
+    `/api/promotions/${promotionId}/retrospective`,
+    { content }
+  );
+  return resp.data;
+}
+
+/** 主管确认复盘（→ 已完成）或打回（→ 待复盘，必须写意见）。不能确认自己写的。 */
+export async function confirmRetrospective(
+  promotionId: string,
+  approve: boolean,
+  opinion?: string
+): Promise<Promotion> {
+  const resp = await apiClient.post<Promotion>(
+    `/api/promotions/${promotionId}/retrospective/confirm`,
+    { approve, opinion: opinion ?? null }
+  );
+  return resp.data;
+}
+
+/** 某博主的历史复盘，倒序。只返回主管确认过的。 */
+export async function bloggerRetrospectives(
+  bloggerId: string,
+  limit = 20
+): Promise<Retrospective[]> {
+  const resp = await apiClient.get<Retrospective[]>(
+    `/api/bloggers/${bloggerId}/retrospectives`,
+    { params: { limit } }
   );
   return resp.data;
 }

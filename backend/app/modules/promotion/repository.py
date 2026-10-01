@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
@@ -29,8 +29,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.metrics import promotion_sequence_lock_duration_seconds
 from app.modules.product.goods_models import GoodsStyleItem
 from app.modules.promotion.exceptions import SequenceOverflowError
-from app.modules.promotion.models import Promotion
+from app.modules.promotion.models import BloggerRetrospective, Promotion
 from app.modules.promotion.urge_calculator import URGE_STATUS_SQL_EXPR
+
+# list_with_cte 把 raw row 重组成 ORM 实例时要往构造器里喂哪些列。
+#
+# **从 ORM 列定义反推，不要手写白名单。** 原来这里是一份手写的列名元组，漏了
+# cooperation_mode / return_shipping_fee / return_waybill / review_reason_category /
+# in_store_order 五列 —— 后果是这些列在列表接口里恒为 null，详情接口正常，
+# 前端表格一片「—」，既不报错也不告警，上线很久才被发现。
+#
+# 生成列必须排除：SQLAlchemy 不允许给 Computed 列赋值。
+_RECONSTRUCT_COLUMNS: tuple[str, ...] = tuple(
+    c.name for c in Promotion.__table__.columns if c.computed is None
+)
 
 # ---------------------------------------------------------------------------
 # Filters dataclass
@@ -414,6 +426,7 @@ class PromotionRepository:
             "publish_status",
             "recall_status",
             "settlement_status",
+            "retro_status",  # PRD V1.4 改动 4，第 4 个并行状态机
         }:
             raise ValueError(f"unsupported state field: {from_state_field}")
 
@@ -493,6 +506,62 @@ class PromotionRepository:
         result = await self._session.execute(stmt)
         row = result.fetchone()
         return row[0] if row else None
+
+    # ----------------------- 复盘（PRD V1.4 改动 4） ----------------------- #
+
+    def add_retrospective(self, retro: BloggerRetrospective) -> None:
+        self._session.add(retro)
+
+    async def latest_retrospective(
+        self, *, tenant_id: UUID, promotion_id: UUID
+    ) -> BloggerRetrospective | None:
+        """本单最新的一条复盘。
+
+        「当前生效」就是最新那条 —— 被主管打回重写时追加新行，旧的留着做留痕。
+        """
+        stmt = (
+            select(BloggerRetrospective)
+            .where(
+                BloggerRetrospective.tenant_id == tenant_id,
+                BloggerRetrospective.promotion_id == promotion_id,
+            )
+            .order_by(BloggerRetrospective.created_at.desc())
+            .limit(1)
+        )
+        return (await self._session.execute(stmt)).scalar_one_or_none()
+
+    async def blogger_retrospectives(
+        self, *, tenant_id: UUID, blogger_id: UUID, limit: int = 20
+    ) -> list[Mapping[str, Any]]:
+        """某博主的历史复盘，按时间倒序（PRD：hover 卡展示全部历史复盘）。
+
+        只取已确认的 —— 没过主管的复盘是草稿，进了博主档案会误导下次选博主的人。
+        """
+        rows = (
+            await self._session.execute(
+                text(
+                    """
+                    SELECT r.id, r.blogger_id, r.promotion_id, r.content,
+                           r.created_by, r.confirmed_by, r.confirmed_at, r.created_at,
+                           p.internal_code AS promotion_internal_code,
+                           p.style_code_snapshot AS style_code,
+                           COALESCE(cu.display_name, cu.username) AS created_by_name,
+                           COALESCE(fu.display_name, fu.username) AS confirmed_by_name
+                    FROM blogger_retrospective r
+                    JOIN promotion p ON p.id = r.promotion_id
+                    LEFT JOIN "user" cu ON cu.id = r.created_by
+                    LEFT JOIN "user" fu ON fu.id = r.confirmed_by
+                    WHERE r.tenant_id = :tenant_id
+                      AND r.blogger_id = :blogger_id
+                      AND r.confirmed_at IS NOT NULL
+                    ORDER BY r.created_at DESC
+                    LIMIT :limit
+                    """
+                ),
+                {"tenant_id": tenant_id, "blogger_id": blogger_id, "limit": limit},
+            )
+        ).mappings()
+        return [dict(r) for r in rows]
 
     # ----------------------- list_with_cte (FB8 + Pattern P-U04-04) ----------------------- #
 
@@ -635,48 +704,7 @@ class PromotionRepository:
         # 将 raw row 重组为 ORM 实例（共享同一 session）
         # 注意：ORM 重组时 do_orm_execute 不触发，需要手动构造
         for row in result.mappings().all():
-            promotion = Promotion(
-                **{
-                    col: row[col]
-                    for col in (
-                        "id",
-                        "tenant_id",
-                        "style_id",
-                        "sku_id",
-                        "goods_main_id",
-                        "blogger_id",
-                        "pr_id",
-                        "internal_code",
-                        "style_code_snapshot",
-                        "style_short_name_snapshot",
-                        "quote_amount",
-                        "cost_snapshot",
-                        "platform",
-                        "cooperation_date",
-                        "scheduled_publish_date",
-                        "actual_publish_date",
-                        "publish_url",
-                        "cancel_reason",
-                        "recall_reason",
-                        "like_count",
-                        "note_title",
-                        "remark",
-                        "publish_status",
-                        "recall_status",
-                        "settlement_status",
-                        "reviewed_by",
-                        "reviewed_at",
-                        "review_action",
-                        "review_reason",
-                        "is_active",
-                        "created_at",
-                        "updated_at",
-                        "source_extra",
-                        "payment_qr_attachment_id",
-                    )
-                    if col in row
-                }
-            )
+            promotion = Promotion(**{col: row[col] for col in _RECONSTRUCT_COLUMNS if col in row})
             # 防止重组的 ORM 实例污染 session unit of work
             if promotion in self._session:
                 self._session.expunge(promotion)

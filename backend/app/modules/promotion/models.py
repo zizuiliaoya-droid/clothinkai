@@ -150,6 +150,56 @@ class Promotion(TenantScopedModel):
     cancel_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     recall_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     like_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # --- 发布满 7 天的数据（PRD V1.4 改动 4：PR 录入点赞/收藏/评论 + 截图）---
+    collect_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    comment_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    """收藏数 / 评论数。
+
+    转成 typed 列而不是继续塞 ``source_extra``：这三个指标是复盘的依据，要给人看、
+    要进校验，JSONB 里存什么类型都行挡不住脏数据。``like_count`` 本来就是 typed，
+    三个放一起才一致。
+
+    注意**没有动** ``source_extra['点赞数']`` —— typed ``like_count`` 与它并存不同步
+    是一个独立的待确认项（哪个为准还没定），这里不顺手改掉。
+    """
+
+    metrics_attachment_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("attachment.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    """7 天数据截图。PRD 原文「发布满 7 天，PR 录入点赞/收藏/评论 + 截图」。
+
+    必传，但不在 DB 层约束 —— 有大量历史单据永远走不到这一步，加 CHECK 会把它们
+    一起卡住。门槛放在 ``record_metrics`` 里。
+    """
+
+    metrics_recorded_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    """指标录入时间。之前系统靠 ``like_count IS NOT NULL`` 当「信息完整」的替代判断，
+    那个在 like_count 合法为 0 时会误判；有了这个字段才说得清「录过没有」。"""
+
+    # --- 复盘（PRD V1.4 改动 4）---
+    retro_status: Mapped[str] = mapped_column(
+        String(8), nullable=False, server_default=text("'未开始'")
+    )
+    """未开始 / 待复盘 / 待确认 / 已完成。第 4 个并行状态机。
+
+    不复用 ``settlement_status``：那边 ``已付款`` 是终态，而且全系统有一批查询按
+    ``settlement_status = '已付款'`` 过滤，塞进去会让它们漏掉进入复盘的单子。
+    """
+
+    retro_confirmed_by: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("user.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    retro_confirmed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     note_title: Mapped[str | None] = mapped_column(String(255), nullable=True)
     remark: Mapped[str | None] = mapped_column(Text, nullable=True)
     # 人工源列扩展（对齐 final.xlsx：颜色及规格/打单地址/发货单号/订单号/寄回单号/合作方式/合作形式/收藏数/评论数/博主风格 等）
@@ -261,6 +311,19 @@ class Promotion(TenantScopedModel):
             name="ck_promotion_like_count_nonneg",
         ),
         CheckConstraint(
+            "collect_count IS NULL OR collect_count >= 0",
+            name="ck_promotion_collect_count_nonneg",
+        ),
+        CheckConstraint(
+            "comment_count IS NULL OR comment_count >= 0",
+            name="ck_promotion_comment_count_nonneg",
+        ),
+        CheckConstraint(
+            "retro_status IN ('未开始', '待复盘', '待确认', '已完成')",
+            name="ck_promotion_retro_status",
+        ),
+        Index("idx_promotion_retro_status", "tenant_id", "retro_status"),
+        CheckConstraint(
             "quote_amount >= 0",
             name="ck_promotion_quote_amount_nonneg",
         ),
@@ -338,4 +401,68 @@ class PromotionSequence(TenantScopedModel):
     )
 
 
-__all__ = ["Promotion", "PromotionSequence"]
+class BloggerRetrospective(TenantScopedModel):
+    """复盘文字，沉淀到博主档案（PRD V1.4 改动 4）。
+
+    **为什么是独立子表而不是 promotion 上的一个 Text 字段**：PRD 原文「复盘文字永久
+    写入博主档案（跨单据伴随这个博主）」「不随单据关闭而丢失」。存在 promotion 字段上
+    的话，PR 被主管打回后重写会覆盖上一版，推广单软删后 hover 卡也查不到 —— 两条都
+    不满足「永久」。
+
+    一个推广单可以有多条：被打回重写时追加一条，旧的留着。「当前生效」的那条 =
+    这个推广单下最新的一条。
+
+    博主档案（hover 卡）只展示 ``confirmed_at IS NOT NULL`` 的 —— 没过主管的复盘
+    是草稿，不该进档案误导下次选博主的人。
+    """
+
+    __tablename__ = "blogger_retrospective"
+
+    blogger_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("blogger.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    promotion_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("promotion.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    """哪一单的复盘。``RESTRICT`` 而不是 ``SET NULL``：复盘脱离了单据就没有上下文，
+    而推广单本来也只走软删（``publish_status='已删除'``），不会真删行。"""
+
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    """自由文本。PRD：数据表现、博主配合度、是否二搭、下次合作建议等，不拆结构化字段。"""
+
+    created_by: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("user.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    confirmed_by: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("user.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        # hover 卡：按博主倒序取全部历史复盘
+        Index(
+            "idx_blogger_retro_blogger",
+            "tenant_id",
+            "blogger_id",
+            text("created_at DESC"),
+        ),
+        # 单据详情：取这一单的复盘（含被打回的旧版本）
+        Index("idx_blogger_retro_promotion", "tenant_id", "promotion_id"),
+        CheckConstraint("length(btrim(content)) > 0", name="ck_blogger_retro_content_nonempty"),
+        # 确认人与确认时间必须同时有或同时没有
+        CheckConstraint(
+            "(confirmed_by IS NULL) = (confirmed_at IS NULL)",
+            name="ck_blogger_retro_confirm_fields",
+        ),
+    )
+
+
+__all__ = ["BloggerRetrospective", "Promotion", "PromotionSequence"]

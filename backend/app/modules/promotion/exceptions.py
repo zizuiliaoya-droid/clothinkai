@@ -141,6 +141,54 @@ class SelfReviewForbiddenError(ValidationError):
 
 
 # ---------------------------------------------------------------------------
+# 复盘（PRD V1.4 改动 4）
+# ---------------------------------------------------------------------------
+
+
+class SettlementNotPaidError(ValidationError):
+    """录 7 天数据要求结款已完成。
+
+    复盘是结完款之后的事。钱还没结清就复盘没有意义 —— ROI 的分母都还没定。
+    """
+
+    code = "SETTLEMENT_NOT_PAID"
+    status_code = 409
+
+
+class MetricsScreenshotRequiredError(ValidationError):
+    """7 天数据必须带截图。
+
+    PRD 原文「发布满 7 天，PR 录入点赞/收藏/评论 + 截图」。数字可以手填错，
+    截图是对账依据。
+    """
+
+    code = "METRICS_SCREENSHOT_REQUIRED"
+
+
+class RetroSelfConfirmForbiddenError(ValidationError):
+    """禁止确认自己写的复盘。
+
+    和自审禁止同一道理：自己写自己批，主管这道关就没有意义。
+
+    这条必须在 service 层挡 —— ``promotion.retro:confirm`` 的一级域是 promotion，
+    PR 持 ``promotion.*:*`` 会被通配命中，权限层拦不住。
+    """
+
+    code = "RETRO_SELF_CONFIRM_FORBIDDEN"
+    status_code = 403
+
+
+class RetroContentMissingError(ValidationError):
+    """确认复盘时找不到复盘文字。
+
+    正常流程走不到这里（``submit_retro`` 才能进待确认）。真出现说明子表记录被清掉了，
+    不该让主管确认一条空复盘。
+    """
+
+    code = "RETRO_CONTENT_MISSING"
+
+
+# ---------------------------------------------------------------------------
 # 状态机冲突
 # ---------------------------------------------------------------------------
 
@@ -183,11 +231,15 @@ __all__ = [
     "InvalidPaymentQrAttachmentError",
     "InvalidSkuReferenceError",
     "InvalidStyleReferenceError",
+    "MetricsScreenshotRequiredError",
     "PromotionInternalCodeConflictError",
     "PromotionNotFoundError",
     "PublishUrlRequiredError",
+    "RetroContentMissingError",
+    "RetroSelfConfirmForbiddenError",
     "ReviewReasonRequiredError",
     "SelfReviewForbiddenError",
     "SequenceOverflowError",
+    "SettlementNotPaidError",
     "StateTransitionConflictError",
 ]

@@ -22,6 +22,9 @@ export type SettlementStatus =
 
 export type ReviewAction = "approve" | "reject";
 
+/** 复盘状态（PRD 改动 4）。已结款 → 录 7 天数据 → 待复盘 → 待确认 → 已完成。 */
+export type RetroStatus = "未开始" | "待复盘" | "待确认" | "已完成";
+
 export type Platform = "小红书" | "抖音" | "快手" | "B站";
 
 export type UrgeStatus =
@@ -76,12 +79,24 @@ export interface Promotion {
   cancel_reason: string | null;
   recall_reason: string | null;
   like_count: number | null;
+  /** 发布满 7 天的收藏数 / 评论数（PRD 改动 4）。 */
+  collect_count: number | null;
+  comment_count: number | null;
+  metrics_recorded_at: string | null;
+  /** 7 天数据截图签名 URL，后端现签，1 小时有效。 */
+  metrics_signed_url: string | null;
   note_title: string | null;
   remark: string | null;
   // 状态
   publish_status: string;
   recall_status: string;
   settlement_status: string;
+  /** 复盘状态（PRD 改动 4）。与 settlement_status 正交，互不影响。 */
+  retro_status: RetroStatus;
+  retro_confirmed_by: string | null;
+  retro_confirmed_at: string | null;
+  /** 当前生效的复盘文字 = 本单最新那条。被打回重写后旧版仍留在博主档案里。 */
+  retro_content: string | null;
   // 审核
   reviewed_by: string | null;
   reviewed_at: string | null;
@@ -174,6 +189,22 @@ export interface PromotionReviewRequest {
   review_reason?: string | null;
   /** 驳回时必填，三选一。审核通过时忽略。 */
   review_reason_category?: RejectReasonCategory | null;
+}
+
+/** 复盘记录（博主档案里的一条）。 */
+export interface Retrospective {
+  id: string;
+  blogger_id: string;
+  promotion_id: string;
+  promotion_internal_code: string | null;
+  style_code: string | null;
+  content: string;
+  created_by: string | null;
+  created_by_name: string | null;
+  confirmed_by: string | null;
+  confirmed_by_name: string | null;
+  confirmed_at: string | null;
+  created_at: string;
 }
 
 export interface PromotionPage {

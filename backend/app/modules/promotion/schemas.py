@@ -248,6 +248,71 @@ class PromotionUpdateLikeRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# 复盘（PRD V1.4 改动 4）
+# ---------------------------------------------------------------------------
+
+
+class PromotionMetricsRequest(BaseModel):
+    """发布满 7 天的数据录入。
+
+    PRD 原文「发布满 7 天，PR 录入点赞/收藏/评论 + 截图」，三个指标都必填。
+    截图走 multipart 端点单独传，不在这个 body 里。
+    """
+
+    model_config = ConfigDict()
+
+    like_count: int = Field(ge=0)
+    collect_count: int = Field(ge=0)
+    comment_count: int = Field(ge=0)
+
+
+class RetrospectiveSubmitRequest(BaseModel):
+    """PR 提交复盘文字。
+
+    PRD：自由描述（数据表现、博主配合度、是否二搭、下次合作建议），不拆结构化字段。
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    content: str = Field(min_length=1, max_length=5000)
+
+
+class RetrospectiveConfirmRequest(BaseModel):
+    """主管确认或打回复盘。"""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    approve: bool = True
+    opinion: str | None = Field(default=None, max_length=2000)
+    """打回时的意见。PR 得知道要改什么。"""
+
+    @model_validator(mode="after")
+    def _require_opinion_on_reject(self) -> RetrospectiveConfirmRequest:
+        if not self.approve and not self.opinion:
+            raise ValueError("打回复盘时必须写明意见")
+        return self
+
+
+class RetrospectiveResponse(BaseModel):
+    """一条复盘记录。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    blogger_id: UUID
+    promotion_id: UUID
+    promotion_internal_code: str | None = None
+    style_code: str | None = None
+    content: str
+    created_by: UUID | None = None
+    created_by_name: str | None = None
+    confirmed_by: UUID | None = None
+    confirmed_by_name: str | None = None
+    confirmed_at: datetime | None = None
+    created_at: datetime
+
+
+# ---------------------------------------------------------------------------
 # 响应 / 列表 / 重复警告
 # ---------------------------------------------------------------------------
 
@@ -314,10 +379,24 @@ class PromotionResponse(BaseModel):
     note_title: str | None = None
     remark: str | None = None
 
+    # 发布满 7 天的数据（PRD V1.4 改动 4）
+    collect_count: int | None = None
+    comment_count: int | None = None
+    metrics_recorded_at: datetime | None = None
+    metrics_signed_url: str | None = None
+    """7 天数据截图的签名 URL，现签不落库。"""
+
     # 状态字段
     publish_status: str
     recall_status: str
     settlement_status: str
+    retro_status: str = "未开始"
+    """未开始 / 待复盘 / 待确认 / 已完成（PRD V1.4 改动 4，第 4 个并行状态机）。"""
+
+    retro_confirmed_by: UUID | None = None
+    retro_confirmed_at: datetime | None = None
+    retro_content: str | None = None
+    """当前生效的复盘文字 = 本单最新的那条。被打回重写时旧版留在子表里。"""
 
     # 审核
     reviewed_by: UUID | None = None
@@ -393,6 +472,7 @@ __all__ = [
     "PromotionDuplicateWarning",
     "PromotionListFilters",
     "PromotionMarkAbnormalRequest",
+    "PromotionMetricsRequest",
     "PromotionPage",
     "PromotionPaymentQrBindRequest",
     "PromotionPaymentQrUploadInitRequest",
@@ -405,4 +485,7 @@ __all__ = [
     "PromotionUpdate",
     "PromotionUpdateLikeRequest",
     "PromotionWarehouseWaybillRequest",
+    "RetrospectiveConfirmRequest",
+    "RetrospectiveResponse",
+    "RetrospectiveSubmitRequest",
 ]

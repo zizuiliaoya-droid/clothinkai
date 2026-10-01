@@ -713,6 +713,7 @@ import app.modules.credential.models  # noqa: E402  (U12 credential)
 import app.modules.importer.models  # noqa: E402
 import app.modules.negotiation.models  # noqa: E402  (谈款审核)
 import app.modules.product.goods_models  # noqa: E402  (goods_main/goods_style_item)
+import app.modules.promotion.models  # noqa: E402  (blogger_retrospective 复盘子表)
 import app.modules.report.user_preference_models  # noqa: E402  (U17 user_preference)
 import app.modules.report.work_progress_models  # noqa: E402  (U14 target_planning/store_daily)
 import app.modules.urge.models  # noqa: E402  (催发任务 urge_config/task/record)

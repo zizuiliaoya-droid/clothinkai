@@ -75,6 +75,14 @@ URGE_READ = "promotion.urge:read"
 URGE_WRITE = "promotion.urge:write"
 URGE_CONFIG_READ = "urge_config:read"
 URGE_CONFIG_WRITE = "urge_config:write"
+# 复盘（PRD 改动 4）。write 由 PR 的 promotion.*:* 覆盖，不必显式授。
+#
+# confirm 显式给主管，但要清楚它拦不住 PR —— PR 的 promotion.*:* 会命中
+# promotion.retro:confirm。真正的门槛是 service 层的
+# RetroSelfConfirmForbiddenError（不能确认自己写的复盘），和既有的
+# promotion.review:approve 同一个处境。
+RETRO_WRITE = "promotion.retro:write"
+RETRO_CONFIRM = "promotion.retro:confirm"
 
 
 # ---------------------------------------------------------------------------
@@ -163,6 +171,7 @@ DEFAULT_ROLES: tuple[RoleSpec, ...] = (
             # 催发任务本身由 promotion.*:* 覆盖；阈值配置是独立域，要显式给
             URGE_CONFIG_READ,
             URGE_CONFIG_WRITE,
+            RETRO_CONFIRM,
             FINANCE_REVIEW,
             "finance.settlement:read",
             "finance.settlement:write",

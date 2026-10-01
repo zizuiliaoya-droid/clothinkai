@@ -19,7 +19,7 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, File, Query, UploadFile, status
+from fastapi import APIRouter, File, Form, Query, UploadFile, status
 from fastapi.responses import Response
 
 from app.modules.auth.deps import (
@@ -36,6 +36,7 @@ from app.modules.promotion.schemas import (
     PromotionCancelRequest,
     PromotionCreate,
     PromotionListFilters,
+    PromotionMetricsRequest,
     PromotionPage,
     PromotionPaymentQrBindRequest,
     PromotionPaymentQrUploadInitRequest,
@@ -48,6 +49,9 @@ from app.modules.promotion.schemas import (
     PromotionReviewRequest,
     PromotionUpdate,
     PromotionWarehouseWaybillRequest,
+    RetrospectiveConfirmRequest,
+    RetrospectiveResponse,
+    RetrospectiveSubmitRequest,
 )
 
 router = APIRouter(prefix="/api", tags=["promotion"])
@@ -375,6 +379,99 @@ async def set_return_waybill(
     寄拍模式审核通过的前提。与仓库发货单号是两个方向：那个寄给博主，这个博主寄回来。
     """
     return await service.set_return_waybill(promotion_id, payload, user)
+
+
+# ---------------------------------------------------------------------------
+# 复盘（PRD V1.4 改动 4）
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/promotions/{promotion_id}/metrics",
+    response_model=PromotionResponse,
+    dependencies=[require_permission("promotion.retro", "write")],
+)
+async def record_metrics(
+    promotion_id: UUID,
+    user: CurrentActiveUser,
+    service: PromotionServiceDep,
+    like_count: Annotated[int, Form(ge=0)],
+    collect_count: Annotated[int, Form(ge=0)],
+    comment_count: Annotated[int, Form(ge=0)],
+    screenshot: Annotated[UploadFile, File(description="7 天数据截图")],
+) -> PromotionResponse:
+    """录发布满 7 天的数据，推进到「待复盘」。
+
+    PRD「已结款 → 发布满 7 天，PR 录入点赞/收藏/评论 + 截图 → 待复盘」。走 multipart
+    是因为截图必传，三个指标和图得在同一个请求里 —— 分两步会出现「数字录了图没传」
+    的中间态。
+    """
+    try:
+        data = await screenshot.read(10 * 1024 * 1024 + 1)
+    finally:
+        await screenshot.close()
+    return await service.record_metrics(
+        promotion_id,
+        PromotionMetricsRequest(
+            like_count=like_count,
+            collect_count=collect_count,
+            comment_count=comment_count,
+        ),
+        user,
+        screenshot=(screenshot.filename, screenshot.content_type, data),
+    )
+
+
+@router.post(
+    "/promotions/{promotion_id}/retrospective",
+    response_model=PromotionResponse,
+    dependencies=[require_permission("promotion.retro", "write")],
+)
+async def submit_retrospective(
+    promotion_id: UUID,
+    payload: RetrospectiveSubmitRequest,
+    user: CurrentActiveUser,
+    service: PromotionServiceDep,
+) -> PromotionResponse:
+    """PR 提交复盘文字，推进到「待确认」。被打回后可以再提交，旧版留在档案里。"""
+    return await service.submit_retrospective(promotion_id, payload, user)
+
+
+@router.post(
+    "/promotions/{promotion_id}/retrospective/confirm",
+    response_model=PromotionResponse,
+    dependencies=[require_permission("promotion.retro", "confirm")],
+)
+async def confirm_retrospective(
+    promotion_id: UUID,
+    payload: RetrospectiveConfirmRequest,
+    user: CurrentActiveUser,
+    service: PromotionServiceDep,
+) -> PromotionResponse:
+    """主管确认复盘（→ 已完成）或打回（→ 待复盘，必须写意见）。
+
+    禁止确认自己写的复盘 —— 这条在 service 层挡，因为 `promotion.retro:confirm`
+    的一级域是 promotion，PR 的 `promotion.*:*` 会被通配命中。
+    """
+    return await service.confirm_retrospective(promotion_id, payload, user)
+
+
+@router.get(
+    "/bloggers/{blogger_id}/retrospectives",
+    response_model=list[RetrospectiveResponse],
+    dependencies=[require_permission("promotion", "read")],
+)
+async def blogger_retrospectives(
+    blogger_id: UUID,
+    user: CurrentActiveUser,
+    service: PromotionServiceDep,
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+) -> list[RetrospectiveResponse]:
+    """某博主的历史复盘，倒序（PRD：hover 卡展示该博主所有历史复盘）。
+
+    只返回主管确认过的 —— 没过确认的是草稿，进博主档案会误导下次选博主的人。
+    """
+    return await service.blogger_retrospectives(blogger_id, user, limit=limit)
 
 
 __all__ = ["router"]

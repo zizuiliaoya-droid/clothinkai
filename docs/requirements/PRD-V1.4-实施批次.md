@@ -132,28 +132,74 @@ diff 只有 +90（17 条）和一堆负数，没有任何一条落在 0~90 之�
 - `urge_config:read/write` **必须独立** —— 叫 `promotion.urge_config:write` 的话
   PR 能自己把「催过 3 次提示主管」的阈值改成 999
 
-## 批次 4b：复盘 + 品牌词截图 + 单据时间线（约 4 人日）
+## 批次 4b-1：复盘环节 ✅ 已完成（migration 050）
 
-- 复盘环节 ← PRD 改动 4
-  - 已结款 → 录 7 天数据 → **待复盘** → PR 手输复盘文字 → 主管确认 → 已完成
-  - 复盘文字永久写入博主档案，跨单据沉淀，hover 卡按时间倒序展示全部历史复盘
-  - 不拆结构化字段，就是一个多行文本框
-  - 调研结论（影响设计）：
-    - `settlement_status='已付款'` 是**终态**，没有现成后续状态可挂
-    - **新开一个独立状态字段（第 4 个并行状态机）比扩 `settlement_status` 干净** ——
-      扩进去的话所有按 `settlement_status='已付款'` 过滤的查询（索引、汇总、finance 列表）
-      都会漏掉进入「待复盘」的单子
-    - **置换单根本没有 settlement 行**（approve_barter 不发 SettlementRequested），
-      所以复盘触发点不能挂在 finance 侧，否则置换单永远进不了复盘
-    - 7 天数据目前只有 `like_count` 一个 typed 列，阅读/收藏/评论都在 `source_extra`
-      JSONB 里无校验；也**没有「录入完成」标记字段**。触发点建议照 `set_return_waybill`
-      的模式新开 `POST /promotions/{id}/metrics`，指标录入与状态推进同事务
-    - 复盘文字**建子表**（照 `wecom_message` / `negotiation` 范式），不追加 JSONB ——
-      全仓 JSONB 字段都是单次覆盖的快照，没有一处是 append 数组
-- 品牌词评论截图提交发布审核时必传（从批次 2b 挪来）
+PRD 改动 4。回原文确认了两处比规划里更具体的要求：录 7 天数据时**截图也是必传的**
+（原文「发布满 7 天，PR 录入点赞/收藏/评论 + 截图」），以及复盘后有「已完成（终态）」。
+
+```
+已结款 → 录 7 天数据(点赞/收藏/评论+截图) → 待复盘
+      → PR 手输复盘文字 → 待确认
+      → 主管确认 → 已完成（终态）
+```
+
+两个设计决定：
+
+**`retro_status` 是新字段，不是给 `settlement_status` 加值。** 「已付款」在
+`SettlementStatusMachine` 里是终态，而且全系统有一批查询按
+`settlement_status = '已付款'` 过滤（索引、汇总、财务列表）。塞进那个枚举，这些查询
+全都会漏掉进复盘的单子。另外**置换单根本没有 settlement 行**（`approve_barter` 不发
+`SettlementRequested`），复盘挂在财务侧会让置换单永远进不了复盘。单元测试里有一条
+专门守这个正交性，有人把复盘状态塞进结款状态机就会红。
+
+**复盘文字在独立子表 `blogger_retrospective`，不在 promotion 字段上。** PRD 原文
+「永久写入博主档案（跨单据伴随这个博主）」「不随单据关闭而丢失」。存字段的话被主管
+打回后重写会覆盖上一版，推广单软删后 hover 卡也查不到 —— 两条都不满足「永久」。
+子表里一单可多条，「当前生效」是最新那条，被打回的旧版留着。
+
+其余要点：
+- 新增 typed 列 `collect_count` / `comment_count`：三个指标是复盘依据，要给人看、
+  要进校验，继续塞 `source_extra` JSONB 里存什么类型都行挡不住脏数据。
+  **没有动** `source_extra['点赞数']` —— 那个双字段不同步是独立的待确认项
+- 新增 `metrics_recorded_at`：之前系统靠 `like_count IS NOT NULL` 当「信息完整」的
+  替代判断，`like_count` 合法为 0 时会误判
+- `reject_retro`（主管打回）不在 PRD 原文里。加它是因为 PRD 只写了「主管确认」，
+  主管看完觉得写得没用时没有打回就只剩「卡死」或「硬着头皮确认」两条路
+- 禁止确认自己写的复盘。这条**只能在 service 层挡** —— `promotion.retro:confirm`
+  的一级域是 promotion，PR 的 `promotion.*:*` 会被通配命中，权限层拦不住
+- hover 卡只展示已确认的复盘：没过主管的是草稿，进档案会误导下次选博主的人
+- 截图走后端代传 + 失败补偿删除 R2 对象；`ALLOWED_PURPOSES` 加 `promotion_metrics`
+
+### 顺带修掉一个已上线的 bug：列表接口静默丢字段
+
+`PromotionRepository.list_with_cte` 把 raw row 重组成 ORM 实例时用的是一份**手写的
+列名白名单**。那份白名单漏了 5 列：
+
+| 列 | 加它的批次 | 后果 |
+|---|---|---|
+| `cooperation_mode` | 2a | 推广列表「合作模式」列恒为空 |
+| `return_shipping_fee` | 2a | 寄回运费列表里看不到 |
+| `return_waybill` | 2b | 2b 刚加的「寄回单号」列从来没显示过数据 |
+| `review_reason_category` | 2b | 驳回原因分类列表里看不到 |
+| `in_store_order` | U16 | 店内单标记列表里看不到 |
+
+详情接口正常，只有列表接口丢 —— 前端表格一片「—」，不报错不告警。
+
+改成从 `Promotion.__table__.columns` 反推（排除 Computed 列），手写白名单这个 bug 源
+就消失了。另加一条测试：拿 DB 原始行逐列比对列表重组出来的实例，以后谁加列漏了都会红。
+
+**这个 bug 是靠写测试找出来的，不是靠读代码。** 我先凭读代码断言「2a/2b 的字段都漏了」，
+写完测试第一版只报了 2 列 —— 因为测试工厂会静默忽略不认识的 kwarg，那几列在
+DB 里本来就是 NULL，两边都 None 就"匹配"了。改成直接 UPDATE 落非默认值之后才暴露全部 5 列。
+
+## 批次 4b-2：品牌词截图 + 单据时间线（约 2 人日）
+
+- 品牌词评论截图提交发布审核时必传 ← PRD 改动 5（业务方明确保留不变，不需再确认）
+  - 原文：「品牌词评论截图（PR 提交发布审核时必传）」，所以门槛在 `publish()`
   - 调研纠正：仓库里**不存在**「推广单发布截图」也不存在「品牌词评论截图」，
     现有图片上传只有 4 处（款式主图、推广收款码、拍单/刷单收款码、结算付款截图）。
     所以这是从零建，不是「复用已有附件流程」
+  - 注意这是会挡业务的硬约束：上线后 PR 不传截图就发不了单
 - 单据时间线表（从批次 2a 挪来）：做金额级回溯，带权限，不放宽 audit 脱敏
 
 ## 批次 5：中间汇总表 + 投产/工作进度/BI（约 8 人日，最大一块）
@@ -195,6 +241,9 @@ PRD 模块四、五、六。5 张中间汇总表目前**全部不存在**，报�
 - **同一个绑定参数在一条语句里出现两次时，`::` 紧跟参数的那一处不会被替换**，留下字面量 `:today` 直接语法错误。`text()` 里一律写 `CAST(:x AS date)`。这和 046/047 的 `jsonb_build_object` 是同一个坑的两种表现，不限于那个函数。
 - **`text("SELECT * FROM t").columns(*Model.__table__.columns)` 配 `scalar_one_or_none()` 返回的是第一列（id）而不是实体**，静默拿到一个 UUID，直到访问属性才炸。要取 ORM 实体就用 `select(Model)`。
 - **`ruff format --check` 在 CI 里是独立一步**（`ruff check` 过了不代表 format 过），提交前要跑 `ruff format`。
+- **`list_with_cte` 的 ORM 重组曾用手写列名白名单，漏列的后果是列表接口静默返回 null。** 已改成从 `Promotion.__table__.columns` 反推。往 promotion 加列时不用再动这里，但要记住：任何「手写一份列名清单」的地方都会烂。
+- **测试工厂（`promotion_factory` 等）的字段清单是手写的，不认识的 kwarg 被静默忽略。** 想让某列在 DB 里有值，要么确认工厂支持那个 kwarg，要么建完直接 `UPDATE`。否则测试会在「两边都是 NULL」的情况下假通过。
+- **`session.expire_all()` 之后再访问任何已加载实例的属性（哪怕是 `obj.id`）都会触发隐式加载**，在 async session 里就是 `MissingGreenlet`。要么先把需要的值取出来，要么干脆别用 ORM 实例做基准 —— 直接 `SELECT *` 拿原始行比更干净。
 
 ## 待业务确认
 
