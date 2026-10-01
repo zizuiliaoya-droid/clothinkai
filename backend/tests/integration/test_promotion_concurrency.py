@@ -166,6 +166,22 @@ class TestPublishConcurrent:
                     "cd": date(2026, 5, 26),
                 },
             )
+            # PRD 改动 5：publish 要求品牌词评论截图。直接插 attachment 行满足 FK，
+            # 这里要测的是乐观并发，不是上传流程。
+            bc_id = uuid4()
+            await seed.execute(
+                text(
+                    "INSERT INTO attachment (id, tenant_id, bucket, r2_key, purpose, "
+                    "filename, mime_type, size_bytes, status, created_at, updated_at) "
+                    "VALUES (:id, :tid, 'private', :key, 'brand_comment_screenshot', "
+                    "'bc.png', 'image/png', 128, 'ready', NOW(), NOW())"
+                ),
+                {"id": bc_id, "tid": tenant_id, "key": f"{tenant_id}/bc/{bc_id}.png"},
+            )
+            await seed.execute(
+                text("UPDATE promotion SET brand_comment_attachment_id = :a WHERE id = :p"),
+                {"a": bc_id, "p": promotion_id},
+            )
             await seed.commit()
 
         # 取 user ORM 对象供 service 使用

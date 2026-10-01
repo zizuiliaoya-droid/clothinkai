@@ -192,15 +192,50 @@ PRD 改动 4。回原文确认了两处比规划里更具体的要求：录 7 �
 写完测试第一版只报了 2 列 —— 因为测试工厂会静默忽略不认识的 kwarg，那几列在
 DB 里本来就是 NULL，两边都 None 就"匹配"了。改成直接 UPDATE 落非默认值之后才暴露全部 5 列。
 
-## 批次 4b-2：品牌词截图 + 单据时间线（约 2 人日）
+## 批次 4b-2：品牌词截图 + 金额时间线 ✅ 已完成（migration 051）
 
-- 品牌词评论截图提交发布审核时必传 ← PRD 改动 5（业务方明确保留不变，不需再确认）
-  - 原文：「品牌词评论截图（PR 提交发布审核时必传）」，所以门槛在 `publish()`
-  - 调研纠正：仓库里**不存在**「推广单发布截图」也不存在「品牌词评论截图」，
-    现有图片上传只有 4 处（款式主图、推广收款码、拍单/刷单收款码、结算付款截图）。
-    所以这是从零建，不是「复用已有附件流程」
-  - 注意这是会挡业务的硬约束：上线后 PR 不传截图就发不了单
-- 单据时间线表（从批次 2a 挪来）：做金额级回溯，带权限，不放宽 audit 脱敏
+### 品牌词评论截图必传（PRD 改动 5）
+
+原文「品牌词评论截图（PR 提交发布审核时必传）」。「提交发布审核」就是 `publish()` ——
+现有链路是 publish → 自动推进待核查 → 主管 review approve，publish 那一步是 PR 把单据
+交给主管。改动 5 整节标题是「业务方明确保留不变」，所以不需要再确认。
+
+**这是会挡业务的硬约束**：上线后 PR 不传截图就发不了单。配套处理：
+- 门槛放 service 不放 DB CHECK：生产 5154 条未发布的历史单会被 CHECK 全卡住
+- 已发布的 2 条历史单不回溯要求补图
+- 独立上传端点（不限状态），与寄拍寄回单号同一个形状 —— 被 publish 挡住之后能回来补
+- **校验顺序：状态机先判，截图后判。** 一开始写反了，于是「已发布的单再点发布」报的是
+  「缺截图」。那会让人去补一张根本不需要的图。是跑全量测试时
+  `test_publish_already_published_raises` 挂了才发现的
+
+爆炸半径量出来是 **11 个既有测试**（所有走 publish 的路径）。给 `promotion_factory` 加了
+`brand_comment=True` 选项，而不是在 11 处各写一遍造附件的代码。顺手把工厂漏掉的
+`cooperation_mode` / `return_shipping_fee` / `return_waybill` / `collect_count` /
+`comment_count` 也补进 kwarg 清单 —— 之前它们被静默忽略，正是上一批那个假通过的根因。
+
+### 金额变更时间线（从批次 2a 挪来）
+
+批次 2a 当时的决定是「成本留痕只记 `*_changed` 不记金额」，理由是 audit_log 的读取面
+（`GET /auth/audit-logs`）是单一粗粒度闸门 `auth.audit:read`，而金额受字段级权限保护。
+现在补上专表 `promotion_amount_log`。
+
+**不给这张表新建 scope**，这是设计上最要紧的一点：`has()` 的前缀通配只看第一段，运营持
+`promotion.*:read`，任何 `promotion.xxx:read` 都会被命中 —— 于是运营能读到金额历史，而
+他们看不到金额本身。读权限走 `can_read_field("promotion", "quote_amount", ctx)`，和推广
+响应过滤金额用的是同一个闸门。有一条测试专门守这个（运营读 → `FieldPermissionDenied`）。
+
+顺手纠正了 `domain.py` 里一句错的注释：原文写「PR 看不到报价」，但
+`FIELD_PERMISSION_REGISTRY` 里 `quote_amount` 的 `visible_roles` 是
+`{admin, pr, pr_manager, finance}` —— PR 是能看的。看不到的是 operations / warehouse /
+designer / pattern_maker / merchandiser。结论没变（两个闸门不是一回事），但理由得写对。
+
+其余要点：
+- 一次 PATCH 只记**净变更**。补合作模式会初始化成本、更新后又有一道按模式压 0 的兜底，
+  中间态记下来只会让人困惑
+- `change_source`（手动编辑 / 模式初始化 / 模式兜底）回答「这个 0 是我改的还是系统压的」
+  —— `_enforce_mode_costs` 会把置换的服务费静默压成 0，没有这个标记 PR 会以为自己填错了
+- `total_promo_cost` 不记：它是三项的生成列，回放三项就能推出来，单独记反而可能不一致
+- CHECK `before_value IS DISTINCT FROM after_value`：没变就不该留一行，否则时间线全是噪音
 
 ## 批次 5：中间汇总表 + 投产/工作进度/BI（约 8 人日，最大一块）
 
@@ -244,6 +279,8 @@ PRD 模块四、五、六。5 张中间汇总表目前**全部不存在**，报�
 - **`list_with_cte` 的 ORM 重组曾用手写列名白名单，漏列的后果是列表接口静默返回 null。** 已改成从 `Promotion.__table__.columns` 反推。往 promotion 加列时不用再动这里，但要记住：任何「手写一份列名清单」的地方都会烂。
 - **测试工厂（`promotion_factory` 等）的字段清单是手写的，不认识的 kwarg 被静默忽略。** 想让某列在 DB 里有值，要么确认工厂支持那个 kwarg，要么建完直接 `UPDATE`。否则测试会在「两边都是 NULL」的情况下假通过。
 - **`session.expire_all()` 之后再访问任何已加载实例的属性（哪怕是 `obj.id`）都会触发隐式加载**，在 async session 里就是 `MissingGreenlet`。要么先把需要的值取出来，要么干脆别用 ORM 实例做基准 —— 直接 `SELECT *` 拿原始行比更干净。
+- **加硬约束时校验顺序要排：状态机先判，附加门槛后判。** 品牌词截图的检查一开始写在状态机之前，于是「已发布的单再点发布」报的是「缺截图」，会让人去补一张根本不需要的图。跑全量测试时才暴露。
+- **`create_upload_record` 在 R2 未配置时直接抛 `AttachmentError`，没有本地回退**（`upload_bytes` 有）。测附件上传要给 `attachment_service._client` 装一个假 client，这样 Attachment 行、状态机、FK 全走真实路径，只有网络调用是假的。
 
 ## 待业务确认
 

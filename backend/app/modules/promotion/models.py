@@ -164,6 +164,17 @@ class Promotion(TenantScopedModel):
     是一个独立的待确认项（哪个为准还没定），这里不顺手改掉。
     """
 
+    brand_comment_attachment_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("attachment.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    """品牌词评论截图。PRD 改动 5：PR 提交发布审核（``publish``）时必传。
+
+    不在 DB 层加 CHECK：生产有 5154 条未发布的历史单，加约束会把它们全卡住。
+    门槛放在 ``publish()`` 里 —— 和寄拍的寄回单号同一个形状。
+    """
+
     metrics_attachment_id: Mapped[UUID | None] = mapped_column(
         PGUUID(as_uuid=True),
         ForeignKey("attachment.id", ondelete="RESTRICT"),
@@ -401,6 +412,81 @@ class PromotionSequence(TenantScopedModel):
     )
 
 
+class PromotionAmountLog(TenantScopedModel):
+    """金额变更时间线（PRD 第 10 节第 14 条：成本修改可追溯）。
+
+    **为什么不写 audit_log**：audit_log 的读取面（``GET /auth/audit-logs``）是单一粗粒度
+    闸门 ``auth.audit:read``，而金额受字段级权限保护
+    （``field.promotion.quote_amount:read`` 只给 admin/pr/pr_manager/finance）。
+    把金额写进 audit 等于绕过字段级门控，所以 audit 那边至今只记 ``*_changed: true``。
+
+    **为什么不给这张表新建 scope**：``has()`` 的前缀通配只看第一段，运营持
+    ``promotion.*:read``，任何 ``promotion.xxx:read`` 都会被命中 —— 运营就能读到金额历史，
+    而他们看不到金额本身。读取走 ``can_read_field("promotion", "quote_amount", ctx)``，
+    与推广响应过滤金额用同一个闸门。
+
+    一次 PATCH 只记**净变更**：合作模式补值会初始化成本、更新后又有一道按模式压 0 的
+    兜底，中间态记下来只会让人困惑。``change_source`` 回答「这个 0 是我改的还是系统压的」。
+    """
+
+    __tablename__ = "promotion_amount_log"
+
+    promotion_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("promotion.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    field_name: Mapped[str] = mapped_column(String(32), nullable=False)
+    """quote_amount / cost_snapshot / return_shipping_fee。
+
+    ``total_promo_cost`` 不记：它是这三项的生成列，回放三项就能推出来，
+    单独记一行反而会出现与分项不一致的可能。
+    """
+
+    before_value: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    after_value: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    change_source: Mapped[str] = mapped_column(String(16), nullable=False)
+    """手动编辑 / 模式初始化 / 模式兜底。
+
+    ``_enforce_mode_costs`` 会静默把置换的服务费压成 0、寄拍的样品成本压成 0。
+    没有这个标记，PR 看到金额变了会以为是自己改的。
+    """
+
+    changed_by: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("user.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    __table_args__ = (
+        Index(
+            "idx_amount_log_promotion",
+            "tenant_id",
+            "promotion_id",
+            text("created_at DESC"),
+        ),
+        CheckConstraint(
+            "field_name IN ('quote_amount', 'cost_snapshot', 'return_shipping_fee')",
+            name="ck_amount_log_field_name",
+        ),
+        CheckConstraint(
+            "change_source IN ('手动编辑', '模式初始化', '模式兜底')",
+            name="ck_amount_log_change_source",
+        ),
+        # 没变就不该留一行。IS DISTINCT FROM 顺带处理 NULL（cost_snapshot 可空）
+        CheckConstraint(
+            "before_value IS DISTINCT FROM after_value",
+            name="ck_amount_log_actually_changed",
+        ),
+        CheckConstraint(
+            "before_value IS NULL OR before_value >= 0", name="ck_amount_log_before_nonneg"
+        ),
+        CheckConstraint(
+            "after_value IS NULL OR after_value >= 0", name="ck_amount_log_after_nonneg"
+        ),
+    )
+
+
 class BloggerRetrospective(TenantScopedModel):
     """复盘文字，沉淀到博主档案（PRD V1.4 改动 4）。
 
@@ -465,4 +551,9 @@ class BloggerRetrospective(TenantScopedModel):
     )
 
 
-__all__ = ["BloggerRetrospective", "Promotion", "PromotionSequence"]
+__all__ = [
+    "BloggerRetrospective",
+    "Promotion",
+    "PromotionAmountLog",
+    "PromotionSequence",
+]
