@@ -57,6 +57,12 @@ IMPORTER_MAPPING_WRITE = "importer.mapping:write"
 # 授了等于没授。要用通配就得写 ops.*:*，那又把未来所有 ops.* 权限一并放开了。
 OPS_PLATFORM_LINK_READ = "ops.platform_link:read"
 OPS_PLATFORM_LINK_WRITE = "ops.platform_link:write"
+# 谈款审核（PRD 模块一）。独立一级域 negotiation，同样刻意不挂在 promotion. 下 ——
+# PR 持 promotion.*:*，叫 promotion.negotiation:approve 会让 PR 自动拿到主管的审核权。
+# 也不给 PR negotiation.*:*，否则 negotiation.review:approve 又被通配命中。
+NEGOTIATION_READ = "negotiation:read"
+NEGOTIATION_WRITE = "negotiation:write"
+NEGOTIATION_REVIEW = "negotiation.review:approve"
 
 
 # ---------------------------------------------------------------------------
@@ -119,6 +125,9 @@ DEFAULT_ROLES: tuple[RoleSpec, ...] = (
         permissions=(
             PROMOTION_ALL,
             BLOGGER_ALL,
+            # 谈款：PR 能建、能改草稿、能提交，但没有审核权
+            NEGOTIATION_READ,
+            NEGOTIATION_WRITE,
             "report.publish_progress:read",
             IMPORTER_BATCH_READ,
             IMPORTER_BATCH_WRITE,
@@ -135,6 +144,10 @@ DEFAULT_ROLES: tuple[RoleSpec, ...] = (
             PROMOTION_ALL,
             BLOGGER_ALL,
             PROMOTION_REVIEW,
+            # 谈款：主管是唯一能审的角色
+            NEGOTIATION_READ,
+            NEGOTIATION_WRITE,
+            NEGOTIATION_REVIEW,
             FINANCE_REVIEW,
             "finance.settlement:read",
             "finance.settlement:write",
@@ -161,6 +174,8 @@ DEFAULT_ROLES: tuple[RoleSpec, ...] = (
             "finance.settlement:read",
             "finance.order_adjustment:write",
             "finance.balance:write",
+            # 谈款：PRD 要求财务只读查看
+            NEGOTIATION_READ,
             # 结款页 API 实际使用的作用域（migration 029 同步授予现存库）
             "settlement:read",
             "settlement:write",
@@ -183,6 +198,7 @@ DEFAULT_ROLES: tuple[RoleSpec, ...] = (
             # 平台链接是运维职责：千牛ID 绑错款式会让整条销售数据算到别的商品上
             OPS_PLATFORM_LINK_READ,
             OPS_PLATFORM_LINK_WRITE,
+            NEGOTIATION_READ,
         ),
     ),
     RoleSpec(

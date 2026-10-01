@@ -20,6 +20,7 @@ import { StyleListPage } from "@/pages/StyleListPage";
 import { GoodsPage } from "@/pages/GoodsPage";
 import { BloggerListPage } from "@/pages/BloggerListPage";
 import { PromotionListPage } from "@/pages/PromotionListPage";
+import { NegotiationPage } from "@/pages/NegotiationPage";
 import { CostTablePage } from "@/pages/CostTablePage";
 import { SettlementListPage } from "@/pages/SettlementListPage";
 import { OrderAdjustmentPage } from "@/pages/OrderAdjustmentPage";
@@ -214,6 +215,8 @@ function AppRoutes() {
           />
         } />
         {/* 推广管理 */}
+        {/* 谈款审核：推广单的上游。权限靠 API 的 negotiation.*，PR 可写、主管可审 */}
+        <Route path="/negotiations" element={<NegotiationPage />} />
         <Route path="/work-progress" element={<WorkProgressPage />} />
         <Route path="/publish-target" element={<PublishTargetPage />} />
         <Route path="/publish-progress" element={<PublishProgressPage />} />
