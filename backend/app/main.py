@@ -58,6 +58,7 @@ from app.modules.finance.order_adjustment_api import router as order_adjustment_
 from app.modules.importer.api import router as import_router
 from app.modules.product.api import router as product_router
 from app.modules.product.dict_api import router as dict_router
+from app.modules.product.goods_api import router as goods_router
 from app.modules.product.platform_product_api import router as platform_product_router
 from app.modules.promotion.api import router as promotion_router
 from app.modules.report.advanced_api import router as report_advanced_router
@@ -461,6 +462,7 @@ def create_app() -> FastAPI:
     app.include_router(ai_router)  # U18 AI 决策建议 /api/ai
     app.include_router(design_router)  # U10a 设计制版 /api/designs
     app.include_router(platform_product_router)  # U10b 平台商品映射 /api/platform-products
+    app.include_router(goods_router)  # 商品 / 套装管理 /api/goods
     app.include_router(credential_router)  # U12 平台凭据 /api/credentials
     app.include_router(crawler_router)  # U13 采集 Worker /api/crawler/tasks
     app.include_router(worker_token_router)  # U13 Worker Token /api/crawler/worker-tokens

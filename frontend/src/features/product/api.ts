@@ -146,6 +146,116 @@ export async function listGoodsForStyle(styleId: string): Promise<GoodsOption[]>
   return resp.data;
 }
 
+/** 商品的成员款式。单品恰好 1 个，套装 ≥2 个。 */
+export interface GoodsStyleItem {
+  id: string;
+  style_id: string;
+  style_code: string | null;
+  style_name: string | null;
+  single_goods_cost: string | null;
+  sort_order: number;
+  is_active: boolean;
+}
+
+export interface GoodsStyleItemInput {
+  style_id: string;
+  single_goods_cost?: string | null;
+  sort_order?: number;
+}
+
+export interface Goods {
+  id: string;
+  goods_code: string;
+  goods_title: string;
+  category: string | null;
+  season: string | null;
+  brand_id: string | null;
+  brand_name: string | null;
+  main_image_key: string | null;
+  remark: string | null;
+  is_suit: boolean;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+  items: GoodsStyleItem[];
+  /** 成员成本之和，任一成员缺成本时仍按已填的求和。 */
+  total_cost: string | null;
+  cost_missing_count: number;
+  /** 挂在该商品上的平台链接数，0 表示还没上架到任何渠道。 */
+  link_count: number;
+}
+
+export interface GoodsPage {
+  items: Goods[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface GoodsFilters {
+  keyword?: string;
+  category?: string;
+  season?: string;
+  brand_id?: string;
+  is_suit?: boolean;
+  is_active?: boolean;
+  include_inactive?: boolean;
+  unlinked_only?: boolean;
+  page?: number;
+  page_size?: number;
+}
+
+export interface GoodsCreate {
+  goods_code: string;
+  goods_title: string;
+  category?: string | null;
+  season?: string | null;
+  brand_id?: string | null;
+  remark?: string | null;
+  items: GoodsStyleItemInput[];
+}
+
+/** goods_code 不在更新范围内：它是报表与链接归属的引用键，改了等于换了一个商品。 */
+export interface GoodsUpdate {
+  goods_title?: string;
+  category?: string | null;
+  season?: string | null;
+  brand_id?: string | null;
+  remark?: string | null;
+  is_active?: boolean;
+  /** 给了就整体替换成员列表；不给则不动成员。 */
+  items?: GoodsStyleItemInput[];
+}
+
+export async function listGoods(filters: GoodsFilters = {}): Promise<GoodsPage> {
+  const resp = await apiClient.get<GoodsPage>("/api/goods/", {
+    params: filters,
+  });
+  return resp.data;
+}
+
+export async function getGoods(goodsId: string): Promise<Goods> {
+  const resp = await apiClient.get<Goods>(`/api/goods/${goodsId}`);
+  return resp.data;
+}
+
+export async function createGoods(payload: GoodsCreate): Promise<Goods> {
+  const resp = await apiClient.post<Goods>("/api/goods/", payload);
+  return resp.data;
+}
+
+export async function updateGoods(
+  goodsId: string,
+  payload: GoodsUpdate
+): Promise<Goods> {
+  const resp = await apiClient.put<Goods>(`/api/goods/${goodsId}`, payload);
+  return resp.data;
+}
+
+export async function deleteGoods(goodsId: string): Promise<void> {
+  await apiClient.delete(`/api/goods/${goodsId}`);
+}
+
 // ---------------------------------------------------------------------------
 // PlatformProduct（平台链接，运维视图）
 // ---------------------------------------------------------------------------

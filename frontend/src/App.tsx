@@ -17,6 +17,7 @@ import { HomePage } from "@/pages/HomePage";
 import { ChangePasswordPage } from "@/pages/ChangePasswordPage";
 import { BrandListPage } from "@/pages/BrandListPage";
 import { StyleListPage } from "@/pages/StyleListPage";
+import { GoodsPage } from "@/pages/GoodsPage";
 import { BloggerListPage } from "@/pages/BloggerListPage";
 import { PromotionListPage } from "@/pages/PromotionListPage";
 import { CostTablePage } from "@/pages/CostTablePage";
@@ -145,6 +146,8 @@ function AppRoutes() {
       >
         <Route path="/" element={<HomePage />} />
         <Route path="/styles" element={<StyleListPage />} />
+        {/* 商品是报表归属主体。权限靠 API 的 product.goods，跟单可写、运营与设计只读 */}
+        <Route path="/goods" element={<GoodsPage />} />
         <Route path="/brands" element={<BrandListPage />} />
         <Route path="/bloggers" element={<BloggerListPage />} />
         <Route path="/promotions" element={<PromotionListPage />} />

@@ -39,6 +39,18 @@ PLATFORM_LINK_PERMISSIONS: list[tuple[str, str, str]] = [
     ("ops.platform_link", "write", "维护平台链接与商品归属、渠道（运维）"),
 ]
 
+# 商品 / 套装（goods_main）—— 产品主数据，与平台链接相反，刻意留在 product.* 下。
+# has() 的前缀通配只看第一段，于是跟单的 product.*:* 自然可写、
+# 运营与设计的 product.*:read 自然只读，正是这块该有的分工。
+SCOPE_GOODS = "product.goods"
+SCOPE_GOODS_READ = "product.goods:read"
+SCOPE_GOODS_WRITE = "product.goods:write"
+
+GOODS_PERMISSIONS: list[tuple[str, str, str]] = [
+    ("product.goods", "read", "查询商品 / 套装"),
+    ("product.goods", "write", "创建 / 编辑 / 删除商品与套装成员"),
+]
+
 # U17 套装/组合商品 scope
 SCOPE_BUNDLE_READ = "product.bundle:read"
 SCOPE_BUNDLE_WRITE = "product.bundle:write"
