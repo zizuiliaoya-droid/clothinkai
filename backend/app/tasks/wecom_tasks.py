@@ -56,7 +56,7 @@ async def _scan_and_dispatch() -> dict[str, Any]:
                         text("SELECT set_config('app.tenant_id', :t, true)"),
                         {"t": str(tid)},
                     )
-                    created = await WecomScanService(s).scan_tenant(today)
+                    created = await WecomScanService(s).scan_tenant(today, tenant_id=tid)
                     await s.commit()
         except Exception as exc:
             log.exception("wecom_scan_tenant_failed", extra={"tenant_id": str(tid)})

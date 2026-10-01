@@ -126,6 +126,7 @@ from app.modules.promotion.urge_calculator import (
     calculate_urge_status,
     get_today,
 )
+from app.modules.urge.enums import UrgeCloseReason
 
 log = logging.getLogger(__name__)
 
@@ -792,6 +793,9 @@ class PromotionService:
             log.exception("promotion_published_event_dispatch_failed")
             await self._log_event_dispatch_failure(published_event, exc, user, blocking=False)
 
+        # PRD 改动 2：博主确认发布 → 催发任务自动关闭。同事务，不另起一次提交。
+        await self._close_urge_task(promotion_id, user, UrgeCloseReason.PUBLISHED)
+
         await self._session.commit()
         return await self._to_response(updated, user)
 
@@ -842,6 +846,10 @@ class PromotionService:
             after={"publish_status": PublishStatus.CANCELLED.value},
             user_id=user.id,
         )
+
+        # 单据取消了就别再催了
+        await self._close_urge_task(promotion_id, user, UrgeCloseReason.CANCELLED)
+
         await self._session.commit()
         return await self._to_response(updated, user)
 
@@ -1263,6 +1271,32 @@ class PromotionService:
         if mode is CooperationMode.BARTER:
             return Decimal("0"), sample_cost
         return quote_amount, sample_cost
+
+    async def _close_urge_task(
+        self, promotion_id: UUID, user: User, reason: UrgeCloseReason
+    ) -> None:
+        """发布 / 取消时顺手关掉催发任务（PRD 改动 2）。
+
+        在 service 内部局部 import：``urge.service`` 用到 ``promotion.urge_calculator``，
+        模块级互引会绕回来。
+
+        **故意吞掉异常**：没有催发任务、任务已关闭、甚至催发模块出问题，都不该让
+        「发布推广单」这个主流程失败 —— 催发任务只是辅助视图。失败记一条 warning
+        由自动扫描的 ``find_stale_open_tasks`` 兜底收口。
+        """
+        from app.modules.urge.service import UrgeService
+
+        try:
+            await UrgeService(self._session).close_for_promotion(
+                promotion_id=promotion_id,
+                tenant_id=user.tenant_id,
+                reason=reason,
+            )
+        except Exception:
+            log.warning(
+                "urge_task_auto_close_failed",
+                extra={"promotion_id": str(promotion_id), "reason": reason.value},
+            )
 
     @staticmethod
     def _enforce_mode_costs(promotion: Promotion) -> None:

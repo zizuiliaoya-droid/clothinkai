@@ -158,6 +158,7 @@ ALLOWED_PURPOSES: frozenset[str] = frozenset(
         "settlement_proof",  # U05 付款截图（FB4）
         "promotion_payment_qr",  # 站外推广博主收款码（私有）
         "order_adjustment_payment_qr",  # 刷单/拍单博主收款码（私有）
+        "urge_screenshot",  # 催发留痕的聊天截图（私有，PRD V1.4 改动 2）
     }
 )
 

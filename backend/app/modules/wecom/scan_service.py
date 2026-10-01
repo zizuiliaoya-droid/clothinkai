@@ -13,6 +13,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.promotion.repository import PromotionRepository
+from app.modules.urge.service import UrgeService
 from app.modules.wecom.domain import build_render_ctx, is_important, render_template
 from app.modules.wecom.enums import NotificationType
 from app.modules.wecom.models import WecomMessage
@@ -23,9 +24,6 @@ from app.modules.wecom.repository import (
 )
 from app.modules.wecom.template_service import MessageTemplateService
 
-_URGE_DAYS = 10
-_IMPORTANT_DAYS = 3
-
 
 class WecomScanService:
     def __init__(self, session: AsyncSession) -> None:
@@ -35,9 +33,26 @@ class WecomScanService:
         self._notify = NotificationService(session)
         self._templates = MessageTemplateService(session)
 
-    async def scan_tenant(self, today: date) -> list[UUID]:
+    async def scan_tenant(self, today: date, *, tenant_id: UUID | None = None) -> list[UUID]:
+        """扫描并建企微催发消息。
+
+        阈值从 ``urge_config`` 读（PRD 改动 2「阈值后台可配」）。原来这里有一份
+        ``_URGE_DAYS = 10 / _IMPORTANT_DAYS = 3``，和
+        ``promotion/legacy_settings.py`` 里的同名常量各写一遍 —— 双份真相，
+        谁改一边就不一致。现在两边都读同一张配置表。
+
+        ``tenant_id`` 可选只为兼容既有调用：取不到就回落默认阈值，行为与改造前一致。
+        """
+        cfg = (
+            await UrgeService(self._s).get_effective_config(tenant_id)
+            if tenant_id is not None
+            else {"urge_threshold_days": 10, "important_threshold_days": 3}
+        )
+        urge_days = cfg["urge_threshold_days"]
+        important_days = cfg["important_threshold_days"]
+
         promos = await PromotionRepository(self._s).find_urge_candidates(
-            today=today, urge_days=_URGE_DAYS, important_days=_IMPORTANT_DAYS
+            today=today, urge_days=urge_days, important_days=important_days
         )
         groups: dict[tuple, list] = defaultdict(list)
         for row in promos:
@@ -67,8 +82,8 @@ class WecomScanService:
                     scheduled_publish_date=it["scheduled_publish_date"],
                     today=today,
                     publish_status=it["publish_status"],
-                    urge_days=_URGE_DAYS,
-                    important_days=_IMPORTANT_DAYS,
+                    urge_days=urge_days,
+                    important_days=important_days,
                 )
                 for it in items
             )

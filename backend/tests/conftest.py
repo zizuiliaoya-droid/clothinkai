@@ -715,6 +715,7 @@ import app.modules.negotiation.models  # noqa: E402  (谈款审核)
 import app.modules.product.goods_models  # noqa: E402  (goods_main/goods_style_item)
 import app.modules.report.user_preference_models  # noqa: E402  (U17 user_preference)
 import app.modules.report.work_progress_models  # noqa: E402  (U14 target_planning/store_daily)
+import app.modules.urge.models  # noqa: E402  (催发任务 urge_config/task/record)
 import app.modules.wecom.alert_models  # noqa: E402  (U15 wecom_alert_config/log)
 import app.modules.wecom.models  # noqa: F401, E402  (U07 wecom 5 表)
 

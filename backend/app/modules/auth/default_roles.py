@@ -63,6 +63,18 @@ OPS_PLATFORM_LINK_WRITE = "ops.platform_link:write"
 NEGOTIATION_READ = "negotiation:read"
 NEGOTIATION_WRITE = "negotiation:write"
 NEGOTIATION_REVIEW = "negotiation.review:approve"
+# 催发任务（PRD 改动 2）。这里两个一级域的分法是故意的：
+#
+# promotion.urge:* 挂在 promotion 下**正是想要的** —— 催发是 PR 的日常工作，
+# PR 的 promotion.*:* 自动覆盖，运营的 promotion.*:read 自动拿到只读，
+# 所以 pr / pr_manager / operations 都不需要显式授权。
+#
+# urge_config:* 必须独立 —— 叫 promotion.urge_config:write 的话 PR 会连
+# 「催过 3 次提示主管」这个阈值一起改掉。改阈值是管理层的事。
+URGE_READ = "promotion.urge:read"
+URGE_WRITE = "promotion.urge:write"
+URGE_CONFIG_READ = "urge_config:read"
+URGE_CONFIG_WRITE = "urge_config:write"
 
 
 # ---------------------------------------------------------------------------
@@ -148,6 +160,9 @@ DEFAULT_ROLES: tuple[RoleSpec, ...] = (
             NEGOTIATION_READ,
             NEGOTIATION_WRITE,
             NEGOTIATION_REVIEW,
+            # 催发任务本身由 promotion.*:* 覆盖；阈值配置是独立域，要显式给
+            URGE_CONFIG_READ,
+            URGE_CONFIG_WRITE,
             FINANCE_REVIEW,
             "finance.settlement:read",
             "finance.settlement:write",
@@ -176,6 +191,8 @@ DEFAULT_ROLES: tuple[RoleSpec, ...] = (
             "finance.balance:write",
             # 谈款：PRD 要求财务只读查看
             NEGOTIATION_READ,
+            # 催发进度只读：财务要知道一单为什么迟迟没发出来
+            URGE_READ,
             # 结款页 API 实际使用的作用域（migration 029 同步授予现存库）
             "settlement:read",
             "settlement:write",

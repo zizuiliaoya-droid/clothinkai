@@ -67,6 +67,7 @@ from app.modules.report.api import router as report_router
 from app.modules.report.bi_api import router as bi_router
 from app.modules.report.export_api import router as report_export_router
 from app.modules.report.preference_api import router as preference_router
+from app.modules.urge.api import router as urge_router
 from app.modules.wecom.alert_api import router as wecom_alert_router
 from app.modules.wecom.api import router as wecom_router
 from app.modules.wecom.callback_api import router as wecom_callback_router
@@ -465,6 +466,7 @@ def create_app() -> FastAPI:
     app.include_router(platform_product_router)  # U10b 平台商品映射 /api/platform-products
     app.include_router(goods_router)  # 商品 / 套装管理 /api/goods
     app.include_router(negotiation_router)  # 谈款审核 /api/negotiations
+    app.include_router(urge_router)  # 催发任务 /api/urge
     app.include_router(credential_router)  # U12 平台凭据 /api/credentials
     app.include_router(crawler_router)  # U13 采集 Worker /api/crawler/tasks
     app.include_router(worker_token_router)  # U13 Worker Token /api/crawler/worker-tokens

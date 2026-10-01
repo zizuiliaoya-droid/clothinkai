@@ -80,19 +80,81 @@ PRD 模块一，之前零实现（`谈款` / `negotiation` 全库 0 命中）。
 未做（挪走）：
 - **hover 卡的「当时 ROI」**。博主维度 ROI 系统里从来没定义过 —— 现有 ROI 全是款式/商品维度；而且要先定「发布后多少天内算这次合作的效果」这个窗口，否则退款晚到会让历史数字自己变。先给已有口径的单赞成本（CPL）+ 点赞数，同样能看出这个博主推得怎么样。窗口口径定了之后再加快照字段（已决定走快照而非实时回算）
 
-## 批次 4：催发任务 + 复盘（约 4 人日）
+## 批次 4a：催发任务 ✅ 已完成（migration 049）
 
-- 催发任务子模块 ← PRD 改动 2
-  - 手动随时发起（单条 + 按款式批量）
-  - 自动按临期触发（距预定发布日 ≤ 5 天未发布，阈值后台可配）
-  - 每次催发留痕：截图 + 时间戳 + 备注，一单多次，时间线倒序
-  - 博主确认发布 → 任务自动关闭
-  - 超过 N 次（默认 3，后台可配）提示主管考虑召回/转取消
-  - 主管看板：本周已催发 N / 待催发 M / 超时未回 K
+原规划把催发 + 复盘估成一批 4 人日。实际调研后拆开了，两个原因：
+
+1. **原规划说「催发任务子模块」是新建，这不准确** —— U07 早就有一条「每天 09:00 扫描 →
+   企微群发」的链路（`wecom/scan_service.py` + `urge_calculator.py` + `wecom_message` 表）。
+2. **但那条链路在生产上从未产生过一条记录**：`wecom_config` 0 行、`wecom_contact` 0 行、
+   `wecom_message` 0 行 —— 企微没配置，Beat 每天空转（租户列表为空直接返回）。
+
+所以催发任务**刻意不建在 `wecom_message` 之上**：企微是通知方式之一，任务本身要能脱离它
+成立。另外 `wecom_message` 是按 (blogger, pr) 聚合的、一条覆盖多个推广单，而 PRD 的
+「博主确认发布 → 任务自动关闭」「超过 N 次提示主管」都是单据维度语义，塞不进聚合消息。
+
+三张新表：
+- `urge_config`（单租户单行）：临期天数 / 提示次数 / 超时上限 / 两个 urge_status 标签阈值 /
+  自动开关。顺便**收编了 `legacy_settings.URGE_THRESHOLD_DAYS` 与
+  `IMPORTANT_THRESHOLD_DAYS`** —— 这两个值在 `wecom/scan_service.py` 还被重复定义了一遍
+  （`_URGE_DAYS` / `_IMPORTANT_DAYS`），双份真相谁改一边就不一致
+- `urge_task`（一单一任务）：`UNIQUE(tenant_id, promotion_id)` 是自动扫描的幂等基石，
+  走 `ON CONFLICT DO NOTHING` 而不是 `wecom/scan_service` 那种 SELECT-then-INSERT
+  （后者真并发会双发）
+- `urge_record`（一任务多条留痕）：截图 + 时间戳 + 备注，永久保留无 is_active
+
+**`max_overdue_days`（默认 30）是防炸的，不是 PRD 要求的。** `find_urge_candidates` 把
+urge_status='超时' 也算候选，而生产有 5134 条历史单的排期在半年前（diff -113 ~ -184 天）。
+不设下界的话自动扫描第一次跑就建 5134 个任务，之后天天催。这些陈旧单仍可手动催。
+
+**阈值从旧的 10 天统一到 PRD 的 5 天，对现有数据影响 0 条** —— 生产 5151 条有排期的单，
+diff 只有 +90（17 条）和一堆负数，没有任何一条落在 0~90 之间。
+
+其余实现要点：
+- 自动扫描当天只计一次（`last_auto_urged_on IS DISTINCT FROM :today` 单语句原子）；
+  手动催不受当日限制
+- 新增 Beat 任务 `urge-task-scan`，00:30 UTC = 08:30 北京，排在企微投递（09:00 UTC）之前；
+  **租户列表取自 `tenant` 而不是 `wecom_config`**，否则又跟着企微一起空转
+- 扫描顺手收口陈旧任务（单据已发布/取消但任务还开着）—— 历史数据与将来漏调用的兜底
+- 发布 / 取消时同事务关任务，异常被吞掉只记 warning：催发任务是辅助视图，不该让
+  「发布推广单」这个主流程失败
+- 「超过 N 次」由服务端算成 `over_limit` 返回，不让前端拿阈值自己比（阈值可配，
+  前端各处比一遍迟早有地方忘了改）
+- `attachment.ALLOWED_PURPOSES` 加 `urge_screenshot`；截图走后端代传 + 失败补偿删除
+  R2 对象，与收款码同一套骨架
+- 前端 `/urge-tasks`：看板四张卡 + 任务列表 + 时间线抽屉 + 阈值配置弹窗 + 按款式批量；
+  推广管理的操作菜单加「催发」快捷入口
+
+权限分两个一级域，这是故意的：
+- `promotion.urge:read/write` 挂在 promotion 下**正是想要的** —— 催发是 PR 日常工作，
+  PR 的 `promotion.*:*` 自动覆盖，运营的 `promotion.*:read` 自动拿到只读，
+  仓库的 `promotion:read` + `promotion.warehouse:write` 两条都匹配不上所以看不到
+- `urge_config:read/write` **必须独立** —— 叫 `promotion.urge_config:write` 的话
+  PR 能自己把「催过 3 次提示主管」的阈值改成 999
+
+## 批次 4b：复盘 + 品牌词截图 + 单据时间线（约 4 人日）
+
 - 复盘环节 ← PRD 改动 4
   - 已结款 → 录 7 天数据 → **待复盘** → PR 手输复盘文字 → 主管确认 → 已完成
   - 复盘文字永久写入博主档案，跨单据沉淀，hover 卡按时间倒序展示全部历史复盘
   - 不拆结构化字段，就是一个多行文本框
+  - 调研结论（影响设计）：
+    - `settlement_status='已付款'` 是**终态**，没有现成后续状态可挂
+    - **新开一个独立状态字段（第 4 个并行状态机）比扩 `settlement_status` 干净** ——
+      扩进去的话所有按 `settlement_status='已付款'` 过滤的查询（索引、汇总、finance 列表）
+      都会漏掉进入「待复盘」的单子
+    - **置换单根本没有 settlement 行**（approve_barter 不发 SettlementRequested），
+      所以复盘触发点不能挂在 finance 侧，否则置换单永远进不了复盘
+    - 7 天数据目前只有 `like_count` 一个 typed 列，阅读/收藏/评论都在 `source_extra`
+      JSONB 里无校验；也**没有「录入完成」标记字段**。触发点建议照 `set_return_waybill`
+      的模式新开 `POST /promotions/{id}/metrics`，指标录入与状态推进同事务
+    - 复盘文字**建子表**（照 `wecom_message` / `negotiation` 范式），不追加 JSONB ——
+      全仓 JSONB 字段都是单次覆盖的快照，没有一处是 append 数组
+- 品牌词评论截图提交发布审核时必传（从批次 2b 挪来）
+  - 调研纠正：仓库里**不存在**「推广单发布截图」也不存在「品牌词评论截图」，
+    现有图片上传只有 4 处（款式主图、推广收款码、拍单/刷单收款码、结算付款截图）。
+    所以这是从零建，不是「复用已有附件流程」
+- 单据时间线表（从批次 2a 挪来）：做金额级回溯，带权限，不放宽 audit 脱敏
 
 ## 批次 5：中间汇总表 + 投产/工作进度/BI（约 8 人日，最大一块）
 
@@ -130,6 +192,9 @@ PRD 模块四、五、六。5 张中间汇总表目前**全部不存在**，报�
 - **`UPDATE ... FROM LATERAL` 引用不到 UPDATE 的目标表** → 用相关子查询。
 - **类里有名为 `list` 的方法时，返回注解必须写 `builtins.list`**，否则会被解析成那个方法，类型检查静默失效。
 - **模块级 `pytestmark = [..., pytest.mark.asyncio]` 会误伤同步测试** → 纯规则测试放 `tests/unit/`。
+- **同一个绑定参数在一条语句里出现两次时，`::` 紧跟参数的那一处不会被替换**，留下字面量 `:today` 直接语法错误。`text()` 里一律写 `CAST(:x AS date)`。这和 046/047 的 `jsonb_build_object` 是同一个坑的两种表现，不限于那个函数。
+- **`text("SELECT * FROM t").columns(*Model.__table__.columns)` 配 `scalar_one_or_none()` 返回的是第一列（id）而不是实体**，静默拿到一个 UUID，直到访问属性才炸。要取 ORM 实体就用 `select(Model)`。
+- **`ruff format --check` 在 CI 里是独立一步**（`ruff check` 过了不代表 format 过），提交前要跑 `ruff format`。
 
 ## 待业务确认
 
