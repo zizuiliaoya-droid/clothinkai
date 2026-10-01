@@ -1,4 +1,4 @@
-"""BI/导出 API 契约及 bundle 公开路由下线测试。"""
+"""BI / 报表导出 API 契约测试。"""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from openpyxl import load_workbook
 
 @pytest.mark.api
 @pytest.mark.asyncio
-class TestBundleExportApiContract:
+class TestReportExportApiContract:
     async def test_bi_dashboard_requires_auth(self) -> None:
         from app.main import app
 
@@ -30,14 +30,13 @@ class TestBundleExportApiContract:
             resp = await ac.get("/api/reports/production/export")
         assert resp.status_code == 401
 
-    async def test_openapi_hides_bundle_and_exposes_bi_export(self) -> None:
+    async def test_openapi_exposes_bi_and_export(self) -> None:
         from app.main import app
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.get("/api/openapi.json")
         assert resp.status_code == 200
         paths = resp.json().get("paths", {})
-        assert not any(path.startswith("/api/bundles") for path in paths)
         assert "/api/reports/bi" in paths
         assert "/api/reports/bi/layout" in paths
         assert "/api/reports/{report_type}/export" in paths
