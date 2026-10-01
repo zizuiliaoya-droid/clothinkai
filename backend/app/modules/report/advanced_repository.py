@@ -25,6 +25,67 @@ _URGE_DAYS = 10
 _IMPORTANT_DAYS = 3
 
 
+# 千牛日报 → 商品 的映射，物化成 CTE。
+#
+# 这段逻辑原来直接写在 ``LEFT JOIN qianniu_daily ON (...)`` 的条件里，于是
+# PostgreSQL 对**每个 (商品, 日报) 组合**都要跑一遍里面的 EXISTS / NOT EXISTS /
+# COUNT(DISTINCT)。生产实测：264 个商品 × 310 行日报 = 81,840 次，
+# `Rows Removed by Join Filter: 81550`、`Buffers: shared hit=237381`，
+# 整条投产 SQL 要 1848ms —— 处理 310 行数据。
+#
+# 提成 CTE 之后映射只算一次（日报行数量级），主查询退化成等值 JOIN。
+#
+# 口径与原来逐字对应，两条分支：
+# 1. 正路：platform_product 里建了千牛链接并绑定了商品
+# 2. 兜底：链接没建，但款式上手填了千牛ID。护栏是「这个千牛ID 只能落在一个商品」
+#    —— 多个款式共用一条链接正是套装的形态，所以按商品数而不是款式数去重。
+#    生产上这条分支只覆盖 20 行日报（``style.qianniu_product_id`` 非空仅 2 条），
+#    却因为写在 JOIN 条件里拖掉了整条查询 67% 的时间。
+_QIANNIU_GOODS_LINK_CTE = """
+qn_link AS (
+    SELECT q.id AS qid, pp.goods_main_id AS goods_id
+    FROM qianniu_daily q
+    JOIN platform_product pp
+      ON pp.tenant_id = q.tenant_id
+     AND pp.platform = '千牛'
+     AND pp.goods_main_id IS NOT NULL
+     AND (
+       (q.platform_product_id IS NOT NULL AND pp.id = q.platform_product_id)
+       OR (q.platform_product_id IS NULL AND pp.platform_id = q.platform_id_snapshot)
+     )
+    WHERE q.tenant_id = :tenant_id AND q.date BETWEEN :date_from AND :date_to
+
+    UNION
+
+    SELECT q.id AS qid, legacy.goods_main_id
+    FROM qianniu_daily q
+    JOIN (
+      -- 按千牛ID 预聚合：它落在几个商品上、落在哪个。只有唯一归属才认
+      SELECT s.tenant_id,
+             s.qianniu_product_id AS pid,
+             (array_agg(DISTINCT gi.goods_main_id))[1] AS goods_main_id,
+             COUNT(DISTINCT gi.goods_main_id) AS goods_cnt
+      FROM style s
+      JOIN goods_style_item gi ON gi.style_id = s.id AND gi.is_active = true
+      WHERE s.is_deleted = false AND s.qianniu_product_id IS NOT NULL
+      GROUP BY s.tenant_id, s.qianniu_product_id
+    ) legacy
+      ON legacy.tenant_id = q.tenant_id
+     AND legacy.pid = q.platform_id_snapshot
+     AND legacy.goods_cnt = 1
+    WHERE q.tenant_id = :tenant_id
+      AND q.date BETWEEN :date_from AND :date_to
+      AND q.platform_product_id IS NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM platform_product pp2
+        WHERE pp2.tenant_id = q.tenant_id
+          AND pp2.platform = '千牛'
+          AND pp2.platform_id = q.platform_id_snapshot
+      )
+)
+"""
+
+
 class WorkProgressRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._s = session
@@ -162,7 +223,7 @@ class ProductionRepository:
         seasons: Sequence[str] | None = None,
         categories: Sequence[str] | None = None,
     ) -> list[Mapping[str, Any]]:
-        """按商品/套装聚合；EXISTS/LATERAL 保证每条日报只映射一次。
+        """按商品/套装聚合；``qn_link`` CTE 保证每条日报只映射一次。
 
         对齐 PRD V1.4 第 3 章：报表主体是「商品」而不是「款式」。套装（多个款式共用
         一条销售链接）合并成一行，销售额只算一次；套装的站外推广费与刷单剔除按成员
@@ -200,6 +261,7 @@ class ProductionRepository:
         category_clause = "AND g.category = ANY(:categories)" if categories else ""
         sql = text(
             f"""
+            WITH {_QIANNIU_GOODS_LINK_CTE}
             SELECT
               g.id AS goods_id, g.goods_code AS goods_code,
               g.goods_title AS goods_title, g.is_suit AS is_suit,
@@ -241,51 +303,11 @@ class ProductionRepository:
               COALESCE(MAX(promo.promo_cost), 0) AS promo_cost,
               COALESCE(MAX(ad.ad_spend), 0) AS ad_spend
             FROM goods_main g
-            LEFT JOIN qianniu_daily q
-              ON q.tenant_id = g.tenant_id
-              AND q.date BETWEEN :date_from AND :date_to
-              AND (
-                EXISTS (
-                  SELECT 1 FROM platform_product mapped_q
-                  WHERE mapped_q.tenant_id = q.tenant_id
-                    AND mapped_q.goods_main_id = g.id
-                    AND mapped_q.platform = '千牛'
-                    AND (
-                      (q.platform_product_id IS NOT NULL
-                       AND mapped_q.id = q.platform_product_id)
-                      OR (q.platform_product_id IS NULL
-                          AND mapped_q.platform_id = q.platform_id_snapshot)
-                    )
-                )
-                OR (
-                  -- 兜底：链接没建，但款式上手填了千牛ID。
-                  -- 护栏从「同一千牛ID 只能绑一个款式」放宽成「只能落在一个商品」——
-                  -- 多个款式共用一条链接正是套装的形态，以前会被挡掉，现在能正常合并。
-                  q.platform_product_id IS NULL
-                  AND NOT EXISTS (
-                    SELECT 1 FROM platform_product any_q
-                    WHERE any_q.tenant_id = q.tenant_id
-                      AND any_q.platform = '千牛'
-                      AND any_q.platform_id = q.platform_id_snapshot
-                  )
-                  AND EXISTS (
-                    SELECT 1 FROM goods_style_item li
-                    JOIN style legacy_s ON legacy_s.id = li.style_id
-                    WHERE li.goods_main_id = g.id AND li.is_active = true
-                      AND legacy_s.is_deleted = false
-                      AND legacy_s.qianniu_product_id = q.platform_id_snapshot
-                  )
-                  AND (
-                    SELECT COUNT(DISTINCT li2.goods_main_id)
-                    FROM style legacy_s2
-                    JOIN goods_style_item li2
-                      ON li2.style_id = legacy_s2.id AND li2.is_active = true
-                    WHERE legacy_s2.tenant_id = q.tenant_id
-                      AND legacy_s2.is_deleted = false
-                      AND legacy_s2.qianniu_product_id = q.platform_id_snapshot
-                  ) = 1
-                )
-              )
+            -- 映射走 qn_link CTE（见 _QIANNIU_GOODS_LINK_CTE），这里只剩等值 JOIN。
+            -- 以前这两行是一大段 EXISTS/NOT EXISTS/COUNT(DISTINCT) 写在 JOIN 条件里，
+            -- 对每个 (商品, 日报) 组合各算一遍，310 行数据要 1848ms。
+            LEFT JOIN qn_link ON qn_link.goods_id = g.id
+            LEFT JOIN qianniu_daily q ON q.id = qn_link.qid
             LEFT JOIN (
               SELECT mapped_a.goods_main_id, SUM(a.cost) AS ad_spend
               FROM ad_daily a
