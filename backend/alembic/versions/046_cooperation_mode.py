@@ -133,12 +133,16 @@ def upgrade() -> None:
 def downgrade() -> None:
     bind = op.get_bind()
 
-    # 把 typed 值写回 JSONB，再删列，保证回滚后前端仍能从 source_extra 读到
+    # 把 typed 值写回 JSONB，再删列，保证回滚后前端仍能从 source_extra 读到。
+    #
+    # :key 必须显式 CAST 成 text：jsonb_build_object 的入参声明是 "any"，
+    # PostgreSQL 推不出绑定参数的类型，会抛 IndeterminateDatatypeError。
     bind.execute(
         sa.text(
             """
             UPDATE promotion
-            SET source_extra = source_extra || jsonb_build_object(:key, cooperation_mode)
+            SET source_extra = source_extra
+                || jsonb_build_object(CAST(:key AS text), cooperation_mode)
             WHERE cooperation_mode IS NOT NULL
             """
         ),

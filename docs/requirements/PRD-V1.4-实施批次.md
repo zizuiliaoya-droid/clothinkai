@@ -113,6 +113,18 @@ PRD 模块四、五、六。5 张中间汇总表目前**全部不存在**，报�
 - 登录 IP 白名单 ← PRD 改动 7（白名单后台可配，失败写安全日志含 IP/时间/账号）
   - **需要防自锁**：配错白名单会把所有人关在外面，要留一个紧急通道（例如 platform_admin 豁免或环境变量开关）
 
+## 踩过的坑（避免重复）
+
+写 migration 与模型时反复撞到的几处，记下来省得再花时间：
+
+- **`jsonb_build_object(:key, col)` 会抛 `IndeterminateDatatypeError`**。该函数入参声明是 `any`，PostgreSQL 推不出绑定参数的类型。必须写 `jsonb_build_object(CAST(:key AS text), col)`。046/047 的 downgrade 都栽在这里，是跑了一次真实 `alembic downgrade` 才发现的 —— 光看代码看不出来。
+- **约束名会被命名约定套前缀**。`op.create_check_constraint("ck_promotion_xxx", ...)` 落库后实际叫 `ck_promotion_ck_promotion_xxx`。`op.drop_constraint` 用原名能对上（alembic 会套同样的约定），但按原名查 `pg_constraint` 查不到，验证脚本要注意。
+- **数据库生成列在 async session 下会抛 `MissingGreenlet`**。SQLAlchemy 默认把 `Computed` 列当「稍后再取」，首次访问补发一条隐式 SELECT。要给模型加 `__mapper_args__ = {"eager_defaults": True}` 让 INSERT 带 RETURNING。
+- **`INSERT ... SELECT ... WHERE NOT EXISTS` 同参数在两处会被推断成不同类型** → `AmbiguousParameterError`。改用 `ON CONFLICT DO NOTHING`。
+- **`UPDATE ... FROM LATERAL` 引用不到 UPDATE 的目标表** → 用相关子查询。
+- **类里有名为 `list` 的方法时，返回注解必须写 `builtins.list`**，否则会被解析成那个方法，类型检查静默失效。
+- **模块级 `pytestmark = [..., pytest.mark.asyncio]` 会误伤同步测试** → 纯规则测试放 `tests/unit/`。
+
 ## 待业务确认
 
 这些挡在实施前面，需要业务方给口径：
