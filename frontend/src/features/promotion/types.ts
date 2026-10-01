@@ -65,6 +65,8 @@ export interface Promotion {
   return_shipping_fee: string | null; // 敏感
   /** 站外推广成本 = 博主服务费 + 样品成本 + 寄回运费。后端生成列，只读。敏感。 */
   total_promo_cost: string | null;
+  /** 博主寄回衣服单号。寄拍模式没有它审核通不过。 */
+  return_waybill: string | null;
   // 业务字段
   platform: string;
   cooperation_date: string;
@@ -85,6 +87,8 @@ export interface Promotion {
   reviewed_at: string | null;
   review_action: string | null;
   review_reason: string | null;
+  /** 驳回原因分类：延迟发文 / 流量差补发 / 衣服未寄回。 */
+  review_reason_category: string | null;
   // 通用
   is_active: boolean;
   created_at: string;
@@ -161,9 +165,15 @@ export interface PromotionRecallStartRequest {
   recall_reason?: string | null;
 }
 
+/** 驳回原因分类，三选一（PRD 改动 5）。 */
+export type RejectReasonCategory = "延迟发文" | "流量差补发" | "衣服未寄回";
+
 export interface PromotionReviewRequest {
   action: ReviewAction;
+  /** 驳回时必填，否则后端 422。 */
   review_reason?: string | null;
+  /** 驳回时必填，三选一。审核通过时忽略。 */
+  review_reason_category?: RejectReasonCategory | null;
 }
 
 export interface PromotionPage {

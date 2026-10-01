@@ -41,6 +41,18 @@ class ReviewAction(str, Enum):
     REJECT = "reject"
 
 
+class RejectReasonCategory(str, Enum):
+    """主管驳回原因分类（PRD V1.4 改动 5：三选一必填）。
+
+    自由文本说不清「为什么这单被打回」，分类之后才能统计哪类问题最多、
+    以及按原因决定后续动作（衣服未寄回要催寄回，流量差补发要重新排期）。
+    """
+
+    LATE_PUBLISH = "延迟发文"
+    TRAFFIC_REDO = "流量差补发"
+    NOT_RETURNED = "衣服未寄回"
+
+
 class CooperationMode(str, Enum):
     """合作模式（PRD V1.4 模块二）。单据生成后不可修改。
 

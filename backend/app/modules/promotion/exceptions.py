@@ -117,6 +117,22 @@ class CooperationModeRequiredError(ValidationError):
     code = "COOPERATION_MODE_REQUIRED"
 
 
+class ReturnWaybillRequiredError(ValidationError):
+    """寄拍模式审核通过前必须上传博主寄回衣服单号。
+
+    PRD 模块二硬约束：没有单号单据不流转到待财务付款，财务看不到、不能结款。
+    后端拦截，不能只靠前端控制。
+    """
+
+    code = "RETURN_WAYBILL_REQUIRED"
+
+
+class RejectReasonCategoryRequiredError(ValidationError):
+    """驳回时原因分类必填（PRD 改动 5：三选一）。"""
+
+    code = "REJECT_REASON_CATEGORY_REQUIRED"
+
+
 class SelfReviewForbiddenError(ValidationError):
     """禁止自审（reviewed_by != pr_id）。"""
 
@@ -161,6 +177,8 @@ __all__ = [
     "CooperationModeImmutableError",
     "CooperationModeRequiredError",
     "FieldPermissionDenied",  # re-exported from modules/product/exceptions
+    "RejectReasonCategoryRequiredError",
+    "ReturnWaybillRequiredError",
     "InvalidBloggerReferenceError",
     "InvalidPaymentQrAttachmentError",
     "InvalidSkuReferenceError",

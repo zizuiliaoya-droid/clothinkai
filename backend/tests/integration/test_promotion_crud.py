@@ -13,23 +13,34 @@ from decimal import Decimal
 from typing import Any
 
 import pytest
+from pydantic import ValidationError as PydanticValidationError
+from sqlalchemy import text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.tenancy import tenant_id_ctx
-from app.modules.promotion.enums import CooperationMode
+from app.modules.promotion.enums import (
+    CooperationMode,
+    RejectReasonCategory,
+    ReviewAction,
+)
 from app.modules.promotion.exceptions import (
     CooperationModeImmutableError,
     InvalidBloggerReferenceError,
     InvalidGoodsReferenceError,
     InvalidStyleReferenceError,
     PromotionNotFoundError,
+    ReturnWaybillRequiredError,
 )
 from app.modules.promotion.schemas import (
     PromotionCreate,
     PromotionListFilters,
+    PromotionPublishRequest,
+    PromotionReturnWaybillRequest,
+    PromotionReviewRequest,
     PromotionUpdate,
 )
 from app.modules.promotion.service import PromotionService
+from app.modules.promotion.urge_calculator import get_today
 
 
 @pytest.mark.integration
@@ -69,8 +80,10 @@ class TestCreatePromotion:
             assert response.settlement_status == "未核查"
             assert response.is_active is True
             # internal_code 格式：<前缀><yyMMdd><0001>
+            # 日期段跟「建单当天」走，不是请求里传的 cooperation_date（PRD 改动 5）
             assert response.internal_code.endswith("0001")
-            assert "260526" in response.internal_code
+            assert get_today().strftime("%y%m%d") in response.internal_code
+            assert response.cooperation_date == get_today()
         finally:
             tenant_id_ctx.reset(token)
 
@@ -480,13 +493,29 @@ class TestSequenceGeneration:
             blogger = await blogger_factory.blogger()
             svc = PromotionService(session)
 
+            # HTTP 建单的合作日期一律是当天（PRD 改动 5），没法再通过 service 造两个
+            # 不同日期的单。但「按日期分别计数」的逻辑仍然要守住 —— Excel 导入历史数据
+            # 走的就是带日期参数的那条路径。所以降到仓储层直接验。
+            seq_day1_first = await svc._repo.next_internal_sequence(
+                tenant_id=tenant_a.id, date_key=date(2026, 5, 26)
+            )
+            seq_day1_second = await svc._repo.next_internal_sequence(
+                tenant_id=tenant_a.id, date_key=date(2026, 5, 26)
+            )
+            seq_day2_first = await svc._repo.next_internal_sequence(
+                tenant_id=tenant_a.id, date_key=date(2026, 5, 27)
+            )
+            assert seq_day1_first == 1
+            assert seq_day1_second == 2
+            assert seq_day2_first == 1, "换一天应该重新从 1 开始"
+
+            # 同一天建两单则递增
             r1 = await svc.create_promotion(
                 PromotionCreate(
                     cooperation_mode=CooperationMode.GIFT,
                     style_id=style.id,
                     blogger_id=blogger.id,
                     platform="小红书",
-                    cooperation_date=date(2026, 5, 26),
                 ),
                 user,
             )
@@ -496,14 +525,11 @@ class TestSequenceGeneration:
                     style_id=style.id,
                     blogger_id=blogger.id,
                     platform="小红书",
-                    cooperation_date=date(2026, 5, 27),
                 ),
                 user,
             )
-            # 不同日期独立计数
-            assert r1.internal_code.endswith("0001")
-            assert r2.internal_code.endswith("0001")
-
+            assert r1.cooperation_date == r2.cooperation_date == get_today()
+            assert int(r2.internal_code[-4:]) == int(r1.internal_code[-4:]) + 1
         finally:
             tenant_id_ctx.reset(token)
 
@@ -1112,5 +1138,291 @@ class TestCooperationMode:
             )
             assert again.cost_snapshot == Decimal("60.00")
             assert again.total_promo_cost == Decimal("260.00")
+        finally:
+            tenant_id_ctx.reset(token)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+class TestThreeModeReviewFlow:
+    """审核通过后的三个出口（PRD V1.4 模块二）。
+
+    PRD 把这三条列为「后端必须分支判断，不可只靠前端」，所以每条都从 service 层验，
+    不走 HTTP —— 要证明的是绕过前端也挡得住。
+    """
+
+    @staticmethod
+    async def _published(
+        session: AsyncSession,
+        tenant: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        *,
+        mode: CooperationMode,
+        code: str,
+    ) -> tuple[Any, Any, Any]:
+        """建一条已发布、已推进到待核查的推广单，返回 (service, promotion, reviewer)。
+
+        注意要两个用户：建单的 PR 和审核的主管。自审会被 SelfReviewForbiddenError 挡掉。
+        """
+        pr_user = await factory.user(tenant, roles=[admin_role])
+        reviewer = await factory.user(tenant, roles=[admin_role])
+        style = await product_factory.style(style_code=code)
+        blogger = await blogger_factory.blogger(quote=Decimal("300.00"))
+        svc = PromotionService(session)
+        created = await svc.create_promotion(
+            PromotionCreate(
+                cooperation_mode=mode,
+                style_id=style.id,
+                blogger_id=blogger.id,
+                platform="小红书",
+            ),
+            pr_user,
+        )
+        published = await svc.publish(
+            created.id,
+            PromotionPublishRequest(
+                publish_url="https://www.xiaohongshu.com/explore/abc",
+                actual_publish_date=date(2026, 7, 20),
+            ),
+            pr_user,
+        )
+        assert published.settlement_status == "待核查"
+        return svc, published, reviewer
+
+    async def test_consignment_blocked_without_return_waybill(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+    ) -> None:
+        """寄拍没有寄回单号时审核通过被拒 —— 财务看不到单据就结不了款。"""
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            svc, promo, reviewer = await self._published(
+                session,
+                tenant_a,
+                factory,
+                admin_role,
+                product_factory,
+                blogger_factory,
+                mode=CooperationMode.CONSIGNMENT,
+                code="FLOW_CONSIGN",
+            )
+            with pytest.raises(ReturnWaybillRequiredError):
+                await svc.review(
+                    promo.id,
+                    PromotionReviewRequest(action=ReviewAction.APPROVE),
+                    reviewer,
+                )
+            # 状态没有被推进
+            still = await svc._repo.get_by_id(promo.id)
+            assert still is not None
+            assert still.settlement_status == "待核查"
+        finally:
+            tenant_id_ctx.reset(token)
+
+    async def test_consignment_passes_after_waybill_uploaded(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        cross_unit_event_bus: Any,
+    ) -> None:
+        """补上寄回单号后寄拍能过审并进入待财务付款。
+
+        需要 cross_unit_event_bus：走待付款的路径会发 SettlementRequested，
+        那是强一致事件，没有 listener 会直接抛错。
+        """
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            svc, promo, reviewer = await self._published(
+                session,
+                tenant_a,
+                factory,
+                admin_role,
+                product_factory,
+                blogger_factory,
+                mode=CooperationMode.CONSIGNMENT,
+                code="FLOW_CONSIGN_OK",
+            )
+            with_waybill = await svc.set_return_waybill(
+                promo.id,
+                PromotionReturnWaybillRequest(return_waybill="SF1234567890"),
+                reviewer,
+            )
+            assert with_waybill.return_waybill == "SF1234567890"
+
+            reviewed = await svc.review(
+                promo.id,
+                PromotionReviewRequest(action=ReviewAction.APPROVE),
+                reviewer,
+            )
+            assert reviewed.settlement_status == "待付款"
+        finally:
+            tenant_id_ctx.reset(token)
+
+    async def test_gift_goes_straight_to_pending_payment(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        cross_unit_event_bus: Any,
+    ) -> None:
+        """送拍不要寄回单号，审核通过直接待付款。"""
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            svc, promo, reviewer = await self._published(
+                session,
+                tenant_a,
+                factory,
+                admin_role,
+                product_factory,
+                blogger_factory,
+                mode=CooperationMode.GIFT,
+                code="FLOW_GIFT",
+            )
+            reviewed = await svc.review(
+                promo.id,
+                PromotionReviewRequest(action=ReviewAction.APPROVE),
+                reviewer,
+            )
+            assert reviewed.settlement_status == "待付款"
+            assert reviewed.return_waybill is None
+        finally:
+            tenant_id_ctx.reset(token)
+
+    async def test_barter_jumps_to_paid_without_settlement(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        cross_unit_event_bus: Any,
+    ) -> None:
+        """置换审核通过直接到已付款，且**不建结款单**。
+
+        PRD：置换没有博主服务费，跳过待财务付款、财务付款、PR 通知博主整套流程。
+        发 SettlementRequested 会让 finance 多出一张金额 0 的单子，所以这里连事件都不发。
+
+        刻意带上 cross_unit_event_bus：finance 的 listener 是注册好的，所以「没有结款单」
+        证明的是我们没发事件，而不是没人接。
+        """
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            svc, promo, reviewer = await self._published(
+                session,
+                tenant_a,
+                factory,
+                admin_role,
+                product_factory,
+                blogger_factory,
+                mode=CooperationMode.BARTER,
+                code="FLOW_BARTER",
+            )
+            reviewed = await svc.review(
+                promo.id,
+                PromotionReviewRequest(action=ReviewAction.APPROVE),
+                reviewer,
+            )
+            assert reviewed.settlement_status == "已付款"
+            # 置换的服务费本来就是 0
+            assert reviewed.quote_amount == Decimal("0.00")
+
+            settlements = (
+                await session.execute(
+                    sa_text("SELECT COUNT(*) FROM settlement WHERE promotion_id = :pid"),
+                    {"pid": promo.id},
+                )
+            ).scalar_one()
+            assert settlements == 0, "置换不应该产生结款单"
+        finally:
+            tenant_id_ctx.reset(token)
+
+    async def test_reject_requires_reason_category(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+    ) -> None:
+        """驳回必须选原因分类（PRD 改动 5 三选一），光给文字不够。"""
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            svc, promo, reviewer = await self._published(
+                session,
+                tenant_a,
+                factory,
+                admin_role,
+                product_factory,
+                blogger_factory,
+                mode=CooperationMode.GIFT,
+                code="FLOW_REJECT",
+            )
+            # schema 层就该挡住「只给文字不给分类」
+            with pytest.raises(PydanticValidationError):
+                PromotionReviewRequest(action=ReviewAction.REJECT, review_reason="笔记迟了一周")
+
+            rejected = await svc.review(
+                promo.id,
+                PromotionReviewRequest(
+                    action=ReviewAction.REJECT,
+                    review_reason="笔记迟了一周",
+                    review_reason_category=RejectReasonCategory.LATE_PUBLISH,
+                ),
+                reviewer,
+            )
+            assert rejected.settlement_status == "已驳回"
+            assert rejected.review_reason_category == "延迟发文"
+        finally:
+            tenant_id_ctx.reset(token)
+
+    async def test_cooperation_date_is_forced_to_today(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+    ) -> None:
+        """合作日期由服务端取当天，前端传的值不生效（PRD 改动 5）。
+
+        日期往前挑会改掉 internal_code 的日期段，也会让新单落进已经对过账的区间。
+        """
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            user = await factory.user(tenant_a, roles=[admin_role])
+            style = await product_factory.style(style_code="FLOW_DATE")
+            blogger = await blogger_factory.blogger(quote=Decimal("100.00"))
+            resp = await PromotionService(session).create_promotion(
+                PromotionCreate(
+                    cooperation_mode=CooperationMode.GIFT,
+                    style_id=style.id,
+                    blogger_id=blogger.id,
+                    platform="小红书",
+                    cooperation_date=date(2020, 1, 1),  # 前端硬塞一个旧日期
+                ),
+                user,
+            )
+            assert resp.cooperation_date == get_today()
+            assert resp.internal_code.endswith("0001") or resp.internal_code[-4:].isdigit()
+            # internal_code 的日期段跟着今天走
+            assert get_today().strftime("%y%m%d") in resp.internal_code
         finally:
             tenant_id_ctx.reset(token)

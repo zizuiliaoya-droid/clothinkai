@@ -120,6 +120,13 @@ class Promotion(TenantScopedModel):
     return_shipping_fee: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
     """寄回运费。召回流程里由 PR 录入；寄拍模式下它是唯一计入成本的那一项。"""
 
+    return_waybill: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    """博主寄回衣服单号。
+
+    寄拍模式的硬门槛：审核通过后没有这个单号就不允许流转到待财务付款
+    （PRD 模块二「不上传单号财务看不到单据，禁止结款」）。送拍与置换不校验。
+    """
+
     total_promo_cost: Mapped[Decimal] = mapped_column(
         Numeric(12, 2),
         Computed(
@@ -172,6 +179,8 @@ class Promotion(TenantScopedModel):
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     review_action: Mapped[str | None] = mapped_column(String(16), nullable=True)
     review_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    review_reason_category: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    """驳回原因分类：延迟发文 / 流量差补发 / 衣服未寄回（PRD 改动 5，驳回时必填）。"""
 
     # --- 通用 ---
     is_active: Mapped[bool] = mapped_column(nullable=False, server_default=text("true"))
@@ -266,6 +275,17 @@ class Promotion(TenantScopedModel):
         CheckConstraint(
             "return_shipping_fee IS NULL OR return_shipping_fee >= 0",
             name="ck_promotion_return_shipping_fee_nonneg",
+        ),
+        CheckConstraint(
+            "review_reason_category IS NULL OR review_reason_category IN "
+            "('延迟发文', '流量差补发', '衣服未寄回')",
+            name="ck_promotion_review_reason_category",
+        ),
+        Index(
+            "idx_promotion_return_waybill",
+            "tenant_id",
+            "return_waybill",
+            postgresql_where=text("return_waybill IS NOT NULL"),
         ),
         Index(
             "idx_promotion_cooperation_mode",

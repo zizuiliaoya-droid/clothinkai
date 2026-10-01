@@ -32,8 +32,12 @@ import {
   createPromotion,
   listPromotions,
   publishPromotion,
+  recallFailurePromotion,
+  recallSuccessPromotion,
   removePaymentQr,
   reviewPromotion,
+  setReturnWaybill,
+  startRecallPromotion,
   updatePromotion,
   uploadPaymentQrFile,
 } from "@/features/promotion/api";
@@ -41,6 +45,7 @@ import type {
   Promotion,
   PromotionCreate,
   PromotionListFilters,
+  RejectReasonCategory,
 } from "@/features/promotion/types";
 import {
   listStyles,
@@ -94,6 +99,27 @@ const cooperationModeColor: Record<string, string> = {
   置换: "purple",
 };
 
+const settlementColor: Record<string, string> = {
+  未核查: "default",
+  待核查: "gold",
+  待付款: "blue",
+  已付款: "green",
+  已驳回: "red",
+};
+
+const recallColor: Record<string, string> = {
+  召回中: "orange",
+  召回成功: "green",
+  召回失败: "red",
+};
+
+/** 驳回原因分类，三选一必填（PRD 改动 5）。 */
+const REJECT_CATEGORIES: RejectReasonCategory[] = [
+  "延迟发文",
+  "流量差补发",
+  "衣服未寄回",
+];
+
 const statusColor: Record<string, string> = {
   未发布: "default",
   已发布: "green",
@@ -127,6 +153,16 @@ export function PromotionListPage() {
   // 改归属：目标推广 + 它所属款式的商品候选
   const [goodsTarget, setGoodsTarget] = useState<Promotion | null>(null);
   const [goodsForm] = Form.useForm();
+  // 取消 / 驳回 / 寄回单号 / 召回：都要填东西，各自一个弹窗。
+  // 以前取消是硬编码「手动取消」直接提交，驳回则压根不传原因（后端必定 422）。
+  const [cancelTarget, setCancelTarget] = useState<Promotion | null>(null);
+  const [cancelForm] = Form.useForm();
+  const [rejectTarget, setRejectTarget] = useState<Promotion | null>(null);
+  const [rejectForm] = Form.useForm();
+  const [waybillTarget, setWaybillTarget] = useState<Promotion | null>(null);
+  const [waybillForm] = Form.useForm();
+  const [recallTarget, setRecallTarget] = useState<Promotion | null>(null);
+  const [recallForm] = Form.useForm();
   // §11：颜色及规格按货号联动——当前推广所属款式的 SKU 颜色+尺码组合
   const [colorSizeOptions, setColorSizeOptions] = useState<
     { label: string; value: string }[]
@@ -323,20 +359,90 @@ export function PromotionListPage() {
   }
 
   const cancelMutation = useMutation({
-    mutationFn: (id: string) =>
-      cancelPromotion(id, { cancel_reason: "手动取消" }),
+    mutationFn: ({ id, reason }: { id: string; reason: string }) =>
+      cancelPromotion(id, { cancel_reason: reason }),
     onSuccess: () => {
       message.success("已取消");
+      setCancelTarget(null);
+      cancelForm.resetFields();
       void qc.invalidateQueries({ queryKey: ["promotions"] });
     },
     onError: (err) => message.error(extractErrorMessage(err)),
   });
 
-  const reviewMutation = useMutation({
-    mutationFn: ({ id, action }: { id: string; action: "approve" | "reject" }) =>
-      reviewPromotion(id, { action }),
+  /** 审核通过。寄拍没有寄回单号时后端会拒，错误信息直接透出给操作人。 */
+  const approveMutation = useMutation({
+    mutationFn: (id: string) => reviewPromotion(id, { action: "approve" }),
+    onSuccess: (saved) => {
+      message.success(
+        saved.settlement_status === "已付款"
+          ? "审核通过。置换无需付款，已直接结清"
+          : "审核通过，已转待财务付款"
+      );
+      void qc.invalidateQueries({ queryKey: ["promotions"] });
+    },
+    onError: (err) => message.error(extractErrorMessage(err)),
+  });
+
+  /** 驳回必须带原因分类 + 文字说明，后端两者都校验。 */
+  const rejectMutation = useMutation({
+    mutationFn: ({
+      id,
+      category,
+      reason,
+    }: {
+      id: string;
+      category: RejectReasonCategory;
+      reason: string;
+    }) =>
+      reviewPromotion(id, {
+        action: "reject",
+        review_reason: reason,
+        review_reason_category: category,
+      }),
     onSuccess: () => {
-      message.success("审核完成");
+      message.success("已驳回");
+      setRejectTarget(null);
+      rejectForm.resetFields();
+      void qc.invalidateQueries({ queryKey: ["promotions"] });
+    },
+    onError: (err) => message.error(extractErrorMessage(err)),
+  });
+
+  const waybillMutation = useMutation({
+    mutationFn: ({ id, waybill }: { id: string; waybill: string }) =>
+      setReturnWaybill(id, waybill),
+    onSuccess: () => {
+      message.success("寄回单号已保存，现在可以提交审核了");
+      setWaybillTarget(null);
+      waybillForm.resetFields();
+      void qc.invalidateQueries({ queryKey: ["promotions"] });
+    },
+    onError: (err) => message.error(extractErrorMessage(err)),
+  });
+
+  const recallMutation = useMutation({
+    mutationFn: ({
+      id,
+      step,
+      reason,
+    }: {
+      id: string;
+      step: "start" | "success" | "failure";
+      reason?: string;
+    }) => {
+      if (step === "start") {
+        return startRecallPromotion(id, { recall_reason: reason ?? null });
+      }
+      if (step === "success") {
+        return recallSuccessPromotion(id);
+      }
+      return recallFailurePromotion(id);
+    },
+    onSuccess: () => {
+      message.success("召回状态已更新");
+      setRecallTarget(null);
+      recallForm.resetFields();
       void qc.invalidateQueries({ queryKey: ["promotions"] });
     },
     onError: (err) => message.error(extractErrorMessage(err)),
@@ -444,8 +550,44 @@ export function PromotionListPage() {
     {
       title: "结算状态",
       dataIndex: "settlement_status",
+      width: 110,
+      render: (v: string, row) => (
+        <Space size={4}>
+          <Tag color={settlementColor[v]}>{v}</Tag>
+          {row.review_reason_category && (
+            <Tooltip title={row.review_reason ?? undefined}>
+              <Tag color="volcano">{row.review_reason_category}</Tag>
+            </Tooltip>
+          )}
+        </Space>
+      ),
+    },
+    {
+      title: "召回",
+      dataIndex: "recall_status",
       width: 100,
-      render: (v: string) => <Tag>{v}</Tag>,
+      render: (v: string) =>
+        v === "未召回" ? (
+          <Typography.Text type="secondary">—</Typography.Text>
+        ) : (
+          <Tag color={recallColor[v]}>{v}</Tag>
+        ),
+    },
+    {
+      title: "寄回单号",
+      dataIndex: "return_waybill",
+      width: 140,
+      render: (v: string | null, row) => {
+        if (v) return <Typography.Text copyable>{v}</Typography.Text>;
+        if (row.cooperation_mode === "寄拍") {
+          return (
+            <Tooltip title="寄拍模式没有寄回单号无法通过审核">
+              <Tag color="orange">待填</Tag>
+            </Tooltip>
+          );
+        }
+        return "—";
+      },
     },
     ...SOURCE_FIELD_NAMES.map((f) => ({
       title: f,
@@ -482,20 +624,54 @@ export function PromotionListPage() {
             key: "cancel",
             label: "取消",
             disabled: record.publish_status !== "未发布",
-            onClick: () => cancelMutation.mutate(record.id),
+            onClick: () => {
+              setCancelTarget(record);
+              cancelForm.resetFields();
+            },
+          },
+          // 寄拍的审核门槛是寄回单号，所以单独给一个录入口，不用翻到「录入信息」里找
+          ...(record.cooperation_mode === "寄拍"
+            ? [
+                {
+                  key: "waybill",
+                  label: record.return_waybill ? "改寄回单号" : "填寄回单号",
+                  onClick: () => {
+                    setWaybillTarget(record);
+                    waybillForm.setFieldsValue({
+                      return_waybill: record.return_waybill ?? "",
+                    });
+                  },
+                },
+              ]
+            : []),
+          {
+            key: "recall",
+            label: "召回",
+            // 召回要求已发布或已取消（后端 BR-U04-24），召回成功是终态
+            disabled:
+              !["已发布", "已取消"].includes(record.publish_status) ||
+              record.recall_status === "召回成功",
+            onClick: () => {
+              setRecallTarget(record);
+              recallForm.resetFields();
+            },
           },
           {
             key: "approve",
             label: "审核通过",
-            onClick: () =>
-              reviewMutation.mutate({ id: record.id, action: "approve" }),
+            // 只有待核查的单据能审。以前没有这个门槛，点了必然 422
+            disabled: record.settlement_status !== "待核查",
+            onClick: () => approveMutation.mutate(record.id),
           },
           {
             key: "reject",
             label: "审核驳回",
             danger: true,
-            onClick: () =>
-              reviewMutation.mutate({ id: record.id, action: "reject" }),
+            disabled: record.settlement_status !== "待核查",
+            onClick: () => {
+              setRejectTarget(record);
+              rejectForm.resetFields();
+            },
           },
         ];
         return (
@@ -731,6 +907,203 @@ export function PromotionListPage() {
             </Typography.Text>
           )}
         </Form>
+      </Modal>
+
+      <Modal
+        title={cancelTarget ? `取消 · ${cancelTarget.internal_code}` : "取消推广"}
+        open={!!cancelTarget}
+        onCancel={() => setCancelTarget(null)}
+        onOk={() => cancelForm.submit()}
+        confirmLoading={cancelMutation.isPending}
+        okButtonProps={{ danger: true }}
+        okText="确认取消"
+        destroyOnHidden
+      >
+        <Form
+          form={cancelForm}
+          layout="vertical"
+          style={{ marginTop: 16 }}
+          onFinish={(v: { cancel_reason: string }) => {
+            if (!cancelTarget) return;
+            cancelMutation.mutate({
+              id: cancelTarget.id,
+              reason: v.cancel_reason,
+            });
+          }}
+        >
+          <Form.Item
+            name="cancel_reason"
+            label="取消原因"
+            rules={[{ required: true, message: "请填写取消原因" }]}
+            tooltip="取消是终态，不能撤回。原因会写入操作记录。"
+          >
+            <Input.TextArea rows={3} placeholder="如：博主档期冲突，不再合作" />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={rejectTarget ? `驳回 · ${rejectTarget.internal_code}` : "驳回"}
+        open={!!rejectTarget}
+        onCancel={() => setRejectTarget(null)}
+        onOk={() => rejectForm.submit()}
+        confirmLoading={rejectMutation.isPending}
+        okButtonProps={{ danger: true }}
+        okText="确认驳回"
+        destroyOnHidden
+      >
+        <Form
+          form={rejectForm}
+          layout="vertical"
+          style={{ marginTop: 16 }}
+          onFinish={(v: {
+            review_reason_category: RejectReasonCategory;
+            review_reason: string;
+          }) => {
+            if (!rejectTarget) return;
+            rejectMutation.mutate({
+              id: rejectTarget.id,
+              category: v.review_reason_category,
+              reason: v.review_reason,
+            });
+          }}
+        >
+          <Form.Item
+            name="review_reason_category"
+            label="驳回原因分类"
+            rules={[{ required: true, message: "请选择驳回原因分类" }]}
+            tooltip="分类用于统计哪类问题最多，也决定后续动作（衣服未寄回要催寄回，流量差补发要重新排期）。"
+          >
+            <Select
+              placeholder="三选一"
+              options={REJECT_CATEGORIES.map((c) => ({ label: c, value: c }))}
+            />
+          </Form.Item>
+          <Form.Item
+            name="review_reason"
+            label="说明"
+            rules={[{ required: true, message: "请填写驳回说明" }]}
+          >
+            <Input.TextArea rows={3} placeholder="具体说明，PR 会看到这段文字" />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={
+          waybillTarget
+            ? `博主寄回衣服单号 · ${waybillTarget.internal_code}`
+            : "博主寄回衣服单号"
+        }
+        open={!!waybillTarget}
+        onCancel={() => setWaybillTarget(null)}
+        onOk={() => waybillForm.submit()}
+        confirmLoading={waybillMutation.isPending}
+        destroyOnHidden
+      >
+        <Form
+          form={waybillForm}
+          layout="vertical"
+          style={{ marginTop: 16 }}
+          onFinish={(v: { return_waybill: string }) => {
+            if (!waybillTarget) return;
+            waybillMutation.mutate({
+              id: waybillTarget.id,
+              waybill: v.return_waybill,
+            });
+          }}
+        >
+          <Typography.Paragraph type="secondary">
+            寄拍模式下，没有这个单号审核通不过，财务也看不到单据。这是博主把衣服寄回来的
+            快递单号，不是寄给博主的那个。
+          </Typography.Paragraph>
+          <Form.Item
+            name="return_waybill"
+            label="寄回快递单号"
+            rules={[{ required: true, message: "请填写寄回单号" }]}
+          >
+            <Input placeholder="如 SF1234567890" allowClear />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={recallTarget ? `召回 · ${recallTarget.internal_code}` : "召回"}
+        open={!!recallTarget}
+        onCancel={() => setRecallTarget(null)}
+        footer={null}
+        destroyOnHidden
+      >
+        {recallTarget && (
+          <div style={{ marginTop: 16 }}>
+            <Typography.Paragraph type="secondary">
+              当前召回状态：<Tag color={recallColor[recallTarget.recall_status]}>
+                {recallTarget.recall_status}
+              </Tag>
+              衣服损坏或要寄回都走召回流程，与合作模式无关。
+            </Typography.Paragraph>
+            {["未召回", "召回失败"].includes(recallTarget.recall_status) && (
+              <Form
+                form={recallForm}
+                layout="vertical"
+                onFinish={(v: { recall_reason?: string }) =>
+                  recallMutation.mutate({
+                    id: recallTarget.id,
+                    step: "start",
+                    reason: v.recall_reason,
+                  })
+                }
+              >
+                <Form.Item name="recall_reason" label="召回原因">
+                  <Input.TextArea rows={2} placeholder="如：衣服有污损，要求寄回（可选）" />
+                </Form.Item>
+                <Button
+                  type="primary"
+                  htmlType="submit"
+                  loading={recallMutation.isPending}
+                >
+                  发起召回
+                </Button>
+              </Form>
+            )}
+            {recallTarget.recall_status === "召回中" && (
+              <Space>
+                <Button
+                  type="primary"
+                  loading={recallMutation.isPending}
+                  onClick={() =>
+                    recallMutation.mutate({
+                      id: recallTarget.id,
+                      step: "success",
+                    })
+                  }
+                >
+                  召回成功
+                </Button>
+                <Button
+                  danger
+                  loading={recallMutation.isPending}
+                  onClick={() =>
+                    recallMutation.mutate({
+                      id: recallTarget.id,
+                      step: "failure",
+                    })
+                  }
+                >
+                  召回失败
+                </Button>
+                <Typography.Text type="secondary">
+                  失败后还能重新发起
+                </Typography.Text>
+              </Space>
+            )}
+            {recallTarget.recall_status === "召回成功" && (
+              <Typography.Text type="secondary">
+                召回已完成，这是终态。寄回运费可以在「录入信息」里补。
+              </Typography.Text>
+            )}
+          </div>
+        )}
       </Modal>
 
       <Modal

@@ -44,6 +44,7 @@ from app.modules.promotion.schemas import (
     PromotionRecallResultRequest,
     PromotionRecallStartRequest,
     PromotionResponse,
+    PromotionReturnWaybillRequest,
     PromotionReviewRequest,
     PromotionUpdate,
     PromotionWarehouseWaybillRequest,
@@ -346,10 +347,34 @@ async def review_promotion(
 ) -> PromotionResponse:
     """EP05-S13 PR 主管审核（approve / reject）.
 
-    approve 时同事务发 SettlementRequested 事件（U05 监听创建 settlement）。
+    approve 后按合作模式分三个出口（PRD V1.4 模块二）：
+
+    - 寄拍：必须已上传博主寄回衣服单号，否则 422；通过后到待财务付款
+    - 送拍：直接到待财务付款
+    - 置换：直接到已付款，不发 SettlementRequested（没有钱要付，不建结款单）
+
+    驳回要同时给 review_reason 与 review_reason_category（三选一）。
     禁止自审（reviewer != pr_id）。
     """
     return await service.review(promotion_id, payload, user)
+
+
+@router.post(
+    "/promotions/{promotion_id}/return-waybill",
+    response_model=PromotionResponse,
+    dependencies=[require_permission("promotion", "write")],
+)
+async def set_return_waybill(
+    promotion_id: UUID,
+    payload: PromotionReturnWaybillRequest,
+    user: CurrentActiveUser,
+    service: PromotionServiceDep,
+) -> PromotionResponse:
+    """上传博主寄回衣服单号。
+
+    寄拍模式审核通过的前提。与仓库发货单号是两个方向：那个寄给博主，这个博主寄回来。
+    """
+    return await service.set_return_waybill(promotion_id, payload, user)
 
 
 __all__ = ["router"]
