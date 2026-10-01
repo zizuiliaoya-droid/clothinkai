@@ -5,6 +5,7 @@ import {
   BarChartOutlined,
   DashboardOutlined,
   DollarOutlined,
+  GiftOutlined,
   HighlightOutlined,
   KeyOutlined,
   LinkOutlined,
@@ -75,6 +76,11 @@ export function AppLayout() {
           key: "/skus",
           icon: <AppstoreOutlined />,
           label: <Link to="/skus">商品成本表</Link>,
+        },
+        {
+          key: "/goods",
+          icon: <GiftOutlined />,
+          label: <Link to="/goods">商品 / 套装</Link>,
         },
         {
           key: "/styles",

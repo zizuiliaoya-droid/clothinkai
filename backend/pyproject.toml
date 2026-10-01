@@ -50,10 +50,11 @@ ignore = [
 "tests/**" = ["S", "N802", "N803", "N806"]
 "scripts/**" = ["N806"]
 "alembic/**" = ["E402", "F401"]
-# 这三个仓储用 f-string 拼接 SQL，但插值部分只有代码控制的片段
+# 这几个仓储用 f-string 拼接 SQL，但插值部分只有代码控制的片段
 # （模块常量、按布尔开关选择的子句），所有用户输入一律走绑定参数（:tenant_id/:kw/...）。
 # 多行 f-string 上挂 inline noqa 很脆弱，故按文件豁免。
 # 新增拼接逻辑时务必确认：用户可控值只能进 params，不能进 f-string。
+"app/modules/product/goods_repository.py" = ["S608"]
 "app/modules/promotion/repository.py" = ["S608"]
 "app/modules/report/advanced_repository.py" = ["S608"]
 "app/modules/report/repository.py" = ["S608"]
