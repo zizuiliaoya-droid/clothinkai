@@ -159,6 +159,7 @@ ALLOWED_PURPOSES: frozenset[str] = frozenset(
         "promotion_payment_qr",  # 站外推广博主收款码（私有）
         "order_adjustment_payment_qr",  # 刷单/拍单博主收款码（私有）
         "urge_screenshot",  # 催发留痕的聊天截图（私有，PRD V1.4 改动 2）
+        "promotion_metrics",  # 发布满 7 天的数据截图（私有，PRD V1.4 改动 4）
     }
 )
 

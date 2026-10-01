@@ -30,15 +30,18 @@ import type { ColumnsType } from "antd/es/table";
 import dayjs from "dayjs";
 import {
   cancelPromotion,
+  confirmRetrospective,
   createPromotion,
   listPromotions,
   publishPromotion,
   recallFailurePromotion,
   recallSuccessPromotion,
+  recordMetrics,
   removePaymentQr,
   reviewPromotion,
   setReturnWaybill,
   startRecallPromotion,
+  submitRetrospective,
   updatePromotion,
   uploadPaymentQrFile,
 } from "@/features/promotion/api";
@@ -47,6 +50,7 @@ import type {
   PromotionCreate,
   PromotionListFilters,
   RejectReasonCategory,
+  RetroStatus,
 } from "@/features/promotion/types";
 import {
   listStyles,
@@ -115,6 +119,13 @@ const recallColor: Record<string, string> = {
   召回失败: "red",
 };
 
+/** 复盘状态配色（PRD 改动 4）。「未开始」不上色，由渲染逻辑决定显示什么。 */
+const retroColor: Record<string, string> = {
+  待复盘: "gold",
+  待确认: "processing",
+  已完成: "green",
+};
+
 /** 驳回原因分类，三选一必填（PRD 改动 5）。 */
 const REJECT_CATEGORIES: RejectReasonCategory[] = [
   "延迟发文",
@@ -165,6 +176,15 @@ export function PromotionListPage() {
   const [waybillForm] = Form.useForm();
   const [urgeTarget, setUrgeTarget] = useState<Promotion | null>(null);
   const [urgeForm] = Form.useForm();
+  const [metricsTarget, setMetricsTarget] = useState<Promotion | null>(null);
+  const [metricsForm] = Form.useForm();
+  const [metricsFile, setMetricsFile] = useState<File | null>(null);
+  const [retroTarget, setRetroTarget] = useState<Promotion | null>(null);
+  const [retroForm] = Form.useForm();
+  const [retroConfirmTarget, setRetroConfirmTarget] = useState<Promotion | null>(
+    null
+  );
+  const [retroConfirmForm] = Form.useForm();
   const [recallTarget, setRecallTarget] = useState<Promotion | null>(null);
   const [recallForm] = Form.useForm();
   // §11：颜色及规格按货号联动——当前推广所属款式的 SKU 颜色+尺码组合
@@ -425,6 +445,65 @@ export function PromotionListPage() {
     onError: (err) => message.error(extractErrorMessage(err)),
   });
 
+  const metricsMutation = useMutation({
+    mutationFn: (v: {
+      id: string;
+      like_count: number;
+      collect_count: number;
+      comment_count: number;
+      file: File;
+    }) =>
+      recordMetrics(
+        v.id,
+        {
+          like_count: v.like_count,
+          collect_count: v.collect_count,
+          comment_count: v.comment_count,
+        },
+        v.file
+      ),
+    onSuccess: () => {
+      message.success("数据已录入，进入待复盘");
+      setMetricsTarget(null);
+      setMetricsFile(null);
+      metricsForm.resetFields();
+      void qc.invalidateQueries({ queryKey: ["promotions"] });
+    },
+    onError: (err) => message.error(extractErrorMessage(err)),
+  });
+
+  const retroMutation = useMutation({
+    mutationFn: ({ id, content }: { id: string; content: string }) =>
+      submitRetrospective(id, content),
+    onSuccess: () => {
+      message.success("复盘已提交，等主管确认");
+      setRetroTarget(null);
+      retroForm.resetFields();
+      void qc.invalidateQueries({ queryKey: ["promotions"] });
+    },
+    onError: (err) => message.error(extractErrorMessage(err)),
+  });
+
+  const retroConfirmMutation = useMutation({
+    mutationFn: ({
+      id,
+      approve,
+      opinion,
+    }: {
+      id: string;
+      approve: boolean;
+      opinion?: string;
+    }) => confirmRetrospective(id, approve, opinion),
+    onSuccess: (_d, v) => {
+      message.success(v.approve ? "复盘已确认，单据完结" : "已打回，PR 需重写");
+      setRetroConfirmTarget(null);
+      retroConfirmForm.resetFields();
+      void qc.invalidateQueries({ queryKey: ["promotions"] });
+      void qc.invalidateQueries({ queryKey: ["blogger-retrospectives"] });
+    },
+    onError: (err) => message.error(extractErrorMessage(err)),
+  });
+
   const urgeMutation = useMutation({
     mutationFn: ({ id, note }: { id: string; note?: string }) =>
       urgePromotion(id, note),
@@ -606,6 +685,24 @@ export function PromotionListPage() {
         return "—";
       },
     },
+    {
+      // 复盘状态（PRD 改动 4）。与结款状态正交，所以单列一列而不是挤进结款那列
+      title: "复盘",
+      dataIndex: "retro_status",
+      width: 110,
+      render: (v: RetroStatus, row) =>
+        v === "未开始" ? (
+          row.settlement_status === "已付款" ? (
+            <Tooltip title="已结款，发布满 7 天后可录数据">
+              <Tag color="blue">待录数据</Tag>
+            </Tooltip>
+          ) : (
+            "—"
+          )
+        ) : (
+          <Tag color={retroColor[v]}>{v}</Tag>
+        ),
+    },
     ...SOURCE_FIELD_NAMES.map((f) => ({
       title: f,
       key: `se_${f}`,
@@ -699,6 +796,38 @@ export function PromotionListPage() {
             onClick: () => {
               setRejectTarget(record);
               rejectForm.resetFields();
+            },
+          },
+          // 复盘三步（PRD 改动 4）。每一步的 disabled 条件都对着后端的状态机门槛，
+          // 点了不会白跑一次 422
+          {
+            key: "metrics",
+            label: "录 7 天数据",
+            disabled:
+              record.settlement_status !== "已付款" ||
+              record.retro_status !== "未开始",
+            onClick: () => {
+              setMetricsTarget(record);
+              metricsForm.resetFields();
+              setMetricsFile(null);
+            },
+          },
+          {
+            key: "retro",
+            label: "写复盘",
+            disabled: record.retro_status !== "待复盘",
+            onClick: () => {
+              setRetroTarget(record);
+              retroForm.setFieldsValue({ content: record.retro_content ?? "" });
+            },
+          },
+          {
+            key: "retro-confirm",
+            label: "确认复盘",
+            disabled: record.retro_status !== "待确认",
+            onClick: () => {
+              setRetroConfirmTarget(record);
+              retroConfirmForm.resetFields();
             },
           },
         ];
@@ -1083,6 +1212,186 @@ export function PromotionListPage() {
             />
           </Form.Item>
         </Form>
+      </Modal>
+
+      <Modal
+        title={
+          metricsTarget
+            ? `录 7 天数据 · ${metricsTarget.internal_code}`
+            : "录 7 天数据"
+        }
+        open={!!metricsTarget}
+        onCancel={() => setMetricsTarget(null)}
+        onOk={() => metricsForm.submit()}
+        confirmLoading={metricsMutation.isPending}
+        destroyOnHidden
+      >
+        <Form
+          form={metricsForm}
+          layout="vertical"
+          style={{ marginTop: 16 }}
+          onFinish={(v: {
+            like_count: number;
+            collect_count: number;
+            comment_count: number;
+          }) => {
+            if (!metricsTarget) return;
+            if (!metricsFile) {
+              message.error("请上传数据截图");
+              return;
+            }
+            metricsMutation.mutate({ id: metricsTarget.id, ...v, file: metricsFile });
+          }}
+        >
+          <Typography.Paragraph type="secondary">
+            发布满 7 天后录一次。三个指标和截图都必填，录完进入待复盘。
+          </Typography.Paragraph>
+          <Space size="large">
+            <Form.Item
+              name="like_count"
+              label="点赞数"
+              rules={[{ required: true, message: "必填" }]}
+            >
+              <InputNumber min={0} style={{ width: 130 }} />
+            </Form.Item>
+            <Form.Item
+              name="collect_count"
+              label="收藏数"
+              rules={[{ required: true, message: "必填" }]}
+            >
+              <InputNumber min={0} style={{ width: 130 }} />
+            </Form.Item>
+            <Form.Item
+              name="comment_count"
+              label="评论数"
+              rules={[{ required: true, message: "必填" }]}
+            >
+              <InputNumber min={0} style={{ width: 130 }} />
+            </Form.Item>
+          </Space>
+          <Form.Item label="数据截图" required>
+            <Upload
+              accept="image/png,image/jpeg,image/webp"
+              maxCount={1}
+              beforeUpload={(file) => {
+                setMetricsFile(file as unknown as File);
+                return false;
+              }}
+              onRemove={() => setMetricsFile(null)}
+            >
+              <Button icon={<UploadOutlined />}>选择截图</Button>
+            </Upload>
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={retroTarget ? `写复盘 · ${retroTarget.internal_code}` : "写复盘"}
+        open={!!retroTarget}
+        onCancel={() => setRetroTarget(null)}
+        onOk={() => retroForm.submit()}
+        confirmLoading={retroMutation.isPending}
+        destroyOnHidden
+        width={560}
+      >
+        <Form
+          form={retroForm}
+          layout="vertical"
+          style={{ marginTop: 16 }}
+          onFinish={(v: { content: string }) => {
+            if (!retroTarget) return;
+            retroMutation.mutate({ id: retroTarget.id, content: v.content });
+          }}
+        >
+          <Typography.Paragraph type="secondary">
+            自由描述：数据表现、博主配合度、是否值得二搭、下次合作建议。
+            主管确认后这段文字会永久沉淀到博主档案，下次挑博主时在悬浮卡里直接看到。
+          </Typography.Paragraph>
+          <Form.Item
+            name="content"
+            label="复盘内容"
+            rules={[{ required: true, message: "请填写复盘内容" }]}
+          >
+            <Input.TextArea rows={6} maxLength={5000} showCount />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={
+          retroConfirmTarget
+            ? `确认复盘 · ${retroConfirmTarget.internal_code}`
+            : "确认复盘"
+        }
+        open={!!retroConfirmTarget}
+        onCancel={() => setRetroConfirmTarget(null)}
+        footer={null}
+        destroyOnHidden
+        width={560}
+      >
+        {retroConfirmTarget && (
+          <Form
+            form={retroConfirmForm}
+            layout="vertical"
+            style={{ marginTop: 16 }}
+            onFinish={(v: { opinion?: string }) => {
+              retroConfirmMutation.mutate({
+                id: retroConfirmTarget.id,
+                approve: true,
+                opinion: v.opinion,
+              });
+            }}
+          >
+            <Typography.Paragraph type="secondary">
+              PR 写的复盘：
+            </Typography.Paragraph>
+            <Typography.Paragraph
+              style={{
+                whiteSpace: "pre-wrap",
+                background: "#fafafa",
+                border: "1px solid #f0f0f0",
+                borderRadius: 4,
+                padding: 12,
+              }}
+            >
+              {retroConfirmTarget.retro_content || "（没有内容）"}
+            </Typography.Paragraph>
+            <Form.Item
+              name="opinion"
+              label="意见"
+              extra="确认时可留空；打回时必填，PR 得知道要改什么"
+            >
+              <Input.TextArea rows={3} />
+            </Form.Item>
+            <Space>
+              <Button
+                type="primary"
+                loading={retroConfirmMutation.isPending}
+                onClick={() => retroConfirmForm.submit()}
+              >
+                确认通过
+              </Button>
+              <Button
+                danger
+                loading={retroConfirmMutation.isPending}
+                onClick={() => {
+                  const opinion = retroConfirmForm.getFieldValue("opinion");
+                  if (!opinion) {
+                    message.error("打回时必须写明意见");
+                    return;
+                  }
+                  retroConfirmMutation.mutate({
+                    id: retroConfirmTarget.id,
+                    approve: false,
+                    opinion,
+                  });
+                }}
+              >
+                打回重写
+              </Button>
+            </Space>
+          </Form>
+        )}
       </Modal>
 
       <Modal
