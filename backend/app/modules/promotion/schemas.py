@@ -30,6 +30,7 @@ from pydantic import (
 )
 
 from app.modules.promotion.enums import (
+    CooperationMode,
     PublishStatus,
     RecallStatus,
     ReviewAction,
@@ -37,6 +38,11 @@ from app.modules.promotion.enums import (
 )
 
 _QuoteField = Annotated[
+    Decimal,
+    Field(ge=Decimal("0"), max_digits=10, decimal_places=2),
+]
+
+_FeeField = Annotated[
     Decimal,
     Field(ge=Decimal("0"), max_digits=10, decimal_places=2),
 ]
@@ -65,17 +71,26 @@ class PromotionBase(BaseModel):
     cooperation_date: date
     scheduled_publish_date: date | None = None
     quote_amount: _QuoteField | None = None
-    """创建时若为 None 则从 blogger.quote 快照；后续编辑可修改。"""
+    """创建时若为 None 则从 blogger.quote 快照；后续编辑可修改。
+
+    置换模式下服务端强制为 0（PRD：置换无博主服务费），前端传什么都会被覆盖。
+    """
     note_title: str | None = Field(default=None, max_length=255)
     remark: str | None = None
-    # 人工源列扩展（颜色及规格/打单地址/发货单号/订单号/寄回单号/合作方式/合作形式/收藏数/评论数/博主风格 等）
+    # 人工源列扩展（颜色及规格/打单地址/发货单号/订单号/寄回单号/合作形式/收藏数/评论数/博主风格 等）
+    # 注意：「合作方式」已提成 typed 字段 cooperation_mode，不再从这里走。
     source_extra: dict = Field(default_factory=dict)
 
 
 class PromotionCreate(PromotionBase):
     """创建入参。"""
 
-    pass
+    cooperation_mode: CooperationMode
+    """寄拍 / 送拍 / 置换。新建必填 —— 它决定成本怎么算、审核通过后走哪个出口，
+    缺了它后面每一步都没法判断。历史数据允许为空，但新单不允许。"""
+
+    return_shipping_fee: _FeeField | None = None
+    """寄回运费。一般在召回时才录，建单时通常为空。"""
 
 
 class PromotionUpdate(BaseModel):
@@ -85,12 +100,17 @@ class PromotionUpdate(BaseModel):
 
     ``goods_main_id`` 可改：归属录错、或者套装是推广录完之后才建的，都要能修正。
     改动会即时反映到投产报表的推广费归属上。
+
+    ``cooperation_mode`` 只能从空补一次，有值后 service 层拒绝修改（PRD：单据生成后
+    不可修改合作模式）。放在这里是为了让历史数据能补齐，不是为了允许改。
     """
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
     sku_id: UUID | None = None
     goods_main_id: UUID | None = None
+    cooperation_mode: CooperationMode | None = None
+    return_shipping_fee: _FeeField | None = None
     platform: str | None = Field(default=None, min_length=1, max_length=16)
     scheduled_publish_date: date | None = None
     quote_amount: _QuoteField | None = None
@@ -245,6 +265,13 @@ class PromotionResponse(BaseModel):
     goods_is_suit: bool = False
     quote_amount: Decimal | None = None  # 敏感
     cost_snapshot: Decimal | None = None  # 敏感
+
+    # 合作模式与成本（PRD V1.4 模块二）
+    cooperation_mode: str | None = None
+    return_shipping_fee: Decimal | None = None  # 敏感
+    total_promo_cost: Decimal | None = None  # 敏感
+    """站外推广成本 = 博主服务费 + 样品成本 + 寄回运费。数据库生成列，与 quote_amount
+    同样受读权限门控 —— 它是三项金额之和，能看到它等于能推算出金额。"""
 
     # 业务字段
     platform: str

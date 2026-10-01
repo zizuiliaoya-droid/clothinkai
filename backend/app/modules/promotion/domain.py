@@ -31,18 +31,31 @@ PROMOTION_SENSITIVE_FIELDS: frozenset[str] = frozenset(
         "publish_url",
         "quote_amount",
         "cost_snapshot",
+        "return_shipping_fee",
+        "cooperation_mode",
         "publish_status",
         "recall_status",
         "settlement_status",
     }
 )
-"""Promotion 表写 audit_log 的字段白名单。"""
+"""Promotion 表写 audit_log 的字段白名单。
+
+``cooperation_mode`` 必须在列表里：它决定成本口径与审核后的流转出口，
+是「谁在什么时候把这单定成置换的」这类追责问题的答案。
+"""
 
 
-PROMOTION_SENSITIVE_VALUE_FIELDS: frozenset[str] = frozenset({"quote_amount", "cost_snapshot"})
+PROMOTION_SENSITIVE_VALUE_FIELDS: frozenset[str] = frozenset(
+    {"quote_amount", "cost_snapshot", "return_shipping_fee"}
+)
 """Promotion 表 audit_log 不存历史值的字段（仅记 ``*_changed: true`` 标记）。
 
 与 U02 BR-U02-31 同模式（cost_price / purchase_price 仅记 changed 标记）。
+
+PRD 第 10 节第 14 条要求成本修改可追溯，但这里仍然只记变更标记：audit_log 的读取面
+（``GET /auth/audit-logs``）只要 ``auth.audit:read`` 就能看全部记录，而金额本身受
+字段级权限保护（PR 看不到报价）。把金额写进 audit 等于绕过那层权限。
+真要做金额级回溯，应该是一张带权限的单据时间线表，不是放宽 audit 的脱敏。
 """
 
 

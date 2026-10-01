@@ -60,6 +60,11 @@ export interface Promotion {
   goods_is_suit: boolean;
   quote_amount: string | null; // Decimal as string；敏感
   cost_snapshot: string | null; // 敏感
+  /** 寄拍 / 送拍 / 置换。历史导入数据为 null，可补一次。单据生成后不可改。 */
+  cooperation_mode: string | null;
+  return_shipping_fee: string | null; // 敏感
+  /** 站外推广成本 = 博主服务费 + 样品成本 + 寄回运费。后端生成列，只读。敏感。 */
+  total_promo_cost: string | null;
   // 业务字段
   platform: string;
   cooperation_date: string;
@@ -110,10 +115,14 @@ export interface PromotionCreate {
   /** 这次推广归属的商品。不传由后端取主商品（非套装优先）。 */
   goods_main_id?: string | null;
   blogger_id: string;
+  /** 寄拍 / 送拍 / 置换。必填 —— 它决定成本怎么算、审核通过后走哪个出口。 */
+  cooperation_mode: string;
   platform: string;
   cooperation_date: string;
   scheduled_publish_date?: string | null;
   quote_amount?: string | null;
+  /** 寄回运费，一般在召回时才录。 */
+  return_shipping_fee?: string | null;
   note_title?: string | null;
   remark?: string | null;
 }
@@ -122,6 +131,13 @@ export interface PromotionUpdate {
   sku_id?: string | null;
   /** 商品归属可改：录错、或套装是推广录完之后才建的。 */
   goods_main_id?: string | null;
+  /**
+   * 只能给历史数据补一次（原值为 null 时）。已有值再传不同的值后端返回 409 —
+   * 改合作模式等于改成本口径。
+   */
+  cooperation_mode?: string;
+  /** 寄回运费，召回时录入。会自动计入站外推广成本。 */
+  return_shipping_fee?: string | null;
   platform?: string;
   scheduled_publish_date?: string | null;
   quote_amount?: string | null;

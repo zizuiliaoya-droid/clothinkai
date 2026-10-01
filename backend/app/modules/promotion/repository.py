@@ -17,6 +17,7 @@ import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
+from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
@@ -305,6 +306,29 @@ class PromotionRepository:
             )
         )
         return bool((await self._session.execute(stmt)).scalar_one())
+
+    async def sum_goods_sample_cost(self, goods_main_id: UUID) -> Decimal | None:
+        """商品的样品成本 = 启用成员款式的单件货品成本之和。
+
+        PRD：送拍 / 置换按 ``tb_item_id`` 查子表全部 ``is_enable=1`` 记录求和。
+        套装就是这么算出总样品成本的 —— 寄给博主的是整套衣服。
+
+        全部成员都没填成本时返回 None 而不是 0，让调用方能区分「这套不要钱」和
+        「成本还没录」。生产上那个套装的两个成员都没有 SKU 成本价，就是后一种。
+        """
+        sql = text(
+            """
+            SELECT SUM(gi.single_goods_cost) AS total
+            FROM goods_style_item gi
+            WHERE gi.goods_main_id = :goods_main_id
+              AND gi.is_active = true
+              AND gi.single_goods_cost IS NOT NULL
+            """
+        )
+        total: Decimal | None = (
+            await self._session.execute(sql, {"goods_main_id": goods_main_id})
+        ).scalar_one_or_none()
+        return total
 
     # ----------------------- write ----------------------- #
 

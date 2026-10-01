@@ -28,6 +28,7 @@ from uuid import UUID
 
 from sqlalchemy import (
     CheckConstraint,
+    Computed,
     Date,
     DateTime,
     ForeignKey,
@@ -56,6 +57,13 @@ class Promotion(TenantScopedModel):
     """
 
     __tablename__ = "promotion"
+
+    # total_promo_cost 是数据库生成列。SQLAlchemy 默认把这类列当「稍后再取」，
+    # 首次访问时补发一条 SELECT —— 在 async session 里那条隐式 IO 会抛 MissingGreenlet。
+    # eager_defaults 让 INSERT/UPDATE 直接带 RETURNING 把值取回来，避免延迟加载。
+    # RUF012 建议标 ClassVar，但 DeclarativeBase 把 __mapper_args__ 声明成实例变量，
+    # 加了 ClassVar mypy 会报 override 冲突。SQLAlchemy 的约定写法就是不带注解。
+    __mapper_args__ = {"eager_defaults": True}  # noqa: RUF012
 
     # --- 关联字段 ---
     style_id: Mapped[UUID] = mapped_column(
@@ -100,6 +108,31 @@ class Promotion(TenantScopedModel):
     style_short_name_snapshot: Mapped[str] = mapped_column(String(128), nullable=False)
     quote_amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
     cost_snapshot: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+
+    # --- 合作模式与成本（PRD V1.4 模块二）---
+    cooperation_mode: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    """寄拍 / 送拍 / 置换。决定样品成本与博主服务费怎么取、审核通过后走哪个出口。
+
+    可空仅为了容纳历史导入数据（5154 条「未发布」的老记录没有这个信息）。
+    新建必填；一旦有值就锁死，service 层拦截修改 —— 单据定稿后改模式等于改了成本口径。
+    """
+
+    return_shipping_fee: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+    """寄回运费。召回流程里由 PR 录入；寄拍模式下它是唯一计入成本的那一项。"""
+
+    total_promo_cost: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2),
+        Computed(
+            "quote_amount + COALESCE(cost_snapshot, 0) + COALESCE(return_shipping_fee, 0)",
+            persisted=True,
+        ),
+        nullable=False,
+    )
+    """站外推广成本 = 博主服务费 + 样品成本 + 寄回运费。
+
+    数据库生成列，不由应用层赋值。PRD 要求「任意成本字段变更实时重算」，而写入路径有
+    HTTP、Excel 导入、迁移三条，手动重算迟早漏一条，交给数据库才漏不掉。
+    """
 
     # --- 业务字段 ---
     platform: Mapped[str] = mapped_column(String(16), nullable=False)
@@ -225,6 +258,20 @@ class Promotion(TenantScopedModel):
         CheckConstraint(
             "cost_snapshot IS NULL OR cost_snapshot >= 0",
             name="ck_promotion_cost_snapshot_nonneg",
+        ),
+        CheckConstraint(
+            "cooperation_mode IS NULL OR cooperation_mode IN ('寄拍', '送拍', '置换')",
+            name="ck_promotion_cooperation_mode",
+        ),
+        CheckConstraint(
+            "return_shipping_fee IS NULL OR return_shipping_fee >= 0",
+            name="ck_promotion_return_shipping_fee_nonneg",
+        ),
+        Index(
+            "idx_promotion_cooperation_mode",
+            "tenant_id",
+            "cooperation_mode",
+            postgresql_where=text("cooperation_mode IS NOT NULL"),
         ),
         # GIN trgm 索引在 alembic migration 中通过 op.execute 创建：
         # idx_promotion_internal_code_trgm

@@ -308,7 +308,9 @@ class ProductionRepository:
               -- 归属为空时回落到「主商品」推定：非套装优先、货号次之。兜底只是为了
               -- 兼容历史数据与「款式还没归到商品」的异常，不是常规路径。
               SELECT COALESCE(p.goods_main_id, owner.goods_main_id) AS goods_main_id,
-                     SUM(p.quote_amount) AS promo_cost
+                     -- 站外推广成本 = 博主服务费 + 样品成本 + 寄回运费（PRD V1.4 §9）。
+                     -- total_promo_cost 是生成列，口径集中在数据库，报表只读不算。
+                     SUM(p.total_promo_cost) AS promo_cost
               FROM promotion p
               LEFT JOIN LATERAL (
                 SELECT gi.goods_main_id
@@ -470,7 +472,8 @@ class ProductionRepository:
             ),
             promos AS (
               SELECT {promo_bucket} AS d,
-                     COALESCE(SUM(p.quote_amount), 0) AS promo_cost
+                     -- 站外推广成本口径，与投产报表一致（PRD V1.4 §9）
+                     COALESCE(SUM(p.total_promo_cost), 0) AS promo_cost
               FROM promotion p
               WHERE p.tenant_id = :tenant_id
                 AND p.is_active = true
@@ -662,7 +665,8 @@ class BiRepository:
               WHERE a.tenant_id = :tenant_id
                 AND a.date BETWEEN :date_from AND :date_to
             ), promos AS (
-              SELECT COALESCE(SUM(p.quote_amount), 0) AS external_spend
+              -- 站外推广成本口径（PRD V1.4 §9），不是约稿金额
+              SELECT COALESCE(SUM(p.total_promo_cost), 0) AS external_spend
               FROM promotion p
               WHERE p.tenant_id = :tenant_id AND p.is_active = true
                 AND p.publish_status = '已发布'
@@ -687,6 +691,13 @@ class BiRepository:
     async def aggregate_promotion_summary(
         self, *, tenant_id: UUID, date_from: date, date_to: date
     ) -> Mapping[str, Any]:
+        """约稿金额汇总。
+
+        这里刻意用 ``quote_amount`` 而不是 ``total_promo_cost``：PRD V1.4 §9 定义
+        「小红书约篇金额 = 博主服务费合计」，是给博主的钱，不含样品成本与寄回运费。
+        站外推广成本是另一个口径（见 ``aggregate_by_goods`` 的 promo 子查询），
+        两者不要混。
+        """
         sql = text(
             """
             SELECT
@@ -818,7 +829,8 @@ class BiRepository:
               GROUP BY {a_bucket}
               UNION ALL
               SELECT {p_bucket} AS d, 0, 0, 0,
-                     COALESCE(SUM(p.quote_amount), 0)
+                     -- 站外推广成本口径（PRD V1.4 §9）
+                     COALESCE(SUM(p.total_promo_cost), 0)
               FROM promotion p
               WHERE p.tenant_id = :tenant_id AND p.is_active = true
                 AND p.publish_status = '已发布'
@@ -847,7 +859,8 @@ class BiRepository:
         sql = text(
             """
             SELECT COALESCE(p.goods_main_id, owner.goods_main_id) AS goods_id,
-                   COALESCE(SUM(p.quote_amount), 0) AS external_spend
+                   -- 站外推广成本口径（PRD V1.4 §9）
+                   COALESCE(SUM(p.total_promo_cost), 0) AS external_spend
             FROM promotion p
             LEFT JOIN LATERAL (
               SELECT gi.goods_main_id

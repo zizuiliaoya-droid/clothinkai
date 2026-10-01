@@ -100,6 +100,23 @@ class ReviewReasonRequiredError(ValidationError):
     code = "REVIEW_REASON_REQUIRED"
 
 
+class CooperationModeImmutableError(ValidationError):
+    """单据已有合作模式后不允许修改（PRD V1.4 模块二硬约束）。
+
+    改模式等于改成本口径（寄拍样品成本恒 0、置换服务费恒 0），已定稿的单据改了
+    会让历史报表与结款金额对不上。历史数据的空值允许补一次，补完即锁。
+    """
+
+    code = "COOPERATION_MODE_IMMUTABLE"
+    status_code = 409
+
+
+class CooperationModeRequiredError(ValidationError):
+    """需要合作模式才能继续（历史数据补齐场景）。"""
+
+    code = "COOPERATION_MODE_REQUIRED"
+
+
 class SelfReviewForbiddenError(ValidationError):
     """禁止自审（reviewed_by != pr_id）。"""
 
@@ -141,6 +158,8 @@ class ActiveDuplicatePromotionWarning(ValidationError):
 __all__ = [
     "ActiveDuplicatePromotionWarning",
     "CancelReasonRequiredError",
+    "CooperationModeImmutableError",
+    "CooperationModeRequiredError",
     "FieldPermissionDenied",  # re-exported from modules/product/exceptions
     "InvalidBloggerReferenceError",
     "InvalidPaymentQrAttachmentError",

@@ -16,7 +16,9 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.tenancy import tenant_id_ctx
+from app.modules.promotion.enums import CooperationMode
 from app.modules.promotion.exceptions import (
+    CooperationModeImmutableError,
     InvalidBloggerReferenceError,
     InvalidGoodsReferenceError,
     InvalidStyleReferenceError,
@@ -51,6 +53,7 @@ class TestCreatePromotion:
             svc = PromotionService(session)
             response = await svc.create_promotion(
                 PromotionCreate(
+                    cooperation_mode=CooperationMode.GIFT,
                     style_id=style.id,
                     blogger_id=blogger.id,
                     platform="小红书",
@@ -89,6 +92,7 @@ class TestCreatePromotion:
             svc = PromotionService(session)
             response = await svc.create_promotion(
                 PromotionCreate(
+                    cooperation_mode=CooperationMode.GIFT,
                     style_id=style.id,
                     blogger_id=blogger.id,
                     platform="小红书",
@@ -118,6 +122,7 @@ class TestCreatePromotion:
             svc = PromotionService(session)
             response = await svc.create_promotion(
                 PromotionCreate(
+                    cooperation_mode=CooperationMode.GIFT,
                     style_id=style.id,
                     blogger_id=blogger.id,
                     platform="小红书",
@@ -148,6 +153,7 @@ class TestCreatePromotion:
             with pytest.raises(InvalidStyleReferenceError):
                 await svc.create_promotion(
                     PromotionCreate(
+                        cooperation_mode=CooperationMode.GIFT,
                         style_id=uuid4(),
                         blogger_id=blogger.id,
                         platform="小红书",
@@ -176,6 +182,7 @@ class TestCreatePromotion:
             with pytest.raises(InvalidBloggerReferenceError):
                 await svc.create_promotion(
                     PromotionCreate(
+                        cooperation_mode=CooperationMode.GIFT,
                         style_id=style.id,
                         blogger_id=uuid4(),
                         platform="小红书",
@@ -238,6 +245,7 @@ class TestGoodsAttribution:
             blogger = await blogger_factory.blogger(quote=Decimal("100.00"))
             resp = await PromotionService(session).create_promotion(
                 PromotionCreate(
+                    cooperation_mode=CooperationMode.GIFT,
                     style_id=style.id,
                     blogger_id=blogger.id,
                     platform="小红书",
@@ -272,6 +280,7 @@ class TestGoodsAttribution:
             blogger = await blogger_factory.blogger(quote=Decimal("100.00"))
             resp = await PromotionService(session).create_promotion(
                 PromotionCreate(
+                    cooperation_mode=CooperationMode.GIFT,
                     style_id=style.id,
                     goods_main_id=suit.id,
                     blogger_id=blogger.id,
@@ -306,6 +315,7 @@ class TestGoodsAttribution:
             with pytest.raises(InvalidGoodsReferenceError):
                 await PromotionService(session).create_promotion(
                     PromotionCreate(
+                        cooperation_mode=CooperationMode.GIFT,
                         style_id=style.id,
                         goods_main_id=unrelated.id,
                         blogger_id=blogger.id,
@@ -340,6 +350,7 @@ class TestGoodsAttribution:
             svc = PromotionService(session)
             created = await svc.create_promotion(
                 PromotionCreate(
+                    cooperation_mode=CooperationMode.GIFT,
                     style_id=style.id,
                     blogger_id=blogger.id,
                     platform="小红书",
@@ -392,6 +403,7 @@ class TestDuplicateWarning:
             svc = PromotionService(session)
             response = await svc.create_promotion(
                 PromotionCreate(
+                    cooperation_mode=CooperationMode.GIFT,
                     style_id=style.id,
                     blogger_id=blogger.id,
                     platform="小红书",
@@ -429,6 +441,7 @@ class TestSequenceGeneration:
 
             r1 = await svc.create_promotion(
                 PromotionCreate(
+                    cooperation_mode=CooperationMode.GIFT,
                     style_id=style.id,
                     blogger_id=blogger.id,
                     platform="小红书",
@@ -438,6 +451,7 @@ class TestSequenceGeneration:
             )
             r2 = await svc.create_promotion(
                 PromotionCreate(
+                    cooperation_mode=CooperationMode.GIFT,
                     style_id=style.id,
                     blogger_id=blogger.id,
                     platform="抖音",
@@ -468,6 +482,7 @@ class TestSequenceGeneration:
 
             r1 = await svc.create_promotion(
                 PromotionCreate(
+                    cooperation_mode=CooperationMode.GIFT,
                     style_id=style.id,
                     blogger_id=blogger.id,
                     platform="小红书",
@@ -477,6 +492,7 @@ class TestSequenceGeneration:
             )
             r2 = await svc.create_promotion(
                 PromotionCreate(
+                    cooperation_mode=CooperationMode.GIFT,
                     style_id=style.id,
                     blogger_id=blogger.id,
                     platform="小红书",
@@ -707,5 +723,394 @@ class TestWarehouseFilters:
                 user=user,
             )
             assert page.total == 4
+        finally:
+            tenant_id_ctx.reset(token)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+class TestCooperationMode:
+    """合作模式的成本口径与不可变约束（PRD V1.4 模块二）。
+
+    PRD 反复强调这几条「后端必须强制，不可只靠前端」，所以这里全部用「前端传了错的值」
+    的方式测 —— 传进去的数字必须被后端改掉，而不是被接受。
+    """
+
+    @staticmethod
+    async def _goods_with_cost(
+        session: AsyncSession,
+        tenant: Any,
+        *pairs: tuple[Any, Decimal | None],
+        code: str,
+        is_suit: bool = False,
+    ) -> Any:
+        """建一个商品，成员款式带单件货品成本。"""
+        from app.modules.product.goods_models import GoodsMain, GoodsStyleItem
+
+        goods = GoodsMain(
+            tenant_id=tenant.id,
+            goods_code=code,
+            goods_title=code,
+            is_suit=is_suit,
+        )
+        session.add(goods)
+        await session.flush()
+        for idx, (style, cost) in enumerate(pairs):
+            session.add(
+                GoodsStyleItem(
+                    tenant_id=tenant.id,
+                    goods_main_id=goods.id,
+                    style_id=style.id,
+                    single_goods_cost=cost,
+                    sort_order=idx,
+                )
+            )
+        await session.flush()
+        return goods
+
+    async def test_consignment_forces_sample_cost_to_zero(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+    ) -> None:
+        """寄拍：衣服要寄回，样品成本恒为 0，即使商品成员填了成本。"""
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            user = await factory.user(tenant_a, roles=[admin_role])
+            style = await product_factory.style(style_code="CM_CONSIGN")
+            await self._goods_with_cost(
+                session, tenant_a, (style, Decimal("200.00")), code="CM-CONSIGN"
+            )
+            blogger = await blogger_factory.blogger(quote=Decimal("500.00"))
+            resp = await PromotionService(session).create_promotion(
+                PromotionCreate(
+                    cooperation_mode=CooperationMode.CONSIGNMENT,
+                    style_id=style.id,
+                    blogger_id=blogger.id,
+                    platform="小红书",
+                    cooperation_date=date(2026, 7, 1),
+                ),
+                user,
+            )
+            assert resp.cooperation_mode == "寄拍"
+            assert resp.cost_snapshot == Decimal("0.00")
+            assert resp.quote_amount == Decimal("500.00")
+            # 站外推广成本 = 服务费 + 0 + 无运费
+            assert resp.total_promo_cost == Decimal("500.00")
+        finally:
+            tenant_id_ctx.reset(token)
+
+    async def test_gift_takes_sum_of_member_costs(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+    ) -> None:
+        """送拍：样品成本 = 商品启用成员的单件货品成本之和（套装就是整套的钱）。"""
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            user = await factory.user(tenant_a, roles=[admin_role])
+            top = await product_factory.style(style_code="CM_GIFT_TOP")
+            skirt = await product_factory.style(style_code="CM_GIFT_SKIRT")
+            await self._goods_with_cost(
+                session,
+                tenant_a,
+                (top, Decimal("72.50")),
+                (skirt, Decimal("38.00")),
+                code="CM-GIFT-SUIT",
+                is_suit=True,
+            )
+            blogger = await blogger_factory.blogger(quote=Decimal("300.00"))
+            resp = await PromotionService(session).create_promotion(
+                PromotionCreate(
+                    cooperation_mode=CooperationMode.GIFT,
+                    style_id=top.id,
+                    blogger_id=blogger.id,
+                    platform="小红书",
+                    cooperation_date=date(2026, 7, 2),
+                ),
+                user,
+            )
+            assert resp.cost_snapshot == Decimal("110.50")
+            assert resp.quote_amount == Decimal("300.00")
+            assert resp.total_promo_cost == Decimal("410.50")
+        finally:
+            tenant_id_ctx.reset(token)
+
+    async def test_barter_forces_quote_to_zero(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+    ) -> None:
+        """置换：以货换推广，博主服务费恒为 0，但样品成本照算。"""
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            user = await factory.user(tenant_a, roles=[admin_role])
+            style = await product_factory.style(style_code="CM_BARTER")
+            await self._goods_with_cost(
+                session, tenant_a, (style, Decimal("88.00")), code="CM-BARTER"
+            )
+            blogger = await blogger_factory.blogger(quote=Decimal("600.00"))
+            resp = await PromotionService(session).create_promotion(
+                PromotionCreate(
+                    cooperation_mode=CooperationMode.BARTER,
+                    style_id=style.id,
+                    blogger_id=blogger.id,
+                    platform="小红书",
+                    cooperation_date=date(2026, 7, 3),
+                    quote_amount=Decimal("600.00"),  # 前端硬塞一个报价，必须被压回 0
+                ),
+                user,
+            )
+            assert resp.quote_amount == Decimal("0.00")
+            assert resp.cost_snapshot == Decimal("88.00")
+            assert resp.total_promo_cost == Decimal("88.00")
+        finally:
+            tenant_id_ctx.reset(token)
+
+    async def test_return_shipping_fee_counts_into_total(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+    ) -> None:
+        """寄回运费计入站外推广成本；寄拍场景下它是唯一的非服务费成本。
+
+        total_promo_cost 是数据库生成列，这里顺带验证它会跟着 PATCH 自动重算。
+        """
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            user = await factory.user(tenant_a, roles=[admin_role])
+            style = await product_factory.style(style_code="CM_FEE")
+            await self._goods_with_cost(
+                session, tenant_a, (style, Decimal("150.00")), code="CM-FEE"
+            )
+            blogger = await blogger_factory.blogger(quote=Decimal("400.00"))
+            svc = PromotionService(session)
+            created = await svc.create_promotion(
+                PromotionCreate(
+                    cooperation_mode=CooperationMode.CONSIGNMENT,
+                    style_id=style.id,
+                    blogger_id=blogger.id,
+                    platform="小红书",
+                    cooperation_date=date(2026, 7, 4),
+                ),
+                user,
+            )
+            assert created.total_promo_cost == Decimal("400.00")
+
+            updated = await svc.update_promotion(
+                created.id,
+                PromotionUpdate(return_shipping_fee=Decimal("12.50")),
+                user,
+            )
+            assert updated.return_shipping_fee == Decimal("12.50")
+            # 400 服务费 + 0 样品成本（寄拍）+ 12.50 运费
+            assert updated.total_promo_cost == Decimal("412.50")
+        finally:
+            tenant_id_ctx.reset(token)
+
+    async def test_mode_cannot_be_changed_once_set(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+    ) -> None:
+        """单据生成后合作模式锁死 —— 改它等于改成本口径，历史报表会对不上。"""
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            user = await factory.user(tenant_a, roles=[admin_role])
+            style = await product_factory.style(style_code="CM_LOCK")
+            blogger = await blogger_factory.blogger(quote=Decimal("100.00"))
+            svc = PromotionService(session)
+            created = await svc.create_promotion(
+                PromotionCreate(
+                    cooperation_mode=CooperationMode.GIFT,
+                    style_id=style.id,
+                    blogger_id=blogger.id,
+                    platform="小红书",
+                    cooperation_date=date(2026, 7, 5),
+                ),
+                user,
+            )
+            with pytest.raises(CooperationModeImmutableError):
+                await svc.update_promotion(
+                    created.id,
+                    PromotionUpdate(cooperation_mode=CooperationMode.BARTER),
+                    user,
+                )
+            # 传同一个值不算修改，不该报错
+            same = await svc.update_promotion(
+                created.id,
+                PromotionUpdate(cooperation_mode=CooperationMode.GIFT),
+                user,
+            )
+            assert same.cooperation_mode == "送拍"
+        finally:
+            tenant_id_ctx.reset(token)
+
+    async def test_legacy_null_mode_can_be_filled_once(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+    ) -> None:
+        """历史导入数据没有合作模式，允许补一次，补完即锁。
+
+        生产上有 5154 条这样的记录（Excel 导入的「未发布」老单）。
+        """
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            user = await factory.user(tenant_a, roles=[admin_role])
+            style = await product_factory.style(style_code="CM_LEGACY")
+            blogger = await blogger_factory.blogger(quote=Decimal("250.00"))
+            svc = PromotionService(session)
+            created = await svc.create_promotion(
+                PromotionCreate(
+                    cooperation_mode=CooperationMode.GIFT,
+                    style_id=style.id,
+                    blogger_id=blogger.id,
+                    platform="小红书",
+                    cooperation_date=date(2026, 7, 6),
+                ),
+                user,
+            )
+            # 人为还原成历史数据的样子
+            promotion = await svc._repo.get_by_id(created.id)
+            assert promotion is not None
+            promotion.cooperation_mode = None
+            await session.flush()
+
+            filled = await svc.update_promotion(
+                created.id,
+                PromotionUpdate(cooperation_mode=CooperationMode.BARTER),
+                user,
+            )
+            assert filled.cooperation_mode == "置换"
+            # 补成置换，服务费被归零
+            assert filled.quote_amount == Decimal("0.00")
+
+            with pytest.raises(CooperationModeImmutableError):
+                await svc.update_promotion(
+                    created.id,
+                    PromotionUpdate(cooperation_mode=CooperationMode.GIFT),
+                    user,
+                )
+        finally:
+            tenant_id_ctx.reset(token)
+
+    async def test_patching_quote_on_barter_is_forced_back_to_zero(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+    ) -> None:
+        """置换单事后 PATCH 一个报价，仍然被压回 0 —— 强制规则不只在建单时生效。"""
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            user = await factory.user(tenant_a, roles=[admin_role])
+            style = await product_factory.style(style_code="CM_PATCH")
+            blogger = await blogger_factory.blogger(quote=Decimal("100.00"))
+            svc = PromotionService(session)
+            created = await svc.create_promotion(
+                PromotionCreate(
+                    cooperation_mode=CooperationMode.BARTER,
+                    style_id=style.id,
+                    blogger_id=blogger.id,
+                    platform="小红书",
+                    cooperation_date=date(2026, 7, 7),
+                ),
+                user,
+            )
+            assert created.quote_amount == Decimal("0.00")
+
+            updated = await svc.update_promotion(
+                created.id,
+                PromotionUpdate(quote_amount=Decimal("999.00")),
+                user,
+            )
+            assert updated.quote_amount == Decimal("0.00")
+        finally:
+            tenant_id_ctx.reset(token)
+
+    async def test_gift_sample_cost_can_be_manually_adjusted(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+    ) -> None:
+        """送拍的样品成本 PRD 允许 PR 手动微调，更新时不能被汇总值重新覆盖。
+
+        这是 _enforce_mode_costs 与 _resolve_mode_costs 分开的原因：前者只压两个恒为 0
+        的字段，不去重算可人工调整的部分。
+        """
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            user = await factory.user(tenant_a, roles=[admin_role])
+            style = await product_factory.style(style_code="CM_ADJUST")
+            await self._goods_with_cost(
+                session, tenant_a, (style, Decimal("100.00")), code="CM-ADJUST"
+            )
+            blogger = await blogger_factory.blogger(quote=Decimal("200.00"))
+            svc = PromotionService(session)
+            created = await svc.create_promotion(
+                PromotionCreate(
+                    cooperation_mode=CooperationMode.GIFT,
+                    style_id=style.id,
+                    blogger_id=blogger.id,
+                    platform="小红书",
+                    cooperation_date=date(2026, 7, 8),
+                ),
+                user,
+            )
+            assert created.cost_snapshot == Decimal("100.00")
+
+            # 尾货拼单，实际只按 60 核算
+            adjusted = await svc.update_promotion(
+                created.id,
+                PromotionUpdate(remark="尾货，按 60 核算"),
+                user,
+            )
+            assert adjusted.cost_snapshot == Decimal("100.00")
+
+            promotion = await svc._repo.get_by_id(created.id)
+            assert promotion is not None
+            promotion.cost_snapshot = Decimal("60.00")
+            await session.flush()
+
+            # 再次更新别的字段，手调过的成本不该被汇总值冲掉
+            again = await svc.update_promotion(
+                created.id,
+                PromotionUpdate(note_title="标题改一下"),
+                user,
+            )
+            assert again.cost_snapshot == Decimal("60.00")
+            assert again.total_promo_cost == Decimal("260.00")
         finally:
             tenant_id_ctx.reset(token)
