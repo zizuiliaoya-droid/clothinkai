@@ -8,7 +8,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Path, Query, status
 
-from app.modules.auth.deps import CurrentActiveUser, require_permission
+from app.modules.auth.deps import CurrentActiveUser, SessionDep, require_permission
 from app.modules.report.advanced_schemas import (
     ProductionReport,
     ProductionTrend,
@@ -21,6 +21,7 @@ from app.modules.report.advanced_schemas import (
 from app.modules.report.deps import (
     ProductionServiceDep,
     StoreDailyServiceDep,
+    SummaryRefreshServiceDep,
     TargetPlanningServiceDep,
     WorkProgressServiceDep,
 )
@@ -174,6 +175,39 @@ async def get_production_trend(
         granularity=granularity,
         exclude_brushing=exclude_brushing,
     )
+
+
+# --------------------------- 汇总表手动刷新 --------------------------- #
+
+
+@router.post(
+    "/summaries/refresh",
+    dependencies=[require_permission("report.summary", "refresh")],
+)
+async def refresh_summaries(
+    user: CurrentActiveUser,
+    service: SummaryRefreshServiceDep,
+    session: SessionDep,
+    date_from: Annotated[date, Query(description="刷新区间起（含）")],
+    date_to: Annotated[date, Query(description="刷新区间止（含）")],
+) -> dict:
+    """按需补算历史区间的汇总表。
+
+    定时任务只滚动刷新最近 31 天（见 ``summary_tasks.REFRESH_WINDOW_DAYS``），
+    导入了更早的 Excel 之后需要手动补这一段。
+
+    并发安全：刷新是「区间删 + 批量插」，两个请求撞上时后一个的 DELETE 会等前一个
+    提交再重新取最新行，最终两者写出同一份数据（源相同）。所以不加分布式锁。
+
+    区间走 ``resolve_time_range("custom", ...)`` 校验而不是另写一套：这个端点会删掉
+    区间内所有汇总行再重建，不限长度一次调用就能触发全库重算，而「date_from ≤ date_to
+    且跨度 ≤ 366 天」这条规则其他报表端点已经在用，没理由在这里定义第二份。
+    """
+    lo, hi = resolve_time_range("custom", date_from, date_to)
+    counts = await service.refresh(tenant_id=user.tenant_id, date_from=lo, date_to=hi)
+    # service 不 commit：5 张表要么一起生效要么一起回滚
+    await session.commit()
+    return {"ok": True, "date_from": str(lo), "date_to": str(hi), **counts}
 
 
 __all__ = ["router"]

@@ -49,3 +49,23 @@ class TestAdvancedReportApiContract:
         assert "/api/reports/store-daily" in paths
         assert "/api/reports/store-daily/{day}" in paths
         assert "/api/reports/production" in paths
+
+    async def test_summary_refresh_requires_auth(self) -> None:
+        from app.main import app
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            resp = await ac.post(
+                "/api/reports/summaries/refresh?date_from=2026-03-01&date_to=2026-03-31"
+            )
+        assert resp.status_code == 401
+
+    async def test_openapi_exposes_summary_refresh(self) -> None:
+        from app.main import app
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            resp = await ac.get("/api/openapi.json")
+        assert resp.status_code == 200
+        paths = resp.json().get("paths", {})
+        assert "/api/reports/summaries/refresh" in paths
+        # 只能 POST：GET 一个会删重建数据的端点容易被预取/爬虫误触发
+        assert set(paths["/api/reports/summaries/refresh"]) == {"post"}

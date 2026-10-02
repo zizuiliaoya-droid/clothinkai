@@ -61,6 +61,7 @@ celery_app.autodiscover_tasks(
         "app.tasks.blogger_tasks",  # U11：recompute_all_blogger_tags
         "app.tasks.crawler_tasks",  # U13：schedule_daily_tasks
         "app.tasks.report_tasks",  # U14：precompute_report_cache（占位）
+        "app.tasks.summary_tasks",  # PRD 模块三：refresh_report_summaries（5 张汇总表）
         "app.tasks.urge_tasks",  # PRD 改动 2：scan_urge_tasks（催发任务，独立于企微）
     ]
 )
@@ -126,6 +127,16 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.wecom_tasks.check_anomaly_and_alert",
         "schedule": crontab(minute=0),
         "options": {"queue": "default"},
+    },
+    # PRD 模块三：每小时刷新 5 张报表汇总表，滚动窗口最近 31 天。
+    # minute=20 是为了避开整点的异常预警与 */15 的采集恢复 —— 三个任务都要连库，
+    # 撞在同一分钟会让连接池吃紧。
+    # 02:00 的采集导入期间也会刷一次，那时可能读到部分数据；下一个小时会再刷，
+    # 最终一致。真要「导入完成即刷新」得在 importer 里挂回调，留给后续批次。
+    "refresh-report-summaries-hourly": {
+        "task": "app.tasks.summary_tasks.refresh_report_summaries",
+        "schedule": crontab(minute=20),
+        "options": {"queue": "report"},
     },
     # U11 博主标签批量重算（选装）：默认注释，需要时取消注释启用
     # "recompute-blogger-tags-daily": {

@@ -314,9 +314,102 @@ CTE 用 `UNION` 而不是 `UNION ALL`：两条分支理论上互斥，但数据�
 - 两份口径（实时 + 汇总）是新的 bug 源 —— 这个项目已经吃过「同一个值两处定义」的苦
   （`legacy_settings` 与 `scan_service` 的催发阈值、`like_count` 与 `source_extra['点赞数']`）
 
-**所以 5 张汇总表的取舍需要业务方决定**，见下节「待业务确认」。
+**所以 5 张汇总表的取舍需要业务方决定** —— 业务方选了「照 PRD 全建」，见下节。
 
-## 批次 5b（待定）：投产/工作进度/BI 的视图补齐
+## 批次 5b-1（已完成）：5 张中间汇总表 + 每小时刷新
+
+migration `052_report_summary`。`product_roi_summary` / `pr_work_progress_summary` /
+`shop_daily_summary` / `shop_week_summary` / `shop_month_summary`，全部带 RLS forced。
+
+**本 PR 不切读取路径**：先刷新 + 校验数字与实时聚合逐分相等，确认无误后再在下个 PR
+切读。这样口径问题在影响用户之前就暴露。
+
+### 刷新源一律复用现有 repository 方法
+
+汇总表最大的风险不是性能也不是调度，而是**预聚合口径和实时查询口径悄悄分叉** ——
+数字对不上，不报错、不抛异常、没有任何信号。这个项目已经为「同一个值两处定义」
+付过三次代价（催发阈值、`like_count` 双字段、推广列表手写列白名单漏 5 列）。
+
+所以 `summary_refresh_service.py` 里**没有一行聚合 SQL**：
+
+| 表 | 刷新源 |
+|---|---|
+| `product_roi_summary` | `ProductionRepository.daily_trend_by_goods(goods_id=None)` |
+| `pr_work_progress_summary` | `WorkProgressRepository.aggregate_by_pr` 逐日调用 |
+| `shop_daily_summary` | `StoreDailyRepository.aggregate` |
+| `shop_week_summary` / `shop_month_summary` | `shop_daily_summary` 二次聚合 |
+
+为此把 `daily_trend_by_goods` 的 `goods_id` 泛化成 `UUID | None`（None 时按
+(商品, 日期桶) 分组），而不是新写一个 `aggregate_daily_by_goods` —— 后者就是第二份 SQL。
+PR 进度表逐日调 `aggregate_by_pr` 而不是给那条 18 个 FILTER 的 SQL 加 granularity 参数：
+落盘的 10 个计数全可加，读取时 SUM 回去就是任意区间的结果，代价只是 31 次查询
+（单次实测 11ms）。
+
+### 几个值得留痕的取舍
+
+**不存比率**（net_roi / 各种 rate）。落盘会把除零语义固化进数据 —— 分母 0 是存 0、
+存 NULL 还是不存这一行？这个语义现在由 `safe_div` 一处决定，存了就变两处。
+
+**不存 `urge_status` 派生的 5 个计数**（档期内/催发/重要催发/超时）。它们依赖「今天」：
+今天算催发的单子明天变超时，按历史日期固化下来永远是错的。这 5 个继续实时算，
+读取时与汇总表结果合并。
+
+**`store_daily` 的手填值不进汇总表**。那是人工 override 层（3 个广告消耗 + 备注），
+读取时 LEFT JOIN 过去即时生效；存进汇总表反而要等下一次刷新才看得到自己刚填的值。
+表名也刻意叫 `shop_daily_summary` 而不是 `shop_daily_data` —— 和 018 的 `store_daily`
+同位会打架。
+
+**多存一列 `brushing_amount`**。报表有「含刷单/剔刷单」开关，只存一个口径另一个就
+查不了，为开关各存一份行则是把同一笔数据写两遍。存刷单额本身，两个口径都能从一份行
+还原：含刷单 = `pay_amount`，剔刷单 = `pay_amount - brushing_amount`。为此
+`daily_trend_by_goods` 的 brushing CTE 改成**总是计算**，减不减由 `:exclude_brushing`
+在 aggregated 里决定。
+
+**用「区间删 + 批量插」而不是 upsert**。纯 upsert 漏掉「源数据减少」：某天的千牛日报
+被删或改了货号，那行汇总不会被任何 upsert 覆盖，永远停在旧数字上。要补这个漏，upsert
+之后还得算出「本次没产出的 key」再删 —— 生产 264 商品 × 31 天是 8000 多个 key，拼进
+SQL 会炸。先删后插一步到位，且删插同事务，MVCC 保证读取方看不到空表。
+
+**周/月刷新会把区间补全成桶**。只刷 3/10~3/15 却写「3 月」那一行，这行就只含 6 天，
+月汇总凭空少掉大半。
+
+### 权限：独立的 `report.summary:refresh`
+
+手动刷新端点 `POST /api/reports/summaries/refresh` 横跨 5 张表且先删后建，挂在
+`report.production` 或 `report.store_daily` 下，持单张报表读写权的人就能触发全表重算。
+
+action 刻意取 `refresh` 而不是 `read`/`write`：`has()` 的通配按 action 精确匹配，
+而 `operations` 与 `pr_manager` 都持有 `report.*:read` —— 叫 `read` 就会自动泄漏给他们。
+这和谈款审核当初必须独立成 `negotiation` 一级域是同一类问题。查过全库：没有任何角色
+持有 `report.*:*`。
+
+### Beat 槽位
+
+`refresh-report-summaries-hourly`，`crontab(minute=20)`，`queue="report"`。
+minute=20 是为了避开整点的异常预警与 `*/15` 的采集恢复 —— 三个任务都要连库。
+滚动窗口 31 天（覆盖「上月整月」，月桶才不会被半月数据覆盖）；更早的区间用手动端点补。
+
+### 测试立的护栏
+
+新增 33 条，重点是用**故障注入**确认它们真能抓到问题（测试绿了不等于有效）：
+
+| 注入的故障 | 被抓到的测试 |
+|---|---|
+| 广告子查询丢掉商品维度（`NULL::uuid AS goods_id`） | 按日合计 ≠ 区间聚合、全商品切片 ≠ 单商品 |
+| `_replace` 的 DELETE 漏掉日期条件（= truncate） | 只刷 3 月动了 4 月、月汇总被半月覆盖 |
+| 周/月刷新不把区间补全成桶 | 月汇总被半月覆盖 |
+
+另外每条等值测试都带一个「场景有效性」断言（四个指标必须都出现非零值），
+防止在比对一堆 0 的情况下静默通过。
+
+### 不在本次范围
+
+`data_source`（api 自动 / excel 手动）与「仅退款率」留在 5b-2：
+- `qianniu_daily` / `ad_daily` 既没有 `import_batch_id` 也没有来源列，**历史数据无法
+  回填**。光加列只会得到一列全 NULL，必须先给 RPA 与 Excel 两条写入通道各自打标。
+- 「仅退款笔数」是否存在于千牛导出里尚未确认，加一个永远为 NULL 的列是负资产。
+
+## 批次 5b-2（待定）：投产/工作进度/BI 的视图补齐
 
 无论汇总表做不做，这部分 PRD 要求都成立，与性能无关：
 
@@ -327,12 +420,17 @@ CTE 用 `UNION` 而不是 `UNION ALL`：两条分支理论上互斥，但数据�
   - 现状：只有 PR 人员进度明细一张表
 - BI 看板 Tab1 店铺总览 + Tab2 单品分析，下钻携带全部筛选参数，导出图片，PR 权限隔离财务指标
   - 现状：单页 cards + 3 图 + 2 表，布局可存，没有 Tab 分离与导出图片
+- 报表读取切到汇总表（带回退）+ 前端手动刷新按钮
+  - 5b-1 已建表并刷新，但读取路径仍是实时聚合
 - `data_source` 标记来源（api 自动拉取 / excel 手动导入）
   - **现在从数据行上完全无法区分**：两条路走的是同一条 importer 通道，
     `qianniu_daily` / `ad_daily` 既没有 `source` 列也没有 `import_batch_id`
+  - 顺序必须是「先给两条写入通道打标 → 再加列」。反过来做只会得到一列全 NULL，
+    而且历史 310 行永远补不上（没有任何路径能追溯某行日报来自哪个批次）
 - `仅退款率` 字段预留 API 回填
   - 现在没有这个字段；`refund_amount` 本身还是从 `qianniu_daily.extra->>'refund_amount'`
     带正则守卫抠出来的
+  - 先确认千牛导出里有没有「仅退款笔数」，再决定加列
 
 ## 批次 6：直播分账 + 全局安全（约 4 人日）
 
@@ -365,6 +463,10 @@ CTE 用 `UNION` 而不是 `UNION ALL`：两条分支理论上互斥，但数据�
 - **`session.expire_all()` 之后再访问任何已加载实例的属性（哪怕是 `obj.id`）都会触发隐式加载**，在 async session 里就是 `MissingGreenlet`。要么先把需要的值取出来，要么干脆别用 ORM 实例做基准 —— 直接 `SELECT *` 拿原始行比更干净。
 - **加硬约束时校验顺序要排：状态机先判，附加门槛后判。** 品牌词截图的检查一开始写在状态机之前，于是「已发布的单再点发布」报的是「缺截图」，会让人去补一张根本不需要的图。跑全量测试时才暴露。
 - **`create_upload_record` 在 R2 未配置时直接抛 `AttachmentError`，没有本地回退**（`upload_bytes` 有）。测附件上传要给 `attachment_service._client` 装一个假 client，这样 Attachment 行、状态机、FK 全走真实路径，只有网络调用是假的。
+- **改了已跑过的 migration 之后，本地库不会自动重跑** —— alembic 看到 revision 已是 head 就跳过。052 加权限 seed 之后查库发现权限表是空的，必须 `alembic downgrade <上一版> && alembic upgrade head` 才生效。验证 migration 的新增内容前先往返一次。
+- **普通唯一索引对 NULL 不生效**。`pr_work_progress_summary` 的 `pr_id` 可为 NULL（未分配 PR 的单据也要统计），普通 `UNIQUE(tenant_id, pr_id, stat_date)` 会让「未分配」那行每次刷新都新增一条。PG 15+ 要写 `NULLS NOT DISTINCT`，而 SQLAlchemy 的 `Index(unique=True)` 表达不了，得用 `op.execute` 写原生 DDL —— 同时 ORM 侧**不要**再声明一遍这个索引，否则 `create_all` 会建出一个语义不同的。
+- **权限的通配是按 action 精确匹配的**（`has()` 里 `f"{prefix}.*:{action}"`）。所以新权限的 action 取什么名字直接决定它会不会被已有通配捞走：`report.summary:read` 会自动落给持 `report.*:read` 的 operations / pr_manager，`report.summary:refresh` 不会。给敏感动作起名时先查一遍 `SELECT scope FROM permission WHERE scope LIKE '%*%'` 和谁持有它。
+- **测试绿了不等于测试有效。** 等值类测试（预聚合 vs 实时、两条路径互为参照）特别容易在「两边都是 0」或「两边跑同一段错代码」的情况下静默通过。写完之后往被测代码里注入一个真实形态的故障（改错分组列、删掉 DELETE 的日期条件），确认测试会红再恢复。5b-1 的三次注入都抓到了，这才说明那 33 条有意义。另外每条等值测试都该带一个「场景有效性」断言，强制各项指标出现非零值。
 
 ## 待业务确认
 
@@ -376,18 +478,13 @@ CTE 用 `UNION` 而不是 `UNION ALL`：两条分支理论上互斥，但数据�
 4. **IP 白名单的紧急通道**（改动 7）：配错会全员锁死，需要定一个兜底方式。
 5. **7 天点赞数**：现在 typed `like_count` 和 `source_extra['点赞数']` 两套并存、互不同步，要定哪个是准的。
 6. **Excel 导出水印**（改动 6）：xlsx 没有原生水印层，通常做法是加页眉文字或铺一层浅色图片，需要确认接受哪种。
-7. **5 张中间汇总表要不要建**（模块四五六）。PRD 要求建表 + 每小时增量刷新，理由是性能。
-   但批次 5a 实测后这个理由不成立了：
-   - 生产数据量 310 行千牛日报 / 38 行广告日报，汇总表没有可感知的读取收益
-   - 真正的瓶颈是一条 SQL 的写法（1848ms → 已修），刷新任务还得跑同一条 SQL，不修照样慢
-   - 两份口径（实时 + 汇总）是新的 bug 源，这个项目已经为「同一个值两处定义」付过代价
-   三个选项：
-   - **(a) 不建**，继续实时聚合 + 按需加索引。省掉 5 张表、1 个定时任务、口径同步逻辑。
-     代价：数据量涨到十万级时要重做。
-   - **(b) 只建 `product_roi_summary`**（投产是唯一重的那张），其余保持实时。
-   - **(c) 照 PRD 全建。** 如果业务方预期数据量会快速增长（比如要接更多店铺、
-     或要存两三年历史），这是对的；现在做比以后做便宜。
-   需要知道的输入：**预计一年后千牛日报会有多少行？要保留多久的历史？**
+**已关闭的确认项**
+
+- **5 张中间汇总表要不要建**（模块四五六）：业务方选 **(c) 照 PRD 全建**，已在 5b-1
+  实施。当时摆出的三个选项是 (a) 不建 / (b) 只建 `product_roi_summary` / (c) 全建；
+  5a 实测后「性能」这个理由其实不成立（310 行数据，瓶颈是 SQL 写法而非数据量），
+  所以实施时把重心放在**防口径分叉**上：刷新复用现有 repository 方法、零新增聚合 SQL、
+  本 PR 不切读取先校验。详见「批次 5b-1」。
 
 ## 已知数据缺口（不挡实施，但影响报表完整度）
 
