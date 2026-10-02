@@ -63,6 +63,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import Date, cast, delete, func, insert, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.promotion.urge_calculator import get_today
 from app.modules.report.advanced_repository import (
     ProductionRepository,
     StoreDailyRepository,
@@ -84,15 +85,20 @@ _ROI_METRICS = (
     "pay_amount",
     "brushing_amount",
     "refund_amount",
+    "add_cart_count",
     "promo_cost",
     "ad_spend",
 )
 
-# pr_work_progress_summary 落盘的计数列。
-# 档期内 / 催发 / 重要催发 / 超时这 4 个**刻意不存**：它们由 urge_status 派生，
-# 依赖「今天」—— 今天算催发的单子明天变超时，按历史日期固化下来永远是错的。
+# pr_work_progress_summary 落盘的计数列（14 个，与 aggregate_by_pr 的输出一一对应）。
+# 档期内 / 催发 / 重要催发 / 超时 4 个由 urge_status 派生、依赖「今天」，存的是
+# **刷新时刻**的状态 —— 见 _refresh_pr_progress 与 migration 054 的 docstring。
 _PR_COUNTERS = (
     "quote_count",
+    "in_schedule_count",
+    "urge_count",
+    "important_urge_count",
+    "overdue_count",
     "publish_count",
     "info_complete_count",
     "cancel_count",
@@ -284,17 +290,20 @@ class SummaryRefreshService:
         self, tenant_id: UUID, date_from: date, date_to: date, now: datetime
     ) -> int:
         payload: list[dict[str, Any]] = []
+        # 催发派生的 4 个计数按**刷新时刻的今天**算，整次刷新共用一个值。
+        # 读取侧实时路径同样用 get_today()，所以「刚刷新完」时两条路径逐个相等；
+        # 之后随时间推移，汇总表里的催发状态停在上次刷新那一刻 —— 与其他计数
+        # 同样最多晚一小时（窗口内）或随历史冻结（窗口外），见 migration 054。
+        today = get_today()
         day = date_from
         while day <= date_to:
             # aggregate_by_pr 按区间聚合，没有「按日分组」的形态。与其给它加一个
             # granularity 参数（= 改一条 18 个 FILTER 的 SQL，风险远大于收益），
-            # 不如把区间收成一天逐日调用：落盘的 10 个计数全是可加的，
-            # 读取时 SUM 回去就是任意区间的结果。
-            #
-            # today 传当天：它只影响 urge_status 派生的 5 个计数，而那 5 个
-            # 刻意不落盘，所以传什么都不改变写入结果。
+            # 不如把区间收成一天逐日调用：落盘的 14 个计数全是可加的（每张推广单
+            # 只有一个合作日期，按天切开再加回去不重不漏），读取时 SUM 回去就是
+            # 任意区间的结果。
             rows = await self._work.aggregate_by_pr(
-                tenant_id=tenant_id, date_from=day, date_to=day, today=day
+                tenant_id=tenant_id, date_from=day, date_to=day, today=today
             )
             payload.extend(
                 {

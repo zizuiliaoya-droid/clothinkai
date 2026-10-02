@@ -65,6 +65,8 @@ def _to_date(raw: Any) -> date | str | None:
 class WanxiangtaiImportAdapter:
     source: str = "wanxiangtai"
     target_table: str = "ad_daily"
+    # 进报表的业务日期列：导入完成后按这一列的范围刷新报表汇总表（import_tasks._AffectedDates）
+    summary_date_field: str | None = "date"
 
     def parse_row(self, row: dict[str, Any], mapping: FieldMapping | None) -> dict[str, Any]:
         columns = (

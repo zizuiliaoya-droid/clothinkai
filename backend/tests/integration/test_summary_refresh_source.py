@@ -49,9 +49,9 @@ D_MAR_09 = date(2026, 3, 9)
 D_APR_01 = date(2026, 4, 1)
 LO, HI = date(2026, 1, 1), date(2026, 12, 31)
 
-# 比对的指标。add_cart_count 不在趋势里（汇总表也不存它，走 fetch_extra_by_goods），
-# net_roi 是比率不落盘，两者都不参与等值比对。
-_METRICS = ("pay_amount", "refund_amount", "promo_cost", "ad_spend")
+# 比对的指标。add_cart_count 由 054 加进汇总表（投产报表「总加购数」靠它），
+# net_roi 是比率不落盘，不参与等值比对。
+_METRICS = ("pay_amount", "refund_amount", "add_cart_count", "promo_cost", "ad_spend")
 
 
 async def _goods(

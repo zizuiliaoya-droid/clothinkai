@@ -92,6 +92,8 @@ class PromotionImportAdapter:
 
     source: str = "manual_promotion"
     target_table: str = "promotion"
+    # 进报表的业务日期列：推广单按合作日期归到报表的哪一天（投产推广费、工作进度）
+    summary_date_field: str | None = "cooperation_date"
 
     def __init__(self) -> None:
         # tenant_id → tenant.code 实例级缓存（tenant.code 不可变，worker 跨 batch 复用）

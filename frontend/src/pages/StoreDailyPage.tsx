@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Button, Card, Select, Space, Table, Typography, message } from "antd";
+import { Button, Card, Select, Space, Table, message } from "antd";
 import { DownloadOutlined } from "@ant-design/icons";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import type { ColumnsType } from "antd/es/table";
@@ -7,6 +7,10 @@ import dayjs from "dayjs";
 import { exportReport, getStoreDaily } from "@/features/report/api";
 import type { StoreDailyRow, TimeGranularity, TimePreset } from "@/features/report/types";
 import { extractErrorMessage } from "@/services/apiClient";
+import {
+  ReportCardTitle,
+  ReportFreshness,
+} from "@/components/ReportFreshness/ReportFreshness";
 import {
   ReportTimeRangeFilter,
   type ReportDateRange,
@@ -121,9 +125,12 @@ export function StoreDailyPage() {
   return (
     <Card
       title={
-        <Typography.Title level={4} style={{ margin: 0 }}>
-          店铺数据
-        </Typography.Title>
+        <ReportCardTitle
+          title="店铺数据"
+          freshness={
+            <ReportFreshness preset={preset} dateFrom={df} dateTo={dt} enabled={enabled} />
+          }
+        />
       }
     >
       <Space style={{ marginBottom: 16 }} wrap>

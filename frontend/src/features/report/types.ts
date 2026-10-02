@@ -212,3 +212,29 @@ export interface BiDashboard {
   cards: Array<Record<string, unknown>>;
   charts: Array<Record<string, unknown>>;
 }
+
+/**
+ * 报表区间的数据新鲜度（GET /api/reports/summaries/freshness）。
+ *
+ * - `summary`：读的是每小时刷新的汇总表，`data_as_of` 是区间内最旧的那次刷新时间
+ * - `live`：区间没有被汇总表完整覆盖，按明细实时统计，`data_as_of` 为 null
+ *
+ * `date_from` / `date_to` 是服务端解析预设后的具体日期 —— 预设模式下前端手里没有日期，
+ * 刷新按钮要用这一对。
+ */
+export interface ReportFreshness {
+  date_from: string;
+  date_to: string;
+  source: "summary" | "live";
+  data_as_of: string | null;
+  can_refresh: boolean;
+}
+
+/** POST /api/reports/summaries/refresh 的返回：各汇总表写入行数。 */
+export interface SummaryRefreshResult {
+  ok: boolean;
+  date_from: string;
+  date_to: string;
+  skipped?: string;
+  [table: string]: unknown;
+}

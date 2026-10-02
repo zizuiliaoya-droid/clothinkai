@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -138,6 +139,23 @@ class ProductionTrend(BaseModel):
     points: list[ProductionTrendPoint]
 
 
+# --------------------------- 汇总表数据新鲜度 --------------------------- #
+
+
+class ReportFreshnessOut(BaseModel):
+    """一个报表区间的数据从哪来、截至什么时候，以及当前用户能不能手动刷新。
+
+    独立成一个端点而不是塞进各报表的响应：工作进度、店铺数据两个接口返回的是裸列表，
+    加字段就要改成信封结构 —— 前后端分开部署，切换那几分钟里旧前端会直接白屏。
+    """
+
+    date_from: date
+    date_to: date
+    source: Literal["summary", "live"]
+    data_as_of: datetime | None = None
+    can_refresh: bool
+
+
 # ----------------------------- BI 看板 ----------------------------- #
 
 
@@ -232,6 +250,7 @@ __all__ = [
     "ProductionRow",
     "ProductionTrend",
     "ProductionTrendPoint",
+    "ReportFreshnessOut",
     "StoreDailyManualUpdate",
     "StoreDailyRow",
     "TargetCreate",

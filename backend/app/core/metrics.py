@@ -316,8 +316,16 @@ report_query_duration_seconds: Histogram = Histogram(
     buckets=(0.05, 0.1, 0.3, 0.5, 0.8, 2.0),
 )
 
+report_summary_reads_total: Counter = Counter(
+    "report_summary_reads_total",
+    "Report reads by data source (summary table vs live aggregation)",
+    # report: production/production_trend/work_progress/store_daily；source: summary/live
+    labelnames=("report", "source"),
+)
+
 
 __all__ = [
+    "report_summary_reads_total",
     "attachment_validation_failures_total",
     "blogger_search_results_count",
     "crawler_poll_total",

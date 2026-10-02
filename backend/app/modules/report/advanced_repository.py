@@ -25,6 +25,93 @@ _URGE_DAYS = 10
 _IMPORTANT_DAYS = 3
 
 
+# ---------------------------------------------------------------------------
+# 实时聚合与汇总表读取共用的 SQL 片段
+#
+# 汇总表读取路径（summary_read.py）必须与实时路径逐分相等。凡是两边都要写的表达式
+# 都只在这里定义一次 —— 各写一份就是口径漂移的温床：改一边忘一边，汇总表和实时报表
+# 对不上，而且不报错。
+# ---------------------------------------------------------------------------
+
+# extra 是导入来的 JSONB，出现 "1,234"、"-" 这类字面量时直接 ::numeric / ::int 会让
+# 整条报表查询报错，所以带正则守卫：认不出的值按 0 算。
+_REFUND_SUM = """COALESCE(SUM(
+  CASE
+    WHEN COALESCE(q.extra->>'refund_amount', '') ~ '^-?[0-9]+([.][0-9]+)?$'
+    THEN (q.extra->>'refund_amount')::numeric
+    ELSE 0
+  END
+), 0)"""
+
+_ADD_CART_SUM = """COALESCE(SUM(
+  CASE
+    WHEN COALESCE(q.extra->>'add_cart_count', '') ~ '^-?[0-9]+$'
+    THEN (q.extra->>'add_cart_count')::int
+    ELSE 0
+  END
+), 0)"""
+
+# 商品维度报表的「商品信息」列（投产主表与它的汇总表读取共用）
+GOODS_META_COLUMNS = """
+  g.id AS goods_id, g.goods_code AS goods_code,
+  g.goods_title AS goods_title, g.is_suit AS is_suit,
+  -- 商品自己没配主图时借用成员款式的（040 建的最小档案都没有主图）
+  COALESCE(g.main_image_key, (
+    SELECT ms.main_image_key
+    FROM goods_style_item mi
+    JOIN style ms ON ms.id = mi.style_id
+    WHERE mi.goods_main_id = g.id AND mi.is_active = true
+      AND ms.main_image_key IS NOT NULL
+    ORDER BY mi.sort_order, ms.style_code
+    LIMIT 1
+  )) AS main_image_key,
+  -- 套装要让人看出含哪几款；单品就是它自己的货号
+  (
+    SELECT string_agg(cs.style_code, ',' ORDER BY ci.sort_order, cs.style_code)
+    FROM goods_style_item ci
+    JOIN style cs ON cs.id = ci.style_id
+    WHERE ci.goods_main_id = g.id AND ci.is_active = true
+  ) AS style_codes"""
+
+GOODS_META_GROUP_BY = "g.id, g.goods_code, g.goods_title, g.is_suit, g.main_image_key"
+
+# 日期分桶。周按 ISO（周一开始），汇总表刷新的 _bucket_start 用同一口径 ——
+# 两边分桶方式不一致会让周汇总与周趋势图对不上。
+_BUCKET_TEMPLATES = {
+    "day": "{column}",
+    "week": "date_trunc('week', {column})::date",
+    "month": "date_trunc('month', {column})::date",
+    "year": "date_trunc('year', {column})::date",
+}
+
+
+def bucket_expr(granularity: str, column: str) -> str:
+    """``column`` 按 ``granularity`` 分桶后的 SQL 表达式（桶的首日）。"""
+    try:
+        template = _BUCKET_TEMPLATES[granularity]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported granularity: {granularity}") from exc
+    return template.format(column=column)
+
+
+def goods_filter_clauses(
+    seasons: Sequence[str] | None, categories: Sequence[str] | None
+) -> tuple[str, dict[str, Any]]:
+    """商品维度的季节 / 类目多选筛选（PRD 第 4 章）。空列表与 None 同义：不筛。
+
+    ``= ANY(:param)`` 走数组绑定参数，不把值拼进 SQL。
+    """
+    clauses: list[str] = []
+    params: dict[str, Any] = {}
+    if seasons:
+        clauses.append("AND g.season = ANY(:seasons)")
+        params["seasons"] = list(seasons)
+    if categories:
+        clauses.append("AND g.category = ANY(:categories)")
+        params["categories"] = list(categories)
+    return "\n".join(clauses), params
+
+
 # 千牛日报 → 商品 的映射，物化成 CTE。
 #
 # 这段逻辑原来直接写在 ``LEFT JOIN qianniu_daily ON (...)`` 的条件里，于是
@@ -126,7 +213,9 @@ class WorkProgressRepository:
             WHERE p.tenant_id = :tenant_id AND p.is_active = true
               AND p.cooperation_date BETWEEN :date_from AND :date_to
             GROUP BY p.pr_id, u.display_name, u.username
-            ORDER BY quote_count DESC
+            -- 约稿量相同的 PR 原来顺序不确定；加上姓名与 id 兜底，
+            -- 汇总表读取（summary_read）用同一排序，两条路径才能逐行比对
+            ORDER BY quote_count DESC, pr_name, pr_id
             """
         )
         params = {
@@ -256,50 +345,15 @@ class ProductionRepository:
             if exclude_brushing
             else ""
         )
-        # = ANY(:param) 走数组绑定参数，不把值拼进 SQL
-        season_clause = "AND g.season = ANY(:seasons)" if seasons else ""
-        category_clause = "AND g.category = ANY(:categories)" if categories else ""
+        filter_sql, filter_params = goods_filter_clauses(seasons, categories)
         sql = text(
             f"""
             WITH {_QIANNIU_GOODS_LINK_CTE}
             SELECT
-              g.id AS goods_id, g.goods_code AS goods_code,
-              g.goods_title AS goods_title, g.is_suit AS is_suit,
-              -- 商品自己没配主图时借用成员款式的（040 建的最小档案都没有主图）
-              COALESCE(g.main_image_key, (
-                SELECT ms.main_image_key
-                FROM goods_style_item mi
-                JOIN style ms ON ms.id = mi.style_id
-                WHERE mi.goods_main_id = g.id AND mi.is_active = true
-                  AND ms.main_image_key IS NOT NULL
-                ORDER BY mi.sort_order, ms.style_code
-                LIMIT 1
-              )) AS main_image_key,
-              -- 套装要让人看出含哪几款；单品就是它自己的货号
-              (
-                SELECT string_agg(cs.style_code, ',' ORDER BY ci.sort_order, cs.style_code)
-                FROM goods_style_item ci
-                JOIN style cs ON cs.id = ci.style_id
-                WHERE ci.goods_main_id = g.id AND ci.is_active = true
-              ) AS style_codes,
+              {GOODS_META_COLUMNS},
               (COALESCE(SUM(q.pay_amount), 0){brushing_sub}) AS pay_amount,
-              COALESCE(SUM(
-                CASE
-                  WHEN COALESCE(q.extra->>'refund_amount', '')
-                       ~ '^-?[0-9]+([.][0-9]+)?$'
-                  THEN (q.extra->>'refund_amount')::numeric
-                  ELSE 0
-                END
-              ), 0) AS refund_amount,
-              -- 与 refund_amount 同样加正则守卫：extra 是导入来的 JSONB，
-              -- 出现 "1,234"、"-" 这类字面量时直接 ::int 会让整条报表查询报错。
-              COALESCE(SUM(
-                CASE
-                  WHEN COALESCE(q.extra->>'add_cart_count', '') ~ '^-?[0-9]+$'
-                  THEN (q.extra->>'add_cart_count')::int
-                  ELSE 0
-                END
-              ), 0) AS add_cart_count,
+              {_REFUND_SUM} AS refund_amount,
+              {_ADD_CART_SUM} AS add_cart_count,
               COALESCE(MAX(promo.promo_cost), 0) AS promo_cost,
               COALESCE(MAX(ad.ad_spend), 0) AS ad_spend
             FROM goods_main g
@@ -348,24 +402,21 @@ class ProductionRepository:
               GROUP BY COALESCE(p.goods_main_id, owner.goods_main_id)
             ) promo ON promo.goods_main_id = g.id
             WHERE g.tenant_id = :tenant_id AND g.is_deleted = false
-              {season_clause}
-              {category_clause}
-            GROUP BY g.id, g.goods_code, g.goods_title, g.is_suit, g.main_image_key
+              {filter_sql}
+            GROUP BY {GOODS_META_GROUP_BY}
             HAVING COALESCE(SUM(q.pay_amount), 0) > 0
                 OR COALESCE(MAX(promo.promo_cost), 0) > 0
                 OR COALESCE(MAX(ad.ad_spend), 0) > 0
-            ORDER BY pay_amount DESC
+            -- 支付额相同的商品原来顺序不确定；货号兜底后汇总表读取能逐行比对
+            ORDER BY pay_amount DESC, goods_code
             """
         )
         params: dict[str, Any] = {
             "tenant_id": tenant_id,
             "date_from": date_from,
             "date_to": date_to,
+            **filter_params,
         }
-        if seasons:
-            params["seasons"] = list(seasons)
-        if categories:
-            params["categories"] = list(categories)
         return as_mappings((await self._s.execute(sql, params)).mappings().all())
 
     async def daily_trend_by_goods(
@@ -388,21 +439,10 @@ class ProductionRepository:
         （催发阈值、like_count 双字段、列表接口手写列白名单）。只要刷新不另写一份
         SQL，就不会出现汇总表和实时聚合对不上的情况。
         """
-        bucket_templates = {
-            "day": "{column}",
-            "week": "date_trunc('week', {column})::date",
-            "month": "date_trunc('month', {column})::date",
-            "year": "date_trunc('year', {column})::date",
-        }
-        try:
-            template = bucket_templates[granularity]
-        except KeyError as exc:
-            raise ValueError(f"Unsupported trend granularity: {granularity}") from exc
-
-        sales_bucket = template.format(column="q.date")
-        ad_bucket = template.format(column="a.date")
-        promo_bucket = template.format(column="p.cooperation_date")
-        brushing_bucket = template.format(column="oa.order_date")
+        sales_bucket = bucket_expr(granularity, "q.date")
+        ad_bucket = bucket_expr(granularity, "a.date")
+        promo_bucket = bucket_expr(granularity, "p.cooperation_date")
+        brushing_bucket = bucket_expr(granularity, "oa.order_date")
 
         # goods_id=None → 全商品，多带一个 goods_id 维度。
         # 四个子查询各自的「归到哪个商品」逻辑不同（销售走 qn_link、广告走
@@ -431,14 +471,9 @@ class ProductionRepository:
             sales AS (
               SELECT {g_sel_sales} {sales_bucket} AS d,
                      COALESCE(SUM(q.pay_amount), 0) AS pay_amount,
-                     COALESCE(SUM(
-                       CASE
-                         WHEN COALESCE(q.extra->>'refund_amount', '')
-                              ~ '^-?[0-9]+([.][0-9]+)?$'
-                         THEN (q.extra->>'refund_amount')::numeric
-                         ELSE 0
-                       END
-                     ), 0) AS refund_amount
+                     -- 两个 extra 表达式与 aggregate_by_goods 共用同一份常量
+                     {_REFUND_SUM} AS refund_amount,
+                     {_ADD_CART_SUM} AS add_cart_count
               -- 映射复用 qn_link，与 aggregate_by_goods 同一份定义。
               -- 这里原来内联了一份一模一样的 EXISTS/NOT EXISTS/COUNT(DISTINCT)，
               -- 两处各写一遍就是口径漂移的温床 —— 改一边忘一边，趋势图和主表
@@ -526,31 +561,33 @@ class ProductionRepository:
                               ELSE 0 END AS pay_amount,
                      COALESCE(SUM(brushing_amount), 0) AS brushing_amount,
                      COALESCE(SUM(refund_amount), 0) AS refund_amount,
+                     COALESCE(SUM(add_cart_count), 0) AS add_cart_count,
                      COALESCE(SUM(promo_cost), 0) AS promo_cost,
                      COALESCE(SUM(ad_spend), 0) AS ad_spend
               FROM (
-                SELECT {g_zero} d, pay_amount, refund_amount,
+                SELECT {g_zero} d, pay_amount, refund_amount, add_cart_count,
                        0::numeric AS brushing_amount,
                        0::numeric AS promo_cost, 0::numeric AS ad_spend
                 FROM sales
                 UNION ALL
-                SELECT {g_zero} d, 0, 0, brushing_amount, 0, 0 FROM brushing
+                SELECT {g_zero} d, 0, 0, 0, brushing_amount, 0, 0 FROM brushing
                 UNION ALL
-                SELECT {g_zero} d, 0, 0, 0, 0, ad_spend FROM ads
+                SELECT {g_zero} d, 0, 0, 0, 0, 0, ad_spend FROM ads
                 UNION ALL
-                SELECT {g_zero} d, 0, 0, 0, promo_cost, 0 FROM promos
+                SELECT {g_zero} d, 0, 0, 0, 0, promo_cost, 0 FROM promos
               ) source
               GROUP BY d{g_grp_union}
             ),
             calculated AS (
               SELECT {g_sel_union} d, pay_amount, brushing_amount, refund_amount,
+                     add_cart_count,
                      pay_amount - refund_amount AS confirmed_amount,
                      promo_cost, ad_spend,
                      promo_cost + ad_spend AS total_spend
               FROM aggregated
             )
             SELECT {g_sel_union} d AS date, pay_amount, brushing_amount,
-                   refund_amount, confirmed_amount,
+                   refund_amount, add_cart_count, confirmed_amount,
                    promo_cost, ad_spend, total_spend,
                    -- 与 services.metric.common.safe_div 同口径：分母 ≤ 0 置 NULL
                    CASE WHEN total_spend <= 0 THEN NULL
@@ -816,19 +853,9 @@ class BiRepository:
         date_to: date,
         granularity: str,
     ) -> list[Mapping[str, Any]]:
-        bucket_templates = {
-            "day": "{column}",
-            "week": "date_trunc('week', {column})::date",
-            "month": "date_trunc('month', {column})::date",
-            "year": "date_trunc('year', {column})::date",
-        }
-        try:
-            template = bucket_templates[granularity]
-        except KeyError as exc:
-            raise ValueError(f"Unsupported BI granularity: {granularity}") from exc
-        q_bucket = template.format(column="q.date")
-        a_bucket = template.format(column="a.date")
-        p_bucket = template.format(column="p.cooperation_date")
+        q_bucket = bucket_expr(granularity, "q.date")
+        a_bucket = bucket_expr(granularity, "a.date")
+        p_bucket = bucket_expr(granularity, "p.cooperation_date")
         sql = text(
             f"""
             SELECT d AS date,
@@ -928,10 +955,14 @@ async def style_exists(session: AsyncSession, tenant_id: UUID, style_id: UUID) -
 
 
 __all__ = [
+    "GOODS_META_COLUMNS",
+    "GOODS_META_GROUP_BY",
     "BiRepository",
     "ProductionRepository",
     "StoreDailyRepository",
     "TargetPlanningRepository",
     "WorkProgressRepository",
+    "bucket_expr",
+    "goods_filter_clauses",
     "style_exists",
 ]

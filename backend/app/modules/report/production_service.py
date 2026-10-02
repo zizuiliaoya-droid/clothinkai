@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from datetime import date, timedelta
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 from uuid import UUID
 
@@ -20,6 +20,7 @@ from app.modules.report.advanced_schemas import (
     ProductionTrend,
     ProductionTrendPoint,
 )
+from app.modules.report.summary_read import SummaryReadRepository, record_source
 from app.services.metric import style_roi
 
 # 投产报表 extra 汇总跳过的非指标列（ID/文本/日期类）
@@ -40,9 +41,60 @@ _EXTRA_SKIP = {
 }
 
 
+_CENT = Decimal("0.01")
+
+
+def _money(value: Any) -> Decimal:
+    """金额统一成两位小数。
+
+    汇总表路径与实时路径的数值相等，但 Decimal 的**写法**可能不同：实时 SQL 在没有行时
+    给的是字面量 ``0``，汇总表读出来是 ``0.00``。JSON 里一个是 ``"0"`` 一个是 ``"0.00"``，
+    页面上就是「¥0」和「¥0.00」—— 切换数据源时用户会看到数字的样子变了。所以两条路径
+    都在这里归一。源数据（千牛 / 万相台 / 推广单）的金额本身就是两位小数，这一步只改写法、
+    不改数值。
+    """
+    return Decimal(str(value or 0)).quantize(_CENT, rounding=ROUND_HALF_UP)
+
+
 class ProductionService:
     def __init__(self, session: AsyncSession) -> None:
         self._repo = ProductionRepository(session)
+        self._summary = SummaryReadRepository(session)
+
+    async def _goods_rows(
+        self,
+        tenant_id: UUID,
+        date_from: date,
+        date_to: date,
+        *,
+        exclude_brushing: bool,
+        seasons: Sequence[str] | None,
+        categories: Sequence[str] | None,
+        use_summary: bool,
+        metric_label: str,
+    ) -> list[Mapping[str, Any]]:
+        """区间被汇总表完整覆盖就读汇总表，否则实时聚合（见 summary_read 模块说明）。"""
+        if use_summary:
+            fresh = await self._summary.freshness(tenant_id, date_from, date_to)
+            if fresh.source == "summary":
+                record_source(metric_label, "summary")
+                return await self._summary.production_by_goods(
+                    tenant_id=tenant_id,
+                    date_from=date_from,
+                    date_to=date_to,
+                    exclude_brushing=exclude_brushing,
+                    seasons=seasons,
+                    categories=categories,
+                )
+        record_source(metric_label, "live")
+        return await self._repo.aggregate_by_goods(
+            tenant_id=tenant_id,
+            date_from=date_from,
+            date_to=date_to,
+            exclude_brushing=exclude_brushing,
+            seasons=seasons,
+            categories=categories,
+        )
 
     async def get_report(
         self,
@@ -52,27 +104,37 @@ class ProductionService:
         exclude_brushing: bool = True,
         seasons: Sequence[str] | None = None,
         categories: Sequence[str] | None = None,
+        use_summary: bool = True,
     ) -> ProductionReport:
+        """投产报表。``use_summary=False`` 强制实时（BI 看板在整体切汇总表之前用）。
+
+        本期与上期各自判断数据源：「最近 30 天」通常被覆盖，它的上一期往往还没有。
+        extra（千牛/万相台导出的其余几十列）汇总表不存，始终实时。
+        """
         cur_from, cur_to = time_range
         span = cur_to - cur_from
         prev_to = cur_from - timedelta(days=1)
         prev_from = prev_to - span
         with report_query_duration_seconds.labels("production").time():
-            cur_rows = await self._repo.aggregate_by_goods(
-                tenant_id=tenant_id,
-                date_from=cur_from,
-                date_to=cur_to,
+            cur_rows = await self._goods_rows(
+                tenant_id,
+                cur_from,
+                cur_to,
                 exclude_brushing=exclude_brushing,
                 seasons=seasons,
                 categories=categories,
+                use_summary=use_summary,
+                metric_label="production",
             )
-            prev_rows = await self._repo.aggregate_by_goods(
-                tenant_id=tenant_id,
-                date_from=prev_from,
-                date_to=prev_to,
+            prev_rows = await self._goods_rows(
+                tenant_id,
+                prev_from,
+                prev_to,
                 exclude_brushing=exclude_brushing,
                 seasons=seasons,
                 categories=categories,
+                use_summary=use_summary,
+                metric_label="production_previous",
             )
             extra_by_goods = await self._aggregate_extra(tenant_id, cur_from, cur_to)
         items = []
@@ -93,23 +155,41 @@ class ProductionService:
         *,
         granularity: str = "day",
         exclude_brushing: bool = True,
+        use_summary: bool = True,
     ) -> ProductionTrend:
-        rows = await self._repo.daily_trend_by_goods(
-            tenant_id=tenant_id,
-            goods_id=goods_id,
-            date_from=time_range[0],
-            date_to=time_range[1],
-            granularity=granularity,
-            exclude_brushing=exclude_brushing,
+        date_from, date_to = time_range
+        fresh = (
+            await self._summary.freshness(tenant_id, date_from, date_to) if use_summary else None
         )
+        rows: list[Mapping[str, Any]]
+        if fresh is not None and fresh.source == "summary":
+            record_source("production_trend", "summary")
+            rows = await self._summary.production_trend(
+                tenant_id=tenant_id,
+                goods_id=goods_id,
+                date_from=date_from,
+                date_to=date_to,
+                granularity=granularity,
+                exclude_brushing=exclude_brushing,
+            )
+        else:
+            record_source("production_trend", "live")
+            rows = await self._repo.daily_trend_by_goods(
+                tenant_id=tenant_id,
+                goods_id=goods_id,
+                date_from=date_from,
+                date_to=date_to,
+                granularity=granularity,
+                exclude_brushing=exclude_brushing,
+            )
         points: list[ProductionTrendPoint] = []
         for row in rows:
-            pay_amount = Decimal(str(row.get("pay_amount") or 0))
-            refund_amount = Decimal(str(row.get("refund_amount") or 0))
-            confirmed_amount = Decimal(str(row.get("confirmed_amount") or 0))
-            promo_cost = Decimal(str(row.get("promo_cost") or 0))
-            ad_spend = Decimal(str(row.get("ad_spend") or 0))
-            total_spend = Decimal(str(row.get("total_spend") or 0))
+            pay_amount = _money(row.get("pay_amount"))
+            refund_amount = _money(row.get("refund_amount"))
+            confirmed_amount = _money(row.get("confirmed_amount"))
+            promo_cost = _money(row.get("promo_cost"))
+            ad_spend = _money(row.get("ad_spend"))
+            total_spend = _money(row.get("total_spend"))
             points.append(
                 ProductionTrendPoint(
                     date=row["date"],
@@ -156,10 +236,13 @@ class ProductionService:
 
     @staticmethod
     def _to_row(r: Mapping[str, Any], exclude_brushing: bool) -> ProductionRow:
-        pay = r["pay_amount"]
-        refund = r["refund_amount"]
+        # 先把金额归一成两位小数再派生 —— 两条数据源路径的输出才会逐字相同
+        pay = _money(r["pay_amount"])
+        refund = _money(r["refund_amount"])
+        promo_cost = _money(r["promo_cost"])
+        ad_spend = _money(r["ad_spend"])
         confirmed = pay - refund
-        total_spend = r["promo_cost"] + r["ad_spend"]
+        total_spend = promo_cost + ad_spend
         ret_rate = style_roi.return_rate(refund, pay)
         main_image_url: str | None = None
         main_image_key = r.get("main_image_key")
@@ -182,8 +265,8 @@ class ProductionService:
             refund_amount=refund,
             return_rate=ret_rate,
             confirmed_amount=confirmed,
-            promo_cost=r["promo_cost"],
-            ad_spend=r["ad_spend"],
+            promo_cost=promo_cost,
+            ad_spend=ad_spend,
             total_spend=total_spend,
             add_cart_count=int(r["add_cart_count"]),
             add_cart_cost=style_roi.add_to_cart_cost(total_spend, r["add_cart_count"]),
