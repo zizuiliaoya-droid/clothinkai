@@ -467,6 +467,8 @@ minute=20 是为了避开整点的异常预警与 `*/15` 的采集恢复 —— 
 - **普通唯一索引对 NULL 不生效**。`pr_work_progress_summary` 的 `pr_id` 可为 NULL（未分配 PR 的单据也要统计），普通 `UNIQUE(tenant_id, pr_id, stat_date)` 会让「未分配」那行每次刷新都新增一条。PG 15+ 要写 `NULLS NOT DISTINCT`，而 SQLAlchemy 的 `Index(unique=True)` 表达不了，得用 `op.execute` 写原生 DDL —— 同时 ORM 侧**不要**再声明一遍这个索引，否则 `create_all` 会建出一个语义不同的。
 - **权限的通配是按 action 精确匹配的**（`has()` 里 `f"{prefix}.*:{action}"`）。所以新权限的 action 取什么名字直接决定它会不会被已有通配捞走：`report.summary:read` 会自动落给持 `report.*:read` 的 operations / pr_manager，`report.summary:refresh` 不会。给敏感动作起名时先查一遍 `SELECT scope FROM permission WHERE scope LIKE '%*%'` 和谁持有它。
 - **测试绿了不等于测试有效。** 等值类测试（预聚合 vs 实时、两条路径互为参照）特别容易在「两边都是 0」或「两边跑同一段错代码」的情况下静默通过。写完之后往被测代码里注入一个真实形态的故障（改错分组列、删掉 DELETE 的日期条件），确认测试会红再恢复。5b-1 的三次注入都抓到了，这才说明那 33 条有意义。另外每条等值测试都该带一个「场景有效性」断言，强制各项指标出现非零值。
+- **新 model 的 FK 目标表要显式 import，否则只在 Celery 路径炸。** 5b-1 上线后生产第一次跑刷新任务就抛 `NoReferencedTableError: ... could not find table 'goods_main'`。HTTP 路径没事 —— app 启动时 router 链式 import 了全部 models；Celery 的链是 `celery_app → summary_tasks → summary_refresh_service → summary_models`，到不了 product / auth。**而本仓库的测试套件也发现不了**：`tests/conftest.py` 顶部把所有 models 都 import 了，metadata 永远完整。要在 model 模块里显式 `import` FK 指向的那些 models 模块。
+- **`configure_mappers()` 检查不出 FK 目标表缺失。** FK 的目标表是懒解析的，import 和 `configure_mappers()` 都照样成功，真正炸的地方是 flush 给相关表排序时（`mapper._sort_tables` → `fk.column`）。上面那个 bug 的第一版测试就是用 `configure_mappers()` 写的，注释掉 import 之后依然绿 —— 测了个没用的东西。要查就直接断言 `fk.target_fullname` 的目标表在 `Base.metadata.tables` 里，再编译一次 `insert()` 复现真实触发点。这类「只在某条 import 链下复现」的问题，测试必须起**干净的子进程**，不能靠 conftest 的环境。
 
 ## 待业务确认
 

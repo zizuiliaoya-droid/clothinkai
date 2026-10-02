@@ -28,6 +28,20 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
+# FK 指向的表必须在同一份 metadata 里注册，否则 flush 时抛 NoReferencedTableError。
+#
+# HTTP 路径碰不到（app 启动时 router 链式 import 了全部 models），但 Celery worker
+# 的 import 链是 celery_app → summary_tasks → summary_refresh_service → 本模块，
+# 到不了 product / auth 的 models —— 生产第一次跑刷新任务就栽在这里。
+#
+# 注意触发点不是 import 也不是 configure_mappers()：FK 的目标表是**懒解析**的，
+# 两者都照样成功。真正炸的地方是 flush 要给相关表排序时（mapper._sort_tables →
+# fk.column）。所以 tests/unit/test_summary_models_standalone.py 直接查
+# 「FK 目标表在不在 metadata 里」，而不是指望 configure_mappers() 报错。
+#
+# 这两行不是「多余的 import」，是本模块 FK 能解析的前提。
+import app.modules.auth.models
+import app.modules.product.goods_models  # noqa: F401  (goods_main)
 from app.core.db import TenantScopedModel
 
 # 汇总是加法，位数只会涨：源列是 numeric(12,2)，这里留到 (16,2)。
