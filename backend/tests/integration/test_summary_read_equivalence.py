@@ -120,7 +120,12 @@ async def _pp(
 
 
 def _qn(
-    tenant: Any, pp: PlatformProduct, day: date, pay: str, extra: dict[str, str]
+    tenant: Any,
+    pp: PlatformProduct,
+    day: date,
+    pay: str,
+    refund: str | None = None,
+    add_cart: int | None = None,
 ) -> QianniuDaily:
     return QianniuDaily(
         tenant_id=tenant.id,
@@ -130,7 +135,8 @@ def _qn(
         visitors=100,
         pay_amount=Decimal(pay),
         pay_orders=5,
-        extra=extra,
+        refund_amount=Decimal(refund) if refund is not None else None,
+        add_cart_count=add_cart,
     )
 
 
@@ -171,12 +177,12 @@ async def _seed(
 
     session.add_all(
         [
-            _qn(tenant, qn_a, D1, "1000.00", {"refund_amount": "50.00", "add_cart_count": "7"}),
-            # 脏值按 0 算，两条路径都不能炸
-            _qn(tenant, qn_a, D3, "800.00", {"refund_amount": "1,234", "add_cart_count": "-"}),
-            _qn(tenant, qn_b, D2, "2000.00", {"refund_amount": "100.00", "add_cart_count": "3"}),
+            _qn(tenant, qn_a, D1, "1000.00", refund="50.00", add_cart=7),
+            # 导出里是 "-" / 缺列 → typed 列为 NULL，两条路径都按没有算、都不能炸
+            _qn(tenant, qn_a, D3, "800.00"),
+            _qn(tenant, qn_b, D2, "2000.00", refund="100.00", add_cart=3),
             # 上一期（环比）
-            _qn(tenant, qn_a, PREV_DAY, "500.00", {"refund_amount": "5.00"}),
+            _qn(tenant, qn_a, PREV_DAY, "500.00", refund="5.00"),
             AdDaily(
                 tenant_id=tenant.id,
                 platform_product_id=ad_a.id,

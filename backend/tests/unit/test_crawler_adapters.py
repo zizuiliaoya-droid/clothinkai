@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
@@ -39,6 +40,75 @@ class TestQianniuAdapter:
         errs = a.validate(parsed)
         assert any("商品ID" in e for e in errs)
         assert any("日期" in e for e in errs)
+
+    def test_parse_refund_and_add_cart_from_export_headers(self) -> None:
+        """生意参谋导出里退款与加购是中文表头 + 千分位（055 之前报表一直读成 0）。"""
+        parsed = QianniuImportAdapter().parse_row(
+            {
+                "商品ID": "123456",
+                "统计日期": "2026-06-08",
+                "成功退款金额": "5,652.00",
+                "商品加购件数": "1,271",
+            },
+            None,
+        )
+        assert parsed["refund_amount"] == Decimal("5652.00")
+        assert parsed["add_cart_count"] == 1271
+
+    @pytest.mark.parametrize("raw", ["-", "", "  ", None, "1.2万", "NaN", "Infinity"])
+    def test_unreadable_refund_is_none(self, raw: str | None) -> None:
+        parsed = QianniuImportAdapter().parse_row(
+            {"商品ID": "1", "统计日期": "2026-06-08", "成功退款金额": raw}, None
+        )
+        assert parsed["refund_amount"] is None
+
+    @pytest.mark.parametrize("raw", ["-", "", None, "1.2万", "12.5"])
+    def test_unreadable_add_cart_is_none(self, raw: str | None) -> None:
+        parsed = QianniuImportAdapter().parse_row(
+            {"商品ID": "1", "统计日期": "2026-06-08", "商品加购件数": raw}, None
+        )
+        assert parsed["add_cart_count"] is None
+
+    def test_integral_decimal_add_cart_is_accepted(self) -> None:
+        parsed = QianniuImportAdapter().parse_row(
+            {"商品ID": "1", "统计日期": "2026-06-08", "商品加购件数": "12.0"}, None
+        )
+        assert parsed["add_cart_count"] == 12
+
+    def test_missing_columns_do_not_fail_the_row(self) -> None:
+        a = QianniuImportAdapter()
+        parsed = a.parse_row({"商品ID": "1", "统计日期": "2026-06-08"}, None)
+        assert parsed["refund_amount"] is None
+        assert parsed["add_cart_count"] is None
+        assert a.validate(parsed) == []
+
+    def test_custom_mapping_target_wins_over_standard_header(self) -> None:
+        """租户映射显式配了 refund_amount 就以映射为准；"-" 同样记空而不是原样写库。"""
+        mapping = SimpleNamespace(
+            mapping_config={
+                "columns": [
+                    {"source_col": "商品ID", "target_field": "platform_id", "type": "str"},
+                    {"source_col": "日期", "target_field": "date", "type": "date"},
+                    {"source_col": "退款(元)", "target_field": "refund_amount", "type": "decimal"},
+                    {"source_col": "加购", "target_field": "add_cart_count", "type": "int"},
+                ]
+            }
+        )
+        a = QianniuImportAdapter()
+        parsed = a.parse_row(
+            {
+                "商品ID": "1",
+                "日期": "2026-06-08",
+                "退款(元)": "88.80",
+                "加购": "-",
+                # 标准表头也在，但映射优先
+                "成功退款金额": "1.00",
+                "商品加购件数": "5",
+            },
+            mapping,  # type: ignore[arg-type]
+        )
+        assert parsed["refund_amount"] == Decimal("88.80")
+        assert parsed["add_cart_count"] is None
 
 
 class TestWanxiangtaiAdapter:
