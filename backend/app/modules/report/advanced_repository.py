@@ -372,13 +372,22 @@ class ProductionRepository:
         self,
         *,
         tenant_id: UUID,
-        goods_id: UUID,
+        goods_id: UUID | None,
         date_from: date,
         date_to: date,
         granularity: str = "day",
         exclude_brushing: bool = True,
     ) -> list[Mapping[str, Any]]:
-        """按日/周/月/年汇总单个商品的投产指标，与投产主表保持相同口径。"""
+        """按日/周/月/年汇总投产指标，与投产主表保持相同口径。
+
+        ``goods_id`` 为 ``None`` 时不限商品，按 (商品, 日期桶) 分组返回 ——
+        这是 ``product_roi_summary`` 汇总表的**唯一刷新源**。
+
+        刷新与实时读共用这一个方法是刻意的：汇总表最大的风险是「预聚合的口径和
+        实时查询的口径悄悄分叉」，而这个项目已经为「同一个值两处定义」付过三次代价
+        （催发阈值、like_count 双字段、列表接口手写列白名单）。只要刷新不另写一份
+        SQL，就不会出现汇总表和实时聚合对不上的情况。
+        """
         bucket_templates = {
             "day": "{column}",
             "week": "date_trunc('week', {column})::date",
@@ -394,10 +403,33 @@ class ProductionRepository:
         ad_bucket = template.format(column="a.date")
         promo_bucket = template.format(column="p.cooperation_date")
         brushing_bucket = template.format(column="oa.order_date")
+
+        # goods_id=None → 全商品，多带一个 goods_id 维度。
+        # 四个子查询各自的「归到哪个商品」逻辑不同（销售走 qn_link、广告走
+        # platform_product、推广走 goods_main_id 回落主商品、刷单走主商品推定），
+        # 所以每段都要单独表达，不能统一加一句 GROUP BY。
+        single = goods_id is not None
+        g_sel_sales = "" if single else "g.id AS goods_id,"
+        g_grp_sales = "" if single else ", g.id"
+        g_where_sales = "AND g.id = :goods_id" if single else ""
+
+        g_sel_ads = "" if single else "mapped_a.goods_main_id AS goods_id,"
+        g_grp_ads = "" if single else ", mapped_a.goods_main_id"
+
+        g_sel_promo = "" if single else "promo_goods.goods_main_id AS goods_id,"
+        g_grp_promo = "" if single else ", promo_goods.goods_main_id"
+
+        g_sel_brush = "" if single else "brush_goods.goods_main_id AS goods_id,"
+        g_grp_brush = "" if single else ", brush_goods.goods_main_id"
+
+        g_sel_union = "" if single else "goods_id,"
+        g_grp_union = "" if single else ", goods_id"
+        g_zero = "" if single else "goods_id,"
         sql = text(
             f"""
-            WITH sales AS (
-              SELECT {sales_bucket} AS d,
+            WITH {_QIANNIU_GOODS_LINK_CTE},
+            sales AS (
+              SELECT {g_sel_sales} {sales_bucket} AS d,
                      COALESCE(SUM(q.pay_amount), 0) AS pay_amount,
                      COALESCE(SUM(
                        CASE
@@ -407,147 +439,125 @@ class ProductionRepository:
                          ELSE 0
                        END
                      ), 0) AS refund_amount
+              -- 映射复用 qn_link，与 aggregate_by_goods 同一份定义。
+              -- 这里原来内联了一份一模一样的 EXISTS/NOT EXISTS/COUNT(DISTINCT)，
+              -- 两处各写一遍就是口径漂移的温床 —— 改一边忘一边，趋势图和主表
+              -- 会对不上，而且不会报错。
               FROM goods_main g
-              JOIN qianniu_daily q
-                ON q.tenant_id = g.tenant_id
-                AND q.date BETWEEN :date_from AND :date_to
-                AND (
-                  EXISTS (
-                    SELECT 1 FROM platform_product mapped_q
-                    WHERE mapped_q.tenant_id = q.tenant_id
-                      AND mapped_q.goods_main_id = g.id
-                      AND mapped_q.platform = '千牛'
-                      AND (
-                        (q.platform_product_id IS NOT NULL
-                         AND mapped_q.id = q.platform_product_id)
-                        OR (q.platform_product_id IS NULL
-                            AND mapped_q.platform_id = q.platform_id_snapshot)
-                      )
-                  )
-                  OR (
-                    q.platform_product_id IS NULL
-                    AND NOT EXISTS (
-                      SELECT 1 FROM platform_product any_q
-                      WHERE any_q.tenant_id = q.tenant_id
-                        AND any_q.platform = '千牛'
-                        AND any_q.platform_id = q.platform_id_snapshot
-                    )
-                    AND EXISTS (
-                      SELECT 1 FROM goods_style_item li
-                      JOIN style legacy_s ON legacy_s.id = li.style_id
-                      WHERE li.goods_main_id = g.id AND li.is_active = true
-                        AND legacy_s.is_deleted = false
-                        AND legacy_s.qianniu_product_id = q.platform_id_snapshot
-                    )
-                    AND (
-                      SELECT COUNT(DISTINCT li2.goods_main_id)
-                      FROM style legacy_s2
-                      JOIN goods_style_item li2
-                        ON li2.style_id = legacy_s2.id AND li2.is_active = true
-                      WHERE legacy_s2.tenant_id = q.tenant_id
-                        AND legacy_s2.is_deleted = false
-                        AND legacy_s2.qianniu_product_id = q.platform_id_snapshot
-                    ) = 1
-                  )
-                )
-              WHERE g.id = :goods_id AND g.tenant_id = :tenant_id
-              GROUP BY {sales_bucket}
+              JOIN qn_link ON qn_link.goods_id = g.id
+              JOIN qianniu_daily q ON q.id = qn_link.qid
+              WHERE g.tenant_id = :tenant_id {g_where_sales}
+              GROUP BY {sales_bucket}{g_grp_sales}
             ),
             brushing AS (
-              SELECT {brushing_bucket} AS d,
+              SELECT {g_sel_brush} {brushing_bucket} AS d,
                      COALESCE(SUM(oa.amount), 0) AS brushing_amount
               FROM order_adjustment oa
-              WHERE :exclude_brushing = true
-                AND oa.tenant_id = :tenant_id
-                -- 与 aggregate_by_goods 同口径：只看 exclude_from_roi，
-                -- 并且同一笔调整只归主商品，不重复计入套装与单品两处。
+              -- 同一笔调整只归「主商品」（非套装优先、货号次之），不重复计入
+              -- 套装与单品两处。与 aggregate_by_goods 同口径。
+              CROSS JOIN LATERAL (
+                SELECT gi.goods_main_id FROM goods_style_item gi
+                JOIN goods_main gg ON gg.id = gi.goods_main_id
+                WHERE gi.style_id = oa.style_id AND gi.is_active = true
+                ORDER BY gg.is_suit, gg.goods_code
+                LIMIT 1
+              ) brush_goods
+              -- 刷单额**总是**算出来，减不减由下面的 aggregated 按
+              -- :exclude_brushing 决定。这样同一次查询既给出「含刷单」的
+              -- pay_amount，也给出可独立存盘的 brushing_amount ——
+              -- 汇总表存这两个值就能还原两种口径，不必为开关存两份行。
+              WHERE oa.tenant_id = :tenant_id
+                -- 只看 exclude_from_roi：标记本身就是「要不要进投产口径」的开关
                 AND oa.exclude_from_roi = true
                 AND oa.order_date BETWEEN :date_from AND :date_to
-                AND (
-                  SELECT gi.goods_main_id FROM goods_style_item gi
-                  JOIN goods_main gg ON gg.id = gi.goods_main_id
-                  WHERE gi.style_id = oa.style_id AND gi.is_active = true
-                  ORDER BY gg.is_suit, gg.goods_code
-                  LIMIT 1
-                ) = :goods_id
-              GROUP BY {brushing_bucket}
+                {"AND brush_goods.goods_main_id = :goods_id" if single else ""}
+              GROUP BY {brushing_bucket}{g_grp_brush}
             ),
             ads AS (
-              SELECT {ad_bucket} AS d,
+              SELECT {g_sel_ads} {ad_bucket} AS d,
                      COALESCE(SUM(a.cost), 0) AS ad_spend
               FROM ad_daily a
+              JOIN platform_product mapped_a
+                ON mapped_a.tenant_id = a.tenant_id
+               AND mapped_a.platform = '万相台'
+               AND mapped_a.goods_main_id IS NOT NULL
+               AND (
+                 (a.platform_product_id IS NOT NULL
+                  AND mapped_a.id = a.platform_product_id)
+                 OR (a.platform_product_id IS NULL
+                     AND mapped_a.platform_id = a.platform_id_snapshot)
+               )
               WHERE a.tenant_id = :tenant_id
                 AND a.date BETWEEN :date_from AND :date_to
-                AND EXISTS (
-                  SELECT 1 FROM platform_product mapped_a
-                  WHERE mapped_a.tenant_id = a.tenant_id
-                    AND mapped_a.goods_main_id = :goods_id
-                    AND mapped_a.platform = '万相台'
-                    AND (
-                      (a.platform_product_id IS NOT NULL
-                       AND mapped_a.id = a.platform_product_id)
-                      OR (a.platform_product_id IS NULL
-                          AND mapped_a.platform_id = a.platform_id_snapshot)
-                    )
-                )
-              GROUP BY {ad_bucket}
+                {"AND mapped_a.goods_main_id = :goods_id" if single else ""}
+              GROUP BY {ad_bucket}{g_grp_ads}
             ),
             promos AS (
-              SELECT {promo_bucket} AS d,
+              SELECT {g_sel_promo} {promo_bucket} AS d,
                      -- 站外推广成本口径，与投产报表一致（PRD V1.4 §9）
                      COALESCE(SUM(p.total_promo_cost), 0) AS promo_cost
               FROM promotion p
-              WHERE p.tenant_id = :tenant_id
-                AND p.is_active = true
-                AND p.publish_status = '已发布'
-                AND p.cooperation_date BETWEEN :date_from AND :date_to
-                -- 与 aggregate_by_goods 同口径：先看推广记录自己的商品归属，
-                -- 为空才回落到主商品推定
-                AND COALESCE(p.goods_main_id, (
+              -- 先看推广记录自己的商品归属，为空才回落到主商品推定。
+              -- 与 aggregate_by_goods 同口径。
+              CROSS JOIN LATERAL (
+                SELECT COALESCE(p.goods_main_id, (
                   SELECT gi.goods_main_id FROM goods_style_item gi
                   JOIN goods_main gg ON gg.id = gi.goods_main_id
                   WHERE gi.style_id = p.style_id AND gi.is_active = true
                   ORDER BY gg.is_suit, gg.goods_code
                   LIMIT 1
-                )) = :goods_id
-              GROUP BY {promo_bucket}
+                )) AS goods_main_id
+              ) promo_goods
+              WHERE p.tenant_id = :tenant_id
+                AND p.is_active = true
+                AND p.publish_status = '已发布'
+                AND p.cooperation_date BETWEEN :date_from AND :date_to
+                AND promo_goods.goods_main_id IS NOT NULL
+                {"AND promo_goods.goods_main_id = :goods_id" if single else ""}
+              GROUP BY {promo_bucket}{g_grp_promo}
             ),
             aggregated AS (
-              SELECT d,
+              SELECT {g_sel_union} d,
+                     -- pay_amount 的语义不变（按开关扣减），额外把 brushing_amount
+                     -- 原样带出来给汇总表存。
                      COALESCE(SUM(pay_amount), 0)
-                       - COALESCE(SUM(brushing_amount), 0) AS pay_amount,
+                       - CASE WHEN :exclude_brushing
+                              THEN COALESCE(SUM(brushing_amount), 0)
+                              ELSE 0 END AS pay_amount,
+                     COALESCE(SUM(brushing_amount), 0) AS brushing_amount,
                      COALESCE(SUM(refund_amount), 0) AS refund_amount,
                      COALESCE(SUM(promo_cost), 0) AS promo_cost,
                      COALESCE(SUM(ad_spend), 0) AS ad_spend
               FROM (
-                SELECT d, pay_amount, refund_amount,
+                SELECT {g_zero} d, pay_amount, refund_amount,
                        0::numeric AS brushing_amount,
                        0::numeric AS promo_cost, 0::numeric AS ad_spend
                 FROM sales
                 UNION ALL
-                SELECT d, 0, 0, brushing_amount, 0, 0 FROM brushing
+                SELECT {g_zero} d, 0, 0, brushing_amount, 0, 0 FROM brushing
                 UNION ALL
-                SELECT d, 0, 0, 0, 0, ad_spend FROM ads
+                SELECT {g_zero} d, 0, 0, 0, 0, ad_spend FROM ads
                 UNION ALL
-                SELECT d, 0, 0, 0, promo_cost, 0 FROM promos
+                SELECT {g_zero} d, 0, 0, 0, promo_cost, 0 FROM promos
               ) source
-              GROUP BY d
+              GROUP BY d{g_grp_union}
             ),
             calculated AS (
-              SELECT d, pay_amount, refund_amount,
+              SELECT {g_sel_union} d, pay_amount, brushing_amount, refund_amount,
                      pay_amount - refund_amount AS confirmed_amount,
                      promo_cost, ad_spend,
                      promo_cost + ad_spend AS total_spend
               FROM aggregated
             )
-            SELECT d AS date, pay_amount, refund_amount, confirmed_amount,
+            SELECT {g_sel_union} d AS date, pay_amount, brushing_amount,
+                   refund_amount, confirmed_amount,
                    promo_cost, ad_spend, total_spend,
                    -- 与 services.metric.common.safe_div 同口径：分母 ≤ 0 置 NULL
                    CASE WHEN total_spend <= 0 THEN NULL
                         ELSE ROUND(confirmed_amount / total_spend, 4)
                    END AS net_roi
             FROM calculated
-            ORDER BY d
+            ORDER BY {"" if single else "goods_id, "}d
             """
         )
         return as_mappings(

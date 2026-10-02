@@ -12,6 +12,7 @@ from app.modules.report.export_service import ReportExportService
 from app.modules.report.production_service import ProductionService
 from app.modules.report.service import PublishProgressService
 from app.modules.report.store_daily_service import StoreDailyService
+from app.modules.report.summary_refresh_service import SummaryRefreshService
 from app.modules.report.target_planning_service import TargetPlanningService
 from app.modules.report.user_preference_service import UserPreferenceService
 from app.modules.report.work_progress_service import WorkProgressService
@@ -73,12 +74,20 @@ def get_user_preference_service(session: SessionDep) -> UserPreferenceService:
 UserPreferenceServiceDep = Annotated[UserPreferenceService, Depends(get_user_preference_service)]
 
 
+def get_summary_refresh_service(session: SessionDep) -> SummaryRefreshService:
+    return SummaryRefreshService(session)
+
+
+SummaryRefreshServiceDep = Annotated[SummaryRefreshService, Depends(get_summary_refresh_service)]
+
+
 __all__ = [
     "BiServiceDep",
     "ExportServiceDep",
     "ProductionServiceDep",
     "PublishProgressServiceDep",
     "StoreDailyServiceDep",
+    "SummaryRefreshServiceDep",
     "TargetPlanningServiceDep",
     "UserPreferenceServiceDep",
     "WorkProgressServiceDep",
@@ -87,6 +96,7 @@ __all__ = [
     "get_production_service",
     "get_publish_progress_service",
     "get_store_daily_service",
+    "get_summary_refresh_service",
     "get_target_planning_service",
     "get_user_preference_service",
     "get_work_progress_service",

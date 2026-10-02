@@ -27,6 +27,7 @@ import app.modules.finance.models
 import app.modules.finance.order_adjustment_models
 import app.modules.product.models
 import app.modules.promotion.models
+import app.modules.report.summary_models
 
 # 测试用的 DB URL 通过环境变量注入；CI 由 docker-compose / pytest-postgresql 提供
 TEST_DATABASE_URL = os.getenv(
