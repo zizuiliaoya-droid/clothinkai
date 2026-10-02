@@ -1,9 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import { Button, Card, DatePicker, Space, Table, Typography, message } from "antd";
+import { Button, Card, DatePicker, Space, Table, message } from "antd";
 import { DownloadOutlined } from "@ant-design/icons";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import type { ColumnsType } from "antd/es/table";
 import dayjs from "dayjs";
+import {
+  ReportCardTitle,
+  ReportFreshness,
+} from "@/components/ReportFreshness/ReportFreshness";
 import { useFilterMemory } from "@/features/preference/useFilterMemory";
 import { exportReport, getWorkProgress } from "@/features/report/api";
 import type { PrWorkProgress } from "@/features/report/types";
@@ -36,15 +40,17 @@ export function WorkProgressPage() {
     enabled: memory.ready,
     queryFn: () => getWorkProgress(month),
   });
+  // 工作进度按整月统计：导出与数据新鲜度都用这同一对日期
+  const selectedMonth = dayjs(`${month}-01`);
+  const monthFrom = selectedMonth.startOf("month").format("YYYY-MM-DD");
+  const monthTo = selectedMonth.endOf("month").format("YYYY-MM-DD");
   const exportMutation = useMutation({
-    mutationFn: () => {
-      const selected = dayjs(`${month}-01`);
-      return exportReport("work-progress", {
+    mutationFn: () =>
+      exportReport("work-progress", {
         preset: "custom",
-        date_from: selected.startOf("month").format("YYYY-MM-DD"),
-        date_to: selected.endOf("month").format("YYYY-MM-DD"),
-      });
-    },
+        date_from: monthFrom,
+        date_to: monthTo,
+      }),
     onSuccess: (filename) => message.success(`已导出 ${filename}`),
     onError: (error) => message.error(extractErrorMessage(error, "导出失败")),
   });
@@ -90,9 +96,18 @@ export function WorkProgressPage() {
   return (
     <Card
       title={
-        <Typography.Title level={4} style={{ margin: 0 }}>
-          工作进度表
-        </Typography.Title>
+        <ReportCardTitle
+          title="工作进度表"
+          // 当月包含还没到的日子，汇总表覆盖不全，这里会显示「实时数据」；往月读汇总表
+          freshness={
+            <ReportFreshness
+              preset="custom"
+              dateFrom={monthFrom}
+              dateTo={monthTo}
+              enabled={memory.ready}
+            />
+          }
+        />
       }
     >
       <Space style={{ marginBottom: 16 }}>

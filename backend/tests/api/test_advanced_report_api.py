@@ -59,6 +59,21 @@ class TestAdvancedReportApiContract:
             )
         assert resp.status_code == 401
 
+    async def test_summary_freshness_requires_auth(self) -> None:
+        from app.main import app
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            resp = await ac.get("/api/reports/summaries/freshness?preset=last_7d")
+        assert resp.status_code == 401
+
+    async def test_openapi_exposes_summary_freshness(self) -> None:
+        from app.main import app
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            resp = await ac.get("/api/openapi.json")
+        paths = resp.json().get("paths", {})
+        assert set(paths["/api/reports/summaries/freshness"]) == {"get"}
+
     async def test_openapi_exposes_summary_refresh(self) -> None:
         from app.main import app
 

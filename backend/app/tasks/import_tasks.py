@@ -15,6 +15,7 @@ from __future__ import annotations
 import io
 import logging
 import time
+from datetime import date, datetime
 from typing import Any, cast
 from uuid import UUID
 
@@ -169,6 +170,7 @@ async def _run_import_batch_claimed(batch_id: UUID, only_failed: bool = False) -
     tok = tenant_id_ctx.set(tenant_id)
     start = time.perf_counter()
     imported = failed = 0
+    affected = _AffectedDates(getattr(adapter, "summary_date_field", None))
     try:
         for row_number, row in rows:
             ok = await _process_one_row(
@@ -179,6 +181,7 @@ async def _run_import_batch_claimed(batch_id: UUID, only_failed: bool = False) -
                 batch_id=batch_id,
                 tenant_id=tenant_id,
                 actor_id=created_by,
+                affected=affected,
             )
             if ok:
                 imported += 1
@@ -193,7 +196,66 @@ async def _run_import_batch_claimed(batch_id: UUID, only_failed: bool = False) -
     # ── 5. 汇总（bypass）──
     status = await _summarize_batch(batch_id, imported, failed, only_failed)
     import_batch_total.labels(source=source, status=status).inc()
+
+    # ── 6. 刷新受影响日期的报表汇总表（方案 2：导入完成后自动刷新）──
+    if status in ("completed", "partial"):
+        _enqueue_summary_refresh(tenant_id, affected, batch_id)
     return {"status": status, "imported": imported, "failed": failed}
+
+
+class _AffectedDates:
+    """本批次**成功提交**的行的业务日期范围（导入完成后刷新报表汇总表用）。
+
+    adapter 用类属性 ``summary_date_field`` 声明哪一列是进报表的业务日期（千牛/万相台的
+    ``date``、推广单的 ``cooperation_date``、刷单的 ``order_date``）。不声明的来源
+    （博主、款式 SKU、结算……）不写任何汇总表依赖的数据，不触发刷新。
+
+    失败行不计：它没进业务表，不影响报表。
+    """
+
+    def __init__(self, field: str | None) -> None:
+        self.field = field
+        self.lo: date | None = None
+        self.hi: date | None = None
+
+    def add(self, parsed: dict[str, Any]) -> None:
+        if self.field is None:
+            return
+        value = parsed.get(self.field)
+        # datetime 是 date 的子类，先归一，免得把时间也带进比较
+        if isinstance(value, datetime):
+            value = value.date()
+        if not isinstance(value, date):
+            return
+        if self.lo is None or value < self.lo:
+            self.lo = value
+        if self.hi is None or value > self.hi:
+            self.hi = value
+
+
+def _enqueue_summary_refresh(tenant_id: UUID, affected: _AffectedDates, batch_id: UUID) -> None:
+    """投递「刷新这批数据涉及的日期」。
+
+    投递失败只记日志：导入本身已经成功，不能因为刷新没排上就把批次标成失败。漏掉的
+    日子，窗口内的由每小时刷新补上；窗口外的维持旧汇总，页面上的「数据更新于」如实
+    显示它是旧的，管理员可以手动刷新。
+    """
+    if affected.lo is None or affected.hi is None:
+        return
+    try:
+        # 懒导入：summary_tasks → summary_refresh_service → report 模块，
+        # 不让导入框架在加载时就依赖报表模块
+        from app.tasks.summary_tasks import refresh_report_summaries_for_dates
+
+        refresh_report_summaries_for_dates.apply_async(
+            args=[str(tenant_id), affected.lo.isoformat(), affected.hi.isoformat()]
+        )
+    except Exception as exc:
+        log.warning(
+            "import_summary_refresh_enqueue_failed",
+            extra={"batch_id": str(batch_id), "tenant_id": str(tenant_id)},
+        )
+        sentry_sdk.capture_exception(exc)
 
 
 # ---------------------------------------------------------------------------
@@ -210,6 +272,7 @@ async def _process_one_row(
     batch_id: UUID,
     tenant_id: UUID,
     actor_id: UUID | None,
+    affected: _AffectedDates | None = None,
 ) -> bool:
     """每行独立事务 + per-row SET LOCAL（NF-1 防连接池串租）。
 
@@ -250,6 +313,9 @@ async def _process_one_row(
                 target_resource_id=rid,
             )
             await app_s.commit()
+        # 提交之后才记：没提交成功的行不该触发报表刷新
+        if affected is not None:
+            affected.add(parsed)
         return True
     except Exception as exc:
         # 失败行用独立 bypass session 写（不被业务回滚带走，FB-C + U05 模式）

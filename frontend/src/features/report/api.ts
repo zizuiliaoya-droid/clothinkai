@@ -7,8 +7,10 @@ import type {
   ProductionTrend,
   ProgressSummary,
   PrWorkProgress,
+  ReportFreshness,
   StoreDailyRow,
   StyleCardPage,
+  SummaryRefreshResult,
   TargetWithActual,
   TimeGranularity,
 } from "./types";
@@ -112,6 +114,32 @@ export async function getBiDashboard(
   } = {}
 ): Promise<BiDashboard> {
   const resp = await apiClient.get<BiDashboard>("/api/reports/bi", { params });
+  return resp.data;
+}
+
+export async function getSummaryFreshness(
+  params: { preset?: string; date_from?: string; date_to?: string } = {}
+): Promise<ReportFreshness> {
+  const resp = await apiClient.get<ReportFreshness>(
+    "/api/reports/summaries/freshness",
+    { params }
+  );
+  return resp.data;
+}
+
+export async function refreshSummaries(
+  dateFrom: string,
+  dateTo: string
+): Promise<SummaryRefreshResult> {
+  const resp = await apiClient.post<SummaryRefreshResult>(
+    "/api/reports/summaries/refresh",
+    null,
+    {
+      params: { date_from: dateFrom, date_to: dateTo },
+      // 区间最长 366 天，要逐日重算工作进度，给足时间（默认 30 秒）
+      timeout: 120_000,
+    }
+  );
   return resp.data;
 }
 

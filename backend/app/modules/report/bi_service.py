@@ -67,7 +67,12 @@ class BiService:
         published_rows = await self._repo.published_spend_by_goods(
             tenant_id=tenant_id, date_from=date_from, date_to=date_to
         )
-        production = await self._production.get_report(tenant_id, time_range, exclude_brushing=True)
+        # BI 其余几块（店铺总览、约稿金额、工作量、趋势）是全店口径，汇总表还装不下，
+        # 都是实时。这一块如果单独读汇总表，同一个看板上会一半是一小时前、一半是此刻 ——
+        # 所以 BI 整体切汇总表之前，这里显式强制实时，保持整页同源。
+        production = await self._production.get_report(
+            tenant_id, time_range, exclude_brushing=True, use_summary=False
+        )
 
         store = self._store_summary(store_row)
         promotion = self._promotion_summary(promotion_row)

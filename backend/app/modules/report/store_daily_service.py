@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import date
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 from uuid import UUID
 
@@ -19,6 +20,7 @@ from app.modules.report.advanced_schemas import (
     StoreDailyManualUpdate,
     StoreDailyRow,
 )
+from app.modules.report.summary_read import SummaryReadRepository, record_source
 from app.modules.report.work_progress_models import StoreDaily
 
 
@@ -26,17 +28,30 @@ class StoreDailyService:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
         self._repo = StoreDailyRepository(session)
+        self._summary = SummaryReadRepository(session)
         self._audit = AuditService(session)
 
     async def get_dashboard(
         self, tenant_id: UUID, time_range: tuple[date, date]
     ) -> list[StoreDailyRow]:
+        """店铺日数据。区间被汇总表完整覆盖就读汇总表，否则实时。
+
+        手填的 3 个广告消耗两条路径都是读取时 LEFT JOIN ``store_daily``，填完立即生效；
+        extra（千牛导出的其余几十列）汇总表不存，始终实时。
+        """
+        date_from, date_to = time_range
+        fresh = await self._summary.freshness(tenant_id, date_from, date_to)
         with report_query_duration_seconds.labels("store_daily").time():
-            rows = await self._repo.aggregate(
-                tenant_id=tenant_id,
-                date_from=time_range[0],
-                date_to=time_range[1],
-            )
+            if fresh.source == "summary":
+                record_source("store_daily", "summary")
+                rows = await self._summary.store_daily(
+                    tenant_id=tenant_id, date_from=date_from, date_to=date_to
+                )
+            else:
+                record_source("store_daily", "live")
+                rows = await self._repo.aggregate(
+                    tenant_id=tenant_id, date_from=date_from, date_to=date_to
+                )
         extra_by_date = await self._aggregate_extra(tenant_id, time_range[0], time_range[1])
         result = []
         for r in rows:
@@ -97,9 +112,12 @@ class StoreDailyService:
     def _to_row(r: Mapping[str, Any]) -> StoreDailyRow:
         return StoreDailyRow(
             date=r["date"],
-            visitors=int(r["visitors"]),
-            pay_amount=r["pay_amount"],
-            pay_orders=int(r["pay_orders"]),
+            visitors=int(r["visitors"] or 0),
+            # 两条路径数值相等但写法可能不同（"0" vs "0.00"），归一成两位小数
+            pay_amount=Decimal(str(r["pay_amount"] or 0)).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP
+            ),
+            pay_orders=int(r["pay_orders"] or 0),
             ad_spend_total=r["ad_spend_total"],
             zhitongche_spend=r["zhitongche_spend"],
             yinli_spend=r["yinli_spend"],

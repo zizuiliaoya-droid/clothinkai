@@ -118,6 +118,8 @@ class OrderAdjustmentImportAdapter:
     """拍单/刷单导入适配器（一行 → 一条 order_adjustment，INSERT-only）。"""
 
     target_table: str = "order_adjustment"
+    # 进报表的业务日期列：刷单按订单日期从当天的投产支付额里扣
+    summary_date_field: str | None = "order_date"
 
     def __init__(self, source: str, order_type: str) -> None:
         self.source = source

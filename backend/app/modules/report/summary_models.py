@@ -5,8 +5,7 @@
 聚合 SQL（理由见 052 migration 的 docstring：口径两处定义是这个项目反复付过代价的坑）。
 
 模型只负责表结构映射。所有比率（net_roi / 各种 rate）不落盘，由 service 层的
-``safe_div`` 统一；``urge_status`` 派生的 5 个计数也不在这里 —— 它们依赖「今天」，
-按历史日期固化下来永远是错的。
+``safe_div`` 统一 —— 落盘会把除零语义固化进数据。
 """
 
 from __future__ import annotations
@@ -78,7 +77,10 @@ class ProductRoiSummary(TenantScopedModel):
     stat_date: Mapped[date] = mapped_column(Date, nullable=False)
     pay_amount: Mapped[Decimal] = _money()
     brushing_amount: Mapped[Decimal] = _money()
-    refund_amount: Mapped[Decimal] = _money()
+    # 不限精度：退款额从导入的 JSONB 抠出来，位数没保证，定长会逐日舍入（054 改的类型）
+    refund_amount: Mapped[Decimal] = mapped_column(Numeric, nullable=False, server_default=_ZERO)
+    # 054 补：投产报表「总加购数」「加购成本」两列靠它
+    add_cart_count: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=_ZERO)
     promo_cost: Mapped[Decimal] = _money()
     ad_spend: Mapped[Decimal] = _money()
     refreshed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -100,9 +102,9 @@ class PrWorkProgressSummary(TenantScopedModel):
 
     刷新源：``WorkProgressRepository.aggregate_by_pr`` 逐日调用。
 
-    只存与「今天」无关的计数。档期内 / 催发 / 重要催发 / 超时这 4 个由
-    ``urge_status`` 派生，今天算催发的单子明天变超时，固化到历史日期上就是错的，
-    读取时实时算再与这里的结果合并。
+    档期内 / 催发 / 重要催发 / 超时 4 个计数由 ``urge_status`` 派生、依赖「今天」，
+    存的是**刷新时刻**的状态（054 补列，推翻 052 不存的决定，理由见 054 docstring）：
+    最近 31 天每小时重算，整行与其他计数同样最多晚一小时；31 天外随历史冻结。
     """
 
     __tablename__ = "pr_work_progress_summary"
@@ -117,6 +119,11 @@ class PrWorkProgressSummary(TenantScopedModel):
     )
     stat_date: Mapped[date] = mapped_column(Date, nullable=False)
     quote_count: Mapped[int] = _count()
+    # 054 补：催发派生计数（截至刷新时刻）
+    in_schedule_count: Mapped[int] = _count()
+    urge_count: Mapped[int] = _count()
+    important_urge_count: Mapped[int] = _count()
+    overdue_count: Mapped[int] = _count()
     publish_count: Mapped[int] = _count()
     info_complete_count: Mapped[int] = _count()
     cancel_count: Mapped[int] = _count()
@@ -126,7 +133,9 @@ class PrWorkProgressSummary(TenantScopedModel):
     # （相减会把「既取消又召回过」的单据扣两次）
     effective_quote_count: Mapped[int] = _count()
     hit_count: Mapped[int] = _count()
-    like_count: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=_ZERO)
+    # numeric 而不是整数：抖音/快手点赞按 ×0.1 折算，单日可以是小数。逐日存整数会
+    # 「先舍入再求和」，与实时路径「先求和再取整」对不上（054 改的类型）
+    like_count: Mapped[Decimal] = mapped_column(Numeric, nullable=False, server_default=_ZERO)
     cost: Mapped[Decimal] = _money()
     refreshed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 

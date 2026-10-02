@@ -9,7 +9,6 @@ import {
   Switch,
   Table,
   Tag,
-  Typography,
   message,
 } from "antd";
 import { DownloadOutlined } from "@ant-design/icons";
@@ -23,6 +22,10 @@ import type {
 } from "@/features/report/types";
 import { listDictItems } from "@/features/product/api";
 import { MiniLineChart } from "@/components/MiniLineChart/MiniLineChart";
+import {
+  ReportCardTitle,
+  ReportFreshness,
+} from "@/components/ReportFreshness/ReportFreshness";
 import { StyleImageThumbnail } from "@/components/StyleImageThumbnail/StyleImageThumbnail";
 import {
   ReportTimeRangeFilter,
@@ -242,9 +245,17 @@ export function ProductionPage() {
   return (
     <Card
       title={
-        <Typography.Title level={4} style={{ margin: 0 }}>
-          投产报表
-        </Typography.Title>
+        <ReportCardTitle
+          title="投产报表"
+          freshness={
+            <ReportFreshness
+              preset={preset}
+              dateFrom={df}
+              dateTo={dt}
+              enabled={enabled && memory.ready}
+            />
+          }
+        />
       }
     >
       <Space style={{ marginBottom: 16 }} wrap>

@@ -58,6 +58,9 @@ ignore = [
 "app/modules/promotion/repository.py" = ["S608"]
 "app/modules/report/advanced_repository.py" = ["S608"]
 "app/modules/report/repository.py" = ["S608"]
+# 插值只有：advanced_repository 的模块常量、goods_filter_clauses 生成的固定子句、
+# bucket_expr 的白名单模板、_PR_SUM_COLUMNS 固定列名。用户输入全部走绑定参数。
+"app/modules/report/summary_read.py" = ["S608"]
 "app/modules/urge/repository.py" = ["S608"]
 
 [tool.ruff.format]
