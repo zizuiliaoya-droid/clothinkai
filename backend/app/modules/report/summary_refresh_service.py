@@ -26,11 +26,31 @@
 区间求和偏高。要补这个漏，upsert 之后还得算出「本次没产出的 key」再删 —— 生产
 264 商品 × 31 天是 8000 多个 key，拼进 SQL 会炸。
 
-直接「删掉区间内的行，再插本次结果」则一步到位。这**不会**让读取方看到空表：
-删与插在同一个事务里，PostgreSQL 的 MVCC 保证事务外的查询在提交前看到的是旧数据、
-提交后看到新数据，中间态不可见。
+直接「删掉区间内的行，再插本次结果」则一步到位。删与插在同一个事务里，事务外的
+读取方在提交前看到旧数据、提交后看到新数据，看不到中间的空表。
 
 删除范围严格限制在刷新区间内 —— 这是增量刷新，区间外的历史汇总一行不动。
+
+## 为什么要加锁
+
+「区间删 + 批量插」**不能并发**。两次刷新区间重叠时（每小时的定时任务撞上页面
+手动刷新），READ COMMITTED 下后一个事务的 DELETE 看不到前一个刚插入、尚未提交的
+行，于是它的 INSERT 会卡在唯一索引上，等前一个提交后报 ``UniqueViolation``。
+5b-1 的初版注释写着「两个请求撞上时最终写出同一份数据，不加锁」—— 那是错的。
+
+锁用 ``pg_try_advisory_xact_lock``：
+- **事务级**：随 commit / rollback 自动释放，进程崩了也不会留下死锁
+- **try 而不是阻塞**：拿不到就报忙。排队会占住 web worker 或 Celery 槽位
+  （生产 worker 只有 2 个并发，还要跑采集与备份）；定时任务跳过这一轮，
+  下个小时自然补上
+- **租户粒度**：不同租户的刷新互不影响；同租户的区间是否重叠不值得细算
+
+## 覆盖记录
+
+读取切到汇总表之后，「某天没有汇总行」有两种可能：那天确实没数据，或者那天从来
+没刷新过。不区分的话，没刷新过的历史区间会静默显示成 0。所以每次刷新在
+``report_summary_coverage`` 里给区间内**每一天**记一笔（不论那天有没有数据），
+读取侧据此判断能不能用汇总表、不能就回退实时聚合。
 """
 
 from __future__ import annotations
@@ -40,7 +60,7 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import Date, cast, delete, func, insert, select
+from sqlalchemy import Date, cast, delete, func, insert, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.report.advanced_repository import (
@@ -48,6 +68,7 @@ from app.modules.report.advanced_repository import (
     StoreDailyRepository,
     WorkProgressRepository,
 )
+from app.modules.report.exceptions import SummaryRefreshBusyError
 from app.modules.report.summary_models import (
     ProductRoiSummary,
     PrWorkProgressSummary,
@@ -85,6 +106,31 @@ _PR_COUNTERS = (
 
 _SHOP_METRICS = ("visitors", "pay_amount", "pay_orders")
 
+# 租户级刷新锁。键带命名空间前缀，与 import_tasks 按 batch_id 取的锁不会撞
+# （两边都是 hashtextextended 到 bigint 键空间，字符串不同即可）。
+# CAST 必须写：同一参数类型推断不出来时 asyncpg 会报 IndeterminateDatatype。
+_LOCK_SQL = text("SELECT pg_try_advisory_xact_lock(hashtextextended(CAST(:key AS text), 0))")
+
+
+def _lock_key(tenant_id: UUID) -> str:
+    """刷新锁的键。单独成函数是为了让测试拿同一个键去占锁，不在测试里再写一遍格式。"""
+    return f"report_summary:{tenant_id}"
+
+
+# 覆盖记录：区间内每一天一行，不论那天有没有数据。
+# 用 upsert 而不是删插：覆盖记录不会「变少」，一天刷过就是刷过，只更新时间。
+_COVERAGE_SQL = text(
+    """
+    INSERT INTO report_summary_coverage
+      (id, tenant_id, stat_date, refreshed_at, created_at, updated_at)
+    SELECT gen_random_uuid(), CAST(:tenant_id AS uuid), d::date,
+           CAST(:now AS timestamptz), CAST(:now AS timestamptz), CAST(:now AS timestamptz)
+    FROM generate_series(CAST(:lo AS date), CAST(:hi AS date), interval '1 day') AS d
+    ON CONFLICT (tenant_id, stat_date) DO UPDATE
+      SET refreshed_at = EXCLUDED.refreshed_at, updated_at = EXCLUDED.updated_at
+    """
+)
+
 
 def _bucket_start(day: date, period: str) -> date:
     """与 ``date_trunc(period, ...)`` 对齐的桶首日。
@@ -99,11 +145,44 @@ def _bucket_start(day: date, period: str) -> date:
     raise ValueError(f"Unsupported bucket period: {period}")
 
 
+def _next_bucket(bucket_start: date, period: str) -> date:
+    if period == "week":
+        return bucket_start + timedelta(days=7)
+    # 月：跳到下月 1 号。手写而不用 relativedelta，省一个依赖
+    if bucket_start.month == 12:
+        return bucket_start.replace(year=bucket_start.year + 1, month=1, day=1)
+    return bucket_start.replace(month=bucket_start.month + 1, day=1)
+
+
+def shop_daily_span(date_from: date, date_to: date) -> tuple[date, date]:
+    """店铺日汇总要刷新的区间：把 ``[date_from, date_to]`` 扩到完整的周桶与月桶。
+
+    周/月汇总是从日汇总二次聚合的。如果只刷 ``[date_from, date_to]`` 的日汇总，
+    落在区间外、但和区间同属一个周/月的那几天就可能**从来没刷过** —— 周/月那一行
+    会缺掉它们。定时任务的窗口是「今天往前 31 天」，下沿几乎总是落在某个月中间，
+    所以每次都会撞上：窗口 09-02 起，9 月这一行就漏了 09-01。
+
+    店铺日汇总只有一条查询（实测 0.7ms），扩几天没有成本。
+
+    周和月的分桶互相交叠：09-02 所在的周从 08-31 开始，而 08-31 属于 8 月。所以扩出来
+    的几天会碰到区间外的桶（8 月）。那个桶也会被重算（见 ``refresh``），周/月行始终
+    等于桶内日汇总之和；但 8 月其余日子的日汇总本次没刷，8 月这一行的新鲜度取决于
+    它们上次被刷的时间 —— 与「历史数据只能手动刷新」（PRD 模块三）是同一类，不是新问题。
+    """
+    lo = min(_bucket_start(date_from, "week"), _bucket_start(date_from, "month"))
+    hi = max(
+        _next_bucket(_bucket_start(date_to, "week"), "week"),
+        _next_bucket(_bucket_start(date_to, "month"), "month"),
+    ) - timedelta(days=1)
+    return lo, hi
+
+
 class SummaryRefreshService:
     """把实时聚合的结果固化进 5 张汇总表。
 
-    调用方负责 commit —— 刷新是一个整体，5 张表要么一起更新要么一起回滚。
-    中间状态（商品 ROI 刷了、店铺日报没刷）会让两张报表对不上账。
+    调用方负责 commit —— 刷新是一个整体，5 张表 + 覆盖记录要么一起更新要么一起回滚，
+    中间状态（商品 ROI 刷了、店铺日报没刷）会让两张报表对不上账。commit 同时释放
+    刷新锁（事务级 advisory lock）。
     """
 
     def __init__(self, session: AsyncSession) -> None:
@@ -115,11 +194,19 @@ class SummaryRefreshService:
     async def refresh(self, *, tenant_id: UUID, date_from: date, date_to: date) -> dict[str, int]:
         """刷新 ``[date_from, date_to]`` 区间。返回每张表写入的行数。
 
-        整次刷新共用一个 ``refreshed_at``，方便一眼看出哪些行是同一批产出的。
+        同租户已有刷新在进行中时抛 ``SummaryRefreshBusyError``（见模块 docstring
+        「为什么要加锁」）。整次刷新共用一个 ``refreshed_at``。
         """
         if date_from > date_to:
             raise ValueError(f"date_from {date_from} 晚于 date_to {date_to}")
+
+        # 必须是事务里的第一件事：锁要罩住后面所有的删与插
+        acquired = (await self._s.execute(_LOCK_SQL, {"key": _lock_key(tenant_id)})).scalar_one()
+        if not acquired:
+            raise SummaryRefreshBusyError()
+
         now = datetime.now(UTC)
+        shop_lo, shop_hi = shop_daily_span(date_from, date_to)
         counts = {
             "product_roi_summary": await self._refresh_product_roi(
                 tenant_id, date_from, date_to, now
@@ -127,15 +214,26 @@ class SummaryRefreshService:
             "pr_work_progress_summary": await self._refresh_pr_progress(
                 tenant_id, date_from, date_to, now
             ),
-            "shop_daily_summary": await self._refresh_shop_daily(
-                tenant_id, date_from, date_to, now
-            ),
+            # 扩到完整周/月桶，周月二次聚合才不会缺天（见 shop_daily_span）
+            "shop_daily_summary": await self._refresh_shop_daily(tenant_id, shop_lo, shop_hi, now),
         }
-        # 周月从日表二次聚合，必须排在日表之后
+        # 周月从日表二次聚合，必须排在日表之后。
+        # 区间传扩展后的 shop_lo / shop_hi 而不是原区间：这样**凡是刚刷过的日汇总
+        # 所在的周/月都会重算**，周/月行永远等于桶内日汇总之和 —— 月 → 周 → 日
+        # 下钻（PRD 投产模块）各层数字对得上。传原区间的话，扩出来的那几天所在的
+        # 桶（例如 08-31 所在的 8 月）不会重算，日汇总新了、月汇总还是旧的。
         for period, key in (("week", "shop_week_summary"), ("month", "shop_month_summary")):
             counts[key] = await self._refresh_shop_bucket(
-                tenant_id, date_from, date_to, now, period=period
+                tenant_id, shop_lo, shop_hi, now, period=period
             )
+
+        # 覆盖记录只记 [date_from, date_to]：这是三张日表**都**刷过的区间。
+        # 店铺日表多刷的那几天不算 —— 读取侧拿覆盖记录判断能不能用汇总表，
+        # 宁可保守（回退实时）也不能把只刷了一张表的日子当成完整。
+        await self._s.execute(
+            _COVERAGE_SQL,
+            {"tenant_id": str(tenant_id), "lo": date_from, "hi": date_to, "now": now},
+        )
         return counts
 
     # ------------------------------------------------------------------ #
@@ -268,10 +366,11 @@ class SummaryRefreshService:
         """从 ``shop_daily_summary`` 二次聚合出周/月。
 
         不另写一条按周/月分桶的聚合 SQL：周月就是日的加总，三个指标都可加，
-        从已经校验过口径的日表再 SUM 一次，天然与日表一致。
+        从已经校验过口径的日表再 SUM 一次，天然与日表一致 —— 下钻「月 → 周 → 日」时
+        各层数字对得上（PRD 投产模块要求的下钻）。
 
-        **区间会被扩展到完整的桶**。只刷 3/10~3/15 却写「3 月」那一行，这行就只含
-        这 6 天 —— 月汇总凭空少掉大半。所以先把区间对齐到桶边界，按完整桶重算。
+        桶要完整：只刷 3/10~3/15 却写「3 月」那一行，这行就只含 6 天。所以按桶边界
+        重算，而桶里每一天的日汇总由 ``shop_daily_span`` 保证刚刚刷过。
         """
         if period == "week":
             model: Any = ShopWeekSummary
@@ -296,9 +395,8 @@ class SummaryRefreshService:
             )
             .where(
                 ShopDailySummary.tenant_id == tenant_id,
-                # 桶的完整范围：bucket_hi 那个桶要整个覆盖到，所以上界取下一个桶前一天
                 ShopDailySummary.stat_date >= bucket_lo,
-                ShopDailySummary.stat_date < self._next_bucket(bucket_hi, period),
+                ShopDailySummary.stat_date < _next_bucket(bucket_hi, period),
             )
             .group_by(bucket)
         )
@@ -323,15 +421,6 @@ class SummaryRefreshService:
         )
         return len(payload)
 
-    @staticmethod
-    def _next_bucket(bucket_start: date, period: str) -> date:
-        if period == "week":
-            return bucket_start + timedelta(days=7)
-        # 月：跳到下月 1 号。手写而不用 relativedelta，省一个依赖
-        if bucket_start.month == 12:
-            return bucket_start.replace(year=bucket_start.year + 1, month=1, day=1)
-        return bucket_start.replace(month=bucket_start.month + 1, day=1)
-
     # ------------------------------------------------------------------ #
     # 通用「区间删 + 批量插」
     # ------------------------------------------------------------------ #
@@ -349,8 +438,7 @@ class SummaryRefreshService:
 
         先删后插能一并解决「源数据减少后的陈旧行」—— 不需要额外算出哪些 key
         本次没产出（生产那个集合有 8000 多个元素，拼进 SQL 会炸）。
-
-        删与插同事务，读取方看不到中间的空表（MVCC）。
+        并发安全靠 ``refresh`` 入口的租户锁，这里不再重复处理。
         """
         await self._s.execute(
             delete(model).where(
@@ -360,3 +448,6 @@ class SummaryRefreshService:
         )
         if payload:
             await self._s.execute(insert(model), list(payload))
+
+
+__all__ = ["SummaryRefreshService", "shop_daily_span"]

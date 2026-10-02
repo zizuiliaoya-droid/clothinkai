@@ -29,9 +29,24 @@ class ReportExportTypeInvalidError(AppException):
     message = "不支持的报表导出类型"
 
 
+class SummaryRefreshBusyError(AppException):
+    """同一租户已有一次汇总刷新在进行中。
+
+    两次刷新的区间重叠时不能并行：READ COMMITTED 下后一个事务的 DELETE 看不到
+    前一个刚插入（未提交）的行，INSERT 会撞唯一索引。所以刷新入口拿租户级
+    advisory lock，拿不到就直接报忙，而不是排队等 —— 排队会占住 web worker
+    或 Celery 槽位（worker 只有 2 个并发，还要跑采集与备份）。
+    """
+
+    code = "REPORT_SUMMARY_REFRESH_BUSY"
+    status_code = 409
+    message = "汇总表正在刷新中，请稍后再试"
+
+
 __all__ = [
     "ReportExportTypeInvalidError",
     "ReportInvalidTimePresetError",
     "ReportInvalidTimeRangeError",
     "ReportStyleNotFoundError",
+    "SummaryRefreshBusyError",
 ]
