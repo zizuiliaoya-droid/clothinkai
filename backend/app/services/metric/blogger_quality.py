@@ -56,14 +56,19 @@ async def avg_cpl_for_blogger(
 ) -> Decimal | None:
     """该博主历史推广的平均单赞成本（CPL）。
 
-    逐行折算 effective_like_count → CPL，对非 None 的 CPL 求平均。
-    无有效样本（无推广 / 全部点赞为 None/0）→ None。
+    逐行算单篇点赞成本（``calculate_cpl``），对非 None 的求平均。
+    无有效样本（无推广 / 都没录 7 天数据 / 点赞为 None 或 0）→ None。
     """
     rows = await _load_promotions(blogger_id, session, tenant_id)
     cpls: list[Decimal] = []
     for p in rows:
         eff = calculate_effective_like_count(platform=p.platform, like_count=p.like_count)
-        cpl = calculate_cpl(quote_amount=p.quote_amount, effective_like_count=eff)
+        # 与推广单、博主卡片同一口径：总推广成本 ÷ 折算点赞，录过 7 天数据才算
+        cpl = calculate_cpl(
+            total_promo_cost=p.total_promo_cost,
+            effective_like_count=eff,
+            metrics_recorded_at=p.metrics_recorded_at,
+        )
         if cpl is not None:
             cpls.append(cpl)
     if not cpls:

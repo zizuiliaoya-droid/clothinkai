@@ -414,16 +414,18 @@ class NegotiationService:
     ) -> BloggerCooperationHistory:
         """某博主最近 N 次合作款式。
 
-        PRD 改动 3 还要「当时 ROI」，但博主维度 ROI 系统里没有定义过（现有 ROI 都是
-        款式/商品维度，还要先定「发布后多少天」这个窗口）。这里先给已有口径的 CPL
-        与点赞数，同样能看出推得怎么样。
+        PRD 改动 3 原文有「当时 ROI」。业务方 10-02 确认博主卡片**不算 ROI**，只看单篇
+        点赞成本，而且要录完 7 天数据之后才算（口径见 ``calculate_cpl``）。
         """
         from app.core.attachment import attachment_service
 
         rows, total = await self._repo.blogger_cooperations(
             tenant_id=user.tenant_id, blogger_id=blogger_id, limit=limit
         )
-        can_see_quote = await self._can_see_quote(user)
+        ctx = await build_field_perm_context(user.id, self._roles, self._perms)
+        can_see_quote = can_read_field("promotion", "quote_amount", ctx)
+        # 单赞成本的分子含样品成本与寄回运费，乘回点赞数就能反推 —— 两个读权限都要有
+        can_see_cpl = can_see_quote and can_read_field("promotion", "cost_snapshot", ctx)
         items: builtins.list[BloggerCooperationItem] = []
         for r in rows:
             image_url: str | None = None
@@ -438,14 +440,11 @@ class NegotiationService:
             effective_like = calculate_effective_like_count(
                 platform=str(r["platform"]), like_count=r.get("like_count")
             )
-            # promotion.quote_amount 是 NOT NULL，这里的 None 分支只为满足类型检查
-            raw_quote = r.get("quote_amount")
-            cpl = (
-                calculate_cpl(
-                    quote_amount=Decimal(str(raw_quote)), effective_like_count=effective_like
-                )
-                if raw_quote is not None
-                else None
+            raw_cost = r.get("total_promo_cost")
+            cpl = calculate_cpl(
+                total_promo_cost=Decimal(str(raw_cost)) if raw_cost is not None else None,
+                effective_like_count=effective_like,
+                metrics_recorded_at=r.get("metrics_recorded_at"),
             )
             items.append(
                 BloggerCooperationItem(
@@ -460,7 +459,7 @@ class NegotiationService:
                     publish_status=str(r["publish_status"]),
                     actual_publish_date=r.get("actual_publish_date"),
                     like_count=r.get("like_count"),
-                    cpl=cpl if can_see_quote else None,
+                    cpl=cpl if can_see_cpl else None,
                     quote_amount=r.get("quote_amount") if can_see_quote else None,
                 )
             )

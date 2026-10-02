@@ -140,10 +140,7 @@ class NegotiationListFilters(BaseModel):
 class BloggerCooperationItem(BaseModel):
     """博主历史合作款式的一条记录。
 
-    PRD 改动 3 还要求「当时 ROI」，但博主维度的 ROI 在系统里从来没有定义过
-    （现有 ROI 都是款式/商品维度，而且要先定「发布后多少天内」这个窗口）。
-    所以这里先给已有口径的 CPL（单赞成本）与点赞数 —— 同样能回答「这博主推得怎么样」。
-    ROI 窗口口径定下来之后再加快照字段。
+    PRD 改动 3 原文有「当时 ROI」，业务方 10-02 确认博主卡片不算 ROI，只看单篇点赞成本。
     """
 
     model_config = ConfigDict(from_attributes=True)
@@ -160,7 +157,10 @@ class BloggerCooperationItem(BaseModel):
     actual_publish_date: date | None = None
     like_count: int | None = None
     cpl: Decimal | None = None
-    """单赞成本 = 博主服务费 ÷ 折算后点赞数。敏感，无报价读权限时为 None。"""
+    """单篇点赞成本 = 总推广成本 ÷ 折算后 7 天点赞数，录过 7 天数据才有值。
+
+    敏感：要同时有报价与成本的读权限，否则为 None。
+    """
 
     quote_amount: Decimal | None = None  # 敏感
 

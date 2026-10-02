@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
@@ -65,24 +66,72 @@ class TestIsHit:
         assert calculate_is_hit(like_count=1500) is True
 
 
+_RECORDED = datetime(2026, 9, 20, 8, 0, tzinfo=UTC)
+
+
 class TestCpl:
+    """单篇点赞成本 = 总推广成本 ÷ 7 天点赞数，录过 7 天数据才算（PRD V1.4 §9）。"""
+
     def test_basic(self) -> None:
-        # 500 / 100 = 5.0000
-        result = calculate_cpl(quote_amount=Decimal("500.00"), effective_like_count=100)
+        # 总推广成本 500 / 100 = 5.0000
+        result = calculate_cpl(
+            total_promo_cost=Decimal("500.00"),
+            effective_like_count=100,
+            metrics_recorded_at=_RECORDED,
+        )
         assert result == Decimal("5.0000")
 
+    def test_not_recorded_returns_none(self) -> None:
+        """有点赞数但没录过 7 天数据（编辑或采集写进来的）也不算。"""
+        assert (
+            calculate_cpl(
+                total_promo_cost=Decimal("500.00"),
+                effective_like_count=100,
+                metrics_recorded_at=None,
+            )
+            is None
+        )
+
+    def test_missing_cost_returns_none(self) -> None:
+        assert (
+            calculate_cpl(
+                total_promo_cost=None, effective_like_count=100, metrics_recorded_at=_RECORDED
+            )
+            is None
+        )
+
     def test_zero_likes_returns_none(self) -> None:
-        assert calculate_cpl(quote_amount=Decimal("500.00"), effective_like_count=0) is None
+        assert (
+            calculate_cpl(
+                total_promo_cost=Decimal("500.00"),
+                effective_like_count=0,
+                metrics_recorded_at=_RECORDED,
+            )
+            is None
+        )
 
     def test_none_likes_returns_none(self) -> None:
-        assert calculate_cpl(quote_amount=Decimal("500.00"), effective_like_count=None) is None
+        assert (
+            calculate_cpl(
+                total_promo_cost=Decimal("500.00"),
+                effective_like_count=None,
+                metrics_recorded_at=_RECORDED,
+            )
+            is None
+        )
 
     def test_precision_4_digits(self) -> None:
         # 100 / 7 = 14.2857142...
-        result = calculate_cpl(quote_amount=Decimal("100.00"), effective_like_count=7)
+        result = calculate_cpl(
+            total_promo_cost=Decimal("100.00"),
+            effective_like_count=7,
+            metrics_recorded_at=_RECORDED,
+        )
         assert result == Decimal("14.2857")
 
     def test_round_half_up(self) -> None:
         # 1 / 8 = 0.125 → 4 位 → 0.1250
-        result = calculate_cpl(quote_amount=Decimal("1.00"), effective_like_count=8)
+        result = calculate_cpl(
+            total_promo_cost=Decimal("1.00"), effective_like_count=8, metrics_recorded_at=_RECORDED
+        )
         assert result == Decimal("0.1250")
