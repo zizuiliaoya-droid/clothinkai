@@ -33,23 +33,15 @@ _IMPORTANT_DAYS = 3
 # 对不上，而且不报错。
 # ---------------------------------------------------------------------------
 
-# extra 是导入来的 JSONB，出现 "1,234"、"-" 这类字面量时直接 ::numeric / ::int 会让
-# 整条报表查询报错，所以带正则守卫：认不出的值按 0 算。
-_REFUND_SUM = """COALESCE(SUM(
-  CASE
-    WHEN COALESCE(q.extra->>'refund_amount', '') ~ '^-?[0-9]+([.][0-9]+)?$'
-    THEN (q.extra->>'refund_amount')::numeric
-    ELSE 0
-  END
-), 0)"""
+# 退款额与加购数读导入时解析好的 typed 列（055）。
+#
+# 以前这里是 ``extra->>'refund_amount'`` / ``extra->>'add_cart_count'`` 加正则守卫 ——
+# 但导入写进 extra 的是生意参谋的**中文原始表头**，这两个英文键从来不存在，生产上所有
+# 报表的退款与加购一直是 0，而且不报错。千分位、"-" 之类的脏值在 adapter 解析时处理，
+# 报表这边只做加法。BI 店铺汇总与 BI 趋势也引用这里，不再各自内联一份。
+_REFUND_SUM = "COALESCE(SUM(q.refund_amount), 0)"
 
-_ADD_CART_SUM = """COALESCE(SUM(
-  CASE
-    WHEN COALESCE(q.extra->>'add_cart_count', '') ~ '^-?[0-9]+$'
-    THEN (q.extra->>'add_cart_count')::int
-    ELSE 0
-  END
-), 0)"""
+_ADD_CART_SUM = "COALESCE(SUM(q.add_cart_count), 0)"
 
 # 商品维度报表的「商品信息」列（投产主表与它的汇总表读取共用）
 GOODS_META_COLUMNS = """
@@ -714,17 +706,10 @@ class BiRepository:
         self, *, tenant_id: UUID, date_from: date, date_to: date
     ) -> Mapping[str, Any]:
         sql = text(
-            """
+            f"""
             WITH sales AS (
               SELECT COALESCE(SUM(q.pay_amount), 0) AS sales_amount,
-                     COALESCE(SUM(
-                       CASE
-                         WHEN COALESCE(q.extra->>'refund_amount', '')
-                              ~ '^[0-9]+([.][0-9]+)?$'
-                         THEN (q.extra->>'refund_amount')::numeric
-                         ELSE 0
-                       END
-                     ), 0) AS refund_amount
+                     {_REFUND_SUM} AS refund_amount
               FROM qianniu_daily q
               WHERE q.tenant_id = :tenant_id
                 AND q.date BETWEEN :date_from AND :date_to
@@ -866,14 +851,7 @@ class BiRepository:
             FROM (
               SELECT {q_bucket} AS d,
                      COALESCE(SUM(q.pay_amount), 0) AS sales_amount,
-                     COALESCE(SUM(
-                       CASE
-                         WHEN COALESCE(q.extra->>'refund_amount', '')
-                              ~ '^[0-9]+([.][0-9]+)?$'
-                         THEN (q.extra->>'refund_amount')::numeric
-                         ELSE 0
-                       END
-                     ), 0) AS refund_amount,
+                     {_REFUND_SUM} AS refund_amount,
                      0::numeric AS internal_spend, 0::numeric AS external_spend
               FROM qianniu_daily q
               WHERE q.tenant_id = :tenant_id

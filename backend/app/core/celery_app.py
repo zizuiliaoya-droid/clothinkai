@@ -131,8 +131,8 @@ celery_app.conf.beat_schedule = {
     # PRD 模块三：每小时刷新 5 张报表汇总表，滚动窗口最近 31 天。
     # minute=20 是为了避开整点的异常预警与 */15 的采集恢复 —— 三个任务都要连库，
     # 撞在同一分钟会让连接池吃紧。
-    # 02:00 的采集导入期间也会刷一次，那时可能读到部分数据；下一个小时会再刷，
-    # 最终一致。真要「导入完成即刷新」得在 importer 里挂回调，留给后续批次。
+    # 导入（含 02:00 的采集导入）完成后另有 refresh_report_summaries_for_dates 只刷
+    # 那批数据涉及的日期（import_tasks._enqueue_summary_refresh），不用等这里的整点。
     "refresh-report-summaries-hourly": {
         "task": "app.tasks.summary_tasks.refresh_report_summaries",
         "schedule": crontab(minute=20),

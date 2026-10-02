@@ -134,6 +134,19 @@ class QianniuDaily(TenantScopedModel):
     visitors: Mapped[int | None] = mapped_column(Integer, nullable=True)
     pay_amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     pay_orders: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    """支付件数（生意参谋「支付件数」）。名字叫 orders，存的是件数不是订单数。"""
+
+    refund_amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    """成功退款金额（生意参谋「成功退款金额」，055）。"""
+
+    add_cart_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    """商品加购件数（生意参谋「商品加购件数」，055）。
+
+    这两列以前不存在，报表从 ``extra`` 里按英文键 ``refund_amount`` / ``add_cart_count``
+    取 —— 而导入写进 ``extra`` 的是中文原始表头，键从来对不上，生产上一直是 0。
+    报表要用的数一律落 typed 列，``extra`` 只做原样留档与「其余列」展示。
+    """
+
     extra: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     __table_args__ = (

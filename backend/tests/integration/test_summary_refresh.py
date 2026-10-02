@@ -111,7 +111,8 @@ async def _seed(
                 visitors=120,
                 pay_amount=Decimal(pay),
                 pay_orders=8,
-                extra={"refund_amount": refund, "add_cart_count": "3"},
+                refund_amount=Decimal(refund),
+                add_cart_count=3,
             )
         )
     # 4 月那天单独留着，用来验证「只刷 3 月不碰 4 月」
@@ -124,7 +125,7 @@ async def _seed(
             visitors=60,
             pay_amount=Decimal("600.00"),
             pay_orders=4,
-            extra={"refund_amount": "0"},
+            refund_amount=Decimal("0"),
         )
     )
     session.add(

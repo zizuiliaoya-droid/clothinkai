@@ -96,6 +96,8 @@ async def _qianniu(
     pay: str = "1000.00",
     visitors: int = 100,
     orders: int = 10,
+    refund: str | None = None,
+    add_cart: int | None = None,
     extra: dict | None = None,
 ) -> None:
     session.add(
@@ -107,6 +109,8 @@ async def _qianniu(
             visitors=visitors,
             pay_amount=Decimal(pay),
             pay_orders=orders,
+            refund_amount=Decimal(refund) if refund is not None else None,
+            add_cart_count=add_cart,
             extra=extra,
         )
     )
@@ -458,7 +462,8 @@ class TestProduction:
                 pp,
                 cur,
                 pay="1000.00",
-                extra={"refund_amount": "100.00", "add_cart_count": 50},
+                refund="100.00",
+                add_cart=50,
             )
             await _ad(session, tenant_a, ad_pp, cur, cost="200.00")
             await promotion_factory.promotion(
@@ -540,7 +545,7 @@ class TestProduction:
                 pp,
                 day,
                 pay="300.00",
-                extra={"refund_amount": "20.00"},
+                refund="20.00",
             )
             await session.commit()
 
@@ -599,7 +604,10 @@ class TestProduction:
                     visitors=10,
                     pay_amount=Decimal("100.00"),
                     pay_orders=1,
-                    extra={"refund_amount": "0", "add_cart_count": 2},
+                    refund_amount=Decimal("0"),
+                    add_cart_count=2,
+                    # extra 按真实导入的样子放中文原始表头（fetch_extra_by_goods 只认非空 extra）
+                    extra={"成功退款金额": "0", "商品加购件数": "2"},
                 )
             )
             session.add(
@@ -640,7 +648,8 @@ class TestProduction:
                     visitors=99,
                     pay_amount=Decimal("999.00"),
                     pay_orders=9,
-                    extra={"add_cart_count": 99},
+                    add_cart_count=99,
+                    extra={"商品加购件数": "99"},
                 )
             )
             await session.commit()
@@ -702,7 +711,8 @@ class TestProduction:
                 pp,
                 day,
                 pay="2000.00",
-                extra={"refund_amount": "100.00", "add_cart_count": 30},
+                refund="100.00",
+                add_cart=30,
             )
             # 两个成员款式各有一笔已发布推广，套装的站外花费应当是两者之和。
             for style in (top, skirt):
@@ -869,7 +879,8 @@ class TestProduction:
                     visitors=50,
                     pay_amount=Decimal("1500.00"),
                     pay_orders=5,
-                    extra={"add_cart_count": 12},
+                    add_cart_count=12,
+                    extra={"商品加购件数": "12"},
                 )
             )
             await session.commit()
@@ -878,9 +889,9 @@ class TestProduction:
             rows = [r for r in report.items if r.goods_id == suit.id]
             assert len(rows) == 1
             assert rows[0].pay_amount == Decimal("1500.00")
-            # extra 只累加一次，不因为两个成员款式而翻倍
+            # typed 列与 extra 都只累加一次，不因为两个成员款式而翻倍
             assert rows[0].add_cart_count == 12
-            assert rows[0].extra.get("add_cart_count") == "12"
+            assert rows[0].extra.get("商品加购件数") == "12"
         finally:
             tenant_id_ctx.reset(tok)
 

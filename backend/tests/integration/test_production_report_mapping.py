@@ -98,13 +98,15 @@ async def _qianniu(
     platform_product_id: Any = None,
     day: date = D1,
     extra: str = "{}",
+    refund: Decimal | None = None,
+    add_cart: int | None = None,
 ) -> None:
     await session.execute(
         sa_text(
             "INSERT INTO qianniu_daily (id, tenant_id, platform_product_id, "
-            "platform_id_snapshot, date, visitors, pay_amount, pay_orders, extra, "
-            "created_at, updated_at) "
-            "VALUES (gen_random_uuid(), :t, :ppid, :pid, :d, 10, :pay, 1, "
+            "platform_id_snapshot, date, visitors, pay_amount, pay_orders, "
+            "refund_amount, add_cart_count, extra, created_at, updated_at) "
+            "VALUES (gen_random_uuid(), :t, :ppid, :pid, :d, 10, :pay, 1, :refund, :cart, "
             "CAST(:extra AS JSONB), NOW(), NOW())"
         ),
         {
@@ -113,6 +115,8 @@ async def _qianniu(
             "pid": platform_id,
             "d": day,
             "pay": pay,
+            "refund": refund,
+            "cart": add_cart,
             "extra": extra,
         },
     )
@@ -319,15 +323,17 @@ class TestMappingBranches:
         finally:
             tenant_id_ctx.reset(token)
 
-    async def test_extra_fields_survive_refactor(
+    async def test_refund_and_add_cart_come_from_typed_columns(
         self,
         session: AsyncSession,
         tenant_a: Any,
         product_factory: Any,
     ) -> None:
-        """extra 里的退款额与加购数照旧从 JSONB 抠出来，带正则守卫。
+        """退款额与加购数读 typed 列（055），不再从 extra 按键抠。
 
-        脏值（"1,234"、"-"）不能让整条报表查询炸，只能当 0。
+        extra 里故意放一组英文键的诱饵值：以前报表就是按这两个键读的，而真实导入从来
+        不写它们 —— 生产上因此一直是 0。读回诱饵值说明又退回了按键读 extra。
+        typed 列为 NULL（导出里是 "-" 或没有这一列）的那天不计入，也不能让查询报错。
         """
         token = tenant_id_ctx.set(tenant_a.id)
         try:
@@ -342,9 +348,13 @@ class TestMappingBranches:
                 pay=Decimal("1000.00"),
                 platform_product_id=pp,
                 day=date(2026, 3, 1),
-                extra='{"refund_amount": "120.50", "add_cart_count": "7"}',
+                refund=Decimal("120.50"),
+                add_cart=7,
+                extra=(
+                    '{"成功退款金额": "120.50", "商品加购件数": "7", '
+                    '"refund_amount": "999", "add_cart_count": "999"}'
+                ),
             )
-            # 脏值那条：两个字段都不该让查询报错，按 0 算
             await _qianniu(
                 session,
                 tenant_a.id,
@@ -352,7 +362,7 @@ class TestMappingBranches:
                 pay=Decimal("500.00"),
                 platform_product_id=pp,
                 day=date(2026, 3, 2),
-                extra='{"refund_amount": "1,234", "add_cart_count": "-"}',
+                extra='{"成功退款金额": "-", "商品加购件数": "-"}',
             )
             await session.flush()
 

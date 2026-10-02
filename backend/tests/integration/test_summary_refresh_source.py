@@ -116,7 +116,8 @@ async def _qianniu(
             visitors=10,
             pay_amount=Decimal(pay),
             pay_orders=1,
-            extra={"refund_amount": refund, "add_cart_count": "2"},
+            refund_amount=Decimal(refund),
+            add_cart_count=2,
         )
     )
 

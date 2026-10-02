@@ -80,7 +80,7 @@ async def _high_return_style(
             visitors=100,
             pay_amount=Decimal(pay),
             pay_orders=10,
-            extra={"refund_amount": refund},
+            refund_amount=Decimal(refund),
         )
     )
     await session.flush()

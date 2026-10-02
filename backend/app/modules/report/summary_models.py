@@ -77,7 +77,8 @@ class ProductRoiSummary(TenantScopedModel):
     stat_date: Mapped[date] = mapped_column(Date, nullable=False)
     pay_amount: Mapped[Decimal] = _money()
     brushing_amount: Mapped[Decimal] = _money()
-    # 不限精度：退款额从导入的 JSONB 抠出来，位数没保证，定长会逐日舍入（054 改的类型）
+    # 不限精度（054 改的类型）。055 起源列是 qianniu_daily.refund_amount numeric(12,2)，
+    # 逐日求和本身已是精确的；保留不限精度只是不必为此再改一次表
     refund_amount: Mapped[Decimal] = mapped_column(Numeric, nullable=False, server_default=_ZERO)
     # 054 补：投产报表「总加购数」「加购成本」两列靠它
     add_cart_count: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=_ZERO)
