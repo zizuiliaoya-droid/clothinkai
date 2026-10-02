@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal
 
 from app.modules.promotion.legacy_settings import (
@@ -60,19 +61,26 @@ def calculate_is_hit(
 
 def calculate_cpl(
     *,
-    quote_amount: Decimal,
+    total_promo_cost: Decimal | None,
     effective_like_count: int | None,
+    metrics_recorded_at: datetime | None,
 ) -> Decimal | None:
-    """BR-U04-33: 单赞成本（cost per like）。
+    """单篇点赞成本（PRD V1.4 §9）= 总推广成本 ÷ 7 天点赞数。
 
-    分母用 ``effective_like_count``（已折算），不是原始 like_count。
-    分母为 None / 0 时返回 None（前端展示 "—"）。
+    - 分子是站外推广成本 ``total_promo_cost``（博主服务费 + 样品成本 + 寄回运费；寄拍样品
+      成本恒 0、置换服务费恒 0 由生成列与 ``_enforce_mode_costs`` 保证）。以前只用博主服务费，
+      置换单的单赞成本永远是 0，寄拍单漏了寄回运费。
+    - **录过 7 天数据才算**（``metrics_recorded_at`` 有值）：PRD「仅 PR 提交 7 天点赞数据后
+      才计算」，业务方 10-02 再次确认。``like_count`` 还能被编辑、被采集器写进来，不能当门槛。
+    - 分母用折算后点赞（抖音 / 快手 ×0.1）；None / 0 → None（前端展示「—」）。
 
     精度：DECIMAL(10, 4) ROUND_HALF_UP。
     """
+    if metrics_recorded_at is None or total_promo_cost is None:
+        return None
     if effective_like_count is None or effective_like_count == 0:
         return None
-    return (quote_amount / Decimal(effective_like_count)).quantize(
+    return (total_promo_cost / Decimal(effective_like_count)).quantize(
         Decimal("0.0001"), rounding=ROUND_HALF_UP
     )
 

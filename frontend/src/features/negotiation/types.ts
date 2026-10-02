@@ -89,8 +89,7 @@ export interface NegotiationReviewRequest {
 /**
  * 博主历史合作的一条记录（hover 卡用）。
  *
- * PRD 还要求「当时 ROI」，但博主维度 ROI 系统里没定义过，还要先定「发布后多少天」
- * 这个窗口。所以先给已有口径的 CPL 与点赞数。
+ * PRD 原文有「当时 ROI」，业务方 10-02 确认卡片上不算 ROI，只看单篇点赞成本。
  */
 export interface BloggerCooperationItem {
   promotion_id: string;
@@ -104,7 +103,10 @@ export interface BloggerCooperationItem {
   publish_status: string;
   actual_publish_date: string | null;
   like_count: number | null;
-  /** 单赞成本。敏感，无报价读权限时为 null。 */
+  /**
+   * 单篇点赞成本 = 总推广成本 ÷ 折算后 7 天点赞数，录过 7 天数据才有值。
+   * 敏感：要同时能看报价与成本，否则为 null。
+   */
   cpl: string | null;
   quote_amount: string | null;
 }

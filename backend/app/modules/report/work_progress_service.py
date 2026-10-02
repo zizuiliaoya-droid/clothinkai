@@ -17,6 +17,7 @@ from app.modules.report.advanced_repository import WorkProgressRepository
 from app.modules.report.advanced_schemas import PrWorkProgress
 from app.modules.report.exceptions import ReportInvalidTimeRangeError
 from app.modules.report.summary_read import SummaryReadRepository, record_source
+from app.modules.urge.service import UrgeService
 from app.services.metric.common import safe_div
 
 _Q4 = Decimal("0.0001")
@@ -37,6 +38,7 @@ class WorkProgressService:
     def __init__(self, session: AsyncSession) -> None:
         self._repo = WorkProgressRepository(session)
         self._summary = SummaryReadRepository(session)
+        self._urge = UrgeService(session)
 
     async def get_for_month(self, tenant_id: UUID, month: str) -> list[PrWorkProgress]:
         """按月 × PR 聚合。整月被汇总表覆盖就读汇总表，否则实时。
@@ -59,6 +61,7 @@ class WorkProgressService:
                     date_from=date_from,
                     date_to=date_to,
                     today=get_today(),
+                    thresholds=await self._urge.get_urge_thresholds(tenant_id),
                 )
         return [self._to_row(r) for r in rows]
 

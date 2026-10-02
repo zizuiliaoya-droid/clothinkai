@@ -15,14 +15,12 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import as_mapping, as_mappings
-from app.modules.promotion.urge_calculator import URGE_STATUS_SQL_EXPR
+from app.modules.promotion.urge_calculator import URGE_STATUS_SQL_EXPR, UrgeThresholds
 from app.services.metric.publish_progress import like_sum_expr
 from app.services.metric.work_progress import HIT_STAT_THRESHOLD
 
 _URGE = URGE_STATUS_SQL_EXPR
 _LIKE = like_sum_expr("p.like_count")
-_URGE_DAYS = 10
-_IMPORTANT_DAYS = 3
 
 
 # ---------------------------------------------------------------------------
@@ -170,8 +168,15 @@ class WorkProgressRepository:
         self._s = session
 
     async def aggregate_by_pr(
-        self, *, tenant_id: UUID, date_from: date, date_to: date, today: date
+        self,
+        *,
+        tenant_id: UUID,
+        date_from: date,
+        date_to: date,
+        today: date,
+        thresholds: UrgeThresholds,
     ) -> list[Mapping[str, Any]]:
+        """``thresholds`` 决定档期内 / 催发 / 重要催发三档的分界，必须是租户配置。"""
         sql = text(
             f"""
             SELECT
@@ -215,8 +220,7 @@ class WorkProgressRepository:
             "date_from": date_from,
             "date_to": date_to,
             "today": today,
-            "urge_days": _URGE_DAYS,
-            "important_days": _IMPORTANT_DAYS,
+            **thresholds.sql_params(),
             "hit_stat": HIT_STAT_THRESHOLD,
         }
         return as_mappings((await self._s.execute(sql, params)).mappings().all())
@@ -789,7 +793,9 @@ class BiRepository:
         date_from: date,
         date_to: date,
         today: date,
+        thresholds: UrgeThresholds,
     ) -> list[Mapping[str, Any]]:
+        # 这里只数「超时」，与两个阈值无关；传租户配置只是为了不再留一份写死的 10 / 3
         sql = text(
             f"""
             WITH work AS (
@@ -825,8 +831,7 @@ class BiRepository:
             "date_from": date_from,
             "date_to": date_to,
             "today": today,
-            "urge_days": _URGE_DAYS,
-            "important_days": _IMPORTANT_DAYS,
+            **thresholds.sql_params(),
         }
         return as_mappings((await self._s.execute(sql, params)).mappings().all())
 

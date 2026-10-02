@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -37,14 +38,28 @@ class TestBloggerQualityAggregation:
         try:
             style = await product_factory.style()
             blogger = await blogger_factory.blogger(follower_count=50_000)
-            # quote=500, like=1000, 小红书系数1.0 → effective=1000 → cpl=0.5
-            await promotion_factory.promotion(
+            # 总推广成本 = 服务费 400 + 样品 80 + 寄回运费 20 = 500；like=1000、小红书系数 1.0
+            # → effective=1000 → cpl=0.5。录过 7 天数据才算。
+            p = await promotion_factory.promotion(
                 style=style,
                 blogger=blogger,
-                quote_amount=Decimal("500.00"),
+                quote_amount=Decimal("400.00"),
+                cost_snapshot=Decimal("80.00"),
+                return_shipping_fee=Decimal("20.00"),
                 like_count=1000,
                 platform="小红书",
             )
+            # 工厂的 kwarg 清单里没有 metrics_recorded_at，直接写
+            p.metrics_recorded_at = datetime.now(UTC)
+            # 再加一张有点赞但没录 7 天数据的：不能拉低 / 拉高平均值
+            await promotion_factory.promotion(
+                style=style,
+                blogger=blogger,
+                quote_amount=Decimal("10.00"),
+                like_count=1000,
+                platform="小红书",
+            )
+            await session.flush()
             cpl = await avg_cpl_for_blogger(blogger.id, session, tenant_a.id)
             assert cpl == Decimal("0.5000")
         finally:
@@ -112,14 +127,16 @@ class TestBloggerQualityAggregation:
         try:
             style = await product_factory.style()
             blogger = await blogger_factory.blogger(follower_count=50_000)
-            # 低 CPL + 爆文 → 高性价比 + 带货型
-            await promotion_factory.promotion(
+            # 低 CPL + 爆文 → 高性价比 + 带货型（CPL 要录过 7 天数据才算）
+            p = await promotion_factory.promotion(
                 style=style,
                 blogger=blogger,
                 quote_amount=Decimal("500.00"),
                 like_count=2000,
                 platform="小红书",
             )
+            p.metrics_recorded_at = datetime.now(UTC)
+            await session.flush()
             tags = await compute_quality_tags(blogger.id, session, tenant_a.id)
             assert TAG_HIGH_VALUE in tags
             assert TAG_BESTSELLER in tags
@@ -143,13 +160,15 @@ class TestRecomputeForTenant:
             style = await product_factory.style()
             # KOL（粉丝量），手动 blogger_type 故意错置为素人 → 重算应纠正
             blogger = await blogger_factory.blogger(follower_count=200_000, blogger_type="素人")
-            await promotion_factory.promotion(
+            p = await promotion_factory.promotion(
                 style=style,
                 blogger=blogger,
                 quote_amount=Decimal("500.00"),
                 like_count=2000,
                 platform="小红书",
             )
+            p.metrics_recorded_at = datetime.now(UTC)
+            await session.flush()
             await factory.user(tenant_a, roles=[admin_role])
             svc = BloggerService(session)
             result = await svc.recompute_tags_for_current_tenant(tenant_a.id)

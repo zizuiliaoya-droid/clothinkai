@@ -27,29 +27,30 @@ from app.modules.report.schemas import (
     StyleCardPage,
     TimeSeriesPoint,
 )
+from app.modules.urge.service import UrgeService
 from app.services.metric.common import safe_div
 
 _Q4 = Decimal("0.0001")
-_URGE_DAYS = 10
-_IMPORTANT_DAYS = 3
 
 
 class PublishProgressService:
     def __init__(self, session: AsyncSession) -> None:
         self._repo = PublishProgressRepository(session)
+        self._urge = UrgeService(session)
 
-    def _common(self, tenant_id: UUID, time_range: tuple) -> dict[str, Any]:
+    async def _common(self, tenant_id: UUID, time_range: tuple) -> dict[str, Any]:
+        # 发文进度只数「超时」，结果与两个阈值无关；照样读租户配置，不再留一份写死的 10 / 3
+        thresholds = await self._urge.get_urge_thresholds(tenant_id)
         return {
             "tenant_id": tenant_id,
             "date_from": time_range[0],
             "date_to": time_range[1],
             "today": get_today(),
-            "urge_days": _URGE_DAYS,
-            "important_days": _IMPORTANT_DAYS,
+            **thresholds.sql_params(),
         }
 
     async def get_summary(self, tenant_id: UUID, time_range: tuple) -> ProgressSummary:
-        row = await self._repo.aggregate_summary(**self._common(tenant_id, time_range))
+        row = await self._repo.aggregate_summary(**(await self._common(tenant_id, time_range)))
         quote = int(row["quote_count"])
         publish_rate = safe_div(row["publish_count"], quote, quantize=_Q4)
         overdue_rate = safe_div(row["overdue_count"], quote, quantize=_Q4)
@@ -73,7 +74,7 @@ class PublishProgressService:
         self, tenant_id: UUID, time_range: tuple, *, page: int, page_size: int
     ) -> StyleCardPage:
         rows, total = await self._repo.aggregate_cards(
-            **self._common(tenant_id, time_range), page=page, page_size=page_size
+            **(await self._common(tenant_id, time_range)), page=page, page_size=page_size
         )
         return StyleCardPage(
             items=[self._to_card(r) for r in rows],
@@ -108,7 +109,7 @@ class PublishProgressService:
         if not await self._repo.style_exists(tenant_id, style_id):
             raise ReportStyleNotFoundError()
         rows = await self._repo.aggregate_by_pr(
-            style_id=style_id, **self._common(tenant_id, time_range)
+            style_id=style_id, **(await self._common(tenant_id, time_range))
         )
         return [
             PrDetail(

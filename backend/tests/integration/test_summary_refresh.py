@@ -46,6 +46,7 @@ from app.modules.report.summary_models import (
     ShopWeekSummary,
 )
 from app.modules.report.summary_refresh_service import SummaryRefreshService
+from app.modules.urge.service import UrgeService
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
@@ -245,7 +246,11 @@ class TestRefreshMatchesLiveAggregation:
             await session.commit()
 
             live = await WorkProgressRepository(session).aggregate_by_pr(
-                tenant_id=tenant_a.id, date_from=FULL_LO, date_to=FULL_HI, today=FULL_HI
+                tenant_id=tenant_a.id,
+                date_from=FULL_LO,
+                date_to=FULL_HI,
+                today=FULL_HI,
+                thresholds=await UrgeService(session).get_urge_thresholds(tenant_a.id),
             )
             assert live, "场景没有推广单，PR 进度对比是空跑"
 

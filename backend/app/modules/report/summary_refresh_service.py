@@ -77,6 +77,7 @@ from app.modules.report.summary_models import (
     ShopMonthSummary,
     ShopWeekSummary,
 )
+from app.modules.urge.service import UrgeService
 
 # product_roi_summary 直接落盘的指标列（与 daily_trend_by_goods 的输出同名）。
 # confirmed_amount / total_spend / net_roi 不在这里：前两个是加法派生，最后一个是
@@ -196,6 +197,7 @@ class SummaryRefreshService:
         self._production = ProductionRepository(session)
         self._work = WorkProgressRepository(session)
         self._store = StoreDailyRepository(session)
+        self._urge = UrgeService(session)
 
     async def refresh(self, *, tenant_id: UUID, date_from: date, date_to: date) -> dict[str, int]:
         """刷新 ``[date_from, date_to]`` 区间。返回每张表写入的行数。
@@ -293,8 +295,10 @@ class SummaryRefreshService:
         # 催发派生的 4 个计数按**刷新时刻的今天**算，整次刷新共用一个值。
         # 读取侧实时路径同样用 get_today()，所以「刚刷新完」时两条路径逐个相等；
         # 之后随时间推移，汇总表里的催发状态停在上次刷新那一刻 —— 与其他计数
-        # 同样最多晚一小时（窗口内）或随历史冻结（窗口外），见 migration 054。
+        # 同样最多晚一小时（窗口内）；窗口外的日子见 summary_tasks 的「催发漂移」补刷。
+        # 分界天数读租户配置，与实时路径同一来源，整次刷新只查一次。
         today = get_today()
+        thresholds = await self._urge.get_urge_thresholds(tenant_id)
         day = date_from
         while day <= date_to:
             # aggregate_by_pr 按区间聚合，没有「按日分组」的形态。与其给它加一个
@@ -303,7 +307,7 @@ class SummaryRefreshService:
             # 只有一个合作日期，按天切开再加回去不重不漏），读取时 SUM 回去就是
             # 任意区间的结果。
             rows = await self._work.aggregate_by_pr(
-                tenant_id=tenant_id, date_from=day, date_to=day, today=today
+                tenant_id=tenant_id, date_from=day, date_to=day, today=today, thresholds=thresholds
             )
             payload.extend(
                 {

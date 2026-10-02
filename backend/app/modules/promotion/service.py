@@ -89,11 +89,7 @@ from app.modules.promotion.exceptions import (
     SettlementNotPaidError,
     StateTransitionConflictError,
 )
-from app.modules.promotion.legacy_settings import (
-    HIT_THRESHOLD_LIKE_COUNT,
-    IMPORTANT_THRESHOLD_DAYS,
-    URGE_THRESHOLD_DAYS,
-)
+from app.modules.promotion.legacy_settings import HIT_THRESHOLD_LIKE_COUNT
 from app.modules.promotion.metrics_calculator import (
     calculate_cpl,
     calculate_effective_like_count,
@@ -142,10 +138,12 @@ from app.modules.promotion.state_machines import (
     SettlementStatusMachine,
 )
 from app.modules.promotion.urge_calculator import (
+    UrgeThresholds,
     calculate_urge_status,
     get_today,
 )
 from app.modules.urge.enums import UrgeCloseReason
+from app.modules.urge.service import UrgeService
 
 log = logging.getLogger(__name__)
 
@@ -699,14 +697,16 @@ class PromotionService:
             has_waybill=filters.has_waybill,
         )
 
+        # 阈值读租户配置（后台可改），整页共用一次查询
+        thresholds = await UrgeService(self._session).get_urge_thresholds(user.tenant_id)
         rows, total = await self._repo.list_with_cte(
             tenant_id=user.tenant_id,
             filters=repo_filters,
             page=page,
             page_size=page_size,
             today=today,
-            urge_threshold_days=URGE_THRESHOLD_DAYS,
-            important_threshold_days=IMPORTANT_THRESHOLD_DAYS,
+            urge_threshold_days=thresholds.urge_days,
+            important_threshold_days=thresholds.important_days,
         )
 
         promotion_search_results_count.observe(total)
@@ -1930,17 +1930,20 @@ class PromotionService:
         # 衍生字段计算
         if today is None:
             today = get_today()
-        urge_status = (
-            urge_status_override
-            if urge_status_override is not None
-            else calculate_urge_status(
+        if urge_status_override is not None:
+            urge_status = urge_status_override
+        else:
+            # 单条响应（详情、各状态推进）才走到这里；列表由 SQL 算好透传进来
+            thresholds: UrgeThresholds = await UrgeService(self._session).get_urge_thresholds(
+                promotion.tenant_id
+            )
+            urge_status = calculate_urge_status(
                 publish_status=promotion.publish_status,
                 scheduled_publish_date=promotion.scheduled_publish_date,
                 today=today,
-                urge_threshold_days=URGE_THRESHOLD_DAYS,
-                important_threshold_days=IMPORTANT_THRESHOLD_DAYS,
+                urge_threshold_days=thresholds.urge_days,
+                important_threshold_days=thresholds.important_days,
             )
-        )
         if dual_platform_override is None:
             dual_platform = await self._repo.has_other_platforms_for_style(
                 style_id=promotion.style_id,
@@ -1957,8 +1960,9 @@ class PromotionService:
             like_count=promotion.like_count, threshold=HIT_THRESHOLD_LIKE_COUNT
         )
         cpl = calculate_cpl(
-            quote_amount=promotion.quote_amount,
+            total_promo_cost=promotion.total_promo_cost,
             effective_like_count=effective_like,
+            metrics_recorded_at=promotion.metrics_recorded_at,
         )
 
         # 7 天数据截图与当前复盘文字（PRD V1.4 改动 4）。
@@ -2029,7 +2033,9 @@ class PromotionService:
             dual_platform=dual_platform,
             effective_like_count=effective_like,
             is_hit=is_hit,
-            cpl=cpl if can_see_quote else None,
+            # 分子是三项金额之和，单赞成本 × 点赞数就能反推出来 —— 与 total_promo_cost 同样
+            # 要两个读权限都有
+            cpl=cpl if (can_see_quote and can_see_cost) else None,
             source_extra=dict(getattr(promotion, "source_extra", {}) or {}),
             payment_qr_attachment_id=visible_payment_qr_id,
             payment_qr_signed_url=payment_qr_url,

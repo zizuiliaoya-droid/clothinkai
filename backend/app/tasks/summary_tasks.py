@@ -15,6 +15,8 @@
 
 - **导入**完成后自动刷新那批数据涉及的日期（``refresh_report_summaries_for_dates``，
   方案 2）—— 只刷已被覆盖的日子，没覆盖的历史本来就走实时，见 ``target_runs``；
+- **催发分类随日历变化**的已覆盖日子，每小时顺带补刷（``refresh_urge_drift``）——
+  数据没被编辑，变的只是「今天」，不能等人去点手动刷新；
 - 其余历史改动（例如在页面上发布一张三个月前合作的推广单）按 PRD「历史数据只能页面
   手动刷新」，由手动刷新端点补。
 
@@ -36,6 +38,7 @@ from uuid import UUID
 import sentry_sdk
 from celery import Task
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.celery_app import celery_app
 from app.core.db import AsyncSessionApp, AsyncSessionBypass
@@ -81,19 +84,35 @@ async def _refresh_all(window_days: int) -> dict[str, Any]:
     totals: dict[str, int] = {}
     failed = 0
     busy = 0
+    drift_days = 0
+    drift_failed = 0
     for tid in tenant_ids:
         tok = tenant_id_ctx.set(tid)
         try:
             async with system_context(), AsyncSessionApp() as s:
-                await s.execute(
-                    text("SELECT set_config('app.tenant_id', :t, true)"), {"t": str(tid)}
-                )
+                await _set_tenant(s, tid)
                 counts = await SummaryRefreshService(s).refresh(
                     tenant_id=tid, date_from=date_from, date_to=today
                 )
                 # 5 张表 + 覆盖记录一起 commit：中间状态（商品 ROI 刷了、店铺日报没刷）
                 # 会让两张报表对不上账。commit 同时释放刷新锁。
                 await s.commit()
+
+                # 窗口外的催发漂移补刷：另起一个事务，出问题只记这一项，不连累上面
+                # 已经提交的窗口刷新（那是每小时刷新的本职）
+                try:
+                    await _set_tenant(s, tid)  # set_config(..., true) 随上一个事务结束失效
+                    runs = await refresh_urge_drift(s, tenant_id=tid, window_lo=date_from)
+                    await s.commit()
+                    drift_days += sum((hi - lo).days + 1 for lo, hi in runs)
+                except SummaryRefreshBusyError:
+                    await s.rollback()
+                    log.info("summary_urge_drift_busy", extra={"tenant_id": str(tid)})
+                except Exception as exc:
+                    await s.rollback()
+                    drift_failed += 1
+                    log.exception("summary_urge_drift_failed", extra={"tenant_id": str(tid)})
+                    sentry_sdk.capture_exception(exc)
             for table, n in counts.items():
                 totals[table] = totals.get(table, 0) + n
         except SummaryRefreshBusyError:
@@ -114,8 +133,48 @@ async def _refresh_all(window_days: int) -> dict[str, Any]:
         "busy": busy,
         "date_from": date_from.isoformat(),
         "date_to": today.isoformat(),
+        "urge_drift_days": drift_days,
+        "urge_drift_failed": drift_failed,
         **totals,
     }
+
+
+async def _set_tenant(s: AsyncSession, tenant_id: UUID) -> None:
+    await s.execute(text("SELECT set_config('app.tenant_id', :t, true)"), {"t": str(tenant_id)})
+
+
+def consecutive_runs(days: Iterable[date]) -> list[tuple[date, date]]:
+    """一组日期按连续区间合并：[3/1, 3/2, 3/5] → [(3/1, 3/2), (3/5, 3/5)]。"""
+    runs: list[tuple[date, date]] = []
+    for day in sorted(set(days)):
+        if runs and day == runs[-1][1] + timedelta(days=1):
+            runs[-1] = (runs[-1][0], day)
+        else:
+            runs.append((day, day))
+    return runs
+
+
+async def refresh_urge_drift(
+    session: AsyncSession, *, tenant_id: UUID, window_lo: date
+) -> list[tuple[date, date]]:
+    """补刷窗口外、催发分类可能已过时的日子。返回刷过的连续区间。
+
+    工作进度的档期内 / 催发 / 重要催发按「刷新那一刻的今天」落盘（054）。窗口内每小时
+    重算没问题；**窗口外的日子不再被每小时刷新**，于是一张三个月前约的、排期在下周的
+    未发布单，汇总表里会一直是「档期内」，哪怕它后来已经超时 —— 这与「历史数据只能
+    手动刷新」不是一回事：那条说的是数据被**编辑**之后，而这里数据一个字没动，变的只是
+    日历。所以这些日子要自动补刷，判据见 ``SummaryReadRepository.urge_drift_dates``。
+
+    名单是自收敛的：补刷后 refreshed_at 前移，排期已过的单落到「超时」不再变化，那一天
+    就退出名单。正常情况下只有极少数日子（约稿一个多月后排期还没到的未发布单）。
+    """
+    days = await SummaryReadRepository(session).urge_drift_dates(tenant_id, before=window_lo)
+    runs = consecutive_runs(days)
+    svc = SummaryRefreshService(session)
+    # 多段在同一个事务里刷：第一段拿到的租户锁对同一会话可重入，后面几段直接通过
+    for lo, hi in runs:
+        await svc.refresh(tenant_id=tenant_id, date_from=lo, date_to=hi)
+    return runs
 
 
 # --------------------------------------------------------------------------- #
@@ -219,7 +278,9 @@ async def _refresh_dates(tenant_id: UUID, date_from: date, date_to: date) -> dic
 
 __all__ = [
     "REFRESH_WINDOW_DAYS",
+    "consecutive_runs",
     "refresh_report_summaries",
     "refresh_report_summaries_for_dates",
+    "refresh_urge_drift",
     "target_runs",
 ]

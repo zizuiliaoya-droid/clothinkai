@@ -10,7 +10,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -502,5 +502,59 @@ class TestListAndHistory:
             # 还没录点赞数，CPL 算不出来
             assert item.like_count is None
             assert item.cpl is None
+        finally:
+            tenant_id_ctx.reset(token)
+
+    async def test_blogger_history_cpl_uses_total_cost_after_7day_data(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        """hover 卡的单赞成本 = 总推广成本 ÷ 7 天点赞，录过 7 天数据才有值（业务方 10-02）。
+
+        以前分子只用博主服务费、也不看 7 天数据录没录。
+        """
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            pr, _manager, style, blogger = await _setup(
+                tenant_a, factory, admin_role, product_factory, blogger_factory, code="NG_CPL"
+            )
+            recorded = await promotion_factory.promotion(
+                tenant=tenant_a,
+                style=style,
+                blogger=blogger,
+                internal_code="DECPLREC0001",
+                cooperation_date=date(2026, 9, 1),
+                quote_amount=Decimal("300.00"),
+                cost_snapshot=Decimal("50.00"),
+                return_shipping_fee=Decimal("20.00"),
+                like_count=100,
+                platform="小红书",
+            )
+            recorded.metrics_recorded_at = datetime.now(UTC)
+            # 点赞数是编辑 / 采集写进来的，7 天数据还没录：不算
+            await promotion_factory.promotion(
+                tenant=tenant_a,
+                style=style,
+                blogger=blogger,
+                internal_code="DECPLNOREC01",
+                cooperation_date=date(2026, 8, 1),
+                quote_amount=Decimal("300.00"),
+                like_count=100,
+                platform="小红书",
+            )
+            await session.flush()
+
+            history = await NegotiationService(session).blogger_history(blogger.id, pr, limit=5)
+            by_code = {i.internal_code: i for i in history.items}
+            # (300 + 50 + 20) / 100
+            assert by_code["DECPLREC0001"].cpl == Decimal("3.7000")
+            assert by_code["DECPLNOREC01"].like_count == 100
+            assert by_code["DECPLNOREC01"].cpl is None
         finally:
             tenant_id_ctx.reset(token)

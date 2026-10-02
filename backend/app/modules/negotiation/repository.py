@@ -159,6 +159,7 @@ class NegotiationRepository:
                            s.main_image_key AS style_main_image_key,
                            p.cooperation_date, p.cooperation_mode, p.publish_status,
                            p.actual_publish_date, p.like_count, p.quote_amount,
+                           p.total_promo_cost, p.metrics_recorded_at,
                            p.platform
                     FROM promotion p
                     LEFT JOIN style s ON s.id = p.style_id

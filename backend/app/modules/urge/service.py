@@ -29,7 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.attachment import AttachmentService, attachment_service, check_image_payload
 from app.core.audit import AuditService
 from app.modules.auth.models import User
-from app.modules.promotion.urge_calculator import get_today
+from app.modules.promotion.urge_calculator import UrgeThresholds, get_today
 from app.modules.urge.enums import UrgeCloseReason, UrgeTaskStatus, UrgeTriggerType
 from app.modules.urge.exceptions import (
     UrgeBatchEmptyError,
@@ -121,6 +121,14 @@ class UrgeService:
             "important_threshold_days": cfg.important_threshold_days,
             "auto_scan_enabled": cfg.auto_scan_enabled,
         }
+
+    async def get_urge_thresholds(self, tenant_id: UUID) -> UrgeThresholds:
+        """urge_status 的两个分界天数。推广列表 / 详情、工作进度、汇总刷新都从这里取。"""
+        cfg = await self.get_effective_config(tenant_id)
+        return UrgeThresholds(
+            urge_days=int(cfg["urge_threshold_days"]),
+            important_days=int(cfg["important_threshold_days"]),
+        )
 
     async def get_config_response(self, tenant_id: UUID) -> UrgeConfigResponse:
         return UrgeConfigResponse(**await self.get_effective_config(tenant_id))

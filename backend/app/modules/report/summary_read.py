@@ -39,6 +39,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.db import as_mappings
 from app.core.metrics import report_summary_reads_total
+from app.modules.promotion.urge_calculator import DEFAULT_TENANT_TZ
 from app.modules.report.advanced_repository import (
     GOODS_META_COLUMNS,
     GOODS_META_GROUP_BY,
@@ -76,6 +77,31 @@ _COVERED_DATES_SQL = text(
     SELECT stat_date FROM report_summary_coverage
     WHERE tenant_id = :tenant_id AND stat_date BETWEEN :date_from AND :date_to
     ORDER BY stat_date
+    """
+)
+
+# 「催发漂移」：窗口外已覆盖、而催发分类自上次刷新以来可能已经变了的日子。
+#
+# 档期内 / 催发 / 重要催发取决于「今天」：刷新那一刻排期还没到的未发布单，过几天分类
+# 就变了（最终变成超时），而窗口外的日子不会再被每小时刷新 —— 工作进度读汇总表时会一直
+# 停在旧分类上。
+#
+# 判据：刷新那天（租户时区）排期还没过的未发布单 —— 当时不是「超时」，之后会变。
+# 已经超时的（排期 < 刷新那天）分类不会再变，已发布 / 已取消也是终态，都不用管。
+# 某天被补刷后 refreshed_at 前移，排期已过的单随之落到「超时」，这一天自然退出名单。
+_URGE_DRIFT_SQL = text(
+    """
+    SELECT DISTINCT c.stat_date
+    FROM report_summary_coverage c
+    JOIN promotion p
+      ON p.tenant_id = c.tenant_id AND p.cooperation_date = c.stat_date
+    WHERE c.tenant_id = :tenant_id
+      AND c.stat_date < :before
+      AND p.is_active = true
+      AND p.publish_status IN ('未发布', '异常')
+      AND p.scheduled_publish_date IS NOT NULL
+      AND p.scheduled_publish_date >= CAST(timezone(CAST(:tz AS text), c.refreshed_at) AS date)
+    ORDER BY c.stat_date
     """
 )
 
@@ -124,6 +150,14 @@ class SummaryReadRepository:
         rows = await self._s.execute(
             _COVERED_DATES_SQL,
             {"tenant_id": tenant_id, "date_from": date_from, "date_to": date_to},
+        )
+        return list(rows.scalars().all())
+
+    async def urge_drift_dates(self, tenant_id: UUID, *, before: date) -> list[date]:
+        """``before`` 之前、已覆盖、催发分类可能已过时的日子（见 ``_URGE_DRIFT_SQL``）。"""
+        rows = await self._s.execute(
+            _URGE_DRIFT_SQL,
+            {"tenant_id": tenant_id, "before": before, "tz": DEFAULT_TENANT_TZ.key},
         )
         return list(rows.scalars().all())
 

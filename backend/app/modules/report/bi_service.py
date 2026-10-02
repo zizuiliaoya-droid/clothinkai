@@ -22,6 +22,7 @@ from app.modules.report.advanced_schemas import (
     ProductionRow,
 )
 from app.modules.report.production_service import ProductionService
+from app.modules.urge.service import UrgeService
 from app.services.metric.common import safe_div
 
 DEFAULT_BI_LAYOUT = {
@@ -37,6 +38,7 @@ class BiService:
     def __init__(self, session: AsyncSession) -> None:
         self._repo = BiRepository(session)
         self._production = ProductionService(session)
+        self._urge = UrgeService(session)
 
     async def get_dashboard(
         self,
@@ -57,6 +59,7 @@ class BiService:
             date_from=date_from,
             date_to=date_to,
             today=get_today(),
+            thresholds=await self._urge.get_urge_thresholds(tenant_id),
         )
         trend_rows = await self._repo.aggregate_trend(
             tenant_id=tenant_id,
