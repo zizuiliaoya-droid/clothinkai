@@ -591,6 +591,67 @@ class TestRefreshIsRepeatableAndIncremental:
         finally:
             tenant_id_ctx.reset(tok)
 
+    async def test_window_starting_mid_month_still_counts_month_start(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+    ) -> None:
+        """刷新窗口从月中开始、且月初那几天**从没刷过**，月汇总仍须含月初的数据。
+
+        这是生产定时任务的真实形态：窗口是「今天往前 31 天」，第一次刷新是 09-02 ~
+        10-02，9 月这一行要从 09-01 起的日汇总加起来 —— 但 09-01 不在窗口里，
+        日汇总从没写过那天。
+
+        上面那条「半个月刷新」的测试**发现不了**这个问题：它先做了一次全量刷新，
+        月初的日汇总已经在表里了。这里刻意不做任何前置刷新。
+        """
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            style = await product_factory.style(style_code=f"MS{uuid4().hex[:6]}")
+            goods = await _goods(session, tenant_a, style, code=f"G_MS_{uuid4().hex[:6]}")
+            qn = await _pp(session, tenant_a, style, goods)
+            for day, pay in ((date(2026, 9, 1), "300.00"), (date(2026, 9, 15), "500.00")):
+                session.add(
+                    QianniuDaily(
+                        tenant_id=tenant_a.id,
+                        platform_product_id=qn.id,
+                        platform_id_snapshot=qn.platform_id,
+                        date=day,
+                        visitors=10,
+                        pay_amount=Decimal(pay),
+                        pay_orders=1,
+                        extra={},
+                    )
+                )
+            await session.commit()
+
+            # 与生产第一次刷新同一个窗口，且之前没有任何刷新
+            await SummaryRefreshService(session).refresh(
+                tenant_id=tenant_a.id, date_from=date(2026, 9, 2), date_to=date(2026, 10, 2)
+            )
+            await session.commit()
+
+            september = await session.scalar(
+                select(ShopMonthSummary.pay_amount).where(
+                    ShopMonthSummary.tenant_id == tenant_a.id,
+                    ShopMonthSummary.period_month == date(2026, 9, 1),
+                )
+            )
+            assert september == Decimal(
+                "800.00"
+            ), f"9 月汇总 {september} 缺了 09-01 的 300 —— 窗口外的月初日汇总没被刷到"
+            # 09-01 所在的周（08-31 起）同样要完整
+            week = await session.scalar(
+                select(ShopWeekSummary.pay_amount).where(
+                    ShopWeekSummary.tenant_id == tenant_a.id,
+                    ShopWeekSummary.week_start == date(2026, 8, 31),
+                )
+            )
+            assert week == Decimal("300.00")
+        finally:
+            tenant_id_ctx.reset(tok)
+
     @staticmethod
     async def _dump(session: AsyncSession, tenant_id: Any) -> dict[str, list[Any]]:
         """抓一份可比对的快照（排除 id / 时间戳这些每次都变的列）。"""

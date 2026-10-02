@@ -196,8 +196,9 @@ async def refresh_summaries(
     定时任务只滚动刷新最近 31 天（见 ``summary_tasks.REFRESH_WINDOW_DAYS``），
     导入了更早的 Excel 之后需要手动补这一段。
 
-    并发安全：刷新是「区间删 + 批量插」，两个请求撞上时后一个的 DELETE 会等前一个
-    提交再重新取最新行，最终两者写出同一份数据（源相同）。所以不加分布式锁。
+    并发：同租户已有刷新在进行中（定时任务或另一个手动刷新）时返回 409
+    ``REPORT_SUMMARY_REFRESH_BUSY``。「区间删 + 批量插」不能并发 —— 见
+    ``summary_refresh_service`` 模块 docstring「为什么要加锁」。
 
     区间走 ``resolve_time_range("custom", ...)`` 校验而不是另写一套：这个端点会删掉
     区间内所有汇总行再重建，不限长度一次调用就能触发全库重算，而「date_from ≤ date_to

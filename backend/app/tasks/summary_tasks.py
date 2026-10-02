@@ -33,6 +33,7 @@ from app.core.celery_app import celery_app
 from app.core.db import AsyncSessionApp, AsyncSessionBypass
 from app.core.tenancy import system_context, tenant_id_ctx
 from app.modules.promotion.urge_calculator import get_today
+from app.modules.report.exceptions import SummaryRefreshBusyError
 from app.modules.report.summary_refresh_service import SummaryRefreshService
 from app.tasks.runner import run_async_task
 
@@ -65,6 +66,7 @@ async def _refresh_all(window_days: int) -> dict[str, Any]:
 
     totals: dict[str, int] = {}
     failed = 0
+    busy = 0
     for tid in tenant_ids:
         tok = tenant_id_ctx.set(tid)
         try:
@@ -75,11 +77,16 @@ async def _refresh_all(window_days: int) -> dict[str, Any]:
                 counts = await SummaryRefreshService(s).refresh(
                     tenant_id=tid, date_from=date_from, date_to=today
                 )
-                # 5 张表一起 commit：中间状态（商品 ROI 刷了、店铺日报没刷）
-                # 会让两张报表对不上账
+                # 5 张表 + 覆盖记录一起 commit：中间状态（商品 ROI 刷了、店铺日报没刷）
+                # 会让两张报表对不上账。commit 同时释放刷新锁。
                 await s.commit()
             for table, n in counts.items():
                 totals[table] = totals.get(table, 0) + n
+        except SummaryRefreshBusyError:
+            # 有人正在手动刷新这个租户 —— 跳过本轮，下个小时自然补上。
+            # 这不是故障，不报 Sentry；记一笔 info 方便排查「为什么这小时没刷」。
+            busy += 1
+            log.info("summary_refresh_tenant_busy", extra={"tenant_id": str(tid)})
         except Exception as exc:
             failed += 1
             log.exception("summary_refresh_tenant_failed", extra={"tenant_id": str(tid)})
@@ -90,6 +97,7 @@ async def _refresh_all(window_days: int) -> dict[str, Any]:
     return {
         "tenants": len(tenant_ids),
         "failed": failed,
+        "busy": busy,
         "date_from": date_from.isoformat(),
         "date_to": today.isoformat(),
         **totals,

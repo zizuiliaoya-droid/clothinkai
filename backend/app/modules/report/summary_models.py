@@ -183,6 +183,22 @@ class ShopWeekSummary(_ShopSummaryBase):
     __table_args__ = (Index("uq_shop_week_summary", "tenant_id", "week_start", unique=True),)
 
 
+class ReportSummaryCoverage(TenantScopedModel):
+    """哪些日子被完整刷新过（migration 053）。
+
+    汇总表里「某天没有行」可能是那天没数据，也可能是从没刷过。不区分的话，
+    没刷过的历史区间会静默显示成 0。每次刷新给区间内**每一天**记一行，
+    不论那天有没有数据；读取侧据此决定读汇总表还是回退实时聚合。
+    """
+
+    __tablename__ = "report_summary_coverage"
+
+    stat_date: Mapped[date] = mapped_column(Date, nullable=False)
+    refreshed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (Index("uq_report_summary_coverage", "tenant_id", "stat_date", unique=True),)
+
+
 class ShopMonthSummary(_ShopSummaryBase):
     """店铺按月。刷新源：``shop_daily_summary`` 二次聚合。
 
@@ -200,6 +216,7 @@ class ShopMonthSummary(_ShopSummaryBase):
 __all__ = [
     "PrWorkProgressSummary",
     "ProductRoiSummary",
+    "ReportSummaryCoverage",
     "ShopDailySummary",
     "ShopMonthSummary",
     "ShopWeekSummary",
