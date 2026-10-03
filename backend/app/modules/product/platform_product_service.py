@@ -106,32 +106,25 @@ class PlatformProductService:
 
     async def _to_response(self, pp: PlatformProduct) -> PlatformProductResponse:
         """带上商品与款式信息 —— 运维视图要一眼看出这条链接连到哪。"""
-        row = (
-            await self._session.execute(
-                text(
-                    """
-                    SELECT g.goods_code, g.goods_title, g.is_suit,
-                           s.style_code, s.style_name
-                    FROM platform_product pp
-                    LEFT JOIN goods_main g ON g.id = pp.goods_main_id
-                    LEFT JOIN style s ON s.id = pp.style_id
-                    WHERE pp.id = :pp_id
-                    """
-                ),
-                {"pp_id": pp.id},
-            )
-        ).one_or_none()
+        result = await self._session.execute(
+            text(
+                """
+                SELECT g.goods_code, g.goods_title, g.short_name AS goods_short_name,
+                       COALESCE(g.is_suit, false) AS goods_is_suit,
+                       s.style_code, s.style_name
+                FROM platform_product pp
+                LEFT JOIN goods_main g ON g.id = pp.goods_main_id
+                LEFT JOIN style s ON s.id = pp.style_id
+                WHERE pp.id = :pp_id
+                """
+            ),
+            {"pp_id": pp.id},
+        )
+        row = result.mappings().one_or_none()
         resp = PlatformProductResponse.model_validate(pp)
         if row is not None:
-            resp = resp.model_copy(
-                update={
-                    "goods_code": row[0],
-                    "goods_title": row[1],
-                    "goods_is_suit": bool(row[2]),
-                    "style_code": row[3],
-                    "style_name": row[4],
-                }
-            )
+            # 按列名回填：以后再加列不用跟着挪下标
+            resp = resp.model_copy(update=dict(row))
         return resp
 
     # ------------------------------------------------------------------ #
@@ -396,7 +389,8 @@ class PlatformProductService:
                     SELECT pp.id, pp.platform, pp.platform_id, pp.style_id, pp.sku_id,
                            pp.goods_main_id, pp.channel, pp.title, pp.is_active,
                            pp.created_at, pp.updated_at,
-                           g.goods_code, g.goods_title, COALESCE(g.is_suit, false) AS goods_is_suit,
+                           g.goods_code, g.goods_title, g.short_name AS goods_short_name,
+                           COALESCE(g.is_suit, false) AS goods_is_suit,
                            s.style_code, s.style_name
                     {joins}
                     WHERE {where}

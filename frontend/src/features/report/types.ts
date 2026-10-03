@@ -93,6 +93,7 @@ export interface ProductionRow {
   goods_id: string;
   goods_code: string;
   goods_title: string;
+  goods_short_name: string | null;
   is_suit: boolean;
   style_codes: string[];
   main_image_url: string | null;
@@ -180,6 +181,7 @@ export interface BiStylePerformance {
   goods_id: string;
   goods_code: string;
   goods_title: string;
+  goods_short_name: string | null;
   is_suit: boolean;
   main_image_url: string | null;
   sales_amount: string;

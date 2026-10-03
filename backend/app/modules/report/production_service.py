@@ -258,6 +258,7 @@ class ProductionService:
             goods_id=r["goods_id"],
             goods_code=r["goods_code"],
             goods_title=r["goods_title"],
+            goods_short_name=r["goods_short_name"],
             is_suit=bool(r.get("is_suit")),
             style_codes=style_codes_raw.split(",") if style_codes_raw else [],
             main_image_url=main_image_url,

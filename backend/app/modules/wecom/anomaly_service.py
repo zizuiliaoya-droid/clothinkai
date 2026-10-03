@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.metrics import wecom_anomaly_alert_total
 from app.core.security.crypto import decrypt_credential
+from app.modules.product.goods_schemas import goods_display_name
 from app.modules.promotion.urge_calculator import get_today
 from app.modules.report.domain import resolve_time_range
 from app.modules.report.production_service import ProductionService
@@ -150,9 +151,10 @@ class AnomalyAlertService:
     def _render(alert_type: str, row: Any, detail: dict) -> str:
         styles = "、".join(row.style_codes) if row.style_codes else row.goods_code
         suit_tag = "（套装）" if row.is_suit else ""
+        name = goods_display_name(row.goods_title, row.goods_short_name)
         return (
             f"**异常预警·{_TITLES.get(alert_type, alert_type)}**\n"
-            f"> 商品：{row.goods_code} {row.goods_title}{suit_tag}\n"
+            f"> 商品：{row.goods_code} {name}{suit_tag}\n"
             f"> 含款号：{styles}\n"
             f"> 当前值：{detail['value']}（阈值：{detail['threshold']}）\n"
             f"> 建议：{_ADVICE.get(alert_type, '请关注')}"

@@ -20,6 +20,7 @@ import { MinusCircleOutlined, PlusOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnsType } from "antd/es/table";
 import {
+  GOODS_SHORT_NAME_MAX_LEN,
   createGoods,
   deleteGoods,
   listBrands,
@@ -31,11 +32,13 @@ import {
   type GoodsFilters,
   type GoodsStyleItemInput,
 } from "@/features/product/api";
+import { GoodsNameCell } from "@/components/GoodsNameCell/GoodsNameCell";
 import { extractErrorMessage } from "@/services/apiClient";
 
 interface FormValues {
   goods_code: string;
   goods_title: string;
+  short_name?: string;
   category?: string;
   season?: string;
   brand_id?: string;
@@ -118,9 +121,12 @@ export function GoodsPage() {
         single_goods_cost: toCost(it.single_goods_cost),
         sort_order: idx,
       }));
+      // 清空输入框 = 去掉简称；后端收到 null 会清掉，之后回落显示全称
+      const shortName = values.short_name?.trim() || null;
       if (editing) {
         return updateGoods(editing.id, {
           goods_title: values.goods_title,
+          short_name: shortName,
           category: values.category ?? null,
           season: values.season ?? null,
           brand_id: values.brand_id ?? null,
@@ -132,6 +138,7 @@ export function GoodsPage() {
       return createGoods({
         goods_code: values.goods_code,
         goods_title: values.goods_title,
+        short_name: shortName,
         category: values.category ?? null,
         season: values.season ?? null,
         brand_id: values.brand_id ?? null,
@@ -178,6 +185,7 @@ export function GoodsPage() {
     form.setFieldsValue({
       goods_code: record.goods_code,
       goods_title: record.goods_title,
+      short_name: record.short_name ?? undefined,
       category: record.category ?? undefined,
       season: record.season ?? undefined,
       brand_id: record.brand_id ?? undefined,
@@ -201,15 +209,19 @@ export function GoodsPage() {
       render: (v: string) => <Typography.Text copyable>{v}</Typography.Text>,
     },
     {
-      title: "商品名称",
-      dataIndex: "goods_title",
+      title: "商品简称",
+      dataIndex: "short_name",
       width: 260,
-      ellipsis: true,
-      render: (v: string, row) => (
-        <Space size={4}>
-          <span>{v}</span>
-          {row.is_suit && <Tag color="purple">套装</Tag>}
-        </Space>
+      ellipsis: { showTitle: false },
+      render: (_: string | null, row) => (
+        <>
+          {row.is_suit && (
+            <Tag color="purple" style={{ marginInlineEnd: 4 }}>
+              套装
+            </Tag>
+          )}
+          <GoodsNameCell goodsTitle={row.goods_title} shortName={row.short_name} markMissing />
+        </>
       ),
     },
     {
@@ -321,9 +333,9 @@ export function GoodsPage() {
 
       <Space style={{ marginBottom: 16 }} wrap>
         <Input.Search
-          placeholder="商品编码 / 商品名 / 成员货号 / 款名"
+          placeholder="商品编码 / 简称 / 全称 / 成员货号 / 款名"
           allowClear
-          style={{ width: 280 }}
+          style={{ width: 300 }}
           onSearch={(v) =>
             setFilters((f) => ({ ...f, keyword: v || undefined, page: 1 }))
           }
@@ -441,14 +453,28 @@ export function GoodsPage() {
               <Input placeholder="如 260419 或 SUIT-1074568657697" disabled={!!editing} />
             </Form.Item>
             <Form.Item
-              name="goods_title"
-              label="商品名称"
-              rules={[{ required: true, message: "请填商品名称" }]}
+              name="short_name"
+              label="商品简称"
+              tooltip="列表、报表和下拉里显示这个短名字；不填就显示全称"
               style={{ width: 400 }}
             >
-              <Input placeholder="店铺里显示的名字" />
+              <Input
+                placeholder="如：冰雪飞狐皮草外套"
+                maxLength={GOODS_SHORT_NAME_MAX_LEN}
+                showCount
+                allowClear
+              />
             </Form.Item>
           </Space>
+
+          <Form.Item
+            name="goods_title"
+            label="商品全称"
+            tooltip="店铺里的完整标题。悬停商品名时显示，搜索时也能搜到"
+            rules={[{ required: true, message: "请填商品全称" }]}
+          >
+            <Input placeholder="店铺里显示的完整标题" />
+          </Form.Item>
 
           <Space align="start" style={{ display: "flex" }}>
             <Form.Item name="category" label="类目" style={{ width: 200 }}>

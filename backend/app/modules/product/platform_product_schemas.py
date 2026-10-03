@@ -58,6 +58,7 @@ class PlatformProductResponse(BaseModel):
     # 运维视图要能一眼看出这条链接连到哪个商品、哪件衣服。实时取，不做快照。
     goods_code: str | None = None
     goods_title: str | None = None
+    goods_short_name: str | None = None
     goods_is_suit: bool = False
     style_code: str | None = None
     style_name: str | None = None

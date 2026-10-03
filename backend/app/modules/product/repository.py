@@ -149,9 +149,9 @@ class StyleRepository:
         款式管理页不再关心。
 
         返回每个款式的：
-        - ``goods_code`` / ``goods_title`` / ``goods_is_suit``：主商品（非套装优先、
-          货号次之，与推广和链接的归属推定同序）
-        - ``suite_name``：该款式所属套装的标题；不在任何套装里则为 None。
+        - ``goods_code`` / ``goods_title`` / ``goods_short_name`` / ``goods_is_suit``：
+          主商品（非套装优先、货号次之，与推广和链接的归属推定同序）
+        - ``suite_name``：该款式所属套装的显示名（有简称用简称）；不在任何套装里则为 None。
           一个款式可以既单卖又进套装（生产上 260419 就是），那时主商品是单品，
           套装名另外给出，两个信息都要让人看到。
         """
@@ -163,8 +163,10 @@ class StyleRepository:
             SELECT gi.style_id,
                    (array_agg(g.goods_code ORDER BY g.is_suit, g.goods_code))[1] AS goods_code,
                    (array_agg(g.goods_title ORDER BY g.is_suit, g.goods_code))[1] AS goods_title,
+                   (array_agg(g.short_name ORDER BY g.is_suit, g.goods_code))[1]
+                     AS goods_short_name,
                    (array_agg(g.is_suit ORDER BY g.is_suit, g.goods_code))[1] AS goods_is_suit,
-                   (array_agg(g.goods_title ORDER BY g.goods_code)
+                   (array_agg(COALESCE(g.short_name, g.goods_title) ORDER BY g.goods_code)
                       FILTER (WHERE g.is_suit))[1] AS suite_name
             FROM goods_style_item gi
             JOIN goods_main g ON g.id = gi.goods_main_id

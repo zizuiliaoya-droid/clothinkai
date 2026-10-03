@@ -19,6 +19,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnsType } from "antd/es/table";
 import {
   deletePlatformLink,
+  goodsDisplayName,
+  goodsOptionLabel,
   listGoodsForStyle,
   listPlatformLinks,
   updatePlatformLink,
@@ -119,7 +121,7 @@ export function PlatformLinkPage() {
       render: (code: string | null, row) =>
         code ? (
           <Space size={4}>
-            <Tooltip title={row.goods_title ?? undefined}>
+            <Tooltip title={goodsDisplayName(row.goods_title, row.goods_short_name) || undefined}>
               <span>{code}</span>
             </Tooltip>
             {row.goods_is_suit && <Tag color="purple">套装</Tag>}
@@ -264,7 +266,7 @@ export function PlatformLinkPage() {
             <Select
               placeholder="选择归属商品"
               options={(goodsOptions ?? []).map((g: GoodsOption) => ({
-                label: `${g.goods_code} ${g.goods_title}${g.is_suit ? "（套装）" : ""}`,
+                label: goodsOptionLabel(g),
                 value: g.goods_main_id,
               }))}
             />

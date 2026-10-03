@@ -344,7 +344,12 @@ class TestGoodsAttribution:
 
     @staticmethod
     async def _goods(
-        session: AsyncSession, tenant: Any, *styles: Any, code: str, is_suit: bool = False
+        session: AsyncSession,
+        tenant: Any,
+        *styles: Any,
+        code: str,
+        is_suit: bool = False,
+        short_name: str | None = None,
     ) -> Any:
         from app.modules.product.goods_models import GoodsMain, GoodsStyleItem
 
@@ -352,6 +357,7 @@ class TestGoodsAttribution:
             tenant_id=tenant.id,
             goods_code=code,
             goods_title="+".join(s.style_name for s in styles) if is_suit else code,
+            short_name=short_name,
             is_suit=is_suit,
         )
         session.add(goods)
@@ -503,5 +509,46 @@ class TestGoodsAttribution:
             response = await svc.get_style(a.id, user)
             assert response.goods_code == "SUIT-PAIR"
             assert response.suite_name == "上衣+裤子"
+        finally:
+            tenant_id_ctx.reset(token)
+
+    async def test_short_names_flow_into_attribution(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
+    ) -> None:
+        """商品填了简称后，款式页的归属提示与「也在套装」标签都显示简称。
+
+        套装没填简称时仍显示全称 —— 上面几条用例钉的就是那种情况。
+        """
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            shared = await product_factory.style(style_code="SHORT_A", style_name="打底衫")
+            partner = await product_factory.style(style_code="SHORT_B", style_name="马甲")
+            await self._goods(session, tenant_a, shared, code="SHORT_A", short_name="打底衫简")
+            await self._goods(
+                session,
+                tenant_a,
+                shared,
+                partner,
+                code="SUIT-SHORT",
+                is_suit=True,
+                short_name="马甲两件套",
+            )
+            user = await factory.user(tenant_a, roles=[admin_role])
+            svc = StyleService(session)
+
+            response = await svc.get_style(shared.id, user)
+            assert response.goods_code == "SHORT_A"
+            assert response.goods_short_name == "打底衫简"
+            assert response.goods_title == "SHORT_A"
+            assert response.suite_name == "马甲两件套"
+
+            only_suit = await svc.get_style(partner.id, user)
+            assert only_suit.goods_code == "SUIT-SHORT"
+            assert only_suit.goods_short_name == "马甲两件套"
         finally:
             tenant_id_ctx.reset(token)

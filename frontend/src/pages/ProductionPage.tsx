@@ -20,7 +20,8 @@ import type {
   TimeGranularity,
   TimePreset,
 } from "@/features/report/types";
-import { listDictItems } from "@/features/product/api";
+import { goodsDisplayName, listDictItems } from "@/features/product/api";
+import { GoodsNameCell } from "@/components/GoodsNameCell/GoodsNameCell";
 import { MiniLineChart } from "@/components/MiniLineChart/MiniLineChart";
 import {
   ReportCardTitle,
@@ -188,7 +189,15 @@ export function ProductionPage() {
           code
         ),
     },
-    { title: "商品名称", dataIndex: "goods_title", width: 180, ellipsis: true },
+    {
+      title: "商品简称",
+      dataIndex: "goods_short_name",
+      width: 180,
+      ellipsis: { showTitle: false },
+      render: (_: string | null, row: ProductionRow) => (
+        <GoodsNameCell goodsTitle={row.goods_title} shortName={row.goods_short_name} />
+      ),
+    },
     {
       title: "含款号",
       dataIndex: "style_codes",
@@ -317,7 +326,7 @@ export function ProductionPage() {
       <Modal
         title={
           trendGoods
-            ? `投产趋势 · ${trendGoods.goods_code} ${trendGoods.goods_title}`
+            ? `投产趋势 · ${trendGoods.goods_code} ${goodsDisplayName(trendGoods.goods_title, trendGoods.goods_short_name)}`
             : "投产趋势"
         }
         open={!!trendGoods}

@@ -57,6 +57,7 @@ import type {
   RetroStatus,
 } from "@/features/promotion/types";
 import {
+  goodsOptionLabel,
   listStyles,
   listSkusByStyle,
   listGoodsForStyle,
@@ -301,7 +302,7 @@ export function PromotionListPage() {
       value: b.id,
     })) ?? [];
   const goodsOptions = (formGoods ?? []).map((g: GoodsOption) => ({
-    label: `${g.goods_code} ${g.goods_title}${g.is_suit ? "（套装）" : ""}`,
+    label: goodsOptionLabel(g),
     value: g.goods_main_id,
   }));
   // 款式只归属一个商品时不必打扰用户，直接用它
@@ -1146,7 +1147,7 @@ export function PromotionListPage() {
             <Select
               placeholder="选择归属商品"
               options={(targetGoods ?? []).map((g: GoodsOption) => ({
-                label: `${g.goods_code} ${g.goods_title}${g.is_suit ? "（套装）" : ""}`,
+                label: goodsOptionLabel(g),
                 value: g.goods_main_id,
               }))}
             />

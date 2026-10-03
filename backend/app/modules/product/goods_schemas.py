@@ -13,7 +13,20 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+GOODS_SHORT_NAME_MAX_LEN = 32
+"""商品简称上限。列上留了 64，接口先收紧到 32 —— 简称是拿来显示的，太长就失去意义了。"""
+
+
+def goods_display_name(goods_title: str, short_name: str | None) -> str:
+    """商品在界面 / 消息里显示的名字：有简称用简称，没填回落全称。"""
+    return short_name or goods_title
+
+
+def _blank_to_none(value: str | None) -> str | None:
+    # 输入框清空后传上来的是空串；存成 NULL，「没填简称」只有一种表示
+    return value or None
 
 
 class GoodsOption(BaseModel):
@@ -24,6 +37,7 @@ class GoodsOption(BaseModel):
     goods_main_id: UUID
     goods_code: str
     goods_title: str
+    goods_short_name: str | None = None
     is_suit: bool = False
 
 
@@ -68,6 +82,7 @@ class GoodsMainCreate(BaseModel):
 
     goods_code: str = Field(..., min_length=1, max_length=64)
     goods_title: str = Field(..., min_length=1, max_length=512)
+    short_name: str | None = Field(default=None, max_length=GOODS_SHORT_NAME_MAX_LEN)
     category: str | None = Field(default=None, max_length=64)
     season: str | None = Field(default=None, max_length=64)
     brand_id: UUID | None = None
@@ -78,11 +93,19 @@ class GoodsMainCreate(BaseModel):
     """成员款式。给 0 个会被拒 —— 没有款式的商品既发不了货也算不出成本。
     ``is_suit`` 不由前端传，服务端按成员数判定（≥2 即套装），避免两个字段互相矛盾。"""
 
+    normalize_short_name = field_validator("short_name")(_blank_to_none)
+
 
 class GoodsMainUpdate(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
     goods_title: str | None = Field(default=None, min_length=1, max_length=512)
+    short_name: str | None = Field(default=None, max_length=GOODS_SHORT_NAME_MAX_LEN)
+    """不传不动；传 ``null`` 或空串清掉简称（之后回落显示全称）。
+
+    其余可选字段是「传 None 等于没传」，简称不行：清空简称是正常操作，
+    所以服务层按 ``model_fields_set`` 判断它有没有被传。
+    """
     category: str | None = Field(default=None, max_length=64)
     season: str | None = Field(default=None, max_length=64)
     brand_id: UUID | None = None
@@ -96,6 +119,8 @@ class GoodsMainUpdate(BaseModel):
     ``goods_code`` 不可改：它是报表与链接归属的引用键，改了等于换了一个商品。
     """
 
+    normalize_short_name = field_validator("short_name")(_blank_to_none)
+
 
 class GoodsMainResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -103,6 +128,7 @@ class GoodsMainResponse(BaseModel):
     id: UUID
     goods_code: str
     goods_title: str
+    short_name: str | None = None
     category: str | None = None
     season: str | None = None
     brand_id: UUID | None = None
@@ -132,6 +158,7 @@ class GoodsMainListResponse(BaseModel):
 
 
 __all__ = [
+    "GOODS_SHORT_NAME_MAX_LEN",
     "GoodsMainCreate",
     "GoodsMainListResponse",
     "GoodsMainResponse",
@@ -139,4 +166,5 @@ __all__ = [
     "GoodsOption",
     "GoodsStyleItemIn",
     "GoodsStyleItemResponse",
+    "goods_display_name",
 ]

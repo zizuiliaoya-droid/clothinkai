@@ -156,7 +156,8 @@ async def list_goods_for_style(
     """
     sql = text(
         """
-        SELECT g.id AS goods_main_id, g.goods_code, g.goods_title, g.is_suit
+        SELECT g.id AS goods_main_id, g.goods_code, g.goods_title,
+               g.short_name AS goods_short_name, g.is_suit
         FROM goods_style_item gi
         JOIN goods_main g ON g.id = gi.goods_main_id
         WHERE gi.tenant_id = :tenant_id

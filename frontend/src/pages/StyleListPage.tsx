@@ -26,6 +26,7 @@ import {
   createStyle,
   disableStyle,
   enableStyle,
+  goodsDisplayName,
   listBrands,
   listDictItems,
   listStyles,
@@ -227,7 +228,9 @@ export function StyleListPage() {
         return (
           <Space size={4} direction="vertical">
             <Space size={4}>
-              <Tooltip title={record.goods_title ?? undefined}>
+              <Tooltip
+                title={goodsDisplayName(record.goods_title, record.goods_short_name) || undefined}
+              >
                 <span>{code}</span>
               </Tooltip>
               {record.goods_is_suit && <Tag color="purple">套装</Tag>}

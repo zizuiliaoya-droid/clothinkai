@@ -478,6 +478,7 @@ class StyleService:
             qianniu_product_id=style.qianniu_product_id,
             goods_code=goods.get("goods_code"),
             goods_title=goods.get("goods_title"),
+            goods_short_name=goods.get("goods_short_name"),
             goods_is_suit=bool(goods.get("goods_is_suit")),
             suite_name=goods.get("suite_name"),
             brand_id=style.brand_id,

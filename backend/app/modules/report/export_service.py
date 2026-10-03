@@ -48,6 +48,7 @@ _WORK_HEADERS = [
 ]
 _PRODUCTION_HEADERS = [
     "商品编码",
+    "商品简称",
     "商品名称",
     "含款号",
     "支付额",
@@ -178,6 +179,8 @@ class ReportExportService:
             rows = [
                 [
                     row.goods_code,
+                    # 导出是数据而不是界面：没填简称就留空，不拿全称冒充
+                    row.goods_short_name,
                     row.goods_title,
                     ",".join(row.style_codes),
                     row.pay_amount,
