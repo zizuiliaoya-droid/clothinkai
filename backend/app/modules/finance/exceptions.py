@@ -143,6 +143,12 @@ class AttachmentNotReadyError(ValidationError):
     code = "ATTACHMENT_NOT_READY"
 
 
+class InvalidPaymentProofImageError(ValidationError):
+    """付款截图不符合要求（格式 / 大小 / 内容与声明格式不一致）。后端代传时在上传前拦下。"""
+
+    code = "INVALID_PAYMENT_PROOF_IMAGE"
+
+
 # ---------------------------------------------------------------------------
 # U16 拍单 / 刷单 / 余额
 # ---------------------------------------------------------------------------
@@ -191,6 +197,7 @@ __all__ = [
     "InvalidAttachmentPurposeError",
     "InvalidAttachmentReferenceError",
     "InvalidOrderPaymentQrError",
+    "InvalidPaymentProofImageError",
     "OrderAdjustmentNotFoundError",
     "PaymentAmountRequiredError",
     "PaymentFieldMissingError",

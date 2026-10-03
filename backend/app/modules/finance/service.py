@@ -21,7 +21,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
@@ -30,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import events as event_bus
 from app.core.attachment import attachment_service as _default_attachment_service
+from app.core.attachment import check_image_payload
 from app.core.audit import AuditService
 from app.core.db import AsyncSessionBypass
 from app.core.metrics import settlement_state_transitions_total
@@ -43,12 +44,16 @@ from app.core.tenancy import bypass_rls_ctx, request_id_ctx
 from app.modules.auth.domain import merge_permissions
 from app.modules.auth.models import User
 from app.modules.auth.repository import PermissionRepository, RoleRepository
+from app.modules.finance.attachment_validator import (
+    MAX_SIZE_BYTES as PROOF_MAX_SIZE_BYTES,
+)
 from app.modules.finance.attachment_validator import ProofAttachmentValidator
 from app.modules.finance.enums import SettlementStatus
 from app.modules.finance.events import SettlementPaid
 from app.modules.finance.exceptions import (
     ExtraItemNotAllowedError,
     FieldPermissionDenied,
+    InvalidPaymentProofImageError,
     PaymentFieldMissingError,
     ReviewReasonRequiredError,
     SelfReviewForbiddenError,
@@ -246,7 +251,128 @@ class SettlementService:
         payload: SettlementPaymentProofRequest,
         user: User,
     ) -> SettlementResponse:
-        """EP06-S07：财务上传付款截图 → 已付款.
+        """EP06-S07：财务上传付款截图 → 已付款（引用一个已上传好的 attachment）.
+
+        前端现在走 ``upload_payment_proof_file``（后端代传），这个入口保留给接口兼容。
+        """
+        updated = await self._mark_paid(settlement_id, payload, user)
+        await self._session.commit()
+        return await self._to_response(updated, user)
+
+    async def upload_payment_proof_file(
+        self,
+        settlement_id: UUID,
+        *,
+        payment_date: date,
+        filename: str | None,
+        mime_type: str | None,
+        data: bytes,
+        user: User,
+    ) -> SettlementResponse:
+        """财务上传付款截图（后端代传到私有桶）→ 已付款，一个请求完成。
+
+        原来是「upload-init → 浏览器直传 R2 → complete → PUT payment-proof」四步。浏览器直传
+        要求 bucket 配 CORS，生产私有桶没配：预检被 R2 拒成 403，前端只报一句
+        ``Failed to fetch``，付款截图一张都传不上去。系统里其余图片（收款码、催发截图、
+        7 天数据、品牌词）早就改成后端代传，这里同样处理。
+
+        顺序：权限 → 结算单状态 → 付款日期 → 图片校验 → 上传 → 复用 ``_mark_paid``（FB4
+        6 项校验 + 状态推进 + 事件）→ commit。前四步都在上传之前：状态不对的单、明天的
+        付款日期，都不该先往桶里放一个文件。上传之后任何一步失败，回滚并删掉已上传的对象。
+        """
+        from fastapi.concurrency import run_in_threadpool
+
+        await self._check_proof_upload_permission(user)
+        settlement = await self._repo.get_by_id(settlement_id)
+        if settlement is None:
+            raise SettlementNotFoundError(f"结算单 {settlement_id} 不存在")
+        SettlementStatusMachine.assert_can_transition(
+            from_state=settlement.settlement_status,
+            to_state=SettlementStatus.PAID.value,
+            action="mark_paid",
+        )
+        self._check_payment_date(payment_date)
+        problem = check_image_payload(
+            data=data,
+            mime_type=mime_type,
+            filename=filename,
+            max_bytes=PROOF_MAX_SIZE_BYTES,
+            label="付款截图",
+        )
+        # mime_type 为 None 时 check_image_payload 必然已给出原因；一并判断是为了把类型
+        # 收窄成 str，后面上传要用它当 content_type
+        if problem is not None or mime_type is None:
+            raise InvalidPaymentProofImageError(problem or "付款截图格式无法识别")
+
+        attachment_id: UUID | None = None
+        attachment_key: str | None = None
+        try:
+            attachment, _ = await self._attachment_service.create_upload_record(
+                session=self._session,
+                tenant_id=user.tenant_id,
+                created_by=user.id,
+                bucket="private",
+                purpose="settlement_proof",
+                filename=filename,
+                mime_type=mime_type,
+                size_bytes=len(data),
+            )
+            attachment_id = attachment.id
+            attachment_key = attachment.r2_key
+            await run_in_threadpool(
+                self._attachment_service.upload_bytes,
+                data,
+                bucket="private",
+                key=attachment_key,
+                content_type=mime_type,
+            )
+            await self._attachment_service.mark_uploaded(
+                session=self._session,
+                attachment_id=attachment_id,
+                tenant_id=user.tenant_id,
+            )
+            updated = await self._mark_paid(
+                settlement_id,
+                SettlementPaymentProofRequest(
+                    payment_date=payment_date, payment_proof_attachment_id=attachment_id
+                ),
+                user,
+            )
+            # commit 在 try 里：提交失败也要删掉对象。响应组装放在外面 —— 已经提交的
+            # 结算单引用着这个对象，之后再出错也不能删
+            await self._session.commit()
+        except Exception:
+            await self._session.rollback()
+            if attachment_key is not None:
+                try:
+                    await run_in_threadpool(
+                        self._attachment_service.delete, "private", attachment_key
+                    )
+                except Exception:
+                    log.warning(
+                        "settlement_proof_compensation_delete_failed",
+                        extra={"attachment_id": str(attachment_id)},
+                    )
+            raise
+
+        return await self._to_response(updated, user)
+
+    @staticmethod
+    def _check_payment_date(payment_date: date) -> None:
+        """payment_date ≤ today（Asia/Shanghai，FB8 复用 get_today）。"""
+        if payment_date > get_today():
+            raise PaymentFieldMissingError(
+                "payment_date 不能晚于今天",
+                details={"payment_date": payment_date.isoformat()},
+            )
+
+    async def _mark_paid(
+        self,
+        settlement_id: UUID,
+        payload: SettlementPaymentProofRequest,
+        user: User,
+    ) -> Settlement:
+        """标记已付款，不 commit（调用方决定事务边界）.
 
         FB4：attachment 6 项强校验（ProofAttachmentValidator）。
         FB5：mark_paid 同事务发 SettlementPaid 反向事件（通知类 — 失败不阻塞主流程）。
@@ -257,12 +383,7 @@ class SettlementService:
         if settlement is None:
             raise SettlementNotFoundError(f"结算单 {settlement_id} 不存在")
 
-        # payment_date ≤ today（Asia/Shanghai，FB8 复用 get_today）
-        if payload.payment_date > get_today():
-            raise PaymentFieldMissingError(
-                "payment_date 不能晚于今天",
-                details={"payment_date": payload.payment_date.isoformat()},
-            )
+        self._check_payment_date(payload.payment_date)
 
         # FB4：attachment 6 项强校验
         await self._validator.validate(
@@ -335,10 +456,9 @@ class SettlementService:
             except Exception:  # noqa: S110 Sentry 上报是 best-effort，其失败不得掩盖原始异常（上一行已 log.exception）
                 pass
             await self._log_event_dispatch_failure(event, exc, user, blocking=False)
-            # 不重新 raise — 让 commit 继续（mark_paid 主流程已成功）
+            # 不重新 raise — 让调用方照常 commit（mark_paid 主流程已成功）
 
-        await self._session.commit()
-        return await self._to_response(updated, user)
+        return updated
 
     # ============================================================
     # 状态推进：resubmit（已驳回 → 待核查）

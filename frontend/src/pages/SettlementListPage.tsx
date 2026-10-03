@@ -21,12 +21,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnsType } from "antd/es/table";
 import dayjs from "dayjs";
 import {
+  PAYMENT_PROOF_MAX_BYTES,
+  PAYMENT_PROOF_MIME_TYPES,
   addExtraItem,
-  completeAttachmentUpload,
   fillPaymentAmount,
-  initAttachmentUpload,
   listSettlements,
-  putFileToR2,
   reviewSettlement,
   uploadPaymentProof,
 } from "@/features/finance/api";
@@ -145,21 +144,22 @@ export function SettlementListPage() {
       message.error("请先选择付款截图");
       return;
     }
+    // 先在本地挡掉格式和大小不对的文件，省得传完 10MB 才被后端拒
+    if (!(PAYMENT_PROOF_MIME_TYPES as readonly string[]).includes(proofFile.type)) {
+      message.error("付款截图仅支持 JPG、PNG、WebP 图片");
+      return;
+    }
+    if (proofFile.size > PAYMENT_PROOF_MAX_BYTES) {
+      message.error("付款截图不能超过 10MB");
+      return;
+    }
     setUploading(true);
     try {
-      const init = await initAttachmentUpload({
-        bucket: "private",
-        purpose: "settlement_proof",
-        filename: proofFile.name,
-        mime_type: proofFile.type || "image/jpeg",
-        size_bytes: proofFile.size,
-      });
-      await putFileToR2(init.presigned_url, proofFile);
-      await completeAttachmentUpload(init.attachment_id);
-      await uploadPaymentProof(target.id, {
-        payment_date: dayjs(values.payment_date).format("YYYY-MM-DD"),
-        payment_proof_attachment_id: init.attachment_id,
-      });
+      await uploadPaymentProof(
+        target.id,
+        dayjs(values.payment_date).format("YYYY-MM-DD"),
+        proofFile
+      );
       message.success("付款凭证已上传，转「已付款」");
       setProofOpen(false);
       setProofFile(null);
@@ -460,11 +460,14 @@ export function SettlementListPage() {
                 return false;
               }}
               maxCount={1}
-              accept="image/*"
+              accept={PAYMENT_PROOF_MIME_TYPES.join(",")}
               onRemove={() => setProofFile(null)}
             >
               <Button icon={<UploadOutlined />}>选择图片</Button>
             </Upload>
+            <Typography.Text style={{ color: "#475569", fontSize: 12 }}>
+              支持 JPG、PNG、WebP，不超过 10MB
+            </Typography.Text>
           </Form.Item>
         </Form>
       </Modal>
