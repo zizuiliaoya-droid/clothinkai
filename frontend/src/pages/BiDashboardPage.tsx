@@ -14,6 +14,7 @@ import {
 } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import type { ColumnsType } from "antd/es/table";
+import { GoodsNameCell } from "@/components/GoodsNameCell/GoodsNameCell";
 import { MiniLineChart } from "@/components/MiniLineChart/MiniLineChart";
 import {
   ReportTimeRangeFilter,
@@ -189,7 +190,15 @@ export function BiDashboardPage() {
           code
         ),
     },
-    { title: "商品名称", dataIndex: "goods_title", width: 180, ellipsis: true },
+    {
+      title: "商品简称",
+      dataIndex: "goods_short_name",
+      width: 180,
+      ellipsis: { showTitle: false },
+      render: (_: string | null, row: BiStylePerformance) => (
+        <GoodsNameCell goodsTitle={row.goods_title} shortName={row.goods_short_name} />
+      ),
+    },
     {
       title: "销售额",
       dataIndex: "sales_amount",

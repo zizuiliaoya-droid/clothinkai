@@ -83,11 +83,13 @@ async def _goods(
     season: str,
     category: str,
     is_suit: bool = False,
+    short_name: str | None = None,
 ) -> GoodsMain:
     goods = GoodsMain(
         tenant_id=tenant.id,
         goods_code=code,
         goods_title=f"{code} 商品",
+        short_name=short_name,
         is_suit=is_suit,
         season=season,
         category=category,
@@ -150,8 +152,15 @@ async def _seed(
 ) -> dict[str, Any]:
     """两个商品（含套装）+ 只有刷单的商品 + 上一期数据 + 覆盖全部催发状态的推广单。"""
     style_a = await product_factory.style(style_code=f"EA{uuid4().hex[:6]}")
+    # A 填了简称、B 没填：两条路径都得原样带出简称（含 NULL）
     goods_a = await _goods(
-        session, tenant, style_a, code=f"G_A_{uuid4().hex[:5]}", season="春夏", category="连衣裙"
+        session,
+        tenant,
+        style_a,
+        code=f"G_A_{uuid4().hex[:5]}",
+        season="春夏",
+        category="连衣裙",
+        short_name="A 简称",
     )
     qn_a = await _pp(session, tenant, style_a, goods_a)
     ad_a = await _pp(session, tenant, style_a, goods_a, platform="万相台")
@@ -329,6 +338,7 @@ class TestProductionReport:
             if seasons is None and categories is None:
                 # 只有刷单的商品被 HAVING 滤掉，剩 A、B 两个
                 assert len(items) == 2
+                assert {r.goods_short_name for r in items} == {"A 简称", None}
                 assert any(r.refund_amount != 0 for r in items)
                 assert any(r.add_cart_count != 0 for r in items)
                 assert any(r.promo_cost != 0 for r in items)

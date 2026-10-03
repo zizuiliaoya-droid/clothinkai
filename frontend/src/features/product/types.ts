@@ -51,8 +51,9 @@ export interface Style {
   /** 所属商品（后端派生）：主商品为非套装优先、货号次之。 */
   goods_code: string | null;
   goods_title: string | null;
+  goods_short_name: string | null;
   goods_is_suit: boolean;
-  /** 所属套装的标题（后端派生）；不在任何套装里则为 null。 */
+  /** 所属套装的显示名（后端派生，有简称用简称）；不在任何套装里则为 null。 */
   suite_name: string | null;
   brand_id: string | null;
   category: string;

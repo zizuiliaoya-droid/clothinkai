@@ -48,8 +48,10 @@ class TestReportExportApiContract:
 
         dangerous_header = '=HYPERLINK("https://invalid.example","x")'
         dangerous_text = "  +SUM(1,1)"
+        dangerous_short = "=1+1"
         production_row = SimpleNamespace(
             goods_code="S001",
+            goods_short_name=dangerous_short,
             goods_title=dangerous_text,
             style_codes=["S001"],
             pay_amount=Decimal("100"),
@@ -146,14 +148,16 @@ class TestReportExportApiContract:
             categories=None,
             granularity="day",
         )
-        assert production_headers[:3] == ["商品编码", "商品名称", "含款号"]
+        assert production_headers[:4] == ["商品编码", "商品简称", "商品名称", "含款号"]
+        assert production_rows[0][1:3] == [dangerous_short, dangerous_text]
         assert production_headers[-1] == dangerous_header
-        # 13 个固定列 + 含款号 + 1 个动态 extra
-        assert len(production_headers) == len(production_rows[0]) == 15
-        assert isinstance(module._cell(production_rows[0][3]), float)
+        # 15 个固定列（编码、简称、名称、含款号 + 11 个指标）+ 1 个动态 extra
+        assert len(production_headers) == len(production_rows[0]) == 16
+        assert isinstance(module._cell(production_rows[0][4]), float)
         assert isinstance(module._cell(production_rows[0][-1]), float)
         assert module._cell(dangerous_header) == f"'{dangerous_header}"
         assert module._cell(dangerous_text) == f"'{dangerous_text}"
+        assert module._cell(dangerous_short) == f"'{dangerous_short}"
 
         store_headers, grouped_store_rows = await service._fetch_rows(
             uuid4(),
@@ -206,5 +210,8 @@ class TestReportExportApiContract:
         last_col = worksheet.max_column
         assert worksheet.cell(1, last_col).value == f"'{dangerous_header}"
         assert worksheet.cell(1, last_col).data_type != "f"
-        assert worksheet.cell(2, 2).value == f"'{dangerous_text}"
+        # 第 2 列简称、第 3 列名称，两列都是用户可编辑的文字，都不能被当成公式执行
+        assert worksheet.cell(2, 2).value == f"'{dangerous_short}"
         assert worksheet.cell(2, 2).data_type != "f"
+        assert worksheet.cell(2, 3).value == f"'{dangerous_text}"
+        assert worksheet.cell(2, 3).data_type != "f"

@@ -48,6 +48,7 @@ async def _high_return_style(
     pay="1000.00",
     refund="500.00",
     day: date | None = None,
+    short_name: str | None = None,
 ) -> Any:
     # AnomalyAlertService 的统计窗口是 last_7d（相对当天），日期必须落在窗口内，
     # 不能硬编码固定日期，否则测试会随时间推移失效。
@@ -58,6 +59,7 @@ async def _high_return_style(
         tenant_id=tenant.id,
         goods_code=f"G{uuid4().hex[:8]}",
         goods_title=style.style_name,
+        short_name=short_name,
     )
     session.add(goods)
     await session.flush()
@@ -173,7 +175,9 @@ class TestAnomalyAlert:
 
             await _wecom_config(session, tenant_a)
             await self._setup_config(session, tenant_a, ["u1"])
-            await _high_return_style(session, tenant_a, product_factory)
+            style = await _high_return_style(
+                session, tenant_a, product_factory, short_name="高退货简称"
+            )
             await session.commit()
 
             svc = AnomalyAlertService(session)
@@ -182,6 +186,10 @@ class TestAnomalyAlert:
             assert n1 == 1
             assert len(sent) == 1
             assert "退货退款率过高" in sent[0][1]
+            # 预警里的商品用简称，不再刷一长串全称
+            goods_line = next(ln for ln in sent[0][1].splitlines() if ln.startswith("> 商品："))
+            assert "高退货简称" in goods_line
+            assert style.style_name not in goods_line
 
             # 落 log 1 条
             cnt = (

@@ -157,6 +157,7 @@ class GoodsService:
             id=goods.id,
             goods_code=goods.goods_code,
             goods_title=goods.goods_title,
+            short_name=goods.short_name,
             category=goods.category,
             season=goods.season,
             brand_id=goods.brand_id,
@@ -191,6 +192,7 @@ class GoodsService:
             tenant_id=tenant_id,
             goods_code=payload.goods_code,
             goods_title=payload.goods_title,
+            short_name=payload.short_name,
             category=payload.category,
             season=payload.season,
             brand_id=payload.brand_id,
@@ -217,6 +219,7 @@ class GoodsService:
             after={
                 "goods_code": goods.goods_code,
                 "goods_title": goods.goods_title,
+                "short_name": goods.short_name,
                 "is_suit": goods.is_suit,
                 "style_count": len(items),
             },
@@ -237,6 +240,7 @@ class GoodsService:
             raise GoodsNotFoundError("商品不存在")
         before: dict[str, Any] = {
             "goods_title": goods.goods_title,
+            "short_name": goods.short_name,
             "is_suit": goods.is_suit,
             "is_active": goods.is_active,
         }
@@ -245,6 +249,9 @@ class GoodsService:
             goods.brand_id = payload.brand_id
         if payload.goods_title is not None:
             goods.goods_title = payload.goods_title
+        # 简称可以清空：按「有没有传」判断，而不是「是不是 None」（见 GoodsMainUpdate）
+        if "short_name" in payload.model_fields_set:
+            goods.short_name = payload.short_name
         if payload.category is not None:
             goods.category = payload.category
         if payload.season is not None:
@@ -266,6 +273,7 @@ class GoodsService:
             before=before,
             after={
                 "goods_title": goods.goods_title,
+                "short_name": goods.short_name,
                 "is_suit": goods.is_suit,
                 "is_active": goods.is_active,
             },
@@ -336,6 +344,7 @@ class GoodsService:
                     id=r["id"],
                     goods_code=r["goods_code"],
                     goods_title=r["goods_title"],
+                    short_name=r["short_name"],
                     category=r["category"],
                     season=r["season"],
                     brand_id=r["brand_id"],

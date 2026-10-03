@@ -25,7 +25,7 @@ class GoodsListFilters:
     """商品列表筛选条件。"""
 
     keyword: str | None = None
-    """同时搜商品编码、商品名、成员款式的货号与款名 —— 手里可能只有其中任意一个。"""
+    """同时搜商品编码、商品全称与简称、成员款式的货号与款名 —— 手里可能只有其中任意一个。"""
 
     category: str | None = None
     season: str | None = None
@@ -110,6 +110,7 @@ class GoodsRepository:
         if filters.keyword:
             clauses.append(
                 """(g.goods_code ILIKE :kw OR g.goods_title ILIKE :kw
+                    OR g.short_name ILIKE :kw
                     OR EXISTS (
                         SELECT 1 FROM goods_style_item gi
                         JOIN style s ON s.id = gi.style_id
@@ -135,7 +136,7 @@ class GoodsRepository:
             await self._session.execute(
                 text(
                     f"""
-                    SELECT g.id, g.goods_code, g.goods_title, g.category, g.season,
+                    SELECT g.id, g.goods_code, g.goods_title, g.short_name, g.category, g.season,
                            g.brand_id, b.brand_name, g.main_image_key, g.remark,
                            g.is_suit, g.is_active, g.created_at, g.updated_at,
                            COALESCE((

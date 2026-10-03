@@ -165,3 +165,49 @@ class TestPlatformProduct:
             assert await svc.find_by_platform_id("qianniu", "DEL1") is None
         finally:
             tenant_id_ctx.reset(token)
+
+    async def test_response_carries_goods_short_name(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
+    ) -> None:
+        """平台链接页靠商品名认链接：单条返回与列表两条读取路径都要带上简称。"""
+        from app.modules.product.goods_models import GoodsMain, GoodsStyleItem
+
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            style = await product_factory.style()
+            goods = GoodsMain(
+                tenant_id=tenant_a.id,
+                goods_code=f"G{uuid4().hex[:8]}",
+                goods_title="很长的商品全称",
+                short_name="短名",
+            )
+            session.add(goods)
+            await session.flush()
+            session.add(
+                GoodsStyleItem(tenant_id=tenant_a.id, goods_main_id=goods.id, style_id=style.id)
+            )
+            await session.flush()
+            user = await factory.user(tenant_a, roles=[admin_role])
+            svc = PlatformProductService(session)
+
+            created = await svc.create(
+                PlatformProductCreate(platform="qianniu", platform_id="SN1", style_id=style.id),
+                user.id,
+            )
+            assert created.goods_main_id == goods.id
+            assert created.goods_short_name == "短名"
+            assert created.goods_title == "很长的商品全称"
+            assert created.goods_is_suit is False
+            assert created.style_code == style.style_code
+
+            items, total = await svc.list_detailed(tenant_id=tenant_a.id, goods_main_id=goods.id)
+            assert total == 1
+            assert items[0].goods_short_name == "短名"
+            assert items[0].goods_title == "很长的商品全称"
+        finally:
+            tenant_id_ctx.reset(token)

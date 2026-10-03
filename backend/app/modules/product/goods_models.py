@@ -3,7 +3,7 @@
 分层与现有 ``style`` / ``sku`` 的关系：
 
 - ``GoodsMain`` = **销售单元**（PRD 的 ``tb_goods_main``）。一行代表店铺里卖的一个东西，
-  单件商品或套装都是它；``is_suit`` 区分。前端只展示 ``goods_title``。
+  单件商品或套装都是它；``is_suit`` 区分。前端展示 ``short_name``，没填时回落 ``goods_title``。
 - ``GoodsStyleItem`` = **商品与款式的关联**（PRD 的 ``tb_style_item``）。套装在这里挂多行，
   每行带该款在该商品下的单件货品成本。
 - ``Style`` 继续做款式（货品）主数据，不再兼任销售链接层。
@@ -48,7 +48,11 @@ class GoodsMain(TenantScopedModel):
     千牛ID 只能落在链接表，所以这里另给一个稳定的业务编码用于引用与去重。"""
 
     goods_title: Mapped[str] = mapped_column(String(512), nullable=False)
-    """商品/套装名称。前端所有下拉与列表展示这个字段，千牛ID 不外露。"""
+    """商品/套装全称（店铺标题）。千牛ID 不外露，前端靠名称认商品。"""
+
+    short_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    """商品简称（056）。全称动辄二三十个字，列表、报表、下拉都显示不全，业务另起一个短名。
+    没填时各处回落显示全称；搜索同时搜两者。"""
 
     main_image_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
     category: Mapped[str | None] = mapped_column(String(64), nullable=True)

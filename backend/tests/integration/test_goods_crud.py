@@ -603,3 +603,186 @@ class TestListGoods:
             assert items[0].total_cost == Decimal("50.00")
         finally:
             tenant_id_ctx.reset(token)
+
+
+class TestGoodsShortName:
+    """商品简称：全称动辄二三十个字，列表、报表、下拉里都显示不全，业务另起一个短名。"""
+
+    async def test_create_keeps_short_name_and_blank_becomes_null(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
+    ) -> None:
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            user = await factory.user(tenant_a, roles=[admin_role])
+            s1 = await product_factory.style(style_code="SN001")
+            s2 = await product_factory.style(style_code="SN002")
+            svc = GoodsService(session)
+            named = await svc.create(
+                GoodsMainCreate(
+                    goods_code="SN001",
+                    goods_title="LENNEA 24/AW 原创冬季 富家千金 冰雪飞狐 环保皮草毛绒外套",
+                    short_name="  冰雪飞狐外套  ",
+                    items=[GoodsStyleItemIn(style_id=s1.id)],
+                ),
+                tenant_id=tenant_a.id,
+                user_id=user.id,
+            )
+            assert named.short_name == "冰雪飞狐外套"
+
+            # 输入框没填时前端可能传空串；存成 NULL，「没填」只有一种表示
+            blank = await svc.create(
+                GoodsMainCreate(
+                    goods_code="SN002",
+                    goods_title="没填简称的商品",
+                    short_name="   ",
+                    items=[GoodsStyleItemIn(style_id=s2.id)],
+                ),
+                tenant_id=tenant_a.id,
+                user_id=user.id,
+            )
+            assert blank.short_name is None
+        finally:
+            tenant_id_ctx.reset(token)
+
+    async def test_update_sets_keeps_and_clears(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
+    ) -> None:
+        """不传不动、传值就改、传 null 或空串就清 —— 清空简称是正常操作，
+        不能套用其他字段「None 等于没传」的写法。"""
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            user = await factory.user(tenant_a, roles=[admin_role])
+            style = await product_factory.style(style_code="SN010")
+            svc = GoodsService(session)
+            created = await svc.create(
+                GoodsMainCreate(
+                    goods_code="SN010",
+                    goods_title="很长很长的商品全称",
+                    items=[GoodsStyleItemIn(style_id=style.id)],
+                ),
+                tenant_id=tenant_a.id,
+                user_id=user.id,
+            )
+            assert created.short_name is None
+
+            set_ = await svc.update(created.id, GoodsMainUpdate(short_name="短名"), user_id=user.id)
+            assert set_.short_name == "短名"
+
+            # 只改别的字段：简称保持
+            kept = await svc.update(
+                created.id, GoodsMainUpdate(goods_title="改过的全称"), user_id=user.id
+            )
+            assert kept.short_name == "短名"
+            assert kept.goods_title == "改过的全称"
+
+            cleared = await svc.update(
+                created.id, GoodsMainUpdate(short_name=None), user_id=user.id
+            )
+            assert cleared.short_name is None
+
+            await svc.update(created.id, GoodsMainUpdate(short_name="又填了"), user_id=user.id)
+            cleared_by_blank = await svc.update(
+                created.id, GoodsMainUpdate(short_name=""), user_id=user.id
+            )
+            assert cleared_by_blank.short_name is None
+        finally:
+            tenant_id_ctx.reset(token)
+
+    async def test_keyword_matches_short_name_and_list_returns_it(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
+    ) -> None:
+        """填了简称以后，业务会拿简称来搜。"""
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            user = await factory.user(tenant_a, roles=[admin_role])
+            style = await product_factory.style(style_code="SN020", style_name="款名里没有关键词")
+            svc = GoodsService(session)
+            await svc.create(
+                GoodsMainCreate(
+                    goods_code="SN020",
+                    goods_title="全称里也没有关键词",
+                    short_name="飞狐NEEDLE",
+                    items=[GoodsStyleItemIn(style_id=style.id)],
+                ),
+                tenant_id=tenant_a.id,
+                user_id=user.id,
+            )
+            items, total = await svc.list_goods(
+                tenant_id=tenant_a.id, filters=GoodsListFilters(keyword="飞狐NEEDLE")
+            )
+            assert total == 1
+            assert items[0].goods_code == "SN020"
+            assert items[0].short_name == "飞狐NEEDLE"
+        finally:
+            tenant_id_ctx.reset(token)
+
+    async def test_short_name_over_limit_rejected(self) -> None:
+        from pydantic import ValidationError as PydanticValidationError
+
+        from app.modules.product.goods_schemas import GOODS_SHORT_NAME_MAX_LEN
+
+        with pytest.raises(PydanticValidationError):
+            GoodsMainUpdate(short_name="字" * (GOODS_SHORT_NAME_MAX_LEN + 1))
+        assert GoodsMainUpdate(short_name="字" * GOODS_SHORT_NAME_MAX_LEN).short_name
+
+    async def test_style_goods_options_carry_short_name(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
+    ) -> None:
+        """录推广 / 改归属时的商品下拉：带上简称，前端才能显示短名字。"""
+        from app.modules.product.api import list_goods_for_style
+
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            user = await factory.user(tenant_a, roles=[admin_role])
+            shared = await product_factory.style(style_code="SN030")
+            partner = await product_factory.style(style_code="SN031")
+            svc = GoodsService(session)
+            await svc.create(
+                GoodsMainCreate(
+                    goods_code="SN030",
+                    goods_title="单品全称",
+                    short_name="单品简称",
+                    items=[GoodsStyleItemIn(style_id=shared.id)],
+                ),
+                tenant_id=tenant_a.id,
+                user_id=user.id,
+            )
+            await svc.create(
+                GoodsMainCreate(
+                    goods_code="SUIT-SN030",
+                    goods_title="套装全称",
+                    items=[
+                        GoodsStyleItemIn(style_id=shared.id),
+                        GoodsStyleItemIn(style_id=partner.id),
+                    ],
+                ),
+                tenant_id=tenant_a.id,
+                user_id=user.id,
+            )
+            options = await list_goods_for_style(user=user, session=session, style_id=shared.id)
+            by_code = {o.goods_code: o for o in options}
+            assert by_code["SN030"].goods_short_name == "单品简称"
+            assert by_code["SUIT-SN030"].goods_short_name is None
+            assert by_code["SUIT-SN030"].goods_title == "套装全称"
+        finally:
+            tenant_id_ctx.reset(token)

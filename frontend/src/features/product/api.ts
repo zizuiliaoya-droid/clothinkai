@@ -135,7 +135,25 @@ export interface GoodsOption {
   goods_main_id: string;
   goods_code: string;
   goods_title: string;
+  goods_short_name: string | null;
   is_suit: boolean;
+}
+
+/** 商品简称上限，与后端 GOODS_SHORT_NAME_MAX_LEN 一致。 */
+export const GOODS_SHORT_NAME_MAX_LEN = 32;
+
+/** 商品显示名：有简称用简称，没填回落全称。全称动辄二三十个字，列表和下拉里显示不全。 */
+export function goodsDisplayName(
+  goodsTitle: string | null | undefined,
+  shortName: string | null | undefined
+): string {
+  return shortName || goodsTitle || "";
+}
+
+/** 商品下拉的选项文字：编码 + 显示名 + 套装标记。 */
+export function goodsOptionLabel(g: GoodsOption): string {
+  const name = goodsDisplayName(g.goods_title, g.goods_short_name);
+  return `${g.goods_code} ${name}${g.is_suit ? "（套装）" : ""}`;
 }
 
 /** 款式归属的商品，非套装优先。返回多条说明该款既单卖又进套装，需要人工指定归属。 */
@@ -167,6 +185,8 @@ export interface Goods {
   id: string;
   goods_code: string;
   goods_title: string;
+  /** 商品简称；没填为 null，界面回落显示全称。 */
+  short_name: string | null;
   category: string | null;
   season: string | null;
   brand_id: string | null;
@@ -208,6 +228,7 @@ export interface GoodsFilters {
 export interface GoodsCreate {
   goods_code: string;
   goods_title: string;
+  short_name?: string | null;
   category?: string | null;
   season?: string | null;
   brand_id?: string | null;
@@ -218,6 +239,8 @@ export interface GoodsCreate {
 /** goods_code 不在更新范围内：它是报表与链接归属的引用键，改了等于换了一个商品。 */
 export interface GoodsUpdate {
   goods_title?: string;
+  /** 不传不动；传 null 清掉简称。 */
+  short_name?: string | null;
   category?: string | null;
   season?: string | null;
   brand_id?: string | null;
@@ -274,6 +297,7 @@ export interface PlatformLink {
   updated_at: string;
   goods_code: string | null;
   goods_title: string | null;
+  goods_short_name: string | null;
   goods_is_suit: boolean;
   style_code: string | null;
   style_name: string | null;

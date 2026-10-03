@@ -44,7 +44,7 @@ _ADD_CART_SUM = "COALESCE(SUM(q.add_cart_count), 0)"
 # 商品维度报表的「商品信息」列（投产主表与它的汇总表读取共用）
 GOODS_META_COLUMNS = """
   g.id AS goods_id, g.goods_code AS goods_code,
-  g.goods_title AS goods_title, g.is_suit AS is_suit,
+  g.goods_title AS goods_title, g.short_name AS goods_short_name, g.is_suit AS is_suit,
   -- 商品自己没配主图时借用成员款式的（040 建的最小档案都没有主图）
   COALESCE(g.main_image_key, (
     SELECT ms.main_image_key
@@ -63,7 +63,7 @@ GOODS_META_COLUMNS = """
     WHERE ci.goods_main_id = g.id AND ci.is_active = true
   ) AS style_codes"""
 
-GOODS_META_GROUP_BY = "g.id, g.goods_code, g.goods_title, g.is_suit, g.main_image_key"
+GOODS_META_GROUP_BY = "g.id, g.goods_code, g.goods_title, g.short_name, g.is_suit, g.main_image_key"
 
 # 日期分桶。周按 ISO（周一开始），汇总表刷新的 _bucket_start 用同一口径 ——
 # 两边分桶方式不一致会让周汇总与周趋势图对不上。

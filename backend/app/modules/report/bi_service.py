@@ -209,6 +209,7 @@ class BiService:
             goods_id=row.goods_id,
             goods_code=row.goods_code,
             goods_title=row.goods_title,
+            goods_short_name=row.goods_short_name,
             is_suit=row.is_suit,
             main_image_url=row.main_image_url,
             sales_amount=row.pay_amount,

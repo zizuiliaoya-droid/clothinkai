@@ -95,6 +95,7 @@ class ProductionRow(BaseModel):
     goods_id: UUID
     goods_code: str
     goods_title: str
+    goods_short_name: str | None = None
     is_suit: bool = False
     # 商品含哪些款式货号；单品就是它自己那一个，套装是多个
     style_codes: list[str] = Field(default_factory=list)
@@ -202,6 +203,7 @@ class BiStylePerformance(BaseModel):
     goods_id: UUID
     goods_code: str
     goods_title: str
+    goods_short_name: str | None = None
     is_suit: bool = False
     main_image_url: str | None = None
     sales_amount: Decimal
