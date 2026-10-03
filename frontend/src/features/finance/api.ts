@@ -2,9 +2,6 @@
 
 import { apiClient } from "@/services/apiClient";
 import type {
-  AttachmentResponse,
-  AttachmentUploadInitRequest,
-  AttachmentUploadInitResponse,
   DailySummaryActivityResponse,
   DailySummaryAsOfResponse,
   Settlement,
@@ -12,7 +9,6 @@ import type {
   SettlementListFilters,
   SettlementPage,
   SettlementPaymentAmountRequest,
-  SettlementPaymentProofRequest,
   SettlementReviewRequest,
 } from "./types";
 
@@ -69,13 +65,29 @@ export async function fillPaymentAmount(
   return resp.data;
 }
 
+/** 付款截图允许的格式与大小（与后端 check_image_payload 一致）。 */
+export const PAYMENT_PROOF_MIME_TYPES = ["image/jpeg", "image/png", "image/webp"] as const;
+export const PAYMENT_PROOF_MAX_BYTES = 10 * 1024 * 1024;
+
+/**
+ * 上传付款截图并标记已付款：后端代传到私有桶，一个请求完成。
+ *
+ * 不再由浏览器直传 R2 —— 直传要求 bucket 配 CORS，生产私有桶没配，浏览器只会报
+ * 「Failed to fetch」。与收款码、催发截图、7 天数据截图同一套做法。
+ */
 export async function uploadPaymentProof(
   settlementId: string,
-  payload: SettlementPaymentProofRequest
+  paymentDate: string,
+  file: File
 ): Promise<Settlement> {
-  const resp = await apiClient.put<Settlement>(
-    `/api/settlements/${settlementId}/payment-proof`,
-    payload
+  const form = new FormData();
+  form.append("payment_date", paymentDate);
+  form.append("file", file, file.name);
+  const resp = await apiClient.post<Settlement>(
+    `/api/settlements/${settlementId}/payment-proof/upload`,
+    form,
+    // 截图最大 10MB，慢网下 30 秒的默认超时不够
+    { timeout: 120_000 }
   );
   return resp.data;
 }
@@ -100,46 +112,6 @@ export async function getDailySummaryActivity(
     { params: date ? { date } : {} }
   );
   return resp.data;
-}
-
-// shared attachment 基础设施（上传付款截图：upload-init → 直传 R2 → complete）
-
-export async function initAttachmentUpload(
-  payload: AttachmentUploadInitRequest
-): Promise<AttachmentUploadInitResponse> {
-  const resp = await apiClient.post<AttachmentUploadInitResponse>(
-    "/api/attachments/upload-init",
-    payload
-  );
-  return resp.data;
-}
-
-export async function completeAttachmentUpload(
-  attachmentId: string
-): Promise<AttachmentResponse> {
-  const resp = await apiClient.post<AttachmentResponse>(
-    `/api/attachments/${attachmentId}/complete`
-  );
-  return resp.data;
-}
-
-/**
- * 直传 R2：用 upload-init 返回的 presigned_url 直接 PUT 文件。
- * Content-Type 必须与 init 时声明的 mime_type 一致。
- * 注意：不走 apiClient（不带 Authorization header，直传 R2）。
- */
-export async function putFileToR2(
-  presignedUrl: string,
-  file: File
-): Promise<void> {
-  const resp = await fetch(presignedUrl, {
-    method: "PUT",
-    headers: { "Content-Type": file.type },
-    body: file,
-  });
-  if (!resp.ok) {
-    throw new Error(`R2 直传失败: ${resp.status}`);
-  }
 }
 
 // ---------------------------------------------------------------------------

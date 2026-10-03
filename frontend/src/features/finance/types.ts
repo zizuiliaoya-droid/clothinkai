@@ -85,11 +85,6 @@ export interface SettlementPaymentAmountRequest {
   payment_amount: string;
 }
 
-export interface SettlementPaymentProofRequest {
-  payment_date: string;
-  payment_proof_attachment_id: string;
-}
-
 export interface SettlementPage {
   items: Settlement[];
   total: number;
@@ -144,35 +139,6 @@ export interface DailySummaryActivityResponse {
     newly_paid: AmountBucket;
     newly_rejected: AmountBucket;
   };
-}
-
-// shared attachment 基础设施（上传付款截图用）
-
-export interface AttachmentUploadInitRequest {
-  bucket: string;
-  purpose: string;
-  filename?: string | null;
-  mime_type: string;
-  size_bytes: number;
-}
-
-export interface AttachmentUploadInitResponse {
-  attachment_id: string;
-  presigned_url: string;
-  expires_in_seconds: number;
-}
-
-export interface AttachmentResponse {
-  id: string;
-  bucket: string;
-  purpose: string;
-  filename: string | null;
-  mime_type: string;
-  size_bytes: number;
-  status: string;
-  created_by: string | null;
-  created_at: string;
-  updated_at: string;
 }
 
 // ---------------------------------------------------------------------------

@@ -48,6 +48,18 @@ class TestSettlementApiAuth:
             )
         assert resp.status_code == 401
 
+    async def test_payment_proof_upload_requires_auth(self) -> None:
+        """代传入口同样要登录；字段齐全，只缺 token。"""
+        from app.main import app
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            resp = await ac.post(
+                f"/api/settlements/{uuid4()}/payment-proof/upload",
+                data={"payment_date": "2026-05-26"},
+                files={"file": ("proof.png", b"\x89PNG\r\n\x1a\n" + b"\x00" * 16, "image/png")},
+            )
+        assert resp.status_code == 401
+
     async def test_daily_summary_requires_auth(self) -> None:
         from app.main import app
 
@@ -86,6 +98,8 @@ class TestSettlementOpenApi:
         assert "/api/settlements/{settlement_id}/extra-items" in paths
         assert "/api/settlements/{settlement_id}/payment-amount" in paths
         assert "/api/settlements/{settlement_id}/payment-proof" in paths
+        assert "/api/settlements/{settlement_id}/payment-proof/upload" in paths
+        assert "post" in paths["/api/settlements/{settlement_id}/payment-proof/upload"]
         assert "/api/settlements/daily-summary/as-of" in paths
         assert "/api/settlements/daily-summary/activity" in paths
 

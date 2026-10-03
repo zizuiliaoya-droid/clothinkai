@@ -21,12 +21,13 @@ from datetime import date
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile, status
 
 from app.modules.auth.deps import (
     CurrentActiveUser,
     require_permission,
 )
+from app.modules.finance.attachment_validator import MAX_SIZE_BYTES as PROOF_MAX_SIZE_BYTES
 from app.modules.finance.deps import SettlementServiceDep
 from app.modules.finance.enums import SettlementStatus
 from app.modules.finance.schemas import (
@@ -201,11 +202,44 @@ async def upload_payment_proof(
     user: CurrentActiveUser,
     service: SettlementServiceDep,
 ) -> SettlementResponse:
-    """EP06-S07 财务上传付款截图 → 已付款.
+    """EP06-S07 财务上传付款截图 → 已付款（引用已上传的 attachment）.
 
     attachment 6 项强校验（FB4）+ 发 SettlementPaid 反向事件（FB5 通知类）。
+    前端已改走下面的 ``/payment-proof/upload``；这个入口保留给接口兼容。
     """
     return await service.upload_payment_proof(settlement_id, payload, user)
+
+
+@router.post(
+    "/settlements/{settlement_id}/payment-proof/upload",
+    response_model=SettlementResponse,
+    dependencies=[require_permission("settlement.pay", "upload_proof")],
+)
+async def upload_payment_proof_file(
+    settlement_id: UUID,
+    user: CurrentActiveUser,
+    service: SettlementServiceDep,
+    payment_date: Annotated[date, Form()],
+    file: Annotated[UploadFile, File(description="付款截图（JPG / PNG / WebP，≤10MB）")],
+) -> SettlementResponse:
+    """财务上传付款截图 → 已付款，后端代传到私有桶，一个请求完成。
+
+    不让浏览器直传 R2：直传要求 bucket 配 CORS，生产私有桶没配，前端只会报
+    ``Failed to fetch``。与收款码、催发截图、7 天数据截图同一套做法。
+    """
+    try:
+        # 多读 1 字节：超限的文件由 check_image_payload 报「不能超过 10MB」，不整个读进内存
+        data = await file.read(PROOF_MAX_SIZE_BYTES + 1)
+    finally:
+        await file.close()
+    return await service.upload_payment_proof_file(
+        settlement_id,
+        payment_date=payment_date,
+        filename=file.filename,
+        mime_type=file.content_type,
+        data=data,
+        user=user,
+    )
 
 
 # ---------------------------------------------------------------------------
