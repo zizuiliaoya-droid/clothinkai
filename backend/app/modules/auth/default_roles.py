@@ -217,12 +217,15 @@ DEFAULT_ROLES: tuple[RoleSpec, ...] = (
     RoleSpec(
         code="operations",
         name="运营",
-        description="只读访问报表与店铺数据，并维护平台链接映射",
+        description="看报表与店铺数据，维护平台链接与商品资料（商品 / 套装 / 款式 / 成本表）",
         permissions=(
             REPORT_READ,
             PROMOTION_READ,
             BLOGGER_READ,
             PRODUCT_READ,
+            # 8a-7：与跟单相同的商品权限（商品 / 套装 / 款式 / SKU / 字典 / 商品资料导入）；
+            # PRODUCT_READ 保留（057 之前的库里已有这一行，迁移只加不删）
+            PRODUCT_ALL,
             IMPORTER_READ,
             WECOM_MESSAGE_READ,
             NOTIFICATION_READ,

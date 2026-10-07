@@ -47,6 +47,16 @@ export interface ImportUploadResponse {
   source: string;
 }
 
+/** GET /api/imports/access 的一项：当前用户对某个导入来源的能力（按来源判权，8a-7）。 */
+export interface ImportSourceAccess {
+  source: string;
+  label: string;
+  can_view: boolean;
+  can_upload: boolean;
+  can_map: boolean;
+  can_resolve: boolean;
+}
+
 // 字段映射版本（EP07-S09）
 
 export interface FieldMappingColumn {

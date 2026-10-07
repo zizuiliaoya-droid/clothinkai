@@ -786,3 +786,49 @@ class TestGoodsShortName:
             assert by_code["SUIT-SN030"].goods_title == "套装全称"
         finally:
             tenant_id_ctx.reset(token)
+
+
+class TestGoodsUpdateAuditSeason:
+    """8a-7（J48）：运营也能改季节，``goods.update`` 审计要带季节的前后值。"""
+
+    async def test_update_audit_has_season_before_after(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
+    ) -> None:
+        from sqlalchemy import select
+
+        from app.modules.auth.models import AuditLog
+
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            user = await factory.user(tenant_a, roles=[admin_role])
+            style = await product_factory.style(style_code="SN040")
+            svc = GoodsService(session)
+            created = await svc.create(
+                GoodsMainCreate(
+                    goods_code="SN040",
+                    goods_title="改季节的商品",
+                    season="春",
+                    items=[GoodsStyleItemIn(style_id=style.id)],
+                ),
+                tenant_id=tenant_a.id,
+                user_id=user.id,
+            )
+            await svc.update(created.id, GoodsMainUpdate(season="秋"), user_id=user.id)
+            log = (
+                await session.execute(
+                    select(AuditLog).where(
+                        AuditLog.action == "goods.update",
+                        AuditLog.resource_id == str(created.id),
+                    )
+                )
+            ).scalar_one()
+            assert log.before is not None and log.after is not None
+            assert log.before["season"] == "春"
+            assert log.after["season"] == "秋"
+        finally:
+            tenant_id_ctx.reset(token)

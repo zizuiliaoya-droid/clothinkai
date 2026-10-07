@@ -23,6 +23,7 @@ import sentry_sdk
 from celery import Task
 from celery.signals import worker_process_init
 from sqlalchemy import Table, func, select, text, update
+from sqlalchemy.exc import IntegrityError, StatementError
 
 from app.core.attachment import BucketKind
 from app.core.celery_app import celery_app
@@ -318,13 +319,23 @@ async def _process_one_row(
             affected.add(parsed)
         return True
     except Exception as exc:
+        if isinstance(exc, StatementError):
+            # 只记异常类名：不带 SQL 与参数（参数里可能有成本价，8a-7 / N11）
+            log.warning(
+                "import_row_db_error",
+                extra={
+                    "batch_id": str(batch_id),
+                    "row_number": row_number,
+                    "error_type": type(exc.orig or exc).__name__,
+                },
+            )
         # 失败行用独立 bypass session 写（不被业务回滚带走，FB-C + U05 模式）
         await _write_job_failed_bypass(
             batch_id=batch_id,
             tenant_id=tenant_id,
             row_number=row_number,
             row=row,
-            error_detail=_sanitize(exc),
+            error_detail=_row_error_detail(exc),
         )
         return False
 
@@ -567,6 +578,28 @@ def _sanitize(exc: Exception) -> str:
     """脱敏行级错误信息（截断 + 仅类型 + message，不含 SQL / 栈）。"""
     msg = getattr(exc, "message", None) or str(exc)
     return f"{type(exc).__name__}: {msg}"[:1000]
+
+
+# 导入路径上可能被两个批次同时撞到的唯一索引（goods_style_item 的成员行只挂在新商品上，撞不到，不列）
+_CONCURRENT_UNIQUE = (
+    "uq_style_code",
+    "uq_sku_code",
+    "uq_goods_main_code",
+    "uq_blogger_xiaohongshu_id",
+    "uq_import_conflict_pending",
+)
+
+
+def _row_error_detail(exc: Exception) -> str:
+    """行失败原因。数据库异常绝不写 str(exc)：它带 [SQL] 与 [parameters]，参数里可能有成本价。"""
+    if isinstance(exc, StatementError):  # DBAPIError 的父类；绑定参数处理失败（也带参数）同样拦住
+        orig = exc.orig
+        if isinstance(exc, IntegrityError) and any(
+            name in str(orig) for name in _CONCURRENT_UNIQUE
+        ):
+            return "与另一批次同时写入，请重试"
+        return f"数据库错误（{type(orig or exc).__name__}），请重试"
+    return _sanitize(exc)
 
 
 __all__ = ["run_import_batch"]

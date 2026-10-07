@@ -8,6 +8,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.tenancy import tenant_id_ctx
+from app.modules.auth.service import AuthService
 from app.modules.importer.field_mapping_service import FieldMappingService
 from app.modules.importer.schemas import FieldMappingColumn, FieldMappingCreate
 
@@ -31,8 +32,10 @@ class TestFieldMappingVersioning:
         token = tenant_id_ctx.set(tenant_a.id)
         try:
             user = await factory.user(tenant_a, roles=[pr_manager_role])
+            # 8a-7：映射读写多收有效权限（来源级判断）
+            perms = await AuthService(session).load_effective_permissions(user.id)
             svc = FieldMappingService(session)
-            m = await svc.create_version(_payload(), user)
+            m = await svc.create_version(_payload(), user, perms)
             assert m.version == 1
             assert m.is_active is True
         finally:
@@ -45,14 +48,16 @@ class TestFieldMappingVersioning:
         token = tenant_id_ctx.set(tenant_a.id)
         try:
             user = await factory.user(tenant_a, roles=[pr_manager_role])
+            # 8a-7：映射读写多收有效权限（来源级判断）
+            perms = await AuthService(session).load_effective_permissions(user.id)
             svc = FieldMappingService(session)
-            v1 = await svc.create_version(_payload(), user)
-            v2 = await svc.create_version(_payload(), user)
+            v1 = await svc.create_version(_payload(), user, perms)
+            v2 = await svc.create_version(_payload(), user, perms)
 
             assert v2.version == 2
             assert v2.is_active is True
 
-            active = await svc.get_active("fake_source", user)
+            active = await svc.get_active("fake_source", user, perms)
             assert active is not None
             assert active.version == 2
 
@@ -67,10 +72,12 @@ class TestFieldMappingVersioning:
         token = tenant_id_ctx.set(tenant_a.id)
         try:
             user = await factory.user(tenant_a, roles=[pr_manager_role])
+            # 8a-7：映射读写多收有效权限（来源级判断）
+            perms = await AuthService(session).load_effective_permissions(user.id)
             svc = FieldMappingService(session)
-            await svc.create_version(_payload(), user)
-            await svc.create_version(_payload(), user)
-            versions = await svc.list_versions("fake_source", user)
+            await svc.create_version(_payload(), user, perms)
+            await svc.create_version(_payload(), user, perms)
+            versions = await svc.list_versions("fake_source", user, perms)
             assert [v.version for v in versions] == [2, 1]
         finally:
             tenant_id_ctx.reset(token)

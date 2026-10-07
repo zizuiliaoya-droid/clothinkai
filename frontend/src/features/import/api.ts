@@ -7,8 +7,18 @@ import type {
   ImportBatch,
   ImportBatchListFilters,
   ImportBatchPage,
+  ImportSourceAccess,
   ImportUploadResponse,
 } from "./types";
+
+/**
+ * 当前用户对每个已注册导入来源的能力（看 / 上传 / 改映射 / 裁决）。
+ * 导入按钮按它显示，不在前端写死角色（商品资料只给管理员、跟单、运营）。
+ */
+export async function getImportAccess(): Promise<ImportSourceAccess[]> {
+  const resp = await apiClient.get<ImportSourceAccess[]>("/api/imports/access");
+  return resp.data;
+}
 
 /**
  * 上传导入文件（multipart）。

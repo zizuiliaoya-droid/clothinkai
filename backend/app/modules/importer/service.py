@@ -19,7 +19,7 @@ import io
 import json
 import logging
 from collections.abc import Sequence
-from typing import cast
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 from sqlalchemy import text
@@ -29,11 +29,16 @@ from app.core.attachment import BucketKind
 from app.core.attachment import attachment_service as _default_attachment_service
 from app.core.audit import AuditService
 from app.core.config import settings
+from app.core.exceptions import PermissionDeniedError
 from app.core.metrics import (
     import_file_size_bytes,
     import_retry_total,
 )
+from app.core.security.field_permissions import build_field_perm_context
+from app.core.security.permissions import EffectivePermissions
 from app.modules.auth.models import User
+from app.modules.auth.repository import PermissionRepository, RoleRepository
+from app.modules.importer import access
 from app.modules.importer.domain import compute_sha256, csv_safe, safe_filename
 from app.modules.importer.exceptions import (
     ImportBatchBusyError,
@@ -46,9 +51,11 @@ from app.modules.importer.exceptions import (
     ImportSourceUnknownError,
     ImportStorageError,
 )
+from app.modules.importer.masking import mask_raw_data, masked_source_columns
 from app.modules.importer.models import ImportBatch
 from app.modules.importer.registry import ImportAdapterRegistry
 from app.modules.importer.repository import (
+    FieldMappingRepository,
     ImportBatchListFilters,
     ImportBatchRepository,
     ImportJobRepository,
@@ -302,7 +309,7 @@ class ImportService:
     # retry（原子 claim 互斥 NF-3 + 两类失败分流 FB-E）
     # ============================================================
 
-    async def retry(self, batch_id: UUID, user: User) -> ImportBatch:
+    async def retry(self, batch_id: UUID, user: User, perms: EffectivePermissions) -> ImportBatch:
         """重试导入批次（仅 partial / failed 可重试，retry_count<3）。
 
         FB-E 两类分流：
@@ -312,13 +319,16 @@ class ImportService:
         NF-3 原子 claim：``claim_for_retry`` UPDATE WHERE status IN(partial,failed)
         RETURNING 保证同一 batch 同时只有一个 runner（防并发 retry / 重复点击）。
 
+        来源级权限（8a-7）：看不到该来源 → 404（不暴露存在性）；能看但没有该来源的写权限 → 403。
+
         Raises:
-            ImportBatchNotFoundError(404) / ImportRetryExhaustedError(409) /
-            ImportBatchBusyError(409)
+            ImportBatchNotFoundError(404) / PermissionDeniedError(403) /
+            ImportRetryExhaustedError(409) / ImportBatchBusyError(409)
         """
         batch = await self._repo.get_by_id(batch_id)
-        if batch is None:
+        if batch is None or not access.can_view(perms, batch.source):
             raise ImportBatchNotFoundError(batch_id)
+        access.require_write(perms, batch.source)
 
         claimed = await self._repo.claim_for_retry(batch_id, user.tenant_id)
         if claimed is None:
@@ -354,9 +364,16 @@ class ImportService:
     # Read
     # ============================================================
 
-    async def get_batch(self, batch_id: UUID, user: User) -> ImportBatch:
+    async def get_batch(
+        self, batch_id: UUID, user: User, perms: EffectivePermissions
+    ) -> ImportBatch:
+        """取批次；不存在、跨租户或查看者看不到该来源 → 404（8a-7，不暴露存在性）。"""
         batch = await self._repo.get_by_id(batch_id)
-        if batch is None or batch.tenant_id != user.tenant_id:
+        if (
+            batch is None
+            or batch.tenant_id != user.tenant_id
+            or not access.can_view(perms, batch.source)
+        ):
             raise ImportBatchNotFoundError(batch_id)
         return batch
 
@@ -367,41 +384,82 @@ class ImportService:
         page: int,
         page_size: int,
         user: User,
+        perms: EffectivePermissions,
     ) -> tuple[Sequence[ImportBatch], int]:
+        """批次列表，只含查看者可见的来源（8a-7）。
+
+        Raises:
+            PermissionDeniedError(403)：一个可见来源都没有，或指定了不可见的 ``source``。
+        """
+        sources = access.visible_sources(perms)
+        if sources is not None:
+            if not sources:
+                raise PermissionDeniedError(
+                    "缺少权限 importer.batch:read",
+                    details={"required_scope": "importer.batch", "required_action": "read"},
+                )
+            if filters.source and filters.source not in sources:
+                access.require_view(perms, filters.source)
         return await self._repo.list_with_filters(
             tenant_id=user.tenant_id,
             filters=filters,
             page=page,
             page_size=page_size,
+            sources=sources,
         )
 
     # ============================================================
     # download_errors（失败明细 CSV + csv_safe injection 防护）
     # ============================================================
 
-    async def build_error_csv(self, batch_id: UUID, user: User) -> bytes:
+    async def build_error_csv(
+        self, batch_id: UUID, user: User, perms: EffectivePermissions
+    ) -> bytes:
         """生成失败明细 CSV（UTF-8 BOM + csv_safe 危险前缀转义）。
 
         列：row_number / error_detail / attempt_count / raw_data(JSON)。
         raw_data 各值与 error_detail 经 ``csv_safe`` 防 Excel 公式注入。
+        raw_data 里受保护字段（成本价、采购价、博主报价 / 微信 / 手机）对应的列按查看者的
+        字段读权限遮成「***」（8a-7，``importer/masking.py``）；error_detail 由 runner 保证
+        不含 SQL 参数（``_row_error_detail``），只过 ``csv_safe``。
         """
-        batch = await self.get_batch(batch_id, user)  # 404 + 租户校验
+        batch = await self.get_batch(batch_id, user, perms)  # 404 + 租户 + 来源可见性
         failed_jobs = await self._job_repo.list_failed(batch.id)
+
+        field_ctx = await build_field_perm_context(
+            user.id, RoleRepository(self._session), PermissionRepository(self._session)
+        )
+        adapter = ImportAdapterRegistry.get(batch.source)
+        columns = await self._batch_mapping_columns(batch)
+        masked = masked_source_columns(adapter, columns, field_ctx)
 
         buf = io.StringIO()
         buf.write("\ufeff")  # UTF-8 BOM（Excel 中文不乱码）
         writer = csv.writer(buf)
         writer.writerow(["row_number", "error_detail", "attempt_count", "raw_data"])
         for job in failed_jobs:
+            raw = mask_raw_data(job.raw_data, masked)
             writer.writerow(
                 [
                     job.row_number,
                     csv_safe(job.error_detail),
                     job.attempt_count,
-                    csv_safe(json.dumps(job.raw_data, ensure_ascii=False)),
+                    csv_safe(json.dumps(raw, ensure_ascii=False)),
                 ]
             )
         return buf.getvalue().encode("utf-8")
+
+    async def _batch_mapping_columns(self, batch: ImportBatch) -> list[dict[str, Any]] | None:
+        """批次所用映射版本的 columns；没有版本（用内置默认）→ None。"""
+        if batch.mapping_version is None:
+            return None
+        mapping = await FieldMappingRepository(self._session).get_by_version(
+            batch.tenant_id, batch.source, batch.mapping_version
+        )
+        if mapping is None:
+            return None
+        columns = (mapping.mapping_config or {}).get("columns")
+        return list(columns) if isinstance(columns, list) else None
 
     # ============================================================
     # Private helpers

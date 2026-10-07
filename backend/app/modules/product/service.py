@@ -581,7 +581,10 @@ class SkuService:
         page_size: int,
         user: User,
     ) -> CostTablePage:
-        """商品成本表（SKU 级，join 款式+品牌）。"""
+        """商品成本表（SKU 级，join 款式+品牌）。
+
+        成本价 / 采购价按查看者字段权限置 None（与单条 ``_to_response`` 同口径，8a-7）。
+        """
         rows, total = await self._skus.list_cost_table(
             keyword=keyword,
             brand_id=brand_id,
@@ -589,6 +592,10 @@ class SkuService:
             page=page,
             page_size=page_size,
         )
+        # 整页取一次字段权限上下文
+        ctx = await build_field_perm_context(user.id, self._roles, self._perms)
+        can_see_cost = can_read_field("sku", "cost_price", ctx)
+        can_see_purchase = can_read_field("sku", "purchase_price", ctx)
         items = [
             CostTableRow(
                 sku_id=r.sku_id,
@@ -602,8 +609,8 @@ class SkuService:
                 color=r.color,
                 size=r.size,
                 base_price=r.base_price,
-                cost_price=r.cost_price,
-                purchase_price=r.purchase_price,
+                cost_price=r.cost_price if can_see_cost else None,
+                purchase_price=r.purchase_price if can_see_purchase else None,
                 tag_price=r.tag_price,
                 brand_name=r.brand_name,
                 sourcing_type=r.sourcing_type,

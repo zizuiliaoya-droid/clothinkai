@@ -16,8 +16,9 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Mapping
 from decimal import Decimal, InvalidOperation
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -99,6 +100,17 @@ class BloggerImportAdapter:
 
     source: str = "manual_blogger"
     target_table: str = "blogger"
+    # 受字段权限保护的目标字段 → FIELD_PERMISSION_REGISTRY 的 (entity, field)：
+    # 失败明细 CSV 按查看者的读权限遮挡对应原始列（importer/masking.py）
+    sensitive_targets: ClassVar[Mapping[str, tuple[str, str]]] = {
+        "quote": ("blogger", "quote"),
+        "wechat": ("blogger", "wechat"),
+        "phone": ("blogger", "phone"),
+    }
+
+    def builtin_columns(self) -> list[dict[str, Any]]:
+        """内置默认映射。"""
+        return _DEFAULT_COLUMNS
 
     # ----------------------- parse_row（纯函数）----------------------- #
 

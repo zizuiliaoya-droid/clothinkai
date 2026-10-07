@@ -1,7 +1,7 @@
 """商品 / 套装管理 API（/api/goods）。
 
-权限走 ``product.goods`` —— 刻意留在 ``product.*`` 下，让跟单的 ``product.*:*``
-自然可写、运营与设计的 ``product.*:read`` 自然只读。这与平台链接（``ops.platform_link``）
+权限走 ``product.goods`` —— 刻意留在 ``product.*`` 下，让跟单与运营（8a-7 起）的
+``product.*:*`` 自然可写、设计的 ``product.*:read`` 自然只读。这与平台链接（``ops.platform_link``）
 相反：那组必须躲开 ``product.*`` 才挡得住业务角色，而商品本来就是产品主数据。
 """
 

@@ -123,8 +123,12 @@ class ImportBatchRepository:
         filters: ImportBatchListFilters,
         page: int,
         page_size: int,
+        sources: frozenset[str] | None = None,
     ) -> tuple[Sequence[ImportBatch], int]:
+        """``sources``：只列这些来源的批次（来源级可见性，8a-7）；None 不过滤。"""
         stmt = select(ImportBatch).where(ImportBatch.tenant_id == tenant_id)
+        if sources is not None:
+            stmt = stmt.where(ImportBatch.source.in_(sorted(sources)))
         if filters.source:
             stmt = stmt.where(ImportBatch.source == filters.source)
         if filters.status:

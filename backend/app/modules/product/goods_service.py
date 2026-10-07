@@ -241,6 +241,7 @@ class GoodsService:
         before: dict[str, Any] = {
             "goods_title": goods.goods_title,
             "short_name": goods.short_name,
+            "season": goods.season,
             "is_suit": goods.is_suit,
             "is_active": goods.is_active,
         }
@@ -274,6 +275,8 @@ class GoodsService:
             after={
                 "goods_title": goods.goods_title,
                 "short_name": goods.short_name,
+                # 运营也能改季节（8a-7），靠审计留痕（J48）
+                "season": goods.season,
                 "is_suit": goods.is_suit,
                 "is_active": goods.is_active,
             },

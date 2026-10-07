@@ -124,6 +124,17 @@ class ImportUploadResponse(BaseModel):
     source: str
 
 
+class ImportSourceAccessResponse(BaseModel):
+    """``GET /api/imports/access`` 的一项：当前用户对某个已注册来源的能力（8a-7）。"""
+
+    source: str
+    label: str
+    can_view: bool
+    can_upload: bool
+    can_map: bool
+    can_resolve: bool
+
+
 __all__ = [
     "FieldMappingColumn",
     "FieldMappingCreate",
@@ -132,5 +143,6 @@ __all__ = [
     "ImportBatchPage",
     "ImportBatchResponse",
     "ImportJobResponse",
+    "ImportSourceAccessResponse",
     "ImportUploadResponse",
 ]

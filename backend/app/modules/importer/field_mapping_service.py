@@ -17,7 +17,9 @@ from uuid import uuid4
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import AuditService
+from app.core.security.permissions import EffectivePermissions
 from app.modules.auth.models import User
+from app.modules.importer import access
 from app.modules.importer.domain import validate_mapping_config
 from app.modules.importer.exceptions import ImportMappingVersionNotFoundError
 from app.modules.importer.models import FieldMapping
@@ -35,12 +37,17 @@ class FieldMappingService:
         self._repo = FieldMappingRepository(session)
         self._audit = AuditService(session)
 
-    async def create_version(self, payload: FieldMappingCreate, user: User) -> FieldMapping:
+    async def create_version(
+        self, payload: FieldMappingCreate, user: User, perms: EffectivePermissions
+    ) -> FieldMapping:
         """新建字段映射版本并设为 active（旧 active 同事务下线）。
 
         Raises:
+            PermissionDeniedError(403): 没有该来源的映射权限（来源级，8a-7）。
             ImportMappingInvalidError: columns 校验失败（domain 层抛）。
         """
+        access.require_mapping(perms, payload.source)
+
         # 1. 校验 + 规范化 columns（domain 纯函数）
         columns = [c.model_dump() for c in payload.columns]
         mapping_config = validate_mapping_config(columns)
@@ -73,8 +80,11 @@ class FieldMappingService:
         await self._session.refresh(mapping)
         return mapping
 
-    async def get_active(self, source: str, user: User) -> FieldMapping | None:
-        """取当前 active 版本（无 → None）。"""
+    async def get_active(
+        self, source: str, user: User, perms: EffectivePermissions
+    ) -> FieldMapping | None:
+        """取当前 active 版本（无 → None）；看不到该来源 → 403（8a-7）。"""
+        access.require_view(perms, source)
         return await self._repo.get_active(user.tenant_id, source)
 
     async def get_by_version(self, source: str, version: int, user: User) -> FieldMapping:
@@ -84,8 +94,11 @@ class FieldMappingService:
             raise ImportMappingVersionNotFoundError()
         return mapping
 
-    async def list_versions(self, source: str, user: User) -> Sequence[FieldMapping]:
-        """列出某 source 的所有版本（version 倒序）。"""
+    async def list_versions(
+        self, source: str, user: User, perms: EffectivePermissions
+    ) -> Sequence[FieldMapping]:
+        """列出某 source 的所有版本（version 倒序）；看不到该来源 → 403（8a-7）。"""
+        access.require_view(perms, source)
         return await self._repo.list_versions(user.tenant_id, source)
 
 

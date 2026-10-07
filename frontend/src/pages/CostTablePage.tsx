@@ -33,6 +33,7 @@ import type {
   SkuCreate,
   SourcingType,
 } from "@/features/product/types";
+import { getImportAccess } from "@/features/import/api";
 import { extractErrorMessage } from "@/services/apiClient";
 import { ImportUploadButton } from "@/components/ImportUploadButton";
 
@@ -113,6 +114,15 @@ export function CostTablePage() {
     queryKey: ["cost-table", filters],
     queryFn: () => listCostTable(filters),
   });
+
+  // 商品资料导入按来源判权（管理员、跟单、运营）；加载中不显示按钮
+  const { data: importAccess } = useQuery({
+    queryKey: ["import-access"],
+    queryFn: getImportAccess,
+  });
+  const canImportGoods =
+    importAccess?.some((a) => a.source === "manual_style_sku" && a.can_upload) ??
+    false;
 
   const { data: brands } = useQuery({
     queryKey: ["brands", "options"],
@@ -317,15 +327,17 @@ export function CostTablePage() {
       }
       extra={
         <Space>
-          <ImportUploadButton
-            source="manual_style_sku"
-            label="导入商品成本表"
-            invalidateKeys={[["cost-table"], ["styles"], ["skus"]]}
-            templateColumns={[
-              "货号", "商品编码", "商品名称", "商品简称", "颜色及规格",
-              "颜色", "规格", "基本售价", "成本价", "采购价", "市场吊牌价", "品牌",
-            ]}
-          />
+          {canImportGoods && (
+            <ImportUploadButton
+              source="manual_style_sku"
+              label="导入商品成本表"
+              invalidateKeys={[["cost-table"], ["styles"], ["skus"]]}
+              templateColumns={[
+                "货号", "商品编码", "商品名称", "商品简称", "颜色及规格",
+                "颜色", "规格", "基本售价", "成本价", "采购价", "市场吊牌价", "品牌",
+              ]}
+            />
+          )}
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
             新增商品
           </Button>
