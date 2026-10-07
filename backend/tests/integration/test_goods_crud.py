@@ -66,6 +66,44 @@ class TestCreateGoods:
         finally:
             tenant_id_ctx.reset(token)
 
+    async def test_main_image_key_ignored_images_derived(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
+    ) -> None:
+        """8a-2：main_image_key 废弃——新建 / 更新传了被忽略、响应里没有；商品图由成员款式派生。"""
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            user = await factory.user(tenant_a, roles=[admin_role])
+            style = await product_factory.style(style_code="G0IMG")
+            style.external_image_url = "https://img.example.invalid/g0img.jpg"
+            svc = GoodsService(session)
+            payload: dict[str, Any] = {
+                "goods_code": "G0IMG",
+                "goods_title": "派生图",
+                "main_image_key": "legacy/key.png",
+                "items": [{"style_id": style.id}],
+            }
+            resp = await svc.create(
+                GoodsMainCreate.model_validate(payload), tenant_id=tenant_a.id, user_id=user.id
+            )
+            assert "main_image_key" not in resp.model_dump()
+            assert [(i.style_code, i.url, i.source) for i in resp.images] == [
+                ("G0IMG", "https://img.example.invalid/g0img.jpg", "external")
+            ]
+            await svc.update(
+                resp.id,
+                GoodsMainUpdate.model_validate({"main_image_key": "legacy/other.png"}),
+                user_id=user.id,
+            )
+            goods = await GoodsRepository(session).get_by_id(resp.id)
+            assert goods is not None and goods.main_image_key is None
+        finally:
+            tenant_id_ctx.reset(token)
+
     async def test_two_styles_become_suit_and_sum_cost(
         self,
         session: AsyncSession,

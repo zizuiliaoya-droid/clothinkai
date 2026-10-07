@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -184,6 +184,12 @@ class StyleResponse(BaseModel):
     tag_color: list[str] = Field(default_factory=list)
     main_image_key: str | None = None
     main_image_url: str | None = None
+    """已上传主图的签名 URL（保留给旧调用方）；展示请用 ``image_url``。"""
+    external_image_url: str | None = None
+    """聚水潭「图片」列导入的外部链接：只存不取，只经导入与冲突裁决写入（8a-4）。"""
+    image_url: str | None = None
+    """款式图（8a-2，``resolve_style_image``）：已上传主图签名 URL > 外部链接 > None。"""
+    image_source: Literal["upload", "external"] | None = None
     remark: str | None = None
     owner_id: UUID | None = None
     design_status: str
@@ -191,6 +197,33 @@ class StyleResponse(BaseModel):
     is_deleted: bool
     created_at: datetime
     updated_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# 款式主图批量上传（8a-2，设计 §7.3 第 8 步）
+# ---------------------------------------------------------------------------
+
+
+class StyleImageBatchItem(BaseModel):
+    filename: str
+    stem: str
+    status: Literal["created", "replaced", "unmatched", "rejected", "failed"]
+    style_id: UUID | None = None
+    style_code: str | None = None
+    reason: str | None = None
+
+
+class StyleImageBatchSummary(BaseModel):
+    created: int = 0
+    replaced: int = 0
+    unmatched: int = 0
+    rejected: int = 0
+    failed: int = 0
+
+
+class StyleImageBatchResponse(BaseModel):
+    results: list[StyleImageBatchItem]
+    summary: StyleImageBatchSummary
 
 
 # ---------------------------------------------------------------------------
@@ -304,6 +337,9 @@ __all__ = [
     "SkuResponse",
     "SkuUpdate",
     "StyleCreate",
+    "StyleImageBatchItem",
+    "StyleImageBatchResponse",
+    "StyleImageBatchSummary",
     "StylePage",
     "StyleResponse",
     "StyleUpdate",
@@ -323,6 +359,10 @@ class CostTableRow(BaseModel):
     sku_id: UUID
     style_id: UUID
     image_key: str | None = None
+    """款式主图的 R2 key（保留给旧调用方）；展示请用 ``image_url``（修 S8）。"""
+    image_url: str | None = None
+    """款式图（8a-2）：已上传主图签名 URL > 外部链接 > None。"""
+    image_source: Literal["upload", "external"] | None = None
     style_code: str
     sku_code: str
     style_name: str

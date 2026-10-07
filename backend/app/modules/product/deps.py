@@ -12,6 +12,7 @@ from fastapi import Depends
 from app.modules.auth.deps import SessionDep
 from app.modules.product.brand_service import BrandService
 from app.modules.product.service import SkuService, StyleService
+from app.modules.product.style_image_service import StyleImageBatchService
 
 
 def get_style_service(session: SessionDep) -> StyleService:
@@ -31,11 +32,22 @@ SkuServiceDep = Annotated[SkuService, Depends(get_sku_service)]
 BrandServiceDep = Annotated[BrandService, Depends(get_brand_service)]
 
 
+def get_style_image_batch_service(session: SessionDep) -> StyleImageBatchService:
+    return StyleImageBatchService(session)
+
+
+StyleImageBatchServiceDep = Annotated[
+    StyleImageBatchService, Depends(get_style_image_batch_service)
+]
+
+
 __all__ = [
     "BrandServiceDep",
     "SkuServiceDep",
+    "StyleImageBatchServiceDep",
     "StyleServiceDep",
     "get_brand_service",
     "get_sku_service",
+    "get_style_image_batch_service",
     "get_style_service",
 ]

@@ -341,6 +341,7 @@ class SkuRepository:
                 Style.style_name,
                 main_goods.c.goods_short_name.label("short_name"),
                 Style.main_image_key,
+                Style.external_image_url,
                 Brand.brand_name,
             )
             .select_from(Sku)

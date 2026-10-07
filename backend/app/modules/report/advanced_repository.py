@@ -45,8 +45,9 @@ _ADD_CART_SUM = "COALESCE(SUM(q.add_cart_count), 0)"
 GOODS_META_COLUMNS = """
   g.id AS goods_id, g.goods_code AS goods_code,
   g.goods_title AS goods_title, g.short_name AS goods_short_name, g.is_suit AS is_suit,
-  -- 商品自己没配主图时借用成员款式的（040 建的最小档案都没有主图）
-  COALESCE(g.main_image_key, (
+  -- 商品主图只取成员款式已上传的主图（8a-2，设计 §7.2：goods_main.main_image_key 是 037 / 041
+  -- 从款式复制来的 key，款式换图后成了死链，已废弃不读）
+  (
     SELECT ms.main_image_key
     FROM goods_style_item mi
     JOIN style ms ON ms.id = mi.style_id
@@ -54,7 +55,7 @@ GOODS_META_COLUMNS = """
       AND ms.main_image_key IS NOT NULL
     ORDER BY mi.sort_order, ms.style_code
     LIMIT 1
-  )) AS main_image_key,
+  ) AS main_image_key,
   -- 套装要让人看出含哪几款；单品就是它自己的货号
   (
     SELECT string_agg(cs.style_code, ',' ORDER BY ci.sort_order, cs.style_code)

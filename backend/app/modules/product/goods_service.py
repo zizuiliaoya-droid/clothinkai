@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import builtins
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
@@ -29,12 +30,14 @@ from app.core.exceptions import (
 from app.modules.product.goods_models import GoodsMain, GoodsStyleItem
 from app.modules.product.goods_repository import GoodsListFilters, GoodsRepository
 from app.modules.product.goods_schemas import (
+    GoodsImage,
     GoodsMainCreate,
     GoodsMainResponse,
     GoodsMainUpdate,
     GoodsStyleItemIn,
     GoodsStyleItemResponse,
 )
+from app.modules.product.images import resolve_style_image
 from app.modules.product.models import Brand, Style
 
 
@@ -52,6 +55,30 @@ class GoodsHasLinksError(AppException):
 
     code = "GOODS_HAS_LINKS"
     status_code = 409
+
+
+def goods_images(item_rows: Sequence[Mapping[str, Any]]) -> builtins.list[GoodsImage]:
+    """商品图由启用成员款式派生（8a-2，§7.2）。
+
+    ``item_rows`` 已按成员顺序（``sort_order, style_code``）排好（``items_by_goods_ids``）；
+    ``resolve_style_image`` 有结果的成员才放进来——缺图的成员不占位。
+    ``goods_main.main_image_key`` 已废弃，不读。
+    """
+    out: builtins.list[GoodsImage] = []
+    for row in item_rows:
+        if not row["is_active"] or row.get("style_code") is None:
+            continue
+        image = resolve_style_image(row.get("main_image_key"), row.get("external_image_url"))
+        if image is not None:
+            out.append(
+                GoodsImage(
+                    style_id=row["style_id"],
+                    style_code=row["style_code"],
+                    url=image.url,
+                    source=image.source,
+                )
+            )
+    return out
 
 
 class GoodsService:
@@ -151,12 +178,12 @@ class GoodsService:
             season=goods.season,
             brand_id=goods.brand_id,
             brand_name=brand_name,
-            main_image_key=goods.main_image_key,
             remark=goods.remark,
             is_suit=goods.is_suit,
             is_active=goods.is_active,
             created_at=goods.created_at,
             updated_at=goods.updated_at,
+            images=goods_images(item_rows),
             items=items,
             total_cost=sum(costs, Decimal("0")) if costs else None,
             cost_missing_count=len(active) - len(costs),
@@ -183,7 +210,6 @@ class GoodsService:
             short_name=payload.short_name,
             category=payload.category,
             season=payload.season,
-            main_image_key=payload.main_image_key,
             remark=payload.remark,
         )
         self._repo.add(goods)
@@ -242,8 +268,6 @@ class GoodsService:
             goods.category = payload.category
         if payload.season is not None:
             goods.season = payload.season
-        if payload.main_image_key is not None:
-            goods.main_image_key = payload.main_image_key
         if payload.remark is not None:
             goods.remark = payload.remark
         if payload.is_active is not None:
@@ -337,12 +361,12 @@ class GoodsService:
                     season=r["season"],
                     brand_id=r["brand_id"],
                     brand_name=r["brand_name"],
-                    main_image_key=r["main_image_key"],
                     remark=r["remark"],
                     is_suit=r["is_suit"],
                     is_active=r["is_active"],
                     created_at=r["created_at"],
                     updated_at=r["updated_at"],
+                    images=goods_images(item_rows),
                     items=[
                         GoodsStyleItemResponse(
                             id=i["id"],

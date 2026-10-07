@@ -137,7 +137,7 @@ class GoodsRepository:
                 text(
                     f"""
                     SELECT g.id, g.goods_code, g.goods_title, g.short_name, g.category, g.season,
-                           g.brand_id, b.brand_name, g.main_image_key, g.remark,
+                           g.brand_id, b.brand_name, g.remark,
                            g.is_suit, g.is_active, g.created_at, g.updated_at,
                            COALESCE((
                                SELECT SUM(gi.single_goods_cost)
@@ -172,7 +172,7 @@ class GoodsRepository:
     async def items_by_goods_ids(
         self, goods_ids: Collection[UUID]
     ) -> dict[UUID, builtins.list[Mapping[str, Any]]]:
-        """批量取成员款式，一次查完避免 N+1。"""
+        """批量取成员款式，一次查完避免 N+1（顺带款式图的两个来源，商品图由它派生，8a-2）。"""
         ids = builtins.list(dict.fromkeys(goods_ids))
         if not ids:
             return {}
@@ -182,7 +182,8 @@ class GoodsRepository:
                     """
                     SELECT gi.goods_main_id, gi.id, gi.style_id, gi.single_goods_cost,
                            gi.sort_order, gi.is_active,
-                           s.style_code, s.style_name
+                           s.style_code, s.style_name,
+                           s.main_image_key, s.external_image_url
                     FROM goods_style_item gi
                     LEFT JOIN style s ON s.id = gi.style_id
                     WHERE gi.goods_main_id = ANY(:ids)

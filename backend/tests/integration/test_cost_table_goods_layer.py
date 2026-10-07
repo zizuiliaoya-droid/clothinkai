@@ -165,6 +165,42 @@ class TestCostTableGoodsLayer:
         finally:
             tenant_id_ctx.reset(token)
 
+    async def test_ac13_image_url(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        product_factory: Any,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """AC 13（8a-2，修 S8）：图片列给签名 URL / 外部链接，不再把 R2 key 当 src。"""
+        from app.core import attachment as att_mod
+
+        class _FakeSigner:
+            def generate_presigned_url(self, _op: str, **kw: Any) -> str:
+                return f"https://fake-r2.local/{kw['Params']['Key']}"
+
+        monkeypatch.setattr(att_mod.attachment_service, "_client", _FakeSigner(), raising=False)
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            tag = uuid4().hex[:6]
+            up = await product_factory.style(style_code=f"CT6{tag}U", main_image_key=f"k/{tag}")
+            up.external_image_url = "https://img.example.invalid/u.jpg"
+            ext = await product_factory.style(style_code=f"CT6{tag}E")
+            ext.external_image_url = "https://img.example.invalid/e.jpg"
+            bare = await product_factory.style(style_code=f"CT6{tag}N")
+            for style in (up, ext, bare):
+                await product_factory.sku(style, sku_code=f"{style.style_code}-1")
+            page = await self._page(session, factory, tenant_a, keyword=f"CT6{tag}")
+            got = {r.style_code: (r.image_url, r.image_source, r.image_key) for r in page.items}
+            assert got == {
+                up.style_code: (f"https://fake-r2.local/k/{tag}", "upload", f"k/{tag}"),
+                ext.style_code: ("https://img.example.invalid/e.jpg", "external", None),
+                bare.style_code: (None, None, None),
+            }
+        finally:
+            tenant_id_ctx.reset(token)
+
     async def test_style_without_goods_shows_empty(
         self, session: AsyncSession, tenant_a: Any, factory: Any, product_factory: Any
     ) -> None:

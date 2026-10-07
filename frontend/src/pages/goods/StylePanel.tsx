@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Button, Input, Select, Space, Table, Tag, Tooltip, Typography, message } from "antd";
-import { PlusOutlined, SearchOutlined } from "@ant-design/icons";
+import { CloudUploadOutlined, PlusOutlined, SearchOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnsType } from "antd/es/table";
 import {
@@ -13,6 +13,7 @@ import type { Style, StyleListFilters } from "@/features/product/types";
 import { extractErrorMessage } from "@/services/apiClient";
 import { StyleImageThumbnail } from "@/components/StyleImageThumbnail/StyleImageThumbnail";
 import { StyleEditModal } from "./StyleEditModal";
+import { StyleImageBatchModal } from "./StyleImageBatchModal";
 
 type StatusFilter = "active" | "inactive" | "all";
 
@@ -55,6 +56,7 @@ export function StylePanel({ openStyleId, onOpenStyleClosed }: StylePanelProps) 
   });
   const [modal, setModal] = useState<ModalState>({ open: false, mode: "create" });
   const [fromUrl, setFromUrl] = useState(false);
+  const [batchOpen, setBatchOpen] = useState(false);
 
   useEffect(() => {
     if (!openStyleId) return;
@@ -90,11 +92,12 @@ export function StylePanel({ openStyleId, onOpenStyleClosed }: StylePanelProps) 
   const columns: ColumnsType<Style> = [
     {
       title: "主图",
-      dataIndex: "main_image_url",
+      dataIndex: "image_url",
       width: 72,
       fixed: "left",
+      // 款式图（8a-2）：已上传主图 > 聚水潭外部链接 > 「暂无主图」
       render: (src: string | null, record) => (
-        <StyleImageThumbnail src={src} alt={`${record.style_code} 款式主图`} />
+        <StyleImageThumbnail src={src} alt={`${record.style_code} 款式主图`} emptyText />
       ),
     },
     { title: "货号", dataIndex: "style_code", width: 140, fixed: "left" },
@@ -210,13 +213,18 @@ export function StylePanel({ openStyleId, onOpenStyleClosed }: StylePanelProps) 
             }}
           />
         </Space>
-        <Button
-          type="primary"
-          icon={<PlusOutlined />}
-          onClick={() => setModal({ open: true, mode: "create" })}
-        >
-          新建款式
-        </Button>
+        <Space wrap>
+          <Button icon={<CloudUploadOutlined />} onClick={() => setBatchOpen(true)}>
+            批量上传主图
+          </Button>
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={() => setModal({ open: true, mode: "create" })}
+          >
+            新建款式
+          </Button>
+        </Space>
       </Space>
 
       <Table
@@ -241,6 +249,7 @@ export function StylePanel({ openStyleId, onOpenStyleClosed }: StylePanelProps) 
         styleId={modal.styleId}
         onClose={closeModal}
       />
+      <StyleImageBatchModal open={batchOpen} onClose={() => setBatchOpen(false)} />
     </>
   );
 }

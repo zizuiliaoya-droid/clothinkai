@@ -3,7 +3,6 @@ import {
   Button,
   Card,
   Form,
-  Image,
   Input,
   InputNumber,
   Modal,
@@ -41,6 +40,7 @@ import {
 } from "@/features/import/api";
 import { extractErrorMessage } from "@/services/apiClient";
 import { ImportUploadButton } from "@/components/ImportUploadButton";
+import { StyleImageThumbnail } from "@/components/StyleImageThumbnail/StyleImageThumbnail";
 import { ImportResultModal } from "@/components/ImportResultModal/ImportResultModal";
 import { FieldMappingDrawer } from "@/pages/cost/FieldMappingDrawer";
 import { templateColumnsFromSpec } from "@/pages/cost/mappingColumns";
@@ -275,21 +275,12 @@ export function CostTablePage() {
   const columns: ColumnsType<CostTableRow> = [
     {
       title: "图片",
-      dataIndex: "image_key",
+      // 款式图（8a-2）：签名 URL 或外部链接；以前把私有桶的 R2 key 直接当 src，显示不出来（S8）
+      dataIndex: "image_url",
       width: 70,
-      render: (key: string | null) =>
-        key ? (
-          <Image width={40} height={40} src={key} fallback="" />
-        ) : (
-          <div
-            style={{
-              width: 40,
-              height: 40,
-              background: "#f0f0f0",
-              borderRadius: 4,
-            }}
-          />
-        ),
+      render: (src: string | null, row) => (
+        <StyleImageThumbnail src={src} alt={`${row.style_code} 款式主图`} size={40} emptyText />
+      ),
     },
     { title: "货号", dataIndex: "style_code", width: 120, fixed: "left" },
     { title: "商品编码", dataIndex: "sku_code", width: 120 },

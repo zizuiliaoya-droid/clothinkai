@@ -22,6 +22,7 @@ import {
   GOODS_SHORT_NAME_MAX_LEN,
   createGoods,
   deleteGoods,
+  goodsDisplayName,
   listDictItems,
   listGoods,
   listStyles,
@@ -31,6 +32,7 @@ import {
   type GoodsStyleItemInput,
 } from "@/features/product/api";
 import type { Style } from "@/features/product/types";
+import { GoodsImages } from "@/components/GoodsImages/GoodsImages";
 import { GoodsNameCell } from "@/components/GoodsNameCell/GoodsNameCell";
 import { extractErrorMessage } from "@/services/apiClient";
 import { StyleEditModal } from "./StyleEditModal";
@@ -244,6 +246,18 @@ export function GoodsPanel() {
 
   const columns: ColumnsType<Goods> = [
     {
+      // 商品图由成员款式派生（8a-2）：单品 1 张，套装并排、缺图不占位
+      title: "主图",
+      dataIndex: "images",
+      width: 104,
+      render: (_, row) => (
+        <GoodsImages
+          images={row.images}
+          displayName={goodsDisplayName(row.goods_title, row.short_name)}
+        />
+      ),
+    },
+    {
       title: "商品编码",
       dataIndex: "goods_code",
       width: 170,
@@ -455,7 +469,7 @@ export function GoodsPanel() {
         loading={isLoading}
         columns={columns}
         dataSource={data?.items ?? []}
-        scroll={{ x: 1600 }}
+        scroll={{ x: 1700 }}
         pagination={{
           current: data?.page ?? 1,
           pageSize: data?.page_size ?? 20,

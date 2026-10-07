@@ -18,9 +18,10 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, File, Query, UploadFile, status
+from fastapi import APIRouter, File, Query, Request, UploadFile, status
 from fastapi.responses import Response
 from sqlalchemy import text
+from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from app.core.exceptions import ValidationError
 from app.modules.auth.deps import (
@@ -36,6 +37,7 @@ from app.modules.product.brand_schemas import (
 from app.modules.product.deps import (
     BrandServiceDep,
     SkuServiceDep,
+    StyleImageBatchServiceDep,
     StyleServiceDep,
 )
 from app.modules.product.goods_schemas import GoodsOption
@@ -48,9 +50,15 @@ from app.modules.product.schemas import (
     SkuResponse,
     SkuUpdate,
     StyleCreate,
+    StyleImageBatchResponse,
     StylePage,
     StyleResponse,
     StyleUpdate,
+)
+from app.modules.product.style_image_service import (
+    MAX_FILES,
+    batch_count_invalid,
+    read_image_batch_form,
 )
 
 router = APIRouter(prefix="/api", tags=["product"])
@@ -241,6 +249,32 @@ async def remove_style_main_image(
 ) -> Response:
     await service.remove_main_image(style_id, user)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/styles/main-images/batch",
+    response_model=StyleImageBatchResponse,
+    dependencies=[require_permission("product", "write")],
+)
+async def upload_style_main_images_batch(
+    request: Request,
+    user: CurrentActiveUser,
+    service: StyleImageBatchServiceDep,
+) -> StyleImageBatchResponse:
+    """按文件名 = 款号（不区分大小写）批量上传款式主图（8a-2，设计 §7.3）。
+
+    不声明 ``File`` 参数（否则 FastAPI 会在进来之前把整个表单解析完），也不调
+    ``request.form()``：请求体由 ``read_image_batch_form`` 边读边计数地解析，超限 413、
+    格式错 422，都在任何 R2 写入之前。
+    """
+    form = await read_image_batch_form(request)
+    try:
+        files = [f for f in form.getlist("files") if isinstance(f, StarletteUploadFile)]
+        if not 1 <= len(files) <= MAX_FILES:
+            raise batch_count_invalid()
+        return await service.upload(files, user)
+    finally:
+        await form.close()
 
 
 @router.delete(

@@ -47,6 +47,47 @@ export interface BrandUpdate {
 // Style
 // ---------------------------------------------------------------------------
 
+/** 款式图来源：upload = 已上传主图，external = 聚水潭外部链接。 */
+export type ImageSource = "upload" | "external";
+
+/** 商品图的一张（由成员款式派生，8a-2）。 */
+export interface GoodsImage {
+  style_id: string;
+  style_code: string;
+  url: string;
+  source: ImageSource;
+}
+
+export type StyleImageBatchStatus =
+  | "created"
+  | "replaced"
+  | "unmatched"
+  | "rejected"
+  | "failed";
+
+/** POST /api/styles/main-images/batch 结果里的一项。 */
+export interface StyleImageBatchItem {
+  filename: string;
+  stem: string;
+  status: StyleImageBatchStatus;
+  style_id?: string | null;
+  style_code?: string | null;
+  reason?: string | null;
+}
+
+export interface StyleImageBatchSummary {
+  created: number;
+  replaced: number;
+  unmatched: number;
+  rejected: number;
+  failed: number;
+}
+
+export interface StyleImageBatchResponse {
+  results: StyleImageBatchItem[];
+  summary: StyleImageBatchSummary;
+}
+
 export interface Style {
   id: string;
   style_code: string;
@@ -69,7 +110,13 @@ export interface Style {
   tags: string[];
   tag_color: string[];
   main_image_key: string | null;
+  /** 已上传主图的签名 URL；展示请用 image_url。 */
   main_image_url: string | null;
+  /** 聚水潭「图片」列导入的外部链接（只经导入与冲突裁决写入，界面不可编辑）。 */
+  external_image_url: string | null;
+  /** 款式图（8a-2）：已上传主图签名 URL > 外部链接 > null。 */
+  image_url: string | null;
+  image_source: ImageSource | null;
   remark: string | null;
   owner_id: string | null;
   design_status: string;
@@ -213,7 +260,11 @@ export interface BrandListResponse {
 export interface CostTableRow {
   sku_id: string;
   style_id: string;
+  /** 款式主图的 R2 key，不能直接当 src（私有桶）；展示用 image_url。 */
   image_key: string | null;
+  /** 款式图（8a-2）：已上传主图签名 URL > 外部链接 > null。 */
+  image_url: string | null;
+  image_source: ImageSource | null;
   style_code: string;
   sku_code: string;
   style_name: string;

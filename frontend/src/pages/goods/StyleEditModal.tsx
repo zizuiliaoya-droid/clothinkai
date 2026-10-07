@@ -126,7 +126,13 @@ export function StyleEditModal({
         saved = await uploadStyleMainImage(saved.id, compressedImage.file);
       } else if (editing?.main_image_key && removeExistingImage) {
         await removeStyleMainImage(saved.id);
-        saved = { ...saved, main_image_key: null, main_image_url: null };
+        saved = {
+          ...saved,
+          main_image_key: null,
+          main_image_url: null,
+          image_url: saved.external_image_url,
+          image_source: saved.external_image_url ? "external" : null,
+        };
       }
       return saved;
     },
@@ -143,8 +149,14 @@ export function StyleEditModal({
   });
 
   const waitingForStyle = isEdit && (styleLoading || !editing);
+  // 款式图（8a-2）：新选的图 > 已上传主图 > 聚水潭外部链接；移除上传主图后回落到外部链接
   const displayedMainImageUrl =
-    imagePreviewUrl ?? (!removeExistingImage ? editing?.main_image_url : null);
+    imagePreviewUrl ??
+    (removeExistingImage ? editing?.external_image_url : editing?.image_url) ??
+    null;
+  // 外部链接只经导入维护，这里只能移除新选的图或已上传的主图
+  const canRemoveImage =
+    Boolean(compressedImage) || (Boolean(editing?.main_image_key) && !removeExistingImage);
 
   const initialValues: Partial<FormValues> =
     isEdit && editing
@@ -209,6 +221,7 @@ export function StyleEditModal({
                 src={displayedMainImageUrl}
                 alt={`${editing?.style_code ?? initialCode ?? "款式"} 主图预览`}
                 size={88}
+                emptyText
               />
               <Space direction="vertical" size={8}>
                 <Upload
@@ -224,7 +237,7 @@ export function StyleEditModal({
                     {displayedMainImageUrl ? "替换主图" : "选择主图"}
                   </Button>
                 </Upload>
-                {displayedMainImageUrl ? (
+                {canRemoveImage ? (
                   <Button
                     danger
                     type="text"

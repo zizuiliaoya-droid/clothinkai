@@ -9,12 +9,14 @@ import type {
   CostTableFilters,
   CostTablePage,
   GoodsBrandOption,
+  GoodsImage,
   MatchResponse,
   Sku,
   SkuCreate,
   SkuUpdate,
   Style,
   StyleCreate,
+  StyleImageBatchResponse,
   StyleListFilters,
   StylePage,
   StyleUpdate,
@@ -73,6 +75,24 @@ export async function uploadStyleMainImage(
   const resp = await apiClient.post<Style>(
     `/api/styles/${styleId}/main-image`,
     body
+  );
+  return resp.data;
+}
+
+/**
+ * 按文件名 = 款号批量上传款式主图（8a-2）。一次最多 20 张，前端按 10 张一批调用。
+ * 文件名只用来匹配款号（不区分大小写），对象 key 由服务端生成。
+ */
+export async function uploadStyleMainImagesBatch(
+  files: File[]
+): Promise<StyleImageBatchResponse> {
+  const body = new FormData();
+  for (const f of files) body.append("files", f, f.name);
+  const resp = await apiClient.post<StyleImageBatchResponse>(
+    "/api/styles/main-images/batch",
+    body,
+    // 一批最多约 3MB，服务端逐张写 R2、逐张提交，慢网下 30 秒的默认超时不够
+    { timeout: 120_000 }
   );
   return resp.data;
 }
@@ -192,8 +212,12 @@ export interface Goods {
   season: string | null;
   brand_id: string | null;
   brand_name: string | null;
-  main_image_key: string | null;
   remark: string | null;
+  /**
+   * 商品图由启用成员款式派生（8a-2）：按成员顺序、只含有图的成员；单品最多 1 张，
+   * 套装并排、缺图不占位，都没有为 []。（main_image_key 已废弃，接口不再返回。）
+   */
+  images: GoodsImage[];
   is_suit: boolean;
   is_active: boolean;
   created_at: string;
