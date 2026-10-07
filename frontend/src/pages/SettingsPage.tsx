@@ -5,13 +5,17 @@ import {
   Card,
   Form,
   Input,
+  Skeleton,
   Space,
   Switch,
+  Tabs,
   Tag,
   Typography,
   message,
 } from "antd";
+import type { TabsProps } from "antd";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { NetworkDiagnosticsPanel } from "@/features/security/components/NetworkDiagnosticsPanel";
 import {
   getWecomConfig,
   testWecom,
@@ -19,8 +23,10 @@ import {
 } from "@/features/settings/api";
 import type { WecomConfigUpdate } from "@/features/settings/api";
 import { extractErrorMessage } from "@/services/apiClient";
+import { useAuthStore } from "@/stores/authStore";
 
-export function SettingsPage() {
+// 企业微信自建应用配置：原「系统设置」页的全部内容，原样搬进「企业微信」Tab
+function WecomSettingsPanel() {
   const qc = useQueryClient();
   const [form] = Form.useForm<WecomConfigUpdate>();
 
@@ -59,15 +65,10 @@ export function SettingsPage() {
     onError: (err) => message.error(extractErrorMessage(err)),
   });
 
+  if (isLoading) return <Skeleton active />;
+
   return (
-    <Card
-      title={
-        <Typography.Title level={4} style={{ margin: 0 }}>
-          系统设置 — 企业微信
-        </Typography.Title>
-      }
-      loading={isLoading}
-    >
+    <>
       <Alert
         type="info"
         showIcon
@@ -134,6 +135,42 @@ export function SettingsPage() {
           </Button>
         </Space>
       </Form>
+    </>
+  );
+}
+
+export function SettingsPage() {
+  // 条件与 AppLayout 的 isSystemAdmin 一致。只管显示，后端 403 才是闸门。
+  // selector 返回布尔：zustand v5 下返回新数组（如 `?? []`）会被判定为每次都变，无限重渲染
+  const isSystemAdmin = useAuthStore(
+    (s) =>
+      s.user?.roles.some((r) => r === "admin" || r === "platform_admin") ??
+      false
+  );
+
+  const items: TabsProps["items"] = [
+    { key: "wecom", label: "企业微信", children: <WecomSettingsPanel /> },
+    // 网络诊断会回显原始转发头（暴露内部网络结构），只给系统管理员
+    ...(isSystemAdmin
+      ? [
+          {
+            key: "network",
+            label: "网络诊断",
+            children: <NetworkDiagnosticsPanel />,
+          },
+        ]
+      : []),
+  ];
+
+  return (
+    <Card
+      title={
+        <Typography.Title level={4} style={{ margin: 0 }}>
+          系统设置
+        </Typography.Title>
+      }
+    >
+      <Tabs defaultActiveKey="wecom" items={items} />
     </Card>
   );
 }

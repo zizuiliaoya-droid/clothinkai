@@ -15,6 +15,7 @@ from app.modules.auth.models import (
     RefreshToken,
     Role,
     RolePermission,
+    Tenant,
     User,
     UserPermissionOverride,
     UserRole,
@@ -23,6 +24,25 @@ from app.modules.auth.models import (
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+# ---------------------------------------------------------------------------
+# TenantRepository
+# ---------------------------------------------------------------------------
+
+
+class TenantRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def get_id_by_code(self, code: str) -> UUID | None:
+        """按租户 code 取 id。
+
+        tenant 是根表（不是 TenantScopedModel），ORM 租户过滤不作用于它；登录走的 bypass 会话里
+        RLS 也不生效，条件全靠这条显式 WHERE。
+        """
+        stmt = select(Tenant.id).where(Tenant.code == code)
+        return (await self._session.execute(stmt)).scalar_one_or_none()
 
 
 # ---------------------------------------------------------------------------
@@ -321,6 +341,7 @@ __all__ = [
     "PermissionRepository",
     "RefreshTokenRepository",
     "RoleRepository",
+    "TenantRepository",
     "UserRepository",
     "UserRoleRepository",
 ]
