@@ -12,10 +12,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ValidationError
 from app.core.tenancy import tenant_id_ctx
+from app.modules.report.preference_api import (
+    get_filter_preference,
+    save_filter_preference,
+)
 from app.modules.report.user_preference_service import (
+    DEPRECATED_FILTER_KEYS,
     FILTER_PAGE_CODES,
     MAX_PREF_BYTES,
     UserPreferenceService,
+    sanitize_filter_payload,
     validate_filter_payload,
 )
 
@@ -115,5 +121,67 @@ class TestFilterRoundtrip:
             await svc.save_filter(user, "bi_dashboard", {"preset": "last_7d"})
             assert await svc.get_or_default(user.id, "bi_layout", {}) == {"cards": ["a"]}
             assert await svc.get_filter(user.id, "bi_dashboard") == {"preset": "last_7d"}
+        finally:
+            tenant_id_ctx.reset(tok)
+
+
+class TestDeprecatedFilterKeys:
+    """类目下线（8a-3，J12）：product_roi 的 category 在接口读写两头都被剔掉（AC 18 记忆部分）。"""
+
+    def test_declared(self) -> None:
+        assert DEPRECATED_FILTER_KEYS == {"product_roi": frozenset({"category"})}
+
+    def test_sanitize_drops_category_for_product_roi(self) -> None:
+        payload = {"season": ["2026秋"], "category": ["上衣"], "preset": "last_30d"}
+        assert sanitize_filter_payload("product_roi", payload) == {
+            "season": ["2026秋"],
+            "preset": "last_30d",
+        }
+        # 不改入参
+        assert payload["category"] == ["上衣"]
+
+    def test_sanitize_keeps_other_pages(self) -> None:
+        """只剔声明过的页面：别的页面同名键原样保留。"""
+        payload = {"category": ["x"], "preset": "last_7d"}
+        assert sanitize_filter_payload("bi_dashboard", payload) == payload
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+class TestPreferenceApiSanitize:
+    async def test_put_strips_category(
+        self, session: AsyncSession, tenant_a: Any, factory: Any, admin_role: Any
+    ) -> None:
+        """PUT product_roi 带 category → 库里存的没有 category。"""
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            user = await factory.user(tenant_a, roles=[admin_role])
+            svc = UserPreferenceService(session)
+            resp = await save_filter_preference(
+                "product_roi",
+                user,
+                svc,
+                {"season": ["2026秋"], "category": ["上衣"], "exclude_brushing": True},
+            )
+            assert resp == {"ok": True}
+            stored = await svc.get_filter(user.id, "product_roi")
+            assert stored == {"season": ["2026秋"], "exclude_brushing": True}
+        finally:
+            tenant_id_ctx.reset(tok)
+
+    async def test_get_strips_legacy_category(
+        self, session: AsyncSession, tenant_a: Any, factory: Any, admin_role: Any
+    ) -> None:
+        """库里存量记录带 category（旧前端存的）→ GET 回来没有 category、不报错。"""
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            user = await factory.user(tenant_a, roles=[admin_role])
+            svc = UserPreferenceService(session)
+            # 绕过接口直接写存量
+            await svc.save_filter(user, "product_roi", {"season": ["2026冬"], "category": ["上衣"]})
+            assert await get_filter_preference("product_roi", user, svc) == {"season": ["2026冬"]}
+            # 别的页面不受影响
+            await svc.save_filter(user, "bi_dashboard", {"preset": "last_7d"})
+            assert await get_filter_preference("bi_dashboard", user, svc) == {"preset": "last_7d"}
         finally:
             tenant_id_ctx.reset(tok)

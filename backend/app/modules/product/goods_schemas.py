@@ -93,7 +93,7 @@ class GoodsMainCreate(BaseModel):
     goods_code: str = Field(..., min_length=1, max_length=64)
     goods_title: str = Field(..., min_length=1, max_length=512)
     short_name: str | None = Field(default=None, max_length=GOODS_SHORT_NAME_MAX_LEN)
-    category: str | None = Field(default=None, max_length=64)
+    # 类目已下线（8a-3，J12）：接口不再收 category（传了被忽略），goods_main.category 列保留
     season: str | None = Field(default=None, max_length=64)
     # 品牌只读（8a-4，A12）：只由商品资料导入写入，接口不再收 brand_id（传了被忽略）
     # main_image_key 已废弃（8a-2，§7.2）：商品图由成员款式派生，传了被忽略
@@ -116,7 +116,7 @@ class GoodsMainUpdate(BaseModel):
     其余可选字段是「传 None 等于没传」，简称不行：清空简称是正常操作，
     所以服务层按 ``model_fields_set`` 判断它有没有被传。
     """
-    category: str | None = Field(default=None, max_length=64)
+    # 类目已下线（8a-3，J12）：传了被忽略
     season: str | None = Field(default=None, max_length=64)
     # 品牌只读（8a-4，A12）：接口不再收 brand_id（传了被忽略）
     # main_image_key 已废弃（8a-2，§7.2）：传了被忽略
@@ -139,7 +139,6 @@ class GoodsMainResponse(BaseModel):
     goods_code: str
     goods_title: str
     short_name: str | None = None
-    category: str | None = None
     season: str | None = None
     brand_id: UUID | None = None
     brand_name: str | None = None
@@ -174,6 +173,15 @@ class GoodsBrandOptionsResponse(BaseModel):
     items: list[GoodsBrandOption]
 
 
+class SeasonOptionsResponse(BaseModel):
+    """季节选项（8a-3，§8.3）：字典 season 启用值在前，再接商品上出现过的值。
+
+    商品侧 ``GET /api/goods/season-options`` 与报表侧 ``GET /api/reports/season-options`` 共用。
+    """
+
+    items: list[str]
+
+
 class GoodsMainListResponse(BaseModel):
     items: list[GoodsMainResponse]
     total: int
@@ -193,5 +201,6 @@ __all__ = [
     "GoodsOption",
     "GoodsStyleItemIn",
     "GoodsStyleItemResponse",
+    "SeasonOptionsResponse",
     "goods_display_name",
 ]

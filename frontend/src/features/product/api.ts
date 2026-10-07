@@ -208,7 +208,7 @@ export interface Goods {
   goods_title: string;
   /** 商品简称；没填为 null，界面回落显示全称。 */
   short_name: string | null;
-  category: string | null;
+  // 类目已下线（8a-3）：接口不再返回 category
   season: string | null;
   brand_id: string | null;
   brand_name: string | null;
@@ -239,7 +239,6 @@ export interface GoodsPage {
 
 export interface GoodsFilters {
   keyword?: string;
-  category?: string;
   season?: string;
   brand_id?: string;
   is_suit?: boolean;
@@ -254,7 +253,6 @@ export interface GoodsCreate {
   goods_code: string;
   goods_title: string;
   short_name?: string | null;
-  category?: string | null;
   season?: string | null;
   // 品牌只读（8a-4）：只由商品资料导入写入，商品接口不再收 brand_id
   remark?: string | null;
@@ -266,7 +264,6 @@ export interface GoodsUpdate {
   goods_title?: string;
   /** 不传不动；传 null 清掉简称。 */
   short_name?: string | null;
-  category?: string | null;
   season?: string | null;
   remark?: string | null;
   is_active?: boolean;
@@ -438,6 +435,15 @@ export async function listGoodsBrandOptions(): Promise<GoodsBrandOption[]> {
   const resp = await apiClient.get<{ items: GoodsBrandOption[] }>(
     "/api/goods/brand-options"
   );
+  return resp.data.items;
+}
+
+/**
+ * 商品页季节选项（8a-3）：字典 season 启用值在前，再接商品上出现过的值。
+ * 查询键 ["goods", "season-options"]；字典季节增删后由 DictManagerModal 失效。
+ */
+export async function getGoodsSeasonOptions(): Promise<string[]> {
+  const resp = await apiClient.get<{ items: string[] }>("/api/goods/season-options");
   return resp.data.items;
 }
 

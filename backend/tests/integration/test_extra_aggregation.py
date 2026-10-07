@@ -308,7 +308,6 @@ class TestExportEqualsPage:
                 (D1, D2),
                 exclude_brushing=True,
                 seasons=None,
-                categories=None,
                 granularity=granularity,
             )
             extra_keys = headers[_STORE_FIXED:]
@@ -351,7 +350,6 @@ class TestExportEqualsPage:
                 (D1, D2),
                 exclude_brushing=True,
                 seasons=None,
-                categories=None,
                 granularity="day",
             )
             extra_keys = headers[_PRODUCTION_FIXED:]

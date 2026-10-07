@@ -27,7 +27,7 @@ class GoodsListFilters:
     keyword: str | None = None
     """同时搜商品编码、商品全称与简称、成员款式的货号与款名 —— 手里可能只有其中任意一个。"""
 
-    category: str | None = None
+    # 类目筛选已下线（8a-3，J12）
     season: str | None = None
     brand_id: UUID | None = None
     is_suit: bool | None = None
@@ -91,9 +91,6 @@ class GoodsRepository:
         elif not filters.include_inactive:
             clauses.append("g.is_active = true")
 
-        if filters.category is not None:
-            clauses.append("g.category = :category")
-            params["category"] = filters.category
         if filters.season is not None:
             clauses.append("g.season = :season")
             params["season"] = filters.season
@@ -136,7 +133,7 @@ class GoodsRepository:
             await self._session.execute(
                 text(
                     f"""
-                    SELECT g.id, g.goods_code, g.goods_title, g.short_name, g.category, g.season,
+                    SELECT g.id, g.goods_code, g.goods_title, g.short_name, g.season,
                            g.brand_id, b.brand_name, g.remark,
                            g.is_suit, g.is_active, g.created_at, g.updated_at,
                            COALESCE((

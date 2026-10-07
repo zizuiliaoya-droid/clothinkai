@@ -22,8 +22,8 @@ import {
   GOODS_SHORT_NAME_MAX_LEN,
   createGoods,
   deleteGoods,
+  getGoodsSeasonOptions,
   goodsDisplayName,
-  listDictItems,
   listGoods,
   listStyles,
   updateGoods,
@@ -41,7 +41,6 @@ interface FormValues {
   goods_code: string;
   goods_title: string;
   short_name?: string;
-  category?: string;
   season?: string;
   remark?: string;
   is_active?: boolean;
@@ -100,14 +99,12 @@ export function GoodsPanel() {
     queryKey: ["goods", filters],
     queryFn: () => listGoods(filters),
   });
-  const { data: categories } = useQuery({
-    queryKey: ["dict-items", "category"],
-    queryFn: () => listDictItems("category"),
-  });
+  // 季节选项 = 字典 season 启用值 + 商品上已有的值（8a-3）；类目已下线，不再查类目字典
   const { data: seasons } = useQuery({
-    queryKey: ["dict-items", "season"],
-    queryFn: () => listDictItems("season"),
+    queryKey: ["goods", "season-options"],
+    queryFn: getGoodsSeasonOptions,
   });
+  const seasonOptions = (seasons ?? []).map((s) => ({ label: s, value: s }));
 
   // 款式可能上百个，走服务端关键词搜索而不是全量拉下来。
   const { data: stylePickerData, isFetching: stylesFetching } = useQuery({
@@ -157,7 +154,6 @@ export function GoodsPanel() {
         return updateGoods(editing.id, {
           goods_title: values.goods_title,
           short_name: shortName,
-          category: values.category ?? null,
           season: values.season ?? null,
           remark: values.remark ?? null,
           is_active: values.is_active,
@@ -168,7 +164,6 @@ export function GoodsPanel() {
         goods_code: values.goods_code,
         goods_title: values.goods_title,
         short_name: shortName,
-        category: values.category ?? null,
         season: values.season ?? null,
         remark: values.remark ?? null,
         items,
@@ -214,7 +209,6 @@ export function GoodsPanel() {
       goods_code: record.goods_code,
       goods_title: record.goods_title,
       short_name: record.short_name ?? undefined,
-      category: record.category ?? undefined,
       season: record.season ?? undefined,
       remark: record.remark ?? undefined,
       is_active: record.is_active,
@@ -336,7 +330,6 @@ export function GoodsPanel() {
           <Tag color="blue">{n} 条</Tag>
         ),
     },
-    { title: "类目", dataIndex: "category", width: 110, render: (v) => v || "—" },
     { title: "季节", dataIndex: "season", width: 100, render: (v) => v || "—" },
     {
       title: "品牌",
@@ -410,23 +403,10 @@ export function GoodsPanel() {
             }
           />
           <Select
-            placeholder="类目"
-            allowClear
-            style={{ width: 130 }}
-            options={(categories ?? []).map((c) => ({
-              label: c.value,
-              value: c.value,
-            }))}
-            onChange={(v) => setFilters((f) => ({ ...f, category: v, page: 1 }))}
-          />
-          <Select
             placeholder="季节"
             allowClear
             style={{ width: 120 }}
-            options={(seasons ?? []).map((s) => ({
-              label: s.value,
-              value: s.value,
-            }))}
+            options={seasonOptions}
             onChange={(v) => setFilters((f) => ({ ...f, season: v, page: 1 }))}
           />
           <Space size={4}>
@@ -534,25 +514,8 @@ export function GoodsPanel() {
           </Form.Item>
 
           <Space align="start" style={{ display: "flex" }}>
-            <Form.Item name="category" label="类目" style={{ width: 200 }}>
-              <Select
-                allowClear
-                placeholder="选择类目"
-                options={(categories ?? []).map((c) => ({
-                  label: c.value,
-                  value: c.value,
-                }))}
-              />
-            </Form.Item>
             <Form.Item name="season" label="季节" style={{ width: 200 }}>
-              <Select
-                allowClear
-                placeholder="选择季节"
-                options={(seasons ?? []).map((s) => ({
-                  label: s.value,
-                  value: s.value,
-                }))}
-              />
+              <Select allowClear placeholder="选择季节" options={seasonOptions} />
             </Form.Item>
             {/* 品牌只读（8a-4，A12）：只由商品资料导入写入，这里不再提供选择 */}
             <Form.Item

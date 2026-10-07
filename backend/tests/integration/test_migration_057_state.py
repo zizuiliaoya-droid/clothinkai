@@ -5,6 +5,9 @@
 
 from __future__ import annotations
 
+import ast
+from pathlib import Path
+
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -197,3 +200,43 @@ class TestMigration057ImportTables:
         assert any("REFERENCES import_batch(id) ON DELETE SET NULL" in d for d in fks)
         # object_id 多态、superseded_by 不设外键
         assert not any("(object_id)" in d or "(superseded_by)" in d for d in fks)
+
+
+_MIGRATION_057 = (
+    Path(__file__).resolve().parents[2] / "alembic" / "versions" / "057_8a_goods_master_data.py"
+)
+
+
+def _code_strings_and_names(source: str) -> list[str]:
+    """迁移文件里除文档字符串、注释之外的全部字符串常量与标识符（SQL 都在字符串常量里）。"""
+    tree = ast.parse(source)
+    docstrings: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Module | ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            body = node.body
+            if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant):
+                docstrings.add(id(body[0].value))
+    out: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if id(node) not in docstrings:
+                out.append(node.value)
+        elif isinstance(node, ast.Name):
+            out.append(node.id)
+        elif isinstance(node, ast.Attribute):
+            out.append(node.attr)
+    return out
+
+
+class TestMigration057KeepsSummaryCoverage:
+    """AC 21：本分支没有清 report_summary_coverage 的迁移（汇总表不存类目，§3.4、§8.2）。
+
+    文档字符串里写明了「不清 ``report_summary_coverage``」，所以只查代码里的字符串常量与标识符。
+    """
+
+    def test_no_summary_coverage_in_code(self) -> None:
+        pieces = _code_strings_and_names(_MIGRATION_057.read_text(encoding="utf-8"))
+        assert pieces, "没解析到任何代码"
+        assert any("ALTER TABLE" in p or "INSERT" in p for p in pieces), "场景有效性：SQL 没被扫到"
+        hits = [p for p in pieces if "summary_coverage" in p.lower()]
+        assert hits == []

@@ -85,11 +85,10 @@ def bucket_expr(granularity: str, column: str) -> str:
     return template.format(column=column)
 
 
-def goods_filter_clauses(
-    seasons: Sequence[str] | None, categories: Sequence[str] | None
-) -> tuple[str, dict[str, Any]]:
-    """商品维度的季节 / 类目多选筛选（PRD 第 4 章）。空列表与 None 同义：不筛。
+def goods_filter_clauses(seasons: Sequence[str] | None) -> tuple[str, dict[str, Any]]:
+    """商品维度的季节多选筛选（PRD 第 4 章）。空列表与 None 同义：不筛。
 
+    类目筛选已下线（8a-3，J12）：实时与汇总两条读路径都只剩季节。
     ``= ANY(:param)`` 走数组绑定参数，不把值拼进 SQL。
     """
     clauses: list[str] = []
@@ -97,9 +96,6 @@ def goods_filter_clauses(
     if seasons:
         clauses.append("AND g.season = ANY(:seasons)")
         params["seasons"] = list(seasons)
-    if categories:
-        clauses.append("AND g.category = ANY(:categories)")
-        params["categories"] = list(categories)
     return "\n".join(clauses), params
 
 
@@ -307,7 +303,6 @@ class ProductionRepository:
         date_to: date,
         exclude_brushing: bool = False,
         seasons: Sequence[str] | None = None,
-        categories: Sequence[str] | None = None,
     ) -> list[Mapping[str, Any]]:
         """按商品/套装聚合；``qn_link`` CTE 保证每条日报只映射一次。
 
@@ -315,7 +310,7 @@ class ProductionRepository:
         一条销售链接）合并成一行，销售额只算一次；套装的站外推广费与刷单剔除按成员
         款式求和。
 
-        ``seasons`` / ``categories`` 为多选（PRD 第 4 章），空列表与 None 同义：不筛。
+        ``seasons`` 为多选（PRD 第 4 章），空列表与 None 同义：不筛（类目筛选已下线，8a-3）。
         """
         # 款式理论上可以同时属于单品商品与套装（库层面表达不了这个约束），那时同一笔
         # 调整会被两个商品各减一次。取「主商品」（非套装优先、货号次之）保证只归一处，
@@ -342,7 +337,7 @@ class ProductionRepository:
             if exclude_brushing
             else ""
         )
-        filter_sql, filter_params = goods_filter_clauses(seasons, categories)
+        filter_sql, filter_params = goods_filter_clauses(seasons)
         sql = text(
             f"""
             WITH {_QIANNIU_GOODS_LINK_CTE}

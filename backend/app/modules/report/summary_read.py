@@ -172,9 +172,8 @@ class SummaryReadRepository:
         date_to: date,
         exclude_brushing: bool,
         seasons: Sequence[str] | None = None,
-        categories: Sequence[str] | None = None,
     ) -> list[Mapping[str, Any]]:
-        filter_sql, filter_params = goods_filter_clauses(seasons, categories)
+        filter_sql, filter_params = goods_filter_clauses(seasons)
         sql = text(
             f"""
             SELECT

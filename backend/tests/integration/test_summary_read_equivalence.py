@@ -81,7 +81,6 @@ async def _goods(
     *styles: Any,
     code: str,
     season: str,
-    category: str,
     is_suit: bool = False,
     short_name: str | None = None,
 ) -> GoodsMain:
@@ -92,7 +91,6 @@ async def _goods(
         short_name=short_name,
         is_suit=is_suit,
         season=season,
-        category=category,
     )
     session.add(goods)
     await session.flush()
@@ -159,7 +157,6 @@ async def _seed(
         style_a,
         code=f"G_A_{uuid4().hex[:5]}",
         season="春夏",
-        category="连衣裙",
         short_name="A 简称",
     )
     qn_a = await _pp(session, tenant, style_a, goods_a)
@@ -174,15 +171,12 @@ async def _seed(
         style_b2,
         code=f"G_B_{uuid4().hex[:5]}",
         season="秋冬",
-        category="外套",
         is_suit=True,
     )
     qn_b = await _pp(session, tenant, style_b1, goods_b)
 
     style_c = await product_factory.style(style_code=f"EC{uuid4().hex[:6]}")
-    await _goods(
-        session, tenant, style_c, code=f"G_C_{uuid4().hex[:5]}", season="春夏", category="连衣裙"
-    )
+    await _goods(session, tenant, style_c, code=f"G_C_{uuid4().hex[:5]}", season="春夏")
 
     session.add_all(
         [
@@ -293,10 +287,11 @@ def _dump(models: Any) -> Any:
 
 class TestProductionReport:
     @pytest.mark.parametrize("exclude_brushing", [True, False])
+    # 类目筛选已下线（8a-3）：组合只剩「刷单开关 × 季节」
     @pytest.mark.parametrize(
-        ("seasons", "categories"),
-        [(None, None), (["春夏"], None), (None, ["外套"])],
-        ids=["no_filter", "season", "category"],
+        "seasons",
+        [None, ["春夏"], ["秋冬"]],
+        ids=["no_filter", "season_spring", "season_autumn"],
     )
     async def test_summary_equals_live(
         self,
@@ -309,11 +304,10 @@ class TestProductionReport:
         recorder: _SourceRecorder,
         exclude_brushing: bool,
         seasons: list[str] | None,
-        categories: list[str] | None,
     ) -> None:
         tok = tenant_id_ctx.set(tenant_a.id)
         try:
-            await _seed(
+            seeded = await _seed(
                 session, tenant_a, product_factory, blogger_factory, promotion_factory, factory
             )
             await session.commit()
@@ -323,7 +317,6 @@ class TestProductionReport:
             kwargs = {
                 "exclude_brushing": exclude_brushing,
                 "seasons": seasons,
-                "categories": categories,
             }
             via_summary = await svc.get_report(tenant_a.id, (M_LO, M_HI), **kwargs)
             # 本期被覆盖 → 汇总表；上一期没刷 → 实时
@@ -335,7 +328,7 @@ class TestProductionReport:
 
             items = via_summary.items
             assert items, "场景没有产生投产行"
-            if seasons is None and categories is None:
+            if seasons is None:
                 # 只有刷单的商品被 HAVING 滤掉，剩 A、B 两个
                 assert len(items) == 2
                 assert {r.goods_short_name for r in items} == {"A 简称", None}
@@ -344,6 +337,10 @@ class TestProductionReport:
                 assert any(r.promo_cost != 0 for r in items)
                 assert any(r.ad_spend != 0 for r in items)
                 assert via_summary.previous, "上一期没有数据，环比比较是空跑"
+            else:
+                # 季节筛选确实生效（不是两条路径都没筛、碰巧相等）：春夏只剩 A，秋冬只剩套装 B
+                expected = seeded["goods_a"] if seasons == ["春夏"] else seeded["goods_b"]
+                assert {str(r.goods_id) for r in items} == {str(expected.id)}
         finally:
             tenant_id_ctx.reset(tok)
 

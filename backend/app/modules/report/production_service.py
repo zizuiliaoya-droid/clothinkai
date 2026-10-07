@@ -52,7 +52,6 @@ class ProductionService:
         *,
         exclude_brushing: bool,
         seasons: Sequence[str] | None,
-        categories: Sequence[str] | None,
         use_summary: bool,
         metric_label: str,
     ) -> list[Mapping[str, Any]]:
@@ -67,7 +66,6 @@ class ProductionService:
                     date_to=date_to,
                     exclude_brushing=exclude_brushing,
                     seasons=seasons,
-                    categories=categories,
                 )
         record_source(metric_label, "live")
         return await self._repo.aggregate_by_goods(
@@ -76,7 +74,6 @@ class ProductionService:
             date_to=date_to,
             exclude_brushing=exclude_brushing,
             seasons=seasons,
-            categories=categories,
         )
 
     async def get_report(
@@ -86,7 +83,6 @@ class ProductionService:
         *,
         exclude_brushing: bool = True,
         seasons: Sequence[str] | None = None,
-        categories: Sequence[str] | None = None,
         use_summary: bool = True,
     ) -> ProductionReport:
         """投产报表。``use_summary=False`` 强制实时（BI 看板在整体切汇总表之前用）。
@@ -105,7 +101,6 @@ class ProductionService:
                 cur_to,
                 exclude_brushing=exclude_brushing,
                 seasons=seasons,
-                categories=categories,
                 use_summary=use_summary,
                 metric_label="production",
             )
@@ -115,7 +110,6 @@ class ProductionService:
                 prev_to,
                 exclude_brushing=exclude_brushing,
                 seasons=seasons,
-                categories=categories,
                 use_summary=use_summary,
                 metric_label="production_previous",
             )

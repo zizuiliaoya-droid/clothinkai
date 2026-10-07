@@ -22,8 +22,10 @@ from app.modules.product.goods_schemas import (
     GoodsMainListResponse,
     GoodsMainResponse,
     GoodsMainUpdate,
+    SeasonOptionsResponse,
 )
 from app.modules.product.goods_service import GoodsService
+from app.modules.product.season_options import list_season_options
 
 router = APIRouter(prefix="/api/goods", tags=["product"])
 
@@ -59,7 +61,6 @@ async def list_goods(
     keyword: Annotated[
         str | None, Query(max_length=64, description="商品编码 / 商品名 / 成员货号 / 款名")
     ] = None,
-    category: Annotated[str | None, Query(max_length=64)] = None,
     season: Annotated[str | None, Query(max_length=64)] = None,
     brand_id: UUID | None = None,
     is_suit: bool | None = None,
@@ -73,7 +74,6 @@ async def list_goods(
         tenant_id=user.tenant_id,
         filters=GoodsListFilters(
             keyword=keyword,
-            category=category,
             season=season,
             brand_id=brand_id,
             is_suit=is_suit,
@@ -105,6 +105,19 @@ async def list_goods_brand_options(
     return GoodsBrandOptionsResponse(
         items=[GoodsBrandOption(id=brand_id, brand_name=name) for brand_id, name in rows]
     )
+
+
+@router.get(
+    "/season-options",
+    response_model=SeasonOptionsResponse,
+    dependencies=[require_permission(SCOPE, "read")],
+)
+async def list_goods_season_options(
+    session: SessionDep,
+    user: CurrentActiveUser,
+) -> SeasonOptionsResponse:
+    """商品页季节筛选与表单的选项：字典 season 启用值 + 商品上出现过的值（8a-3，§8.3）。"""
+    return SeasonOptionsResponse(items=await list_season_options(session, user.tenant_id))
 
 
 @router.get(

@@ -32,7 +32,7 @@ async def export_report(
     date_to: _ToQ = None,
     exclude_brushing: bool = True,
     season: Annotated[list[str] | None, Query(description="季节多选")] = None,
-    category: Annotated[list[str] | None, Query(description="类目多选")] = None,
+    # 类目筛选已下线（8a-3，J12）：旧客户端带 category 被 FastAPI 忽略
     granularity: Annotated[str, Query(pattern=r"^(day|week|month|year)$")] = "day",
 ) -> StreamingResponse:
     tr = resolve_time_range(preset, date_from, date_to)
@@ -42,7 +42,6 @@ async def export_report(
         tr,
         exclude_brushing=exclude_brushing,
         seasons=season,
-        categories=category,
         granularity=granularity,
     )
 

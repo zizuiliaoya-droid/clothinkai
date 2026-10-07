@@ -150,7 +150,6 @@ class TestReportExportApiContract:
             period,
             exclude_brushing=True,
             seasons=None,
-            categories=None,
             granularity="day",
         )
         assert production_headers[:4] == ["商品编码", "商品简称", "商品名称", "含款号"]
@@ -170,7 +169,6 @@ class TestReportExportApiContract:
             period,
             exclude_brushing=True,
             seasons=None,
-            categories=None,
             granularity="week",
         )
         assert store_headers[:7] == [
@@ -216,7 +214,6 @@ class TestReportExportApiContract:
             period,
             exclude_brushing=True,
             seasons=None,
-            categories=None,
             granularity="day",
         )
         assert len(work_headers) == len(work_rows[0]) == 20

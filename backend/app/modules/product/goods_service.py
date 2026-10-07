@@ -174,7 +174,6 @@ class GoodsService:
             goods_code=goods.goods_code,
             goods_title=goods.goods_title,
             short_name=goods.short_name,
-            category=goods.category,
             season=goods.season,
             brand_id=goods.brand_id,
             brand_name=brand_name,
@@ -208,7 +207,6 @@ class GoodsService:
             goods_code=payload.goods_code,
             goods_title=payload.goods_title,
             short_name=payload.short_name,
-            category=payload.category,
             season=payload.season,
             remark=payload.remark,
         )
@@ -264,8 +262,6 @@ class GoodsService:
         # 简称可以清空：按「有没有传」判断，而不是「是不是 None」（见 GoodsMainUpdate）
         if "short_name" in payload.model_fields_set:
             goods.short_name = payload.short_name
-        if payload.category is not None:
-            goods.category = payload.category
         if payload.season is not None:
             goods.season = payload.season
         if payload.remark is not None:
@@ -357,7 +353,6 @@ class GoodsService:
                     goods_code=r["goods_code"],
                     goods_title=r["goods_title"],
                     short_name=r["short_name"],
-                    category=r["category"],
                     season=r["season"],
                     brand_id=r["brand_id"],
                     brand_name=r["brand_name"],
