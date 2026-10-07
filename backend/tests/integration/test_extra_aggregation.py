@@ -47,6 +47,7 @@ async def _goods(
     *,
     qianniu_id: str,
     wanxiangtai_id: str | None = None,
+    extra_qianniu_ids: tuple[str, ...] = (),
 ) -> GoodsMain:
     style = await product_factory.style(tenant=tenant)
     goods = GoodsMain(
@@ -57,7 +58,7 @@ async def _goods(
     session.add(goods)
     await session.flush()
     session.add(GoodsStyleItem(tenant_id=tenant.id, goods_main_id=goods.id, style_id=style.id))
-    links = [("千牛", qianniu_id)]
+    links = [("千牛", qianniu_id), *(("千牛", extra) for extra in extra_qianniu_ids)]
     if wanxiangtai_id is not None:
         links.append(("万相台", wanxiangtai_id))
     for platform, platform_id in links:
@@ -247,6 +248,45 @@ class TestProduction:
             assert b["下单转化率"] == "0.59"
             assert b["月累计支付金额"] == "241800.00"
             assert "点击率" not in b
+        finally:
+            tenant_id_ctx.reset(tok)
+
+    async def test_single_day_multi_link_sums_cumulative(
+        self, session: AsyncSession, tenant_a: Any, product_factory: Any
+    ) -> None:
+        """一个商品挂两条千牛链接、只查一天：同一天的累计列跨链接相加；区间跨天就不加。"""
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            q1, q2 = f"QN{uuid4().hex[:10]}", f"QN{uuid4().hex[:10]}"
+            goods = await _goods(
+                session, tenant_a, product_factory, qianniu_id=q1, extra_qianniu_ids=(q2,)
+            )
+            await _import(
+                session,
+                tenant_a,
+                QianniuImportAdapter(),
+                [
+                    qianniu_row(0, 统计日期=D1.isoformat(), 商品ID=q1, 主商品ID=q1),
+                    qianniu_row(1, 统计日期=D1.isoformat(), 商品ID=q2, 主商品ID=q2),
+                ],
+            )
+            service = ProductionService(session)
+
+            one_day = await service.get_report(tenant_a.id, (D1, D1), exclude_brushing=False)
+            extra = {r.goods_id: r for r in one_day.items}[goods.id].extra
+            assert extra["月累计支付金额"] == "522741.00"  # 280941 + 241800
+            assert extra["年累计支付金额"] == "3471045.00"
+            assert extra["月累计支付件数"] == "3364"
+            # 其余列与跨天一样：比率重算、跳出率不相加
+            assert extra["下单转化率"] == "0.63"
+            assert extra["商品详情页跳出率"] is None
+            assert extra["支付金额"] == "27548.00"
+
+            # 区间跨天（即便数据只落在其中一天）：累计列给 None，与店铺数据按周同一条规则
+            two_days = await service.get_report(tenant_a.id, (D1, D2), exclude_brushing=False)
+            extra = {r.goods_id: r for r in two_days.items}[goods.id].extra
+            assert extra["月累计支付金额"] is None
+            assert extra["支付金额"] == "27548.00"
         finally:
             tenant_id_ctx.reset(tok)
 

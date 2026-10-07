@@ -197,7 +197,8 @@ class ProductionService:
         """按商品聚合千牛 / 站内 extra（对齐 final.xlsx 投产报表 70 列）。
 
         规则在 ``extra_metrics``：计数与金额相加，比率 / 均值 / 评分不相加（常用比率按
-        分子分母重算）。一个商品的行通常跨多天，累计列不相加（``same_day=False``）。
+        分子分母重算）。累计列只在查询区间是同一天时相加（一个商品挂多条链接，同一天的
+        累计值可以加）；区间跨天就不加，与店铺数据按日 / 按周的规则一致。
         """
         rows = await self._repo.fetch_extra_by_goods(
             tenant_id=tenant_id, date_from=date_from, date_to=date_to
@@ -208,7 +209,8 @@ class ProductionService:
             if gid is None:
                 continue
             by_goods[str(gid)].append(r["extra"])
-        return {gid: aggregate_extra(extras, same_day=False) for gid, extras in by_goods.items()}
+        same_day = date_from == date_to
+        return {gid: aggregate_extra(extras, same_day=same_day) for gid, extras in by_goods.items()}
 
     @staticmethod
     def _to_row(r: Mapping[str, Any], exclude_brushing: bool) -> ProductionRow:
