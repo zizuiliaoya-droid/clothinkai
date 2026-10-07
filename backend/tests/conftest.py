@@ -508,6 +508,13 @@ async def promotion_factory(session: AsyncSession, tenant_a: Any) -> Any:
                     return_waybill=kw.get("return_waybill"),
                     collect_count=kw.get("collect_count"),
                     comment_count=kw.get("comment_count"),
+                    # 审核与 7a-4 重新提交
+                    reviewed_by=kw.get("reviewed_by"),
+                    review_action=kw.get("review_action"),
+                    review_reason=kw.get("review_reason"),
+                    review_reason_category=kw.get("review_reason_category"),
+                    resubmit_note=kw.get("resubmit_note"),
+                    resubmitted_at=kw.get("resubmitted_at"),
                 )
                 session.add(p)
                 await session.flush()

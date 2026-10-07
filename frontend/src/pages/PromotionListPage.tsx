@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import {
+  Alert,
   Button,
   Card,
   DatePicker,
@@ -43,6 +44,7 @@ import {
   recallSuccessPromotion,
   recordMetrics,
   removePaymentQr,
+  resubmitPromotion,
   reviewPromotion,
   setReturnWaybill,
   startRecallPromotion,
@@ -54,6 +56,7 @@ import type {
   Promotion,
   PromotionCreate,
   PromotionListFilters,
+  PromotionResubmitRequest,
   RejectReasonCategory,
   RetroStatus,
 } from "@/features/promotion/types";
@@ -250,6 +253,9 @@ export function PromotionListPage() {
   const [cancelForm] = Form.useForm();
   const [rejectTarget, setRejectTarget] = useState<Promotion | null>(null);
   const [rejectForm] = Form.useForm();
+  const [resubmitTarget, setResubmitTarget] = useState<Promotion | null>(null);
+  const [resubmitForm] = Form.useForm();
+  const [resubmitBrandFile, setResubmitBrandFile] = useState<File | null>(null);
   const [waybillTarget, setWaybillTarget] = useState<Promotion | null>(null);
   const [waybillForm] = Form.useForm();
   const [urgeTarget, setUrgeTarget] = useState<Promotion | null>(null);
@@ -524,6 +530,44 @@ export function PromotionListPage() {
     onError: (err) => message.error(extractErrorMessage(err)),
   });
 
+  /** 驳回后重新提交（7a-4）。有新截图先传图，再推进状态。 */
+  const resubmitMutation = useMutation({
+    mutationFn: async ({
+      id,
+      payload,
+      brandFile,
+    }: {
+      id: string;
+      payload: PromotionResubmitRequest;
+      brandFile?: File;
+    }) => {
+      if (brandFile) {
+        await uploadBrandComment(id, brandFile);
+      }
+      return resubmitPromotion(id, payload);
+    },
+    onSuccess: () => {
+      message.success("已重新提交，等主管审核");
+      setResubmitTarget(null);
+      setResubmitBrandFile(null);
+      resubmitForm.resetFields();
+      void qc.invalidateQueries({ queryKey: ["promotions"] });
+    },
+    onError: (err) => message.error(extractErrorMessage(err)),
+  });
+
+  function openResubmit(record: Promotion) {
+    setResubmitTarget(record);
+    setResubmitBrandFile(null);
+    resubmitForm.resetFields();
+    resubmitForm.setFieldsValue({
+      publish_url: record.publish_url ?? undefined,
+      actual_publish_date: record.actual_publish_date
+        ? dayjs(record.actual_publish_date)
+        : undefined,
+    });
+  }
+
   const waybillMutation = useMutation({
     mutationFn: ({ id, waybill }: { id: string; waybill: string }) =>
       setReturnWaybill(id, waybill),
@@ -737,15 +781,34 @@ export function PromotionListPage() {
     {
       title: "结算状态",
       dataIndex: "settlement_status",
-      width: 110,
+      // 放得下「上轮驳回：流量差补发」这个 Tag（7a-4）
+      width: 150,
       render: (v: string, row) => (
-        <Space size={4}>
+        <Space size={4} wrap>
           <Tag color={settlementColor[v]}>{v}</Tag>
-          {row.review_reason_category && (
-            <Tooltip title={row.review_reason ?? undefined}>
-              <Tag color="volcano">{row.review_reason_category}</Tag>
-            </Tooltip>
-          )}
+          {row.review_reason_category &&
+            (v === "已驳回" ? (
+              <Tooltip title={row.review_reason ?? undefined}>
+                <Tag color="volcano">{row.review_reason_category}</Tag>
+              </Tooltip>
+            ) : (
+              // 重提后（或再审通过后）上一轮驳回原因仍保留，标成「上轮」免得误读成现在被驳回
+              <Tooltip
+                title={
+                  <div>
+                    {row.review_reason && <div>驳回说明：{row.review_reason}</div>}
+                    {row.resubmit_note && <div>重提说明：{row.resubmit_note}</div>}
+                    {row.resubmitted_at && (
+                      <div>
+                        重提时间：{dayjs(row.resubmitted_at).format("YYYY-MM-DD HH:mm")}
+                      </div>
+                    )}
+                  </div>
+                }
+              >
+                <Tag>上轮驳回：{row.review_reason_category}</Tag>
+              </Tooltip>
+            ))}
         </Space>
       ),
     },
@@ -888,6 +951,13 @@ export function PromotionListPage() {
               setRejectTarget(record);
               rejectForm.resetFields();
             },
+          },
+          {
+            // 驳回后 PR 改完重新交给主管（已驳回 → 待核查）
+            key: "resubmit",
+            label: "重新提交",
+            disabled: record.settlement_status !== "已驳回",
+            onClick: () => openResubmit(record),
           },
           // 复盘三步（PRD 改动 4）。每一步的 disabled 条件都对着后端的状态机门槛，
           // 点了不会白跑一次 422
@@ -1240,6 +1310,113 @@ export function PromotionListPage() {
             rules={[{ required: true, message: "请填写驳回说明" }]}
           >
             <Input.TextArea rows={3} placeholder="具体说明，PR 会看到这段文字" />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={resubmitTarget ? `重新提交 · ${resubmitTarget.internal_code}` : "重新提交"}
+        open={!!resubmitTarget}
+        onCancel={() => {
+          setResubmitTarget(null);
+          setResubmitBrandFile(null);
+        }}
+        onOk={() => resubmitForm.submit()}
+        confirmLoading={resubmitMutation.isPending}
+        okText="重新提交"
+        destroyOnHidden
+        width={560}
+      >
+        {resubmitTarget && (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginTop: 16 }}
+            message={`上一轮驳回：${resubmitTarget.review_reason_category ?? "未分类"}`}
+            description={resubmitTarget.review_reason || "（没有填写驳回说明）"}
+          />
+        )}
+        <Form
+          form={resubmitForm}
+          layout="vertical"
+          style={{ marginTop: 16 }}
+          onFinish={(v: {
+            note: string;
+            publish_url?: string;
+            actual_publish_date?: Dayjs | null;
+          }) => {
+            if (!resubmitTarget) return;
+            // 只带改了的链接 / 日期：不传后端就不动，留空也不会清掉原值
+            const payload: PromotionResubmitRequest = { note: v.note.trim() };
+            const url = (v.publish_url ?? "").trim();
+            if (url && url !== (resubmitTarget.publish_url ?? "")) {
+              payload.publish_url = url;
+            }
+            const publishDate = v.actual_publish_date
+              ? v.actual_publish_date.format("YYYY-MM-DD")
+              : null;
+            if (publishDate && publishDate !== resubmitTarget.actual_publish_date) {
+              payload.actual_publish_date = publishDate;
+            }
+            resubmitMutation.mutate({
+              id: resubmitTarget.id,
+              payload,
+              brandFile: resubmitBrandFile ?? undefined,
+            });
+          }}
+        >
+          <Form.Item
+            name="note"
+            label="重提说明"
+            rules={[
+              {
+                required: true,
+                whitespace: true,
+                message: "请写明改了什么，主管再审时会看到",
+              },
+            ]}
+          >
+            <Input.TextArea
+              rows={3}
+              maxLength={2000}
+              showCount
+              placeholder="如：已让博主补发，链接已更新"
+            />
+          </Form.Item>
+          <Form.Item
+            name="publish_url"
+            label="发布链接"
+            rules={[{ type: "url", message: "请输入合法 URL" }]}
+            extra="预填当前链接，改了才会提交"
+          >
+            <Input placeholder="https://www.xiaohongshu.com/..." />
+          </Form.Item>
+          <Form.Item
+            name="actual_publish_date"
+            label="实际发布日期"
+            extra="预填当前日期，改了才会提交；不能晚于今天"
+          >
+            <DatePicker
+              style={{ width: "100%" }}
+              disabledDate={disableFutureDate}
+              allowClear={false}
+            />
+          </Form.Item>
+          <Form.Item
+            label="品牌词评论截图（可选）"
+            extra="驳回跟截图有关时重新选一张，会覆盖旧图；不选就沿用旧图"
+          >
+            <Upload
+              accept="image/png,image/jpeg,image/webp"
+              maxCount={1}
+              beforeUpload={(file) => {
+                setResubmitBrandFile(file as unknown as File);
+                return false;
+              }}
+              onRemove={() => setResubmitBrandFile(null)}
+            >
+              <Button icon={<UploadOutlined />}>重新上传</Button>
+            </Upload>
           </Form.Item>
         </Form>
       </Modal>

@@ -121,6 +121,7 @@ from app.modules.promotion.schemas import (
     PromotionPublishRequest,
     PromotionRecallStartRequest,
     PromotionResponse,
+    PromotionResubmitRequest,
     PromotionReturnWaybillRequest,
     PromotionReviewRequest,
     PromotionUpdate,
@@ -1208,6 +1209,89 @@ class PromotionService:
         await self._session.commit()
         return await self._to_response(updated, user)
 
+    async def resubmit(
+        self,
+        promotion_id: UUID,
+        payload: PromotionResubmitRequest,
+        user: User,
+    ) -> PromotionResponse:
+        """7a-4 驳回后重新提交：已驳回 → 待核查。
+
+        - 只允许从「已驳回」出发，且 publish_status 必须是「已发布」（否则进了待核查也批不了，
+          与 review approve 的跨状态机校验同理）
+        - 状态机先判，再判日期（plan D4）
+        - 可同改发布链接 / 实际发布日期：不传不动；传了且与现值不同才写入、才进 audit
+        - 上一轮 reviewed_* / review_action / review_reason / review_reason_category **不清**，
+          主管再审时能看到上次为什么驳；resubmit_note / resubmitted_at 每轮覆盖
+        """
+        promotion = await self._repo.get_by_id(promotion_id)
+        if promotion is None:
+            raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
+
+        SettlementStatusMachine.assert_can_transition(
+            from_state=promotion.settlement_status,
+            to_state=SettlementStatus.PENDING_REVIEW.value,
+            action="resubmit",
+        )
+        if promotion.publish_status != PublishStatus.PUBLISHED.value:
+            raise StateTransitionConflictError(
+                "仅「已发布」状态的推广可重新提交审核",
+                details={"publish_status": promotion.publish_status},
+            )
+        _assert_not_future_publish_date(payload.actual_publish_date)
+
+        before: dict[str, Any] = {"settlement_status": SettlementStatus.REJECTED.value}
+        after: dict[str, Any] = {"settlement_status": SettlementStatus.PENDING_REVIEW.value}
+        extra: dict[str, Any] = {"resubmit_note": payload.note, "resubmitted_at": _utcnow()}
+        if payload.publish_url is not None and payload.publish_url != promotion.publish_url:
+            extra["publish_url"] = payload.publish_url
+            before["publish_url"] = promotion.publish_url
+            after["publish_url"] = payload.publish_url
+        if (
+            payload.actual_publish_date is not None
+            and payload.actual_publish_date != promotion.actual_publish_date
+        ):
+            extra["actual_publish_date"] = payload.actual_publish_date
+            before["actual_publish_date"] = (
+                promotion.actual_publish_date.isoformat()
+                if promotion.actual_publish_date is not None
+                else None
+            )
+            after["actual_publish_date"] = payload.actual_publish_date.isoformat()
+        after["has_note"] = True
+
+        updated = await self._repo.update_state(
+            promotion_id=promotion_id,
+            tenant_id=user.tenant_id,
+            from_state_field="settlement_status",
+            from_state_value=SettlementStatus.REJECTED.value,
+            to_state_value=SettlementStatus.PENDING_REVIEW.value,
+            extra_fields=extra,
+        )
+        if updated is None:
+            raise StateTransitionConflictError(
+                "结款状态已变更，请刷新后重试",
+                details={"promotion_id": str(promotion_id)},
+            )
+
+        promotion_state_transitions_total.labels(
+            from_state=SettlementStatus.REJECTED.value,
+            to_state=SettlementStatus.PENDING_REVIEW.value,
+            status_field="settlement",
+        ).inc()
+
+        await self._audit.log(
+            action="promotion.resubmit",
+            resource="promotion",
+            resource_id=promotion_id,
+            before=before,
+            after=after,
+            user_id=user.id,
+        )
+
+        await self._session.commit()
+        return await self._to_response(updated, user)
+
     async def set_return_waybill(
         self,
         promotion_id: UUID,
@@ -2044,6 +2128,8 @@ class PromotionService:
             review_action=promotion.review_action,
             review_reason=promotion.review_reason,
             review_reason_category=promotion.review_reason_category,
+            resubmit_note=promotion.resubmit_note,
+            resubmitted_at=promotion.resubmitted_at,
             is_active=promotion.is_active,
             created_at=promotion.created_at,
             updated_at=promotion.updated_at,

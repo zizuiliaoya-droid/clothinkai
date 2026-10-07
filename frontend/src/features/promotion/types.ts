@@ -111,6 +111,9 @@ export interface Promotion {
   review_reason: string | null;
   /** 驳回原因分类：延迟发文 / 流量差补发 / 衣服未寄回。 */
   review_reason_category: string | null;
+  /** 最近一次驳回后重新提交的说明（只留最近一轮）。 */
+  resubmit_note: string | null;
+  resubmitted_at: string | null;
   // 通用
   is_active: boolean;
   created_at: string;
@@ -196,6 +199,13 @@ export interface PromotionReviewRequest {
   review_reason?: string | null;
   /** 驳回时必填，三选一。审核通过时忽略。 */
   review_reason_category?: RejectReasonCategory | null;
+}
+
+/** 驳回后重新提交。note 必填；链接 / 日期不传就不改。 */
+export interface PromotionResubmitRequest {
+  note: string;
+  publish_url?: string;
+  actual_publish_date?: string;
 }
 
 /** 金额变更来源。「模式兜底」= 被按合作模式的硬规则改写了，不是人改的。 */

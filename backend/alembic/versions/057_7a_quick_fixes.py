@@ -1,4 +1,4 @@
-"""7a 快修：款式下拉读权限 ``product.style:read``。
+"""7a 快修：款式下拉读权限 ``product.style:read`` + 驳回后重新提交的两列。
 
 ## 为什么（7a-1）
 
@@ -29,6 +29,12 @@ SKU 接口里的成本价 / 采购价仍由字段级权限屏蔽，与本迁移�
 ## 生效时间
 
 权限有 Redis 缓存（``PERM_CACHE_TTL_SECONDS=300``），已登录的 PR 最多 5 分钟后生效。
+
+## 7a-4 驳回后重新提交
+
+``promotion`` 加 ``resubmit_note``（Text）与 ``resubmitted_at``（timestamptz），都可空、不回填，
+已有单据不受影响。只留最近一轮（每次重提覆盖），完整历史随 7d-1 时间线做。downgrade 删这两列
+会丢掉已写入的重提说明——这是新功能自己产生的数据，回退版本时本来就用不上。
 
 Revision ID: 057_7a_quick_fixes
 Revises: 056_goods_short_name
@@ -123,8 +129,18 @@ def upgrade() -> None:
     for scope, code in _holders(bind, (_STYLE_READ,)):
         _log(f"改挂后 {scope}: {code}")
 
+    # 7a-4 驳回后重新提交：两列可空、不回填，已有单据不受影响
+    op.add_column("promotion", sa.Column("resubmit_note", sa.Text(), nullable=True))
+    op.add_column(
+        "promotion", sa.Column("resubmitted_at", sa.DateTime(timezone=True), nullable=True)
+    )
+    _log("promotion 加列 resubmit_note、resubmitted_at")
+
 
 def downgrade() -> None:
+    op.drop_column("promotion", "resubmitted_at")
+    op.drop_column("promotion", "resubmit_note")
+
     bind = op.get_bind()
     bind.execute(
         sa.text(

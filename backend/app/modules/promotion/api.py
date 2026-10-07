@@ -46,6 +46,7 @@ from app.modules.promotion.schemas import (
     PromotionRecallResultRequest,
     PromotionRecallStartRequest,
     PromotionResponse,
+    PromotionResubmitRequest,
     PromotionReturnWaybillRequest,
     PromotionReviewRequest,
     PromotionUpdate,
@@ -362,6 +363,27 @@ async def review_promotion(
     禁止自审（reviewer != pr_id）。
     """
     return await service.review(promotion_id, payload, user)
+
+
+@router.post(
+    "/promotions/{promotion_id}/resubmit",
+    response_model=PromotionResponse,
+    dependencies=[require_permission("promotion", "write")],
+)
+async def resubmit_promotion(
+    promotion_id: UUID,
+    payload: PromotionResubmitRequest,
+    user: CurrentActiveUser,
+    service: PromotionServiceDep,
+) -> PromotionResponse:
+    """7a-4 驳回后重新提交：已驳回 → 待核查，等主管再审.
+
+    - 只允许从「已驳回」出发（其余状态 422 ILLEGAL_STATE_TRANSITION），且要求已发布
+    - 重提说明 note 必填（≤ 2000 字）；可同时改发布链接 / 实际发布日期，不传不动
+    - 实际发布日期不能晚于今天（422 PUBLISH_DATE_IN_FUTURE）
+    - 上一轮驳回原因保留，不清
+    """
+    return await service.resubmit(promotion_id, payload, user)
 
 
 @router.post(

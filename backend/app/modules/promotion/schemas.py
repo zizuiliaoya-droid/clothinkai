@@ -158,6 +158,13 @@ class PromotionWarehouseWaybillRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+def _check_publish_url(v: str) -> str:
+    """发布链接必须是 http(s)；publish 与 resubmit 共用。"""
+    if not (v.startswith("http://") or v.startswith("https://")):
+        raise ValueError("publish_url 必须以 http:// 或 https:// 开头")
+    return v
+
+
 class PromotionPublishRequest(BaseModel):
     """publish 入参（BR-U04-20）。"""
 
@@ -172,9 +179,26 @@ class PromotionPublishRequest(BaseModel):
     @field_validator("publish_url")
     @classmethod
     def _validate_url(cls, v: str) -> str:
-        if not (v.startswith("http://") or v.startswith("https://")):
-            raise ValueError("publish_url 必须以 http:// 或 https:// 开头")
-        return v
+        return _check_publish_url(v)
+
+
+class PromotionResubmitRequest(BaseModel):
+    """驳回后重新提交入参（7a-4）。
+
+    只允许 已驳回 → 待核查。重提说明必填（全空白 = 没填）；发布链接与实际发布日期
+    可以一起改，不传就不动。日期「不晚于今天」同 publish，在 service 状态机之后判。
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    note: str = Field(min_length=1, max_length=2000)
+    publish_url: str | None = Field(default=None, min_length=1, max_length=512)
+    actual_publish_date: date | None = None
+
+    @field_validator("publish_url")
+    @classmethod
+    def _validate_url(cls, v: str | None) -> str | None:
+        return None if v is None else _check_publish_url(v)
 
 
 class PromotionCancelRequest(BaseModel):
@@ -436,6 +460,9 @@ class PromotionResponse(BaseModel):
     review_action: str | None = None
     review_reason: str | None = None
     review_reason_category: str | None = None
+    resubmit_note: str | None = None
+    """最近一次驳回后重新提交的说明（7a-4，只留最近一轮）。"""
+    resubmitted_at: datetime | None = None
 
     # 通用
     is_active: bool
@@ -514,6 +541,7 @@ __all__ = [
     "PromotionRecallResultRequest",
     "PromotionRecallStartRequest",
     "PromotionResponse",
+    "PromotionResubmitRequest",
     "PromotionReviewRequest",
     "PromotionUpdate",
     "PromotionUpdateLikeRequest",
