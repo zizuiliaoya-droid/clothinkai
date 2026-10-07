@@ -947,10 +947,13 @@ export function PromotionListPage() {
             },
           },
           {
-            // 驳回后 PR 改完重新交给主管（已驳回 → 待核查）
+            // 驳回后 PR 改完重新交给主管（已驳回 → 待核查）。后端还要求「已发布」
+            // （否则进了待核查也批不了），这里对齐，免得点了得到 409
             key: "resubmit",
             label: "重新提交",
-            disabled: record.settlement_status !== "已驳回",
+            disabled:
+              record.settlement_status !== "已驳回" ||
+              record.publish_status !== "已发布",
             onClick: () => openResubmit(record),
           },
           // 复盘三步（PRD 改动 4）。每一步的 disabled 条件都对着后端的状态机门槛，
