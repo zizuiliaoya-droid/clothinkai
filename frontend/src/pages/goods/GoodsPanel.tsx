@@ -34,8 +34,13 @@ import {
 import type { Style } from "@/features/product/types";
 import { GoodsImages } from "@/components/GoodsImages/GoodsImages";
 import { GoodsNameCell } from "@/components/GoodsNameCell/GoodsNameCell";
+import { PermissionGate } from "@/components/PermissionGate/PermissionGate";
 import { extractErrorMessage } from "@/services/apiClient";
 import { StyleEditModal } from "./StyleEditModal";
+import { SuitLinkModal } from "./SuitLinkModal";
+
+/** 能绑平台链接的角色，与 App.tsx 里 /platform-links 的 RoleRoute 一致（后端校验 ops.platform_link:write）。 */
+const LINK_ROLES = ["admin", "platform_admin", "operations"];
 
 interface FormValues {
   goods_code: string;
@@ -86,6 +91,7 @@ export function GoodsPanel() {
   });
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Goods | null>(null);
+  const [linkGoods, setLinkGoods] = useState<Goods | null>(null);
   const [styleKeyword, setStyleKeyword] = useState("");
   const [styleModal, setStyleModal] = useState<StyleModalState>({
     open: false,
@@ -346,13 +352,21 @@ export function GoodsPanel() {
     },
     {
       title: "操作",
-      width: 120,
+      width: 190,
       fixed: "right",
       render: (_, record) => (
         <Space>
           <Button type="link" size="small" onClick={() => openEdit(record)}>
             编辑
           </Button>
+          {/* 套装在这里绑千牛链接（8a-5）；与 /platform-links 的路由限制同一组角色，单品不加 */}
+          {record.is_suit && (
+            <PermissionGate requireAnyRole={LINK_ROLES}>
+              <Button type="link" size="small" onClick={() => setLinkGoods(record)}>
+                绑定链接
+              </Button>
+            </PermissionGate>
+          )}
           <Popconfirm
             title="删除这个商品？"
             description="历史推广记录会保留归属；仍挂着平台链接的商品删不掉，要先改链接归属。"
@@ -632,6 +646,8 @@ export function GoodsPanel() {
         onClose={() => setStyleModal((m) => ({ ...m, open: false }))}
         onSaved={handleStyleSaved}
       />
+
+      <SuitLinkModal goods={linkGoods} onClose={() => setLinkGoods(null)} />
     </>
   );
 }

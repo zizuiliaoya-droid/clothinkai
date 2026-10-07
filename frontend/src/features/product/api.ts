@@ -360,6 +360,28 @@ export async function listPlatformLinks(
   return resp.data;
 }
 
+/** 新建平台链接（8a-5 套装「绑定链接」）。后端会去掉平台 ID 的前导单引号与首尾空白。 */
+export interface PlatformLinkCreate {
+  platform: string;
+  platform_id: string;
+  style_id: string;
+  /** 归属商品；必须以 style_id 为启用成员，否则 422 INVALID_GOODS_REFERENCE。 */
+  goods_main_id?: string;
+  channel?: string;
+  title?: string | null;
+}
+
+/**
+ * POST /api/platform-products/（ops.platform_link:write）。
+ * 平台 ID 已有链接 → 409 PLATFORM_PRODUCT_CONFLICT，message 里是归属商品的显示名，不覆盖。
+ */
+export async function createPlatformLink(
+  payload: PlatformLinkCreate
+): Promise<PlatformLink> {
+  const resp = await apiClient.post<PlatformLink>("/api/platform-products/", payload);
+  return resp.data;
+}
+
 export async function updatePlatformLink(
   id: string,
   payload: PlatformLinkUpdate

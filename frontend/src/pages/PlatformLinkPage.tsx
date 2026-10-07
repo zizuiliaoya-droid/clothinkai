@@ -28,6 +28,7 @@ import {
   type PlatformLink,
   type PlatformLinkFilters,
 } from "@/features/product/api";
+import { PLATFORM_LINK_RISK_TEXT } from "@/features/product/platformLinkRisk";
 import { extractErrorMessage } from "@/services/apiClient";
 
 const PLATFORMS = ["千牛", "万相台"];
@@ -182,7 +183,7 @@ export function PlatformLinkPage() {
       }
     >
       <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
-        店铺里每条在卖的链接与商品、款式、渠道的绑定关系。绑错会让销售数据算到别的商品头上，
+        店铺里每条在卖的链接与商品、款式、渠道的绑定关系。{PLATFORM_LINK_RISK_TEXT}，
         所以这个视图只对管理员与运营开放。
       </Typography.Paragraph>
 
