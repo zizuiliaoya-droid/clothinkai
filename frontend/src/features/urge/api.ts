@@ -63,6 +63,10 @@ export async function urgePromotion(
   return resp.data;
 }
 
+/** 催发截图允许的格式与大小（与后端 check_image_payload、urge _SCREENSHOT_MAX_BYTES 一致）。 */
+export const URGE_SCREENSHOT_MIME_TYPES = ["image/jpeg", "image/png", "image/webp"] as const;
+export const URGE_SCREENSHOT_MAX_BYTES = 10 * 1024 * 1024;
+
 /**
  * 手动催发并附聊天截图。
  *

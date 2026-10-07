@@ -35,7 +35,6 @@ import {
   listUrgeTasks,
   updateUrgeConfig,
   urgeBatch,
-  urgePromotion,
 } from "@/features/urge/api";
 import type {
   UrgeConfig,
@@ -48,6 +47,7 @@ import { useAuthStore } from "@/stores/authStore";
 import { BloggerHoverCard } from "@/components/BloggerHoverCard/BloggerHoverCard";
 import { DisplayNameCell } from "@/components/DisplayNameCell/DisplayNameCell";
 import { StyleSelect } from "@/components/RemoteSelect/StyleSelect";
+import { UrgeModal } from "@/components/UrgeModal/UrgeModal";
 
 const statusColor: Record<UrgeTaskStatus, string> = {
   进行中: "processing",
@@ -82,6 +82,8 @@ export function UrgePage() {
     page_size: 20,
   });
   const [detailId, setDetailId] = useState<string | null>(null);
+  // 催发弹窗（与推广页共用 UrgeModal，可附截图）
+  const [urgeTarget, setUrgeTarget] = useState<UrgeTask | null>(null);
   const [configOpen, setConfigOpen] = useState(false);
   const [batchOpen, setBatchOpen] = useState(false);
   const [configForm] = Form.useForm<UrgeConfig>();
@@ -106,16 +108,6 @@ export function UrgePage() {
     queryKey: ["urge-task", detailId],
     queryFn: () => getUrgeTask(detailId as string),
     enabled: !!detailId,
-  });
-
-  const urgeMutation = useMutation({
-    mutationFn: (task: UrgeTask) => urgePromotion(task.promotion_id),
-    onSuccess: (d) => {
-      message.success(`已催发，这是第 ${d.urge_count} 次`);
-      invalidate();
-      void qc.invalidateQueries({ queryKey: ["urge-task", d.id] });
-    },
-    onError: (err) => message.error(extractErrorMessage(err)),
   });
 
   const closeMutation = useMutation({
@@ -292,8 +284,7 @@ export function UrgePage() {
             type="link"
             size="small"
             disabled={r.status !== "进行中"}
-            loading={urgeMutation.isPending}
-            onClick={() => urgeMutation.mutate(r)}
+            onClick={() => setUrgeTarget(r)}
           >
             催发
           </Button>
@@ -531,6 +522,17 @@ export function UrgePage() {
           </Space>
         )}
       </Drawer>
+
+      <UrgeModal
+        open={!!urgeTarget}
+        promotionId={urgeTarget?.promotion_id ?? null}
+        title={
+          urgeTarget
+            ? `催发 · ${urgeTarget.promotion_internal_code ?? "—"} · ${urgeTarget.blogger_nickname ?? "—"}`
+            : "催发"
+        }
+        onClose={() => setUrgeTarget(null)}
+      />
 
       <Modal
         title="催发设置"
