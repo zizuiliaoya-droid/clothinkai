@@ -6,7 +6,7 @@
 
 ## 当前进度（交接用，2026-10-07）
 
-- **线上版本**：`main` @ `a0f1410`（PR #29），alembic head `056_goods_short_name`。合并到 main 后 Zeabur
+- **线上版本**：`main` 含 PR #31（`5530894`，10-07 上线并核对）与文档 PR #30，alembic head 仍是 `056_goods_short_name`。合并到 main 后 Zeabur
   自动重新部署 backend / frontend / worker / beat 四个服务；backend 启动时先跑 `alembic upgrade head`，
   迁移失败就起不来（`backend/Dockerfile`）。`.github/workflows/migrate.yml` 只是手动补跑通道
 - **已完成**：批次 0 ~ 5b-1e 与两个修复，截至 PR #29，见下表与各批次小节。PR #28（付款截图）、#29（商品简称）
@@ -19,8 +19,8 @@
   （只出设计）。各在 `.worktrees/<名字>` 独立 worktree 与独立测试库里做，只在分支上本地提交；
   编排方负责 push、开 PR，**合并（= 上生产）每次等业务方确认**。各工作流的报告写在
   `.agents/tasks/20261007-exec/`（git 忽略）
-- **待合并的 PR**：#30（只有文档：修改清单、调研存档、归批、台账、交接手册、需求原件）；#31（W2 = 7b 第一步：管理员网络诊断页 +
-  登录审计补齐账号与租户，全量 1315 passed、覆盖率 81.79%，评审通过）。合并 = 上生产，等业务方确认
+- **10-07 已合并**：#31（W2 = 7b 第一步，见「7b 第一步（PR #31）」一节）、#30（文档）。**等业务方**用管理员账号在办公室网络、
+  手机 4G 下各打开一次「系统设置 → 网络诊断」，复制结果发回，据此做 7b 第二步
 - **下一步**：第一波完成 → 开 PR → 业务方同意后按 W2 → W1 → W3 合并并做生产核对；第二波 7c 实施、8b、7b 第二步
 - **等业务方**：见「待业务确认」一节（20261007 的 5 个问题、路由器 DDNS、补录简称与季节）
 - **接手**：环境、本地检查、故障注入、生产只读核对、提交发布流程、并行开发约定都在[交接手册](../交接手册.md)。
@@ -58,6 +58,8 @@
 | 5b-1e | 催发阈值读配置 + 历史汇总的催发漂移 + 单篇点赞成本对齐 PRD | #27 | e10c6ed |
 | 修复 | 付款截图改后端代传（Failed to fetch） | #28 | 02d9de7 |
 | 简称 | 商品 / 套装加「商品简称」（056） | #29 | a0f1410 |
+| 7b-1 | 管理员网络诊断页 + 登录审计补齐账号与租户（无迁移） | #31 | 5530894 |
+| 文档 | 20261005 修改清单与调研存档、20261007 需求归批、交接手册、需求原件 | #30 | — |
 
 ## 批次 2：合作模式 typed 化 + 三分支成本与流转
 
@@ -729,6 +731,40 @@ PRD §9：单篇点赞成本 = 总推广成本 ÷ 7 天点赞数，PR 提交 7 �
 - 护栏：CRUD（填写 / 空串归一 / 保持 / 清空 / 超长）、搜索、商品下拉、款式归属、平台链接两条
   读取路径、汇总与实时逐字相等（一个有简称一个没有）、企微预警、导出列与公式转义。
   7 处故障注入全部抓到
+
+## 7b 第一步（PR #31，无 migration）：管理员网络诊断页 + 登录审计补齐账号与租户
+
+生产 90 天登录审计 69 条 IP 都是 Zeabur 内网入口 `10.42.0.1`：后端认不出用户真实 IP（启动只带 `--proxy-headers`、没配
+`FORWARDED_ALLOW_IPS`，uvicorn 0.30.6 默认只信任 127.0.0.1）。要定该信任哪一层代理，先得看清生产的转发链，所以先上只读诊断。
+
+- `GET /api/security/ip-diagnostics`：回显 uvicorn 处理后的 `client.host`、8 个转发相关请求头原值、X-Forwarded-For 拆分
+  （IPv4-mapped 归一 + 是否公网）、`FORWARDED_ALLOW_IPS`、uvicorn 版本、服务器时间；`Cache-Control: no-store`，不写库
+- 权限挂新一级域 `security.ip_allowlist:write`：permission 表里没有 `security.*`，现在只有持 `*` 的 admin / platform_admin 能过；
+  7f 迁移入册这个 scope 时要确认只授 admin
+- 共享 IP 工具 `core/security/client_ip.py`；采集 Worker 白名单的匹配函数原样搬过去，用冻结的原实现逐条对照，行为不变
+- 登录类 6 个审计动作都写 `after.username`（截 64 字）和显式 `tenant_id`（查不到用户用 default 租户）；判定顺序、返回码、限流计数不变
+- 系统设置页改成「企业微信 / 网络诊断」两个 Tab，网络诊断只对系统管理员显示，可一键复制
+
+验证：全量 1315 passed（新增 111），覆盖率 81.79%；11 处故障注入全红；375 / 768 / 1440 实看；独立评审通过。
+**生产核对（10-07）**：4 个服务部署成功，`/ready` 200；未登录访问诊断接口 401；线上前端包已含诊断接口；alembic 仍是 056；
+`permission` 表 `security%` 0 行。部署后还没有新的登录审计行，「新行都带 username 与 tenant_id」等有人登录后再查：
+
+```sql
+SELECT action, count(*) AS n,
+       count(*) FILTER (WHERE tenant_id IS NULL) AS null_tenant,
+       count(*) FILTER (WHERE coalesce(after->>'username', '') = '') AS no_username
+FROM audit_log
+WHERE (action LIKE 'login%' OR action = 'user_lock')
+  AND created_at >= TIMESTAMPTZ '2026-10-07 09:59:00+00'
+GROUP BY action;
+-- 预期 null_tenant = 0；user_lock 本批没加 username，no_username 非 0 属正常
+```
+
+评审留下、带进后面批次的三条：
+- 匿名登录审计（限流、用户不存在）的 `user_id` 仍会回落到浏览器里旧 token 的用户——既有行为，7f 改登录路径时修
+- `client_ip.py`「`client.host` 不会出现 IPv4-mapped 形态」只在 XFF 不被信任时成立；7b 第二步开信任前看诊断结果的
+  `xff_chain[].raw`，有 `::ffff:` 或带端口就同时给 Worker 白名单补归一
+- 诊断结果把同名头的多行拼成一串；uvicorn 只读最后一行 X-Forwarded-For、Starlette `headers.get()` 取第一行，判读时注意
 
 ## 批次 5b-2：投产/工作进度/BI 的视图补齐（已并入批次 7e）
 
