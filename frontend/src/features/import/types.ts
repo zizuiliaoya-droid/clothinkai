@@ -6,7 +6,12 @@ export type ImportBatchStatus =
   | "partial"
   | "failed";
 
-export type ImportJobStatus = "success" | "failed";
+export type ImportJobStatus =
+  | "success"
+  | "failed"
+  | "filled"
+  | "skipped"
+  | "conflict";
 
 export interface ImportBatch {
   id: string;
@@ -16,6 +21,7 @@ export interface ImportBatch {
   mapping_version: number | null;
   status: ImportBatchStatus;
   total_rows: number;
+  /** 商品资料、博主：新增或已覆盖的行；其他来源与原来相同 */
   imported: number;
   failed: number;
   retry_count: number;
@@ -23,6 +29,140 @@ export interface ImportBatch {
   created_by: string | null;
   created_at: string;
   updated_at: string;
+  // 8a-6：仅补空 / 重复已跳过 / 冲突（按行互斥）；带提示的行、补空对象数（不互斥）
+  filled: number;
+  skipped: number;
+  conflicted: number;
+  warning_count: number;
+  filled_objects: number;
+  /** 该批次仍待处理的冲突条数 */
+  pending_conflicts: number;
+}
+
+/** GET /api/imports/batches/{id}/notes 的一行：提示与补空明细（只有字段名，不含值）。 */
+export interface ImportJobNote {
+  row_number: number;
+  status: ImportJobStatus;
+  warnings: string[];
+  filled: { object_type: string; object_label: string; fields: string[] }[];
+}
+
+export interface ImportJobNotesPage {
+  items: ImportJobNote[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+// 导入冲突（8a-6）
+
+export type ConflictStatus =
+  | "pending"
+  | "overwritten"
+  | "kept"
+  | "superseded"
+  | "invalid";
+
+export type ConflictObjectType = "style" | "sku" | "goods" | "blogger";
+
+export type ConflictValue =
+  | string
+  | number
+  | boolean
+  | null
+  | ConflictValue[]
+  | { [key: string]: ConflictValue };
+
+export interface ConflictFieldDiff {
+  field: string;
+  label: string;
+  system: ConflictValue;
+  file: ConflictValue;
+  system_display: string | null;
+  file_display: string | null;
+  sensitive: boolean;
+  /** 没有字段读权限：四个值为空，界面显示「有差异」 */
+  masked: boolean;
+  /** 从被取代的旧冲突并入的字段 */
+  from_batch_id: string | null;
+}
+
+export interface ImportConflict {
+  id: string;
+  source: string;
+  batch_id: string | null;
+  batch_filename: string | null;
+  row_numbers: number[];
+  object_type: ConflictObjectType;
+  object_id: string;
+  object_key: string;
+  object_label: string;
+  kind: "fields" | "key";
+  fields: ConflictFieldDiff[];
+  message: string | null;
+  status: ConflictStatus;
+  created_by: string | null;
+  created_at: string;
+  resolved_by: string | null;
+  resolved_by_name: string | null;
+  resolved_at: string | null;
+  resolution_note: string | null;
+  superseded_by: string | null;
+  can_resolve: boolean;
+  overwritable: boolean;
+}
+
+export interface ImportConflictPage {
+  items: ImportConflict[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface ImportConflictFilters {
+  page?: number;
+  page_size?: number;
+  source?: string;
+  batch_id?: string;
+  status?: ConflictStatus | "all";
+  field?: string;
+  object_type?: ConflictObjectType;
+}
+
+export interface ConflictResolveItem {
+  id: string;
+  /** 用户看到的系统值（按字段名，原样回传列表里的 system）；用文件覆盖时必填 */
+  expected_system_values?: Record<string, ConflictValue>;
+}
+
+export interface ConflictResolveRequest {
+  decision: "overwrite" | "keep";
+  items: ConflictResolveItem[];
+  note?: string;
+}
+
+export type ConflictResolveOutcome =
+  | "resolved"
+  | "stale"
+  | "gone"
+  | "not_pending"
+  | "not_overwritable"
+  | "invalid_value"
+  | "error";
+
+export interface ConflictResolveResult {
+  id: string;
+  outcome: ConflictResolveOutcome;
+  status: string | null;
+  current_values: Record<string, ConflictValue> | null;
+  masked_fields: string[];
+  field: string | null;
+  message: string | null;
+}
+
+export interface ConflictResolveResponse {
+  results: ConflictResolveResult[];
+  summary: Record<ConflictResolveOutcome, number>;
 }
 
 export interface ImportBatchPage {
@@ -51,6 +191,8 @@ export interface ImportUploadResponse {
 export interface ImportSourceAccess {
   source: string;
   label: string;
+  /** 重复规则可切换（商品资料、博主）：导入记录页只对它们显示新计数列与结果 / 冲突入口 */
+  configurable: boolean;
   can_view: boolean;
   can_upload: boolean;
   can_map: boolean;

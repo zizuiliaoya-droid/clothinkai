@@ -13,6 +13,11 @@
 - POST   /api/imports/field-mappings                映射权限（importer.mapping:write） 新建映射版本
 - GET    /api/imports/field-mappings                来源可见，否则 403                列出版本
 - GET    /api/imports/field-mappings/active         来源可见，否则 403                取 active 版本
+- GET    /api/imports/batches/{id}/notes            来源可见，否则 404                行提示与补空明细（8a-6）
+- GET    /api/imports/conflicts                     可见来源                          冲突列表（脱敏，8a-6）
+- GET    /api/imports/conflicts/summary             来源可见，否则 403                待处理冲突条数
+- GET    /api/imports/conflicts/download            可见来源                          冲突明细 CSV（脱敏）
+- POST   /api/imports/conflicts/resolve             裁决权限 + 字段权限，整单预检     单条 / 多选裁决
 - GET    /api/imports/access                        登录即可                          各来源的能力
 
 商品资料（manual_style_sku）只认 product.import:write（跟单、运营、管理员）。
@@ -32,14 +37,27 @@ from fastapi.responses import StreamingResponse
 from app.core.config import settings
 from app.modules.auth.deps import CurrentActiveUser, CurrentPerms
 from app.modules.importer import access
-from app.modules.importer.deps import FieldMappingServiceDep, ImportServiceDep
+from app.modules.importer.conflicts import ConflictFilters
+from app.modules.importer.deps import (
+    FieldMappingServiceDep,
+    ImportConflictServiceDep,
+    ImportServiceDep,
+)
 from app.modules.importer.exceptions import ImportFileTooLargeError
+from app.modules.importer.models import ImportBatch
 from app.modules.importer.repository import ImportBatchListFilters
 from app.modules.importer.schemas import (
+    ConflictObjectType,
+    ConflictResolveRequest,
+    ConflictResolveResponse,
+    ConflictStatusFilter,
+    ConflictSummary,
     FieldMappingCreate,
     FieldMappingResponse,
     ImportBatchPage,
     ImportBatchResponse,
+    ImportConflictPage,
+    ImportJobNotesPage,
     ImportSourceAccessResponse,
     ImportUploadResponse,
 )
@@ -124,12 +142,19 @@ async def list_batches(
     items, total = await service.list_batches(
         filters=filters, page=page, page_size=page_size, user=user, perms=perms
     )
+    pending = await service.pending_conflicts(b.id for b in items)
     return ImportBatchPage(
-        items=[ImportBatchResponse.model_validate(b) for b in items],
+        items=[_batch_response(b, pending.get(b.id, 0)) for b in items],
         total=total,
         page=page,
         page_size=page_size,
     )
+
+
+def _batch_response(batch: ImportBatch, pending_conflicts: int) -> ImportBatchResponse:
+    resp = ImportBatchResponse.model_validate(batch)
+    resp.pending_conflicts = pending_conflicts
+    return resp
 
 
 @router.get("/batches/{batch_id}", response_model=ImportBatchResponse)
@@ -140,7 +165,22 @@ async def get_batch(
     service: ImportServiceDep,
 ) -> ImportBatchResponse:
     batch = await service.get_batch(batch_id, user, perms)
-    return ImportBatchResponse.model_validate(batch)
+    pending = await service.pending_conflicts([batch.id])
+    return _batch_response(batch, pending.get(batch.id, 0))
+
+
+@router.get("/batches/{batch_id}/notes", response_model=ImportJobNotesPage)
+async def get_batch_notes(
+    batch_id: UUID,
+    user: CurrentActiveUser,
+    perms: CurrentPerms,
+    service: ImportServiceDep,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+) -> ImportJobNotesPage:
+    """有提示或补空的行（行号、类别、提示、补空字段名；不含受保护字段的值）。批次不可见 → 404。"""
+    items, total = await service.batch_notes(batch_id, user, perms, page=page, page_size=page_size)
+    return ImportJobNotesPage(items=items, total=total, page=page, page_size=page_size)
 
 
 # ---------------------------------------------------------------------------
@@ -161,7 +201,8 @@ async def retry_batch(
     409：retry_count 已达上限（exhausted）或批次正在处理中（busy）。
     """
     batch = await service.retry(batch_id, user, perms)
-    return ImportBatchResponse.model_validate(batch)
+    pending = await service.pending_conflicts([batch.id])
+    return _batch_response(batch, pending.get(batch.id, 0))
 
 
 @router.get("/batches/{batch_id}/errors/download")
@@ -224,6 +265,91 @@ async def get_active_field_mapping(
     """取某 source 当前 active 映射版本（无 → null）。"""
     mapping = await service.get_active(source, user, perms)
     return FieldMappingResponse.model_validate(mapping) if mapping else None
+
+
+# ---------------------------------------------------------------------------
+# 冲突（8a-6）
+# ---------------------------------------------------------------------------
+
+
+def _conflict_filters(
+    source: str | None,
+    batch_id: UUID | None,
+    conflict_status: ConflictStatusFilter,
+    field: str | None,
+    object_type: ConflictObjectType | None,
+) -> ConflictFilters:
+    return ConflictFilters(
+        source=source,
+        batch_id=batch_id,
+        status=conflict_status,
+        field=field,
+        object_type=object_type,
+    )
+
+
+@router.get("/conflicts", response_model=ImportConflictPage)
+async def list_conflicts(
+    user: CurrentActiveUser,
+    perms: CurrentPerms,
+    service: ImportConflictServiceDep,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+    source: Annotated[str | None, Query(max_length=32)] = None,
+    batch_id: Annotated[UUID | None, Query()] = None,
+    conflict_status: Annotated[ConflictStatusFilter, Query(alias="status")] = "pending",
+    field: Annotated[str | None, Query(max_length=64)] = None,
+    object_type: Annotated[ConflictObjectType | None, Query()] = None,
+) -> ImportConflictPage:
+    """冲突列表（只含可见来源；受保护字段按字段权限脱敏；按字段筛选只认该来源的比较字段）。"""
+    filters = _conflict_filters(source, batch_id, conflict_status, field, object_type)
+    items, total = await service.list_conflicts(
+        filters, page=page, page_size=page_size, user=user, perms=perms
+    )
+    return ImportConflictPage(items=items, total=total, page=page, page_size=page_size)
+
+
+@router.get("/conflicts/summary", response_model=ConflictSummary)
+async def get_conflict_summary(
+    user: CurrentActiveUser,
+    perms: CurrentPerms,
+    service: ImportConflictServiceDep,
+    source: Annotated[str, Query(max_length=32)],
+) -> ConflictSummary:
+    """某来源的待处理冲突条数（成本表页的「待处理冲突 N」）。"""
+    return ConflictSummary(pending=await service.summary(source, user, perms))
+
+
+@router.get("/conflicts/download")
+async def download_conflicts(
+    user: CurrentActiveUser,
+    perms: CurrentPerms,
+    service: ImportConflictServiceDep,
+    source: Annotated[str | None, Query(max_length=32)] = None,
+    batch_id: Annotated[UUID | None, Query()] = None,
+    conflict_status: Annotated[ConflictStatusFilter, Query(alias="status")] = "pending",
+    field: Annotated[str | None, Query(max_length=64)] = None,
+    object_type: Annotated[ConflictObjectType | None, Query()] = None,
+) -> StreamingResponse:
+    """冲突明细 CSV（UTF-8 BOM、csv_safe、脱敏写「有差异」；超过 10,000 条 → 422）。"""
+    filters = _conflict_filters(source, batch_id, conflict_status, field, object_type)
+    data = await service.download_csv(filters, user, perms)
+    return StreamingResponse(
+        iter([data]),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="import_conflicts.csv"'},
+    )
+
+
+@router.post("/conflicts/resolve", response_model=ConflictResolveResponse)
+async def resolve_conflicts(
+    payload: ConflictResolveRequest,
+    user: CurrentActiveUser,
+    perms: CurrentPerms,
+    service: ImportConflictServiceDep,
+) -> ConflictResolveResponse:
+    """裁决冲突（单条与多选同一接口）：整单预检权限（403），之后逐条处理、逐条返回结果。"""
+    return await service.resolve(payload, user, perms)
 
 
 # ---------------------------------------------------------------------------

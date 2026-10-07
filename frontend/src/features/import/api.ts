@@ -2,11 +2,16 @@
 
 import { apiClient } from "@/services/apiClient";
 import type {
+  ConflictResolveRequest,
+  ConflictResolveResponse,
   FieldMapping,
   FieldMappingCreate,
   ImportBatch,
   ImportBatchListFilters,
   ImportBatchPage,
+  ImportConflictFilters,
+  ImportConflictPage,
+  ImportJobNotesPage,
   ImportSourceAccess,
   ImportUploadResponse,
 } from "./types";
@@ -80,6 +85,68 @@ export async function downloadImportErrors(batchId: string): Promise<Blob> {
     { responseType: "blob" }
   );
   return resp.data as Blob;
+}
+
+/** 批次里有提示或补空的行（行号、类别、提示、补空字段名；不含任何值）。 */
+export async function getImportBatchNotes(
+  batchId: string,
+  params: { page?: number; page_size?: number } = {}
+): Promise<ImportJobNotesPage> {
+  const resp = await apiClient.get<ImportJobNotesPage>(
+    `/api/imports/batches/${batchId}/notes`,
+    { params }
+  );
+  return resp.data;
+}
+
+// 导入冲突（8a-6）
+
+/** 冲突列表：只含可见来源；受保护字段对没有读权限的人 masked。 */
+export async function listImportConflicts(
+  filters: ImportConflictFilters = {}
+): Promise<ImportConflictPage> {
+  const resp = await apiClient.get<ImportConflictPage>("/api/imports/conflicts", {
+    params: filters,
+  });
+  return resp.data;
+}
+
+/** 某来源仍待处理的冲突条数。 */
+export async function getImportConflictSummary(
+  source: string
+): Promise<{ pending: number }> {
+  const resp = await apiClient.get<{ pending: number }>(
+    "/api/imports/conflicts/summary",
+    { params: { source } }
+  );
+  return resp.data;
+}
+
+/** 下载冲突明细 CSV（同列表筛选；超过 10,000 条后端返回 422）。 */
+export async function downloadImportConflicts(
+  filters: Omit<ImportConflictFilters, "page" | "page_size"> = {}
+): Promise<Blob> {
+  const resp = await apiClient.get("/api/imports/conflicts/download", {
+    params: filters,
+    responseType: "blob",
+    timeout: 120_000,
+  });
+  return resp.data as Blob;
+}
+
+/**
+ * 裁决冲突（单条与多选同一接口，1 ~ 200 条）。权限整单预检（403 零改动），
+ * 之后逐条处理、逐条返回结果（stale 带当前值，需确认后带新的期望值重发）。
+ */
+export async function resolveImportConflicts(
+  payload: ConflictResolveRequest
+): Promise<ConflictResolveResponse> {
+  const resp = await apiClient.post<ConflictResolveResponse>(
+    "/api/imports/conflicts/resolve",
+    payload,
+    { timeout: 120_000 }
+  );
+  return resp.data;
 }
 
 // 字段映射版本

@@ -249,17 +249,20 @@ class TestDescribeAccess:
             assert set(item) == {
                 "source",
                 "label",
+                "configurable",  # 8a-6：重复规则可切换（只有商品资料、博主为真）
                 "can_view",
                 "can_upload",
                 "can_map",
                 "can_resolve",
             }
+            assert item["configurable"] is (item["source"] in {STYLE_SKU, BLOGGER})
 
     def test_operations_flags(self, registered: None) -> None:
         by_source = {i["source"]: i for i in access.describe_access(_role_perms("operations"))}
         assert by_source[STYLE_SKU] == {
             "source": STYLE_SKU,
             "label": "商品资料",
+            "configurable": True,
             "can_view": True,
             "can_upload": True,
             "can_map": True,

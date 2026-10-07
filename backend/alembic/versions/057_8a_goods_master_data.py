@@ -34,7 +34,10 @@ from uuid import uuid4
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.engine import Connection
+
+from app.core.security.rls import disable_rls_sql, enable_rls_sql
 
 revision: str = "057_8a_goods_master_data"
 down_revision: str | Sequence[str] | None = "056_goods_short_name"
@@ -50,6 +53,8 @@ _PRODUCT_ALL_NAME = "商品模块全部权限"
 _GRANT_ROLE = "operations"
 # downgrade 恢复 style.category NOT NULL 前给空类目补的值
 _CATEGORY_FALLBACK = "未分类"
+# import_batch 新增的五个计数列（8a-6，设计 §4.2）
+_BATCH_COUNT_COLUMNS = ("filled", "skipped", "conflicted", "warning_count", "filled_objects")
 
 
 def _log(msg: str) -> None:
@@ -70,11 +75,134 @@ def _upgrade_style(bind: Connection) -> None:
     _log("style.category 放开 NOT NULL")
 
 
+def _drop_import_job_status_check(bind: Connection) -> None:
+    """按定义查出 ``import_job`` 状态 CHECK 的实际名字再删（不按名字猜）。
+
+    这条约束是 010 在 ``create_table`` 里建的，落库名取决于当时的命名约定
+    （实测被套成 ``ck_import_job_ck_import_job_status``）；表上另一条 CHECK 是
+    ``attempt_count >= 1``，不含 ``status``。恰好一条才删，否则中止迁移（设计 §3.2 第 4 步）。
+    """
+    names = (
+        bind.execute(
+            sa.text(
+                "SELECT conname FROM pg_constraint "
+                "WHERE conrelid = 'import_job'::regclass AND contype = 'c' "
+                "AND pg_get_constraintdef(oid) LIKE '%status%'"
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if len(names) != 1:
+        raise RuntimeError(
+            f"[057] import_job 上含 status 的 CHECK 应恰好一条，实际 {len(names)} 条："
+            f"{', '.join(names) or '（无）'}；不猜着删，迁移中止"
+        )
+    # op.f：按库里的实际名删，不再套命名约定
+    op.drop_constraint(op.f(names[0]), "import_job", type_="check")
+    _log(f"删除 import_job 状态 CHECK：{names[0]}")
+
+
 def _upgrade_import_tables(bind: Connection) -> None:
     """导入表：``import_batch`` 计数列、``import_job`` 状态与备注、``import_conflict`` 新表（8a-6）。
 
-    由后续步骤填写；本步骤（8a-7）不改导入表。
+    - ``import_batch`` 加五个计数（行互斥的补空 / 跳过 / 冲突，与不互斥的带提示行数 / 补空对象数）
+    - ``import_job.status`` 多 ``filled`` / ``skipped`` / ``conflict``；加 ``notes``（行提示与补空明细，
+      只有字段名、没有值）
+    - 新表 ``import_conflict``：同来源同对象只有一条待处理，由部分唯一索引保证（设计 §4.4）
     """
+    for col in _BATCH_COUNT_COLUMNS:
+        op.add_column(
+            "import_batch",
+            sa.Column(col, sa.Integer(), nullable=False, server_default=sa.text("0")),
+        )
+    op.create_check_constraint(
+        "ck_import_batch_8a_counts_nonneg",
+        "import_batch",
+        " AND ".join(f"{col} >= 0" for col in _BATCH_COUNT_COLUMNS),
+    )
+    _log(f"import_batch 加计数列：{', '.join(_BATCH_COUNT_COLUMNS)}")
+
+    _drop_import_job_status_check(bind)
+    op.create_check_constraint(
+        "ck_import_job_status",
+        "import_job",
+        "status IN ('success','failed','filled','skipped','conflict')",
+    )
+    op.add_column("import_job", sa.Column("notes", postgresql.JSONB(), nullable=True))
+    _log("import_job 状态 CHECK 改为五个取值，加 notes")
+
+    op.create_table(
+        "import_conflict",
+        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
+        sa.Column("tenant_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
+        sa.Column("source", sa.String(32), nullable=False),
+        sa.Column("batch_id", postgresql.UUID(as_uuid=True), nullable=True),
+        sa.Column(
+            "row_numbers",
+            postgresql.JSONB(),
+            nullable=False,
+            server_default=sa.text("'[]'::jsonb"),
+        ),
+        sa.Column("object_type", sa.String(16), nullable=False),
+        # 多态，不设外键：对象被删时冲突转「失效」（设计 §4.5）
+        sa.Column("object_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("object_key", sa.String(128), nullable=False),
+        sa.Column("object_label", sa.String(255), nullable=False),
+        sa.Column("kind", sa.String(8), nullable=False),
+        sa.Column(
+            "fields", postgresql.JSONB(), nullable=False, server_default=sa.text("'[]'::jsonb")
+        ),
+        sa.Column("message", sa.Text(), nullable=True),
+        sa.Column("status", sa.String(16), nullable=False, server_default=sa.text("'pending'")),
+        sa.Column("created_by", postgresql.UUID(as_uuid=True), nullable=True),
+        sa.Column("resolved_by", postgresql.UUID(as_uuid=True), nullable=True),
+        sa.Column("resolved_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("resolution_note", sa.Text(), nullable=True),
+        # 不设外键，免得「先标旧冲突取代、再插新冲突」的插入顺序打架
+        sa.Column("superseded_by", postgresql.UUID(as_uuid=True), nullable=True),
+        sa.ForeignKeyConstraint(["tenant_id"], ["tenant.id"], ondelete="RESTRICT"),
+        # 批次被清理时冲突留痕仍在
+        sa.ForeignKeyConstraint(["batch_id"], ["import_batch.id"], ondelete="SET NULL"),
+        sa.ForeignKeyConstraint(["created_by"], ["user.id"], ondelete="SET NULL"),
+        sa.ForeignKeyConstraint(["resolved_by"], ["user.id"], ondelete="SET NULL"),
+        sa.CheckConstraint(
+            "object_type IN ('style','sku','goods','blogger')",
+            name="ck_import_conflict_object_type",
+        ),
+        sa.CheckConstraint("kind IN ('fields','key')", name="ck_import_conflict_kind"),
+        sa.CheckConstraint(
+            "status IN ('pending','overwritten','kept','superseded','invalid')",
+            name="ck_import_conflict_status",
+        ),
+        # 状态与留痕字段不能各写各的：待处理 ⇔ 没有处理时间
+        sa.CheckConstraint(
+            "(status = 'pending') = (resolved_at IS NULL)",
+            name="ck_import_conflict_resolved_at",
+        ),
+    )
+    # 同来源同对象只有一条待处理：批次之间可并发，只能由数据库保证
+    op.create_index(
+        "uq_import_conflict_pending",
+        "import_conflict",
+        ["tenant_id", "source", "object_type", "object_id"],
+        unique=True,
+        postgresql_where=sa.text("status = 'pending'"),
+    )
+    op.create_index(
+        "idx_import_conflict_list",
+        "import_conflict",
+        ["tenant_id", "source", "status", "created_at"],
+    )
+    op.create_index("idx_import_conflict_batch", "import_conflict", ["tenant_id", "batch_id"])
+    op.execute(enable_rls_sql("import_conflict"))
+    _log("import_conflict 表已创建（RLS；部分唯一索引 uq_import_conflict_pending）")
 
 
 def _upgrade_permissions(bind: Connection) -> None:
@@ -201,7 +329,33 @@ def _downgrade_permissions(bind: Connection) -> None:
 
 
 def _downgrade_import_tables(bind: Connection) -> None:
-    """撤回导入表的变更（8a-6）。由后续步骤填写。"""
+    """撤回导入表的变更（8a-6）。
+
+    冲突记录随表一起丢掉（回退语义）；``filled`` / ``skipped`` / ``conflict`` 三类行本来就不是
+    失败，回退成 ``success``；``import_batch`` 的五列直接删，PG 删列时连带删掉引用它们的多列
+    CHECK，不依赖约束的实际名字（设计 §3.3 第 2-4 步）。
+    """
+    op.execute(disable_rls_sql("import_conflict"))
+    op.drop_table("import_conflict")
+    _log("删除 import_conflict 表")
+
+    res = bind.execute(
+        sa.text(
+            "UPDATE import_job SET status = 'success' "
+            "WHERE status IN ('filled','skipped','conflict')"
+        )
+    )
+    _log(f"import_job 补空 / 跳过 / 冲突行回退为 success：{res.rowcount or 0} 行")
+    _drop_import_job_status_check(bind)
+    op.create_check_constraint(
+        "ck_import_job_status", "import_job", "status IN ('success','failed')"
+    )
+    op.drop_column("import_job", "notes")
+    _log("import_job 状态 CHECK 恢复两个取值，删 notes")
+
+    for col in _BATCH_COUNT_COLUMNS:
+        op.drop_column("import_batch", col)
+    _log(f"import_batch 删计数列：{', '.join(_BATCH_COUNT_COLUMNS)}")
 
 
 def _downgrade_style(bind: Connection) -> None:

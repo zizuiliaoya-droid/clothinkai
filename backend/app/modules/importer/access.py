@@ -23,6 +23,7 @@ from typing import Any
 
 from app.core.exceptions import PermissionDeniedError
 from app.core.security.permissions import EffectivePermissions
+from app.modules.importer.duplicate_rules import is_configurable
 from app.modules.importer.registry import ImportAdapterRegistry
 
 SCOPE_PRODUCT_IMPORT = "product.import"
@@ -137,6 +138,8 @@ def describe_access(perms: EffectivePermissions) -> list[dict[str, Any]]:
             {
                 "source": source,
                 "label": SOURCE_LABELS.get(source, source),
+                # 重复规则可切换的来源（商品资料、博主），导入记录页据此显示新计数列（8a-6）
+                "configurable": is_configurable(source),
                 "can_view": can_view(perms, source),
                 "can_upload": perms.has(*access.write),
                 "can_map": perms.has(*access.mapping),

@@ -181,6 +181,27 @@ class ImportJobRepository:
         )
         return (await self._session.execute(stmt)).scalar_one_or_none()
 
+    async def list_with_notes(
+        self, batch_id: UUID, *, page: int, page_size: int
+    ) -> tuple[Sequence[ImportJob], int]:
+        """有提示或补空明细的行（notes 两样都空时 runner 写 NULL，8a-6）。"""
+        where = (ImportJob.batch_id == batch_id, ImportJob.notes.is_not(None))
+        total = int(
+            (
+                await self._session.execute(
+                    select(func.count()).select_from(ImportJob).where(*where)
+                )
+            ).scalar_one()
+        )
+        stmt = (
+            select(ImportJob)
+            .where(*where)
+            .order_by(ImportJob.row_number.asc())
+            .limit(page_size)
+            .offset((page - 1) * page_size)
+        )
+        return (await self._session.execute(stmt)).scalars().all(), total
+
     async def count_by_status(self, batch_id: UUID, status: str) -> int:
         stmt = select(func.count()).where(
             ImportJob.batch_id == batch_id, ImportJob.status == status

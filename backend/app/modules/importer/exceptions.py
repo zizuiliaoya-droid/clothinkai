@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.core.exceptions import AppException
+from app.core.exceptions import AppException, PermissionDeniedError
 
 # ---------------------------------------------------------------------------
 # 上传校验（422）
@@ -110,6 +110,70 @@ class ImportBatchNotFoundError(AppException):
         super().__init__(f"导入批次 {batch_id} 不存在", details={"batch_id": str(batch_id)})
 
 
+class ImportConflictNotFoundError(AppException):
+    """裁决时有冲突取不到（不存在、跨租户或来源不可见），整单不处理（8a-6）。"""
+
+    code = "IMPORT_CONFLICT_NOT_FOUND"
+    status_code = 404
+    message = "导入冲突不存在"
+
+    def __init__(self, missing_ids: list[Any]) -> None:
+        super().__init__(
+            f"有 {len(missing_ids)} 条冲突不存在或无权查看",
+            details={"missing_ids": [str(i) for i in missing_ids]},
+        )
+
+
+# ---------------------------------------------------------------------------
+# 冲突（8a-6，422 / 403）
+# ---------------------------------------------------------------------------
+
+
+class ImportConflictExpectedRequiredError(AppException):
+    """「用文件覆盖」时每条都必须带 expected_system_values（整单不处理）。"""
+
+    code = "IMPORT_CONFLICT_EXPECTED_REQUIRED"
+    status_code = 422
+    message = "用文件覆盖时每条冲突都必须带上看到的系统值"
+
+    def __init__(self, ids: list[Any]) -> None:
+        super().__init__(
+            "用文件覆盖时每条冲突都必须带上看到的系统值",
+            details={"ids": [str(i) for i in ids]},
+        )
+
+
+class ImportConflictFieldUnknownError(AppException):
+    """按字段筛选冲突时字段不在该来源的比较字段名单里。"""
+
+    code = "IMPORT_CONFLICT_FIELD_UNKNOWN"
+    status_code = 422
+    message = "未知的冲突字段"
+
+    def __init__(self, field: str) -> None:
+        super().__init__(f"未知的冲突字段：{field}", details={"field": field})
+
+
+class ImportConflictExportTooLargeError(AppException):
+    """冲突下载超过条数上限，请缩小筛选范围。"""
+
+    code = "IMPORT_CONFLICT_EXPORT_TOO_LARGE"
+    status_code = 422
+    message = "冲突条数超过下载上限，请缩小筛选范围"
+
+    def __init__(self, limit: int) -> None:
+        super().__init__(f"冲突超过 {limit} 条，请缩小筛选范围后再下载", details={"limit": limit})
+
+
+class ImportConflictFieldPermissionError(PermissionDeniedError):
+    """裁决的冲突里有受保护字段，而用户对它没有读写权限（整单 403）。"""
+
+    code = "FIELD_PERMISSION_DENIED"
+
+    def __init__(self, denied: list[dict[str, Any]]) -> None:
+        super().__init__("无权处理含受保护字段的冲突", details={"denied": denied})
+
+
 # ---------------------------------------------------------------------------
 # 存储（500）
 # ---------------------------------------------------------------------------
@@ -139,6 +203,11 @@ class RowValidationError(AppException):
 __all__ = [
     "ImportBatchBusyError",
     "ImportBatchNotFoundError",
+    "ImportConflictExpectedRequiredError",
+    "ImportConflictExportTooLargeError",
+    "ImportConflictFieldPermissionError",
+    "ImportConflictFieldUnknownError",
+    "ImportConflictNotFoundError",
     "ImportDuplicateFileError",
     "ImportFileTooLargeError",
     "ImportFormatUnsupportedError",

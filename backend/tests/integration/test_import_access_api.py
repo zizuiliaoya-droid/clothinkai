@@ -301,6 +301,147 @@ class TestOperationsProductWriteHttp:
         assert resp.status_code == 201, resp.text
 
 
+async def _conflict(session: AsyncSession, tenant: Any, source: str, batch_id: Any) -> Any:
+    from app.modules.importer.models import ImportConflict
+
+    c = ImportConflict(
+        tenant_id=tenant.id,
+        source=source,
+        batch_id=batch_id,
+        row_numbers=[1],
+        object_type="sku" if source == STYLE_SKU else "blogger",
+        object_id=uuid4(),
+        object_key="k",
+        object_label="对象",
+        kind="fields",
+        fields=[{"field": "remark", "label": "备注", "system": "a", "file": "b"}],
+    )
+    session.add(c)
+    await session.flush()
+    return c
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("registered", "tenant_ctx")
+class TestConflictAccessHttp:
+    """8a-6：/access 的 configurable、冲突接口与 notes 按来源可见。"""
+
+    async def test_access_configurable(self, as_role: Any) -> None:
+        await as_role("admin")
+        async with _client() as c:
+            resp = await c.get("/api/imports/access")
+        assert resp.status_code == 200
+        configurable = {i["source"] for i in resp.json() if i["configurable"]}
+        assert configurable == {STYLE_SKU, "manual_blogger"}
+
+    async def test_conflicts_visible_by_source(
+        self, as_role: Any, session: AsyncSession, tenant_a: Any, import_batch_factory: Any
+    ) -> None:
+        style_batch = await import_batch_factory.batch(source=STYLE_SKU, status="completed")
+        blogger_batch = await import_batch_factory.batch(
+            source="manual_blogger", status="completed"
+        )
+        style_c = await _conflict(session, tenant_a, STYLE_SKU, style_batch.id)
+        blogger_c = await _conflict(session, tenant_a, "manual_blogger", blogger_batch.id)
+
+        await as_role("merchandiser")
+        async with _client() as c:
+            resp = await c.get("/api/imports/conflicts", params={"page_size": 100})
+            assert resp.status_code == 200, resp.text
+            ids = {i["id"] for i in resp.json()["items"]}
+            assert str(style_c.id) in ids
+            assert str(blogger_c.id) not in ids
+            assert (
+                await c.get("/api/imports/conflicts", params={"source": "manual_blogger"})
+            ).status_code == 403
+            resp = await c.get("/api/imports/conflicts/summary", params={"source": STYLE_SKU})
+            assert resp.status_code == 200
+            assert resp.json()["pending"] >= 1
+            assert (
+                await c.get("/api/imports/conflicts/summary", params={"source": "manual_blogger"})
+            ).status_code == 403
+            # 看不到的来源：裁决按不存在处理
+            resp = await c.post(
+                "/api/imports/conflicts/resolve",
+                json={"decision": "keep", "items": [{"id": str(blogger_c.id)}]},
+            )
+            assert resp.status_code == 404
+            assert resp.json()["code"] == "IMPORT_CONFLICT_NOT_FOUND"
+            # 参数不合法由 FastAPI 返回 422
+            bad = await c.get("/api/imports/conflicts", params={"status": "nope"})
+            assert bad.status_code == 422
+            bad = await c.get("/api/imports/conflicts", params={"object_type": "brand"})
+            assert bad.status_code == 422
+            # 批次详情带待处理冲突条数
+            resp = await c.get(f"/api/imports/batches/{style_batch.id}")
+            assert resp.json()["pending_conflicts"] == 1
+            resp = await c.get("/api/imports/batches", params={"page_size": 100})
+            by_id = {i["id"]: i for i in resp.json()["items"]}
+            assert by_id[str(style_batch.id)]["pending_conflicts"] == 1
+
+        await as_role("pr")
+        async with _client() as c:
+            resp = await c.get(
+                "/api/imports/conflicts", params={"source": "manual_blogger", "page_size": 100}
+            )
+            assert resp.status_code == 200
+            assert str(blogger_c.id) in {i["id"] for i in resp.json()["items"]}
+            resp = await c.post(
+                "/api/imports/conflicts/resolve",
+                json={"decision": "keep", "items": [{"id": str(style_c.id)}]},
+            )
+            assert resp.status_code == 403
+            resp = await c.get(
+                "/api/imports/conflicts/download", params={"source": "manual_blogger"}
+            )
+            assert resp.status_code == 200
+            assert resp.content.startswith("\ufeff".encode())
+
+    async def test_batch_notes(
+        self, as_role: Any, session: AsyncSession, tenant_a: Any, import_batch_factory: Any
+    ) -> None:
+        from app.modules.importer.models import ImportJob
+
+        batch = await import_batch_factory.batch(source=STYLE_SKU, status="completed")
+        qn_batch = await import_batch_factory.batch(source="qianniu", status="completed")
+        for row_number, status_, notes in (
+            (1, "skipped", None),
+            (
+                2,
+                "filled",
+                {
+                    "warnings": ["提示"],
+                    "filled": [
+                        {"object_type": "sku", "object_label": "SKU-1", "fields": ["base_price"]}
+                    ],
+                },
+            ),
+            (3, "conflict", {"warnings": ["冲突提示"], "filled": []}),
+        ):
+            session.add(
+                ImportJob(
+                    tenant_id=tenant_a.id,
+                    batch_id=batch.id,
+                    row_number=row_number,
+                    status=status_,
+                    raw_data={},
+                    notes=notes,
+                )
+            )
+        await session.flush()
+        await as_role("merchandiser")
+        async with _client() as c:
+            resp = await c.get(f"/api/imports/batches/{batch.id}/notes")
+            assert resp.status_code == 200, resp.text
+            body = resp.json()
+            assert body["total"] == 2
+            assert [i["row_number"] for i in body["items"]] == [2, 3]
+            assert body["items"][0]["filled"][0]["fields"] == ["base_price"]
+            assert body["items"][1]["warnings"] == ["冲突提示"]
+            assert (await c.get(f"/api/imports/batches/{qn_batch.id}/notes")).status_code == 404
+
+
 def _all_calls(dependant: Dependant) -> set[Any]:
     """递归取一个路由的全部依赖（含嵌套）的 call。
 

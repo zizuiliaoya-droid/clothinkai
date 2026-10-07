@@ -35,8 +35,10 @@ from app.core.metrics import (
     import_rows_total,
 )
 from app.core.tenancy import tenant_id_ctx
+from app.modules.importer.adapter import ContextAwareImportAdapter
 from app.modules.importer.exceptions import RowValidationError
 from app.modules.importer.models import ImportBatch, ImportJob
+from app.modules.importer.outcome import BatchSeen, ImportRowContext, RowKind, RowOutcome
 from app.modules.importer.registry import ImportAdapterRegistry
 from app.tasks.runner import run_async_task
 
@@ -170,11 +172,13 @@ async def _run_import_batch_claimed(batch_id: UUID, only_failed: bool = False) -
     # ── 4. 逐行处理（tenant_id_ctx 供 audit；RLS 靠 per-row SET LOCAL）──
     tok = tenant_id_ctx.set(tenant_id)
     start = time.perf_counter()
-    imported = failed = 0
+    counts = _BatchCounts()
     affected = _AffectedDates(getattr(adapter, "summary_date_field", None))
+    # 每次执行（首跑、整文件重跑、只重跑失败行）一个，同批以第一个已提交的给值行为准（§4.2.1）
+    batch_seen = BatchSeen()
     try:
         for row_number, row in rows:
-            ok = await _process_one_row(
+            outcome = await _process_one_row(
                 adapter,
                 row,
                 row_number,
@@ -182,26 +186,70 @@ async def _run_import_batch_claimed(batch_id: UUID, only_failed: bool = False) -
                 batch_id=batch_id,
                 tenant_id=tenant_id,
                 actor_id=created_by,
+                source=source,
+                batch_seen=batch_seen,
                 affected=affected,
             )
-            if ok:
-                imported += 1
-                import_rows_total.labels(source=source, result="success").inc()
-            else:
-                failed += 1
-                import_rows_total.labels(source=source, result="failed").inc()
+            result = counts.add(outcome)
+            import_rows_total.labels(source=source, result=result).inc()
     finally:
         tenant_id_ctx.reset(tok)
         import_batch_duration_seconds.labels(source=source).observe(time.perf_counter() - start)
 
     # ── 5. 汇总（bypass）──
-    status = await _summarize_batch(batch_id, imported, failed, only_failed)
+    status = await _summarize_batch(batch_id, counts, only_failed)
     import_batch_total.labels(source=source, status=status).inc()
 
     # ── 6. 刷新受影响日期的报表汇总表（方案 2：导入完成后自动刷新）──
     if status in ("completed", "partial"):
         _enqueue_summary_refresh(tenant_id, affected, batch_id)
-    return {"status": status, "imported": imported, "failed": failed}
+    return {"status": status, "imported": counts.imported, "failed": counts.failed}
+
+
+# RowKind → import_job.status（INSERTED / UPDATED 与旧来源的 success 同义）
+_JOB_STATUS: dict[RowKind, str] = {
+    RowKind.INSERTED: "success",
+    RowKind.UPDATED: "success",
+    RowKind.FILLED: "filled",
+    RowKind.SKIPPED: "skipped",
+    RowKind.CONFLICT: "conflict",
+}
+
+
+class _BatchCounts:
+    """本次执行的行计数：五类按行互斥；带提示的行与补空对象数不互斥（§4.2）。"""
+
+    def __init__(self) -> None:
+        self.imported = 0
+        self.filled = 0
+        self.skipped = 0
+        self.conflicted = 0
+        self.failed = 0
+        self.warning_count = 0
+        self.filled_objects = 0
+
+    def add(self, outcome: RowOutcome | None) -> str:
+        """计一行，返回 import_rows_total 的 result 标签。"""
+        if outcome is None:
+            self.failed += 1
+            return "failed"
+        if outcome.warnings:
+            self.warning_count += 1
+        self.filled_objects += len(outcome.filled)
+        status = _JOB_STATUS[outcome.kind]
+        if status == "success":
+            self.imported += 1
+        elif status == "filled":
+            self.filled += 1
+        elif status == "skipped":
+            self.skipped += 1
+        else:
+            self.conflicted += 1
+        return status
+
+    @property
+    def total_rows(self) -> int:
+        return self.imported + self.filled + self.skipped + self.conflicted + self.failed
 
 
 class _AffectedDates:
@@ -273,16 +321,23 @@ async def _process_one_row(
     batch_id: UUID,
     tenant_id: UUID,
     actor_id: UUID | None,
+    source: str = "",
+    batch_seen: BatchSeen | None = None,
     affected: _AffectedDates | None = None,
-) -> bool:
-    """每行独立事务 + per-row SET LOCAL（NF-1 防连接池串租）。
+) -> RowOutcome | None:
+    """每行独立事务 + per-row SET LOCAL（NF-1 防连接池串租）。返回行结果；None = 失败。
 
-    成功 → 业务记录 + import_job(success) 同事务原子提交。
+    成功 → 业务记录 + import_job(success / filled / skipped / conflict) 同事务原子提交。
     失败 → 独立 bypass session 写 import_job(failed)（防被业务事务回滚带走）。
+
+    adapter 实现了 ``ContextAwareImportAdapter`` 就调 ``upsert_with_context``（8a-6），否则调旧的
+    ``upsert`` 并把 ``(rid, inserted)`` 映射成 INSERTED / UPDATED。行提交成功后
+    ``batch_seen.commit_row()``；失败先 ``discard_row()`` 再写失败行——没提交的行不能成为「第 M 行」。
 
     import_job 写入用 ``ON CONFLICT(batch_id, row_number)``：首次跑插入（attempt_count=1），
     重试时原地更新（attempt_count+1）—— FB-E only_failed 与首跑统一逻辑。
     """
+    seen = batch_seen if batch_seen is not None else BatchSeen()
     try:
         parsed = adapter.parse_row(row, mapping)
         errs = adapter.validate(parsed)
@@ -297,28 +352,45 @@ async def _process_one_row(
                 text("SELECT set_config('app.tenant_id', :tid, true)"),
                 {"tid": str(tenant_id)},
             )
-            rid, _inserted = await adapter.upsert(
-                parsed,
-                session=app_s,
-                tenant_id=tenant_id,
-                actor_id=actor_id,
-            )
+            if isinstance(adapter, ContextAwareImportAdapter):
+                ctx = ImportRowContext(
+                    tenant_id=tenant_id,
+                    source=source or str(getattr(adapter, "source", "")),
+                    batch_id=batch_id,
+                    row_number=row_number,
+                    actor_id=actor_id,
+                    batch_seen=seen,
+                )
+                outcome = await adapter.upsert_with_context(parsed, session=app_s, ctx=ctx)
+            else:
+                rid, inserted = await adapter.upsert(
+                    parsed,
+                    session=app_s,
+                    tenant_id=tenant_id,
+                    actor_id=actor_id,
+                )
+                outcome = RowOutcome(
+                    resource_id=rid, kind=RowKind.INSERTED if inserted else RowKind.UPDATED
+                )
             await _upsert_job(
                 app_s,
                 batch_id=batch_id,
                 tenant_id=tenant_id,
                 row_number=row_number,
                 row=row,
-                status="success",
+                status=_JOB_STATUS[outcome.kind],
                 error_detail=None,
-                target_resource_id=rid,
+                target_resource_id=outcome.resource_id,
+                notes=_job_notes(outcome),
             )
             await app_s.commit()
+        seen.commit_row()
         # 提交之后才记：没提交成功的行不该触发报表刷新
         if affected is not None:
             affected.add(parsed)
-        return True
+        return outcome
     except Exception as exc:
+        seen.discard_row()
         if isinstance(exc, StatementError):
             # 只记异常类名：不带 SQL 与参数（参数里可能有成本价，8a-7 / N11）
             log.warning(
@@ -337,7 +409,17 @@ async def _process_one_row(
             row=row,
             error_detail=_row_error_detail(exc),
         )
-        return False
+        return None
+
+
+def _job_notes(outcome: RowOutcome) -> dict[str, Any] | None:
+    """行提示与补空明细（只有字段名、没有值）；两样都空 → None（落 SQL NULL）。"""
+    if not outcome.warnings and not outcome.filled:
+        return None
+    return {
+        "warnings": list(outcome.warnings),
+        "filled": [record.to_json() for record in outcome.filled],
+    }
 
 
 async def _upsert_job(
@@ -350,6 +432,7 @@ async def _upsert_job(
     status: str,
     error_detail: str | None,
     target_resource_id: UUID | None,
+    notes: dict[str, Any] | None = None,
 ) -> None:
     """INSERT ... ON CONFLICT(batch_id,row_number) DO UPDATE（首跑插入 / 重试更新）。
 
@@ -367,6 +450,7 @@ async def _upsert_job(
         raw_data=row,
         error_detail=error_detail,
         target_resource_id=target_resource_id,
+        notes=notes,
         attempt_count=1,
     )
     stmt = stmt.on_conflict_do_update(
@@ -376,6 +460,7 @@ async def _upsert_job(
             "raw_data": stmt.excluded.raw_data,
             "error_detail": stmt.excluded.error_detail,
             "target_resource_id": stmt.excluded.target_resource_id,
+            "notes": stmt.excluded.notes,
             "attempt_count": ImportJob.attempt_count + 1,
             "updated_at": func.now(),
         },
@@ -522,37 +607,60 @@ async def _mark_batch_failed(batch_id: UUID, reason: str) -> None:
         await s.commit()
 
 
-async def _summarize_batch(batch_id: UUID, imported: int, failed: int, only_failed: bool) -> str:
-    """汇总段：更新 batch 计数 + 终态（completed / partial / failed）。
+async def _recount_from_jobs(s: Any, batch_id: UUID) -> _BatchCounts:
+    """只重跑失败行时按 import_job 重新数七个计数（原地更新之后，§4.2）。"""
+    by_status = dict(
+        (
+            await s.execute(
+                select(ImportJob.status, func.count())
+                .where(ImportJob.batch_id == batch_id)
+                .group_by(ImportJob.status)
+            )
+        ).all()
+    )
+    warnings_len = func.jsonb_array_length(
+        func.coalesce(ImportJob.notes["warnings"], text("'[]'::jsonb"))
+    )
+    filled_len = func.jsonb_array_length(
+        func.coalesce(ImportJob.notes["filled"], text("'[]'::jsonb"))
+    )
+    warning_rows, filled_objects = (
+        await s.execute(
+            select(
+                func.count().filter(warnings_len > 0),
+                func.coalesce(func.sum(filled_len), 0),
+            ).where(ImportJob.batch_id == batch_id)
+        )
+    ).one()
+    counts = _BatchCounts()
+    counts.imported = int(by_status.get("success", 0))
+    counts.filled = int(by_status.get("filled", 0))
+    counts.skipped = int(by_status.get("skipped", 0))
+    counts.conflicted = int(by_status.get("conflict", 0))
+    counts.failed = int(by_status.get("failed", 0))
+    counts.warning_count = int(warning_rows or 0)
+    counts.filled_objects = int(filled_objects or 0)
+    return counts
 
-    - only_failed=False（首跑 / 整文件重试）：total_rows = imported+failed，直接覆盖计数
-    - only_failed=True（partial 重试）：重算 import_job 当前成功/失败总数（原地更新后）
+
+async def _summarize_batch(batch_id: UUID, counts: _BatchCounts, only_failed: bool) -> str:
+    """汇总段：更新 batch 七个计数 + 终态（completed / partial / failed）。
+
+    - only_failed=False（首跑 / 整文件重试）：直接用本次执行的计数覆盖
+    - only_failed=True（partial 重试）：按 import_job 重新数一遍（原地更新后）
+
+    状态：没有失败行（且至少一行）→ completed；全部失败（含 0 行）→ failed；其余 partial。
+    补空 / 重复已跳过 / 冲突都不算失败（8a-6；旧逻辑「imported == 0 判失败」会把全是跳过的
+    批次判成失败）。
     """
     async with AsyncSessionBypass() as s:
-        if only_failed:
-            total_success = (
-                await s.execute(
-                    select(func.count())
-                    .select_from(ImportJob)
-                    .where(ImportJob.batch_id == batch_id, ImportJob.status == "success")
-                )
-            ).scalar_one()
-            total_failed = (
-                await s.execute(
-                    select(func.count())
-                    .select_from(ImportJob)
-                    .where(ImportJob.batch_id == batch_id, ImportJob.status == "failed")
-                )
-            ).scalar_one()
-            imported_n, failed_n = int(total_success), int(total_failed)
-            total_rows = imported_n + failed_n
-        else:
-            imported_n, failed_n = imported, failed
-            total_rows = imported + failed
+        final = await _recount_from_jobs(s, batch_id) if only_failed else counts
+        total_rows = final.total_rows
+        failed_n = final.failed
 
         if failed_n == 0 and total_rows > 0:
             status = "completed"
-        elif imported_n == 0:
+        elif failed_n == total_rows:
             status = "failed"
         else:
             status = "partial"
@@ -563,8 +671,13 @@ async def _summarize_batch(batch_id: UUID, imported: int, failed: int, only_fail
             .values(
                 status=status,
                 total_rows=total_rows,
-                imported=imported_n,
+                imported=final.imported,
                 failed=failed_n,
+                filled=final.filled,
+                skipped=final.skipped,
+                conflicted=final.conflicted,
+                warning_count=final.warning_count,
+                filled_objects=final.filled_objects,
                 error_summary=(f"{failed_n} 行失败" if failed_n else None),
                 updated_at=func.now(),
             )

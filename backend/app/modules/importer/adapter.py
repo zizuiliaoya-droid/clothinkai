@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 if TYPE_CHECKING:
     from app.modules.importer.models import FieldMapping
+    from app.modules.importer.outcome import ImportRowContext, RowOutcome
 
 
 @runtime_checkable
@@ -52,4 +53,23 @@ class ImportAdapter(Protocol):
         ...
 
 
-__all__ = ["ImportAdapter"]
+@runtime_checkable
+class ContextAwareImportAdapter(Protocol):
+    """可选协议（8a-6，设计 §4.2）：按来源的重复规则处理已有对象、报告补空 / 跳过 / 冲突。
+
+    runner 遇到实现了它的 adapter 就调 ``upsert_with_context``，否则调旧的 ``upsert`` 并把
+    ``(rid, inserted)`` 映射成 INSERTED / UPDATED——其余 adapter 一行不改。
+    同样**不自行 commit**；``ctx.batch_seen`` 由 runner 每次批次执行新建一个，行提交后
+    ``commit_row()``、行失败 ``discard_row()``。
+    """
+
+    async def upsert_with_context(
+        self,
+        parsed: dict[str, Any],
+        *,
+        session: AsyncSession,
+        ctx: ImportRowContext,
+    ) -> RowOutcome: ...
+
+
+__all__ = ["ContextAwareImportAdapter", "ImportAdapter"]

@@ -65,6 +65,32 @@ class TestRetry:
         finally:
             tenant_id_ctx.reset(token)
 
+    async def test_retry_with_conflicts_reruns_failed_only(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        pr_role: Any,
+        import_batch_factory: Any,
+        _intercept_celery: list,
+    ) -> None:
+        """8a-6 AC 50：冲突 / 补空 / 跳过的行不重跑，只重跑失败行（计数由 runner 按 import_job 重算）。"""
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            user = await factory.user(tenant_a, roles=[pr_role])
+            batch = await import_batch_factory.batch(
+                source="manual_blogger", status="partial", failed=1, total_rows=6
+            )
+            batch.conflicted, batch.skipped, batch.filled = 3, 1, 1
+            await session.flush()
+            claimed = await ImportService(session).retry(
+                batch.id, user, await _perms(session, user)
+            )
+            assert claimed.status == "processing"
+            assert _intercept_celery[0]["kwargs"]["only_failed"] is True
+        finally:
+            tenant_id_ctx.reset(token)
+
     async def test_retry_failed_uses_whole_file(
         self,
         session: AsyncSession,

@@ -18,7 +18,7 @@ import csv
 import io
 import json
 import logging
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from typing import Any, cast
 from uuid import UUID, uuid4
 
@@ -39,6 +39,7 @@ from app.core.security.permissions import EffectivePermissions
 from app.modules.auth.models import User
 from app.modules.auth.repository import PermissionRepository, RoleRepository
 from app.modules.importer import access
+from app.modules.importer.conflicts import ImportConflictRepository
 from app.modules.importer.domain import compute_sha256, csv_safe, safe_filename
 from app.modules.importer.exceptions import (
     ImportBatchBusyError,
@@ -60,6 +61,7 @@ from app.modules.importer.repository import (
     ImportBatchRepository,
     ImportJobRepository,
 )
+from app.modules.importer.schemas import ImportJobFilledItem, ImportJobNoteItem
 
 log = logging.getLogger(__name__)
 
@@ -407,6 +409,35 @@ class ImportService:
             page_size=page_size,
             sources=sources,
         )
+
+    async def pending_conflicts(self, batch_ids: Iterable[UUID]) -> dict[UUID, int]:
+        """一页批次各自仍待处理的冲突条数（一条 GROUP BY，8a-6）。"""
+        return await ImportConflictRepository(self._session).pending_by_batch(batch_ids)
+
+    async def batch_notes(
+        self,
+        batch_id: UUID,
+        user: User,
+        perms: EffectivePermissions,
+        *,
+        page: int,
+        page_size: int,
+    ) -> tuple[list[ImportJobNoteItem], int]:
+        """批次里有提示或补空的行（只有字段名与提示文案，不含任何值）；批次不可见 → 404。"""
+        batch = await self.get_batch(batch_id, user, perms)
+        jobs, total = await self._job_repo.list_with_notes(batch.id, page=page, page_size=page_size)
+        items: list[ImportJobNoteItem] = []
+        for job in jobs:
+            notes = job.notes or {}
+            items.append(
+                ImportJobNoteItem(
+                    row_number=job.row_number,
+                    status=job.status,
+                    warnings=[str(w) for w in notes.get("warnings") or []],
+                    filled=[ImportJobFilledItem(**f) for f in notes.get("filled") or []],
+                )
+            )
+        return items, total
 
     # ============================================================
     # download_errors（失败明细 CSV + csv_safe injection 防护）

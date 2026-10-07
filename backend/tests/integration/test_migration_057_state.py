@@ -66,3 +66,117 @@ class TestMigration057Permissions:
         )
         ops = next(r for r in DEFAULT_ROLES if r.code == "operations")
         assert scopes == {s for s in ops.permissions if s.startswith("product")}
+
+
+_BATCH_COUNTS = ("filled", "skipped", "conflicted", "warning_count", "filled_objects")
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+class TestMigration057ImportTables:
+    """8a-6：导入表（约束按定义查，不按名字——落库名取决于命名约定）。"""
+
+    async def _checks(self, session: AsyncSession, table: str) -> list[str]:
+        return list(
+            (
+                await session.execute(
+                    text(
+                        "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+                        "WHERE conrelid = CAST(:t AS regclass) AND contype = 'c'"
+                    ),
+                    {"t": table},
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    async def test_import_batch_count_columns(self, session: AsyncSession) -> None:
+        rows = (
+            await session.execute(
+                text(
+                    "SELECT column_name, is_nullable, column_default, data_type "
+                    "FROM information_schema.columns "
+                    "WHERE table_schema = 'public' AND table_name = 'import_batch' "
+                    "AND column_name = ANY(:cols)"
+                ),
+                {"cols": list(_BATCH_COUNTS)},
+            )
+        ).all()
+        assert {r.column_name for r in rows} == set(_BATCH_COUNTS)
+        for r in rows:
+            assert r.is_nullable == "NO"
+            assert r.data_type == "integer"
+            assert r.column_default == "0"
+        defs = [d for d in await self._checks(session, "import_batch") if "filled_objects" in d]
+        assert len(defs) == 1
+        for col in _BATCH_COUNTS:
+            assert f"({col} >= 0)" in defs[0]
+
+    async def test_import_job_status_check_and_notes(self, session: AsyncSession) -> None:
+        defs = [d for d in await self._checks(session, "import_job") if "status" in d]
+        assert len(defs) == 1
+        for value in ("success", "failed", "filled", "skipped", "conflict"):
+            assert f"'{value}'" in defs[0]
+        col = (
+            await session.execute(
+                text(
+                    "SELECT data_type, is_nullable FROM information_schema.columns "
+                    "WHERE table_schema = 'public' AND table_name = 'import_job' "
+                    "AND column_name = 'notes'"
+                )
+            )
+        ).one()
+        assert (col.data_type, col.is_nullable) == ("jsonb", "YES")
+
+    async def test_import_conflict_table(self, session: AsyncSession) -> None:
+        indexes = dict(
+            (
+                await session.execute(
+                    text(
+                        "SELECT indexname, indexdef FROM pg_indexes "
+                        "WHERE tablename = 'import_conflict'"
+                    )
+                )
+            )
+            .tuples()
+            .all()
+        )
+        pending = indexes["uq_import_conflict_pending"]
+        assert pending.startswith("CREATE UNIQUE INDEX")
+        assert "(tenant_id, source, object_type, object_id)" in pending
+        assert "WHERE ((status)::text = 'pending'::text)" in pending
+        assert "idx_import_conflict_list" in indexes
+        assert "idx_import_conflict_batch" in indexes
+
+        defs = await self._checks(session, "import_conflict")
+        assert any("resolved_at IS NULL" in d for d in defs)
+        assert any("'blogger'" in d and "'style'" in d for d in defs)
+        assert any("'superseded'" in d and "'invalid'" in d for d in defs)
+
+        rls = (
+            await session.execute(
+                text(
+                    "SELECT relrowsecurity, relforcerowsecurity FROM pg_class "
+                    "WHERE relname = 'import_conflict'"
+                )
+            )
+        ).one()
+        assert rls.relrowsecurity is True
+        assert rls.relforcerowsecurity is True
+
+        fks = list(
+            (
+                await session.execute(
+                    text(
+                        "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+                        "WHERE conrelid = 'import_conflict'::regclass AND contype = 'f'"
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert any("REFERENCES import_batch(id) ON DELETE SET NULL" in d for d in fks)
+        # object_id 多态、superseded_by 不设外键
+        assert not any("(object_id)" in d or "(superseded_by)" in d for d in fks)
