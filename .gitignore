@@ -87,6 +87,11 @@ local-dashboard.png
 # 并行开发用的 git worktree
 .worktrees/
 
+# 业务方交付包：压缩包、HTML 副本、含真实达人数据的抖音样本不入库
+20261007改动/交付20261007.zip
+20261007改动/交付20261007/archive.html
+20261007改动/交付20261007/抖音博主数据库*.xlsx
+
 # 本地存储回退（R2 未配置时；dev only）
 backend/.local_storage/
 
