@@ -36,6 +36,14 @@ SKU 接口里的成本价 / 采购价仍由字段级权限屏蔽，与本迁移�
 已有单据不受影响。只留最近一轮（每次重提覆盖），完整历史随 7d-1 时间线做。downgrade 删这两列
 会丢掉已写入的重提说明——这是新功能自己产生的数据，回退版本时本来就用不上。
 
+## downgrade 的前提
+
+``user_permission_override.permission_id`` 的外键是 ``ondelete=RESTRICT``。上线后如果有人给某个
+账号单独授予 / 撤销过 ``product.style:read``（自定义权限），downgrade 会在删 ``permission`` 那一步
+报外键错误并停下（迁移在一个事务里，前面删的列一起回滚，不丢数据）。系统里个人覆盖只能在
+授予 / 撤销之间切换、没有删除入口，要回退得先由 DBA 手工删掉这条 scope 的覆盖行，再跑 downgrade。
+本迁移不替人删个人覆盖，与以往权限迁移的写法一致。
+
 Revision ID: 057_7a_quick_fixes
 Revises: 056_goods_short_name
 Create Date: 2026-10-07
