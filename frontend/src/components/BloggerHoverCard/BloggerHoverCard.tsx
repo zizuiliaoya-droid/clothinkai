@@ -15,6 +15,7 @@ import type { ReactNode } from "react";
 import { bloggerCooperationHistory } from "@/features/negotiation/api";
 import type { BloggerCooperationItem } from "@/features/negotiation/types";
 import { bloggerRetrospectives } from "@/features/promotion/api";
+import { DisplayNameCell } from "@/components/DisplayNameCell/DisplayNameCell";
 
 const modeColor: Record<string, string> = {
   寄拍: "blue",
@@ -103,9 +104,13 @@ export function BloggerHoverCard({
           )}
           <span>
             <div>{code}</div>
-            {row.style_name && (
+            {/* 第二行是品名：商品简称，没填回落建单快照（7a-8） */}
+            {(row.display_short_name ?? row.style_name) && (
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                {row.style_name}
+                <DisplayNameCell
+                  name={row.display_short_name ?? row.style_name}
+                  fullTitle={row.goods_title}
+                />
               </Typography.Text>
             )}
           </span>

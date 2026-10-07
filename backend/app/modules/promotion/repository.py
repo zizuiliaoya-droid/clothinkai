@@ -28,6 +28,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.metrics import promotion_sequence_lock_duration_seconds
 from app.modules.product.goods_models import GoodsStyleItem
+from app.modules.promotion.display_name import (
+    PROMOTION_DISPLAY_SHORT_NAME_SQL,
+    display_short_name_sql,
+)
 from app.modules.promotion.exceptions import SequenceOverflowError
 from app.modules.promotion.models import BloggerRetrospective, Promotion
 from app.modules.promotion.urge_calculator import URGE_STATUS_SQL_EXPR
@@ -86,6 +90,10 @@ class PromotionListRow:
     style_main_image_key: str | None = None
     goods_code: str | None = None
     goods_is_suit: bool = False
+    # 7a-8：品名（商品简称，没填回落快照）与归属商品的名字，规则见 display_name.py
+    display_short_name: str | None = None
+    goods_title: str | None = None
+    goods_short_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -195,7 +203,10 @@ class PromotionRepository:
         复用 ``URGE_STATUS_SQL_EXPR``（FB8 :today 参数化）+ JOIN blogger 取昵称。
         返回 RowMapping 列表（键：promotion_id / blogger_id / pr_id /
         scheduled_publish_date / publish_status / style_short_name_snapshot /
-        blogger_nickname）。RLS 自动按 tenant 过滤。
+        display_short_name / blogger_nickname）。RLS 自动按 tenant 过滤。
+
+        ``display_short_name`` 是企微模板 ``{商品简称}`` 用的品名（商品简称，没填回落
+        快照，规则见 ``display_name.py``）；快照列照旧返回。
         """
         stmt = text(
             f"""
@@ -206,9 +217,12 @@ class PromotionRepository:
                 promotion.scheduled_publish_date AS scheduled_publish_date,
                 promotion.publish_status AS publish_status,
                 promotion.style_short_name_snapshot AS style_short_name_snapshot,
+                {display_short_name_sql(promotion="promotion")} AS display_short_name,
                 blogger.nickname AS blogger_nickname
             FROM promotion
             JOIN blogger ON blogger.id = promotion.blogger_id
+            LEFT JOIN goods_main g
+              ON g.id = promotion.goods_main_id AND g.tenant_id = promotion.tenant_id
             WHERE promotion.is_active = true
               AND promotion.publish_status IN ('未发布', '异常')
               AND promotion.scheduled_publish_date IS NOT NULL
@@ -617,6 +631,9 @@ class PromotionRepository:
                    s.main_image_key AS style_main_image_key,
                    g.goods_code AS goods_code,
                    COALESCE(g.is_suit, false) AS goods_is_suit,
+                   NULLIF(BTRIM(g.short_name), '') AS goods_short_name,
+                   g.goods_title AS goods_title,
+                   {PROMOTION_DISPLAY_SHORT_NAME_SQL} AS display_short_name,
                    {URGE_STATUS_SQL_EXPR.strip()} AS urge_status,
                    EXISTS (
                        SELECT 1 FROM promotion p2
@@ -690,11 +707,16 @@ class PromotionRepository:
             clauses.append("(like_count IS NULL OR like_count < :hit_th)")
             params["hit_th"] = filters.hit_threshold
         if filters.keyword:
-            # 命中 GIN trgm 索引（idx_promotion_internal_code_trgm 等）
+            # 前三列命中 GIN trgm 索引（idx_promotion_internal_code_trgm 等）。
+            # 商品简称 / 全称 / 编码来自 LEFT JOIN 的 goods_main（7a-8）：界面上不再显示
+            # 商品编码，但仍要能按编码搜到（业务方 10-06「隐藏显示 ≠ 不可查」）。不加索引。
             clauses.append(
                 "(internal_code ILIKE :kw "
                 "OR style_code_snapshot ILIKE :kw "
-                "OR style_short_name_snapshot ILIKE :kw)"
+                "OR style_short_name_snapshot ILIKE :kw "
+                "OR goods_short_name ILIKE :kw "
+                "OR goods_title ILIKE :kw "
+                "OR goods_code ILIKE :kw)"
             )
             params["kw"] = f"%{filters.keyword}%"
         # 表达式与 idx_promotion_print_address 部分索引的谓词保持一致，否则不命中索引。
@@ -741,6 +763,9 @@ class PromotionRepository:
                     style_main_image_key=row["style_main_image_key"],
                     goods_code=row["goods_code"],
                     goods_is_suit=bool(row["goods_is_suit"]),
+                    display_short_name=row["display_short_name"],
+                    goods_title=row["goods_title"],
+                    goods_short_name=row["goods_short_name"],
                 )
             )
         return rows, total

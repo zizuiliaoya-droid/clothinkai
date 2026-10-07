@@ -56,11 +56,19 @@ export interface Promotion {
   pr_id: string | null;
   // 快照
   style_code_snapshot: string;
+  /** 建单时的款式简称快照。界面的品名用 display_short_name。 */
   style_short_name_snapshot: string;
+  /** 品名（7a-8）：商品简称，没填回落 style_short_name_snapshot。规则在后端一处。 */
+  display_short_name: string | null;
   style_main_image_url: string | null;
   // 商品归属（实时取，不做快照 —— 归属可改）
+  /** 商品编码。界面不显示（业务方 10-06），只留给搜索 / 导出。 */
   goods_code: string | null;
   goods_is_suit: boolean;
+  /** 归属商品全称；没有归属商品为 null。 */
+  goods_title: string | null;
+  /** 归属商品简称（全空白归一成 null）。「归属商品」列显示它，没填回落 goods_title。 */
+  goods_short_name: string | null;
   quote_amount: string | null; // Decimal as string；敏感
   cost_snapshot: string | null; // 敏感
   /** 寄拍 / 送拍 / 置换。历史导入数据为 null，可补一次。单据生成后不可改。 */

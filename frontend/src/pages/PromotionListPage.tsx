@@ -62,18 +62,20 @@ import type {
   RetroStatus,
 } from "@/features/promotion/types";
 import {
-  goodsOptionLabel,
+  goodsDisplayName,
   listStyles,
   listSkusByStyle,
   listGoodsForStyle,
   type GoodsOption,
 } from "@/features/product/api";
+import { goodsNameLabel } from "@/features/promotion/goodsLabel";
 import { listBloggers } from "@/features/blogger/api";
 import { urgePromotion } from "@/features/urge/api";
 import { extractErrorMessage } from "@/services/apiClient";
 import { useAuthStore } from "@/stores/authStore";
 import { ImportUploadButton } from "@/components/ImportUploadButton";
 import { StyleImageThumbnail } from "@/components/StyleImageThumbnail/StyleImageThumbnail";
+import { DisplayNameCell } from "@/components/DisplayNameCell/DisplayNameCell";
 
 const PLATFORMS = ["小红书", "抖音", "快手", "B站"];
 const PUBLISH_STATUS = ["未发布", "已发布", "已取消", "异常", "已删除"];
@@ -314,8 +316,9 @@ export function PromotionListPage() {
       label: `${b.nickname} (${b.xiaohongshu_id})`,
       value: b.id,
     })) ?? [];
+  // 只显示商品名 + 套装标记，不显示商品编码（业务方 10-06）
   const goodsOptions = (formGoods ?? []).map((g: GoodsOption) => ({
-    label: goodsOptionLabel(g),
+    label: goodsNameLabel(g),
     value: g.goods_main_id,
   }));
   // 款式只归属一个商品时不必打扰用户，直接用它
@@ -724,20 +727,33 @@ export function PromotionListPage() {
       ),
     },
     { title: "货号", dataIndex: "style_code_snapshot", width: 110, fixed: "left" },
-    { title: "品名", dataIndex: "style_short_name_snapshot", width: 130, render: (v) => v || "—" },
     {
+      // 品名 = 商品简称，没填回落建单快照（7a-8，后端 display_name.py 一处定规则）
+      title: "品名",
+      dataIndex: "display_short_name",
+      width: 130,
+      ellipsis: { showTitle: false },
+      render: (v: string | null, row: Promotion) => (
+        <DisplayNameCell name={v ?? row.style_short_name_snapshot} fullTitle={row.goods_title} />
+      ),
+    },
+    {
+      // 只显示商品名（简称，没填回落全称）+ 套装标记，不显示商品编码（业务方 10-06）。
+      // 编码仍能在上面的搜索框里搜到
       title: "归属商品",
-      dataIndex: "goods_code",
+      dataIndex: "goods_short_name",
       width: 150,
-      render: (code: string | null, row: Promotion) =>
-        code ? (
-          <Space size={4}>
-            <span>{code}</span>
+      render: (_: string | null, row: Promotion) => {
+        const name = goodsDisplayName(row.goods_title, row.goods_short_name);
+        return name ? (
+          <Space size={4} wrap>
+            <DisplayNameCell name={name} fullTitle={row.goods_title} />
             {row.goods_is_suit && <Tag color="purple">套装</Tag>}
           </Space>
         ) : (
           "—"
-        ),
+        );
+      },
     },
     {
       title: "合作模式",
@@ -1051,9 +1067,9 @@ export function PromotionListPage() {
     >
       <Space style={{ marginBottom: 16 }} wrap>
         <Input.Search
-          placeholder="搜索内部编码 / 货号"
+          placeholder="搜索内部编码 / 货号 / 商品简称 / 商品编码"
           allowClear
-          style={{ width: 220 }}
+          style={{ width: 300 }}
           onSearch={(v) =>
             setFilters((f) => ({ ...f, keyword: v || undefined, page: 1 }))
           }
@@ -1205,7 +1221,9 @@ export function PromotionListPage() {
       <Modal
         title={
           goodsTarget
-            ? `改归属商品 · ${goodsTarget.style_code_snapshot} ${goodsTarget.style_short_name_snapshot}`
+            ? `改归属商品 · ${goodsTarget.style_code_snapshot} ${
+                goodsTarget.display_short_name ?? goodsTarget.style_short_name_snapshot
+              }`
             : "改归属商品"
         }
         open={!!goodsTarget}
@@ -1236,7 +1254,7 @@ export function PromotionListPage() {
             <Select
               placeholder="选择归属商品"
               options={(targetGoods ?? []).map((g: GoodsOption) => ({
-                label: goodsOptionLabel(g),
+                label: goodsNameLabel(g),
                 value: g.goods_main_id,
               }))}
             />

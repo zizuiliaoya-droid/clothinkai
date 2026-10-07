@@ -48,6 +48,10 @@ from app.modules.auth.repository import PermissionRepository, RoleRepository
 from app.modules.blogger.repository import BloggerRepository
 from app.modules.product.models import Sku
 from app.modules.product.repository import SkuRepository, StyleRepository
+from app.modules.promotion.display_name import (
+    normalize_goods_short_name,
+    promotion_display_short_name,
+)
 from app.modules.promotion.domain import (
     build_promotion_audit_changes,
     compute_amount_changes,
@@ -761,6 +765,9 @@ class PromotionService:
                 style_main_image_preloaded=True,
                 goods_code=row.goods_code,
                 goods_is_suit=row.goods_is_suit,
+                display_short_name=row.display_short_name,
+                goods_title=row.goods_title,
+                goods_short_name=row.goods_short_name,
                 goods_preloaded=True,
             )
             for row in rows
@@ -1963,6 +1970,9 @@ class PromotionService:
         style_main_image_preloaded: bool = False,
         goods_code: str | None = None,
         goods_is_suit: bool | None = None,
+        display_short_name: str | None = None,
+        goods_title: str | None = None,
+        goods_short_name: str | None = None,
         goods_preloaded: bool = False,
     ) -> PromotionResponse:
         """组装响应：字段权限过滤 + 衍生字段计算.
@@ -1972,6 +1982,9 @@ class PromotionService:
             dual_platform_override: 同上。
             style_main_image_key: 列表查询预加载的款式主图 key。
             style_main_image_preloaded: 为 True 时不再查询 Style，避免列表 N+1。
+            display_short_name / goods_title / goods_short_name: 列表 SQL 已算好的品名与
+                归属商品名（``goods_preloaded`` 为 True 时用）；单条响应在这里按
+                ``display_name.py`` 的同一规则现算。
             today: 列表查询时由 service 层 get_today() 透传，单条响应时缺省现算。
         """
         ctx = await build_field_perm_context(user.id, self._roles, self._perms)
@@ -2019,18 +2032,33 @@ class PromotionService:
         # 商品归属实时取（不做快照，因为归属可改）。列表查询已 JOIN 出来，避免 N+1。
         resolved_goods_code = goods_code
         resolved_goods_is_suit = bool(goods_is_suit)
-        if not goods_preloaded and promotion.goods_main_id is not None:
-            goods_row = (
-                await self._session.execute(
-                    sa_text("SELECT goods_code, is_suit FROM goods_main WHERE id = :gid"),
-                    {"gid": promotion.goods_main_id},
-                )
-            ).one_or_none()
-            if goods_row is not None:
-                resolved_goods_code, resolved_goods_is_suit = (
-                    goods_row[0],
-                    bool(goods_row[1]),
-                )
+        resolved_goods_title = goods_title
+        resolved_goods_short_name = goods_short_name
+        resolved_display_short_name = display_short_name
+        if not goods_preloaded:
+            # 品名规则与列表 SQL 同一份（display_name.py）：商品简称，没填回落快照
+            raw_short_name: str | None = None
+            if promotion.goods_main_id is not None:
+                goods_row = (
+                    await self._session.execute(
+                        sa_text(
+                            "SELECT goods_code, is_suit, short_name, goods_title "
+                            "FROM goods_main WHERE id = :gid"
+                        ),
+                        {"gid": promotion.goods_main_id},
+                    )
+                ).one_or_none()
+                if goods_row is not None:
+                    resolved_goods_code, resolved_goods_is_suit = (
+                        goods_row[0],
+                        bool(goods_row[1]),
+                    )
+                    raw_short_name, resolved_goods_title = goods_row[2], goods_row[3]
+            resolved_goods_short_name = normalize_goods_short_name(raw_short_name)
+            resolved_display_short_name = promotion_display_short_name(
+                goods_short_name=raw_short_name,
+                style_short_name_snapshot=promotion.style_short_name_snapshot,
+            )
         style_main_image_url: str | None = None
         if resolved_style_image_key:
             try:
@@ -2102,9 +2130,12 @@ class PromotionService:
             pr_id=promotion.pr_id,
             style_code_snapshot=promotion.style_code_snapshot,
             style_short_name_snapshot=promotion.style_short_name_snapshot,
+            display_short_name=resolved_display_short_name,
             style_main_image_url=style_main_image_url,
             goods_code=resolved_goods_code,
             goods_is_suit=resolved_goods_is_suit,
+            goods_title=resolved_goods_title,
+            goods_short_name=resolved_goods_short_name,
             quote_amount=(promotion.quote_amount if can_see_quote else None),
             cost_snapshot=(promotion.cost_snapshot if can_see_cost else None),
             cooperation_mode=promotion.cooperation_mode,

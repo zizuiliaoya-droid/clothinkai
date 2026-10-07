@@ -405,10 +405,24 @@ class PromotionResponse(BaseModel):
     # 快照字段
     style_code_snapshot: str
     style_short_name_snapshot: str
+    """建单时的款式简称快照，原样返回、不回填（导出与历史核对在用）。界面的品名看
+    ``display_short_name``。"""
+    display_short_name: str | None = None
+    """品名（7a-8）：归属商品的简称，没填（或全空白、没有归属商品）回落
+    ``style_short_name_snapshot``。规则只有 ``display_name.py`` 一处。"""
     style_main_image_url: str | None = None
     # 商品归属实时取，不做快照 —— 归属可改，快照会过期
     goods_code: str | None = None
+    """商品编码。接口保留（导出、对账要用），界面不再显示（业务方 10-06）。"""
     goods_is_suit: bool = False
+    goods_title: str | None = None
+    """归属商品全称。没有归属商品为 None。"""
+    goods_short_name: str | None = None
+    """归属商品简称，归一过（全空白 → None）。
+
+    给「归属商品」列用：显示 简称，没填回落 ``goods_title``（商品全称）——与品名不同，
+    品名回落的是建单快照。
+    """
     quote_amount: Decimal | None = None  # 敏感
     cost_snapshot: Decimal | None = None  # 敏感
 

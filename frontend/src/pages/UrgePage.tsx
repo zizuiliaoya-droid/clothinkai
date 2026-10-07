@@ -47,6 +47,7 @@ import { listStyles } from "@/features/product/api";
 import { extractErrorMessage } from "@/services/apiClient";
 import { useAuthStore } from "@/stores/authStore";
 import { BloggerHoverCard } from "@/components/BloggerHoverCard/BloggerHoverCard";
+import { DisplayNameCell } from "@/components/DisplayNameCell/DisplayNameCell";
 
 const statusColor: Record<UrgeTaskStatus, string> = {
   进行中: "processing",
@@ -219,16 +220,20 @@ export function UrgePage() {
       title: "款式",
       dataIndex: "style_code",
       width: 150,
-      render: (v: string | null, r) => (
-        <span>
-          <div>{v || "—"}</div>
-          {r.style_name && (
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {r.style_name}
-            </Typography.Text>
-          )}
-        </span>
-      ),
+      render: (v: string | null, r) => {
+        // 第二行是品名：商品简称，没填回落建单快照（7a-8）
+        const name = r.display_short_name ?? r.style_name;
+        return (
+          <span>
+            <div>{v || "—"}</div>
+            {name && (
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                <DisplayNameCell name={name} fullTitle={r.goods_title} />
+              </Typography.Text>
+            )}
+          </span>
+        );
+      },
     },
     { title: "PR", dataIndex: "pr_name", width: 100, render: (v) => v || "—" },
     {
@@ -469,7 +474,16 @@ export function UrgePage() {
               </Typography.Text>
               <Typography.Text type="secondary">
                 {detail.style_code}
-                {detail.style_name ? ` ${detail.style_name}` : ""} ·{" "}
+                {(detail.display_short_name ?? detail.style_name) && (
+                  <>
+                    {" "}
+                    <DisplayNameCell
+                      name={detail.display_short_name ?? detail.style_name}
+                      fullTitle={detail.goods_title}
+                    />
+                  </>
+                )}{" "}
+                ·{" "}
                 {detail.scheduled_publish_date
                   ? `预定 ${detail.scheduled_publish_date}`
                   : "未排期"}

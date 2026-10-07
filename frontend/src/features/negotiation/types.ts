@@ -96,7 +96,12 @@ export interface BloggerCooperationItem {
   internal_code: string;
   style_id: string;
   style_code: string;
+  /** 建单时的款式简称快照。界面显示 display_short_name。 */
   style_name: string | null;
+  /** 品名（7a-8）：商品简称，没填回落快照。 */
+  display_short_name: string | null;
+  /** 归属商品全称（悬停提示）；没有归属商品为 null。 */
+  goods_title: string | null;
   style_main_image_url: string | null;
   cooperation_date: string;
   cooperation_mode: string | null;

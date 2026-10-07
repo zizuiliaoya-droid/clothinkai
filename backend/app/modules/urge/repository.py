@@ -17,11 +17,14 @@ from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.promotion.display_name import PROMOTION_DISPLAY_SHORT_NAME_SQL
 from app.modules.urge.enums import UrgeTaskStatus
 from app.modules.urge.models import UrgeConfig, UrgeRecord, UrgeTask
 
-# 列表与详情共用的投影，避免两处口径漂移
-_SELECT_COLUMNS = """
+# 列表与详情共用的投影，避免两处口径漂移。
+# display_short_name = 商品简称，没填回落建单快照（7a-8，规则见 promotion/display_name.py）；
+# style_name 仍是快照，接口兼容保留。
+_SELECT_COLUMNS = f"""
     t.id, t.promotion_id, t.blogger_id, t.pr_id, t.status, t.urge_count,
     t.last_urged_at, t.closed_at, t.close_reason, t.created_at, t.updated_at,
     b.nickname AS blogger_nickname,
@@ -29,6 +32,8 @@ _SELECT_COLUMNS = """
     p.internal_code AS promotion_internal_code,
     p.style_code_snapshot AS style_code,
     p.style_short_name_snapshot AS style_name,
+    {PROMOTION_DISPLAY_SHORT_NAME_SQL} AS display_short_name,
+    g.goods_title AS goods_title,
     p.scheduled_publish_date,
     p.publish_status,
     -- 超期天数：只有排了期且已过期才算，否则 NULL（前端显示「—」）
@@ -47,6 +52,7 @@ _SELECT_COLUMNS = """
 _JOINS = """
     FROM urge_task t
     JOIN promotion p ON p.id = t.promotion_id
+    LEFT JOIN goods_main g ON g.id = p.goods_main_id AND g.tenant_id = p.tenant_id
     LEFT JOIN blogger b ON b.id = t.blogger_id
     LEFT JOIN "user" pru ON pru.id = t.pr_id
 """

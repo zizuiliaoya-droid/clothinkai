@@ -624,6 +624,8 @@ class UrgeService:
             pr_name=row.get("pr_name"),
             style_code=row.get("style_code"),
             style_name=row.get("style_name"),
+            display_short_name=row.get("display_short_name"),
+            goods_title=row.get("goods_title"),
             scheduled_publish_date=row.get("scheduled_publish_date"),
             publish_status=row.get("publish_status"),
             status=row["status"],

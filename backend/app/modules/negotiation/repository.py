@@ -15,6 +15,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.negotiation.models import Negotiation
+from app.modules.promotion.display_name import PROMOTION_DISPLAY_SHORT_NAME_SQL
 
 # 详情与列表共用的 JOIN + 投影，避免两处口径漂移
 _SELECT_COLUMNS = """
@@ -39,6 +40,27 @@ _JOINS = """
     LEFT JOIN "user" pru ON pru.id = n.pr_id
     LEFT JOIN "user" rvu ON rvu.id = n.reviewed_by
     LEFT JOIN promotion p ON p.id = n.promotion_id
+"""
+
+# 博主 hover 卡「历史合作」的投影（取自推广单）。display_short_name = 商品简称，没填回落
+# 建单快照（7a-8，规则见 promotion/display_name.py）；style_name 仍是快照，接口兼容保留
+_COOPERATION_COLUMNS = f"""
+    p.id AS promotion_id, p.internal_code, p.style_id,
+    p.style_code_snapshot AS style_code,
+    p.style_short_name_snapshot AS style_name,
+    {PROMOTION_DISPLAY_SHORT_NAME_SQL} AS display_short_name,
+    g.goods_title AS goods_title,
+    s.main_image_key AS style_main_image_key,
+    p.cooperation_date, p.cooperation_mode, p.publish_status,
+    p.actual_publish_date, p.like_count, p.quote_amount,
+    p.total_promo_cost, p.metrics_recorded_at,
+    p.platform
+"""
+
+_COOPERATION_JOINS = """
+    FROM promotion p
+    LEFT JOIN style s ON s.id = p.style_id
+    LEFT JOIN goods_main g ON g.id = p.goods_main_id AND g.tenant_id = p.tenant_id
 """
 
 
@@ -152,17 +174,9 @@ class NegotiationRepository:
         rows = (
             await self._session.execute(
                 text(
-                    """
-                    SELECT p.id AS promotion_id, p.internal_code, p.style_id,
-                           p.style_code_snapshot AS style_code,
-                           p.style_short_name_snapshot AS style_name,
-                           s.main_image_key AS style_main_image_key,
-                           p.cooperation_date, p.cooperation_mode, p.publish_status,
-                           p.actual_publish_date, p.like_count, p.quote_amount,
-                           p.total_promo_cost, p.metrics_recorded_at,
-                           p.platform
-                    FROM promotion p
-                    LEFT JOIN style s ON s.id = p.style_id
+                    f"""
+                    SELECT {_COOPERATION_COLUMNS}
+                    {_COOPERATION_JOINS}
                     WHERE p.tenant_id = :tenant_id AND p.blogger_id = :blogger_id
                       AND p.is_active = true
                     ORDER BY p.cooperation_date DESC, p.created_at DESC

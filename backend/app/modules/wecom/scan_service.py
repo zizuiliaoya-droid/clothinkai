@@ -90,7 +90,8 @@ class WecomScanService:
             tt = "urge_important" if important else "urge"
             ctx = build_render_ctx(
                 blogger_nickname=items[0]["blogger_nickname"],
-                style_short_name=items[0]["style_short_name_snapshot"],
+                # 模板变量「商品简称」= 商品简称，没填回落建单快照（7a-8，业务方 10-05）
+                style_short_name=items[0]["display_short_name"],
                 scheduled_publish_date=items[0]["scheduled_publish_date"],
                 today=today,
             )
