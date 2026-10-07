@@ -63,19 +63,19 @@ import type {
 } from "@/features/promotion/types";
 import {
   goodsDisplayName,
-  listStyles,
   listSkusByStyle,
   listGoodsForStyle,
   type GoodsOption,
 } from "@/features/product/api";
 import { goodsNameLabel } from "@/features/promotion/goodsLabel";
-import { listBloggers } from "@/features/blogger/api";
 import { urgePromotion } from "@/features/urge/api";
 import { extractErrorMessage } from "@/services/apiClient";
 import { useAuthStore } from "@/stores/authStore";
 import { ImportUploadButton } from "@/components/ImportUploadButton";
 import { StyleImageThumbnail } from "@/components/StyleImageThumbnail/StyleImageThumbnail";
 import { DisplayNameCell } from "@/components/DisplayNameCell/DisplayNameCell";
+import { BloggerSelect } from "@/components/RemoteSelect/BloggerSelect";
+import { StyleSelect } from "@/components/RemoteSelect/StyleSelect";
 
 const PLATFORMS = ["小红书", "抖音", "快手", "B站"];
 const PUBLISH_STATUS = ["未发布", "已发布", "已取消", "异常", "已删除"];
@@ -287,10 +287,6 @@ export function PromotionListPage() {
     queryKey: ["promotions", filters],
     queryFn: () => listPromotions(filters),
   });
-  const { data: styles } = useQuery({
-    queryKey: ["styles", "options"],
-    queryFn: () => listStyles({ page: 1, page_size: 100 }),
-  });
   const { data: formGoods } = useQuery({
     queryKey: ["goods", "by-style", formStyleId],
     enabled: !!formStyleId,
@@ -301,21 +297,6 @@ export function PromotionListPage() {
     enabled: !!goodsTarget,
     queryFn: () => listGoodsForStyle(goodsTarget!.style_id),
   });
-  const { data: bloggers } = useQuery({
-    queryKey: ["bloggers", "options"],
-    queryFn: () => listBloggers({ page: 1, page_size: 100 }),
-  });
-
-  const styleOptions =
-    styles?.items.map((s) => ({
-      label: `${s.style_code} ${s.style_name}`,
-      value: s.id,
-    })) ?? [];
-  const bloggerOptions =
-    bloggers?.items.map((b) => ({
-      label: `${b.nickname} (${b.xiaohongshu_id})`,
-      value: b.id,
-    })) ?? [];
   // 只显示商品名 + 套装标记，不显示商品编码（业务方 10-06）
   const goodsOptions = (formGoods ?? []).map((g: GoodsOption) => ({
     label: goodsNameLabel(g),
@@ -1129,15 +1110,7 @@ export function PromotionListPage() {
             label="款式"
             rules={[{ required: true, message: "请选择款式" }]}
           >
-            <Select
-              showSearch
-              placeholder="选择款式"
-              options={styleOptions}
-              filterOption={(i, o) =>
-                (o?.label ?? "").toString().includes(i)
-              }
-              onChange={(v: string) => setFormStyleId(v)}
-            />
+            <StyleSelect onChange={(v) => setFormStyleId(v ?? null)} />
           </Form.Item>
           {goodsChoiceNeeded && (
             <Form.Item
@@ -1154,14 +1127,7 @@ export function PromotionListPage() {
             label="博主"
             rules={[{ required: true, message: "请选择博主" }]}
           >
-            <Select
-              showSearch
-              placeholder="选择博主"
-              options={bloggerOptions}
-              filterOption={(i, o) =>
-                (o?.label ?? "").toString().includes(i)
-              }
-            />
+            <BloggerSelect />
           </Form.Item>
           <Form.Item
             name="cooperation_mode"

@@ -43,11 +43,11 @@ import type {
   UrgeTaskFilters,
   UrgeTaskStatus,
 } from "@/features/urge/types";
-import { listStyles } from "@/features/product/api";
 import { extractErrorMessage } from "@/services/apiClient";
 import { useAuthStore } from "@/stores/authStore";
 import { BloggerHoverCard } from "@/components/BloggerHoverCard/BloggerHoverCard";
 import { DisplayNameCell } from "@/components/DisplayNameCell/DisplayNameCell";
+import { StyleSelect } from "@/components/RemoteSelect/StyleSelect";
 
 const statusColor: Record<UrgeTaskStatus, string> = {
   进行中: "processing",
@@ -106,12 +106,6 @@ export function UrgePage() {
     queryKey: ["urge-task", detailId],
     queryFn: () => getUrgeTask(detailId as string),
     enabled: !!detailId,
-  });
-
-  const { data: styleOptions } = useQuery({
-    queryKey: ["styles", "urge-batch"],
-    queryFn: () => listStyles({ page: 1, page_size: 200 }),
-    enabled: batchOpen,
   });
 
   const urgeMutation = useMutation({
@@ -627,15 +621,7 @@ export function UrgePage() {
             label="款式"
             rules={[{ required: true, message: "请选择款式" }]}
           >
-            <Select
-              showSearch
-              placeholder="搜索款号 / 款名"
-              optionFilterProp="label"
-              options={(styleOptions?.items ?? []).map((s) => ({
-                label: `${s.style_code} ${s.style_name ?? ""}`.trim(),
-                value: s.id,
-              }))}
-            />
+            <StyleSelect placeholder="搜索款号 / 款名" />
           </Form.Item>
           <Form.Item name="note" label="备注">
             <Input.TextArea rows={2} placeholder="这轮催发的说明（可选）" />
