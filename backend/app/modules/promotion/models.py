@@ -213,7 +213,9 @@ class Promotion(TenantScopedModel):
 
     note_title: Mapped[str | None] = mapped_column(String(255), nullable=True)
     remark: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # 人工源列扩展（对齐 final.xlsx：颜色及规格/打单地址/发货单号/订单号/寄回单号/合作方式/合作形式/收藏数/评论数/博主风格 等）
+    # 人工源列扩展（对齐 final.xlsx：颜色及规格/打单地址/发货单号/订单号/合作形式/负责PR/博主风格 等）。
+    # 寄回单号 / 点赞数 / 收藏数 / 评论数 已从「录入信息」删掉（7a-5，各有 typed 列），
+    # JSONB 里的旧值原样留档、不迁移；PATCH 按键合并（domain.merge_source_extra）。
     source_extra: Mapped[dict] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )

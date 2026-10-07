@@ -85,8 +85,10 @@ class PromotionBase(BaseModel):
     """
     note_title: str | None = Field(default=None, max_length=255)
     remark: str | None = None
-    # 人工源列扩展（颜色及规格/打单地址/发货单号/订单号/寄回单号/合作形式/收藏数/评论数/博主风格 等）
+    # 人工源列扩展（颜色及规格/打单地址/发货单号/订单号/合作形式/负责PR/博主风格 等）
     # 注意：「合作方式」已提成 typed 字段 cooperation_mode，不再从这里走。
+    # 寄回单号 / 点赞数 / 收藏数 / 评论数 已从「录入信息」删掉（7a-5，各有 typed 列），
+    # JSONB 里的旧值原样留档，不迁移。
     source_extra: dict = Field(default_factory=dict)
 
 
@@ -126,7 +128,12 @@ class PromotionUpdate(BaseModel):
     like_count: int | None = Field(default=None, ge=0)
     remark: str | None = None
     is_active: bool | None = None
-    source_extra: dict | None = None
+    source_extra: dict[str, str | None] | None = None
+    """按键合并（7a-5）：值为 null 或空串 = 删这个键；没出现的键不动。
+
+    不再整包覆盖：整包会删掉表单上没有的键，也会让弹窗开着期间仓库回填的发货单号
+    被旧快照冲掉。合并规则在 ``domain.merge_source_extra``。
+    """
 
 
 class PromotionPaymentQrUploadInitRequest(BaseModel):

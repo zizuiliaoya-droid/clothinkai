@@ -174,7 +174,11 @@ export interface PromotionUpdate {
   like_count?: number | null;
   remark?: string | null;
   is_active?: boolean;
-  source_extra?: Record<string, unknown>;
+  /**
+   * 按键合并（7a-5）：值为 null 或空串 = 删这个键，没出现的键不动。
+   * 只交改过的键，见 `buildSourceExtraPatch`。
+   */
+  source_extra?: Record<string, string | null>;
 }
 
 export interface PromotionPublishRequest {

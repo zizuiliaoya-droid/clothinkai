@@ -53,6 +53,7 @@ from app.modules.promotion.domain import (
     compute_amount_changes,
     compute_promotion_changes,
     format_internal_code,
+    merge_source_extra,
 )
 from app.modules.promotion.enums import (
     AMOUNT_LOG_FIELDS,
@@ -367,6 +368,13 @@ class PromotionService:
         payload: PromotionUpdate,
         user: User,
     ) -> PromotionResponse:
+        """部分更新（PATCH）。
+
+        ``source_extra`` 按键合并（7a-5，``domain.merge_source_extra``）：补丁里值为 null
+        或空白 = 删这个键，没出现的键不动。合并基于这次请求刚读出的行，所以「录入信息」
+        弹窗开着期间仓库回填的发货单号不会被 PR 的旧快照冲掉；毫秒级的并发与其他字段
+        一样不加锁。
+        """
         promotion = await self._repo.get_by_id(promotion_id)
         if promotion is None:
             raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
@@ -436,6 +444,12 @@ class PromotionService:
         # 这里不能再 setattr —— 否则会把枚举对象写回去，也会绕过那段拦截。
         for field in changes:
             if field == "cooperation_mode":
+                continue
+            if field == "source_extra":
+                # 按键合并，不整包 setattr —— 整包会删掉表单上没有的键（7a-5）
+                promotion.source_extra = merge_source_extra(
+                    promotion.source_extra, payload.source_extra or {}
+                )
                 continue
             new_value = getattr(payload, field)
             setattr(promotion, field, new_value)

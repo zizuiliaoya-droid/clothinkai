@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import date
 from decimal import Decimal
 from typing import Any
@@ -92,17 +93,47 @@ def format_internal_code(
 # ---------------------------------------------------------------------------
 
 
+def merge_source_extra(
+    current: Mapping[str, Any] | None, patch: Mapping[str, Any]
+) -> dict[str, Any]:
+    """``source_extra`` 的 PATCH 语义：按键合并（7a-5）。
+
+    - 补丁里值为 None、或去空白后是空串 → 删掉这个键（「录入信息」里清空了一项）
+    - 其余值去空白后写入
+    - 补丁里没出现的键原样保留：导入写的「博主风格」、已从录入信息删掉的旧字段
+      （寄回单号 / 点赞数 / 收藏数 / 评论数，JSONB 里的旧值留档）、仓库刚回填的
+      「发货单号」，都不会因为 PR 保存了一次录入信息而丢
+
+    以前是整包覆盖：前端把打开弹窗时的快照连同表单值一起发回来，表单上没有的键被删，
+    弹窗开着期间仓库回填的发货单号也会被旧快照冲掉。
+
+    不改入参，返回新 dict —— JSONB 列要换一个对象 SQLAlchemy 才认得出变更。
+    """
+    merged: dict[str, Any] = dict(current or {})
+    for key, value in patch.items():
+        cleaned = None if value is None else str(value).strip()
+        if cleaned:
+            merged[key] = cleaned
+        else:
+            merged.pop(key, None)
+    return merged
+
+
 def compute_promotion_changes(
     promotion: Promotion, payload: PromotionUpdate
 ) -> dict[str, dict[str, Any]]:
     """对比当前 ORM 实例与 payload，返回变更字段的 ``{before, after}`` 字典。
 
     仅包含 ``payload.model_fields_set`` 中显式设置的字段（PATCH 语义）。
+    ``source_extra`` 按键合并：after 是合并后的结果，与现值相同就不算变更。
     """
     changes: dict[str, dict[str, Any]] = {}
     for field in payload.model_fields_set:
         new = getattr(payload, field)
         old = getattr(promotion, field, None)
+        if field == "source_extra":
+            old = dict(old or {})
+            new = merge_source_extra(old, new or {})
         if old != new:
             changes[field] = {
                 "before": _serialize(old),
@@ -224,4 +255,5 @@ __all__ = [
     "compute_promotion_changes",
     "compute_state_change",
     "format_internal_code",
+    "merge_source_extra",
 ]

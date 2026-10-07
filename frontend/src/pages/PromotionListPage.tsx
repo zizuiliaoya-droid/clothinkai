@@ -52,6 +52,7 @@ import {
   updatePromotion,
   uploadPaymentQrFile,
 } from "@/features/promotion/api";
+import { buildSourceExtraPatch } from "@/features/promotion/sourceExtra";
 import type {
   Promotion,
   PromotionCreate,
@@ -83,22 +84,20 @@ const disableFutureDate = (d: Dayjs) => d.isAfter(dayjs(), "day");
 // 站外推广人工源列（对齐 final.xlsx），从 source_extra 读取
 type SourceField = {
   name: string;
-  type: "text" | "number" | "select";
+  type: "text" | "select";
   options?: string[];
 };
+// 寄回单号 / 点赞数 / 收藏数 / 评论数 已删（7a-5）：各有 typed 字段（寄回单号走「填寄回单号」，
+// 三个数走「录 7 天数据」），这里再填只进 JSONB、哪儿都不认。JSONB 里的旧值原样留档。
 const SOURCE_FIELDS: SourceField[] = [
   { name: "颜色及规格", type: "text" },
   { name: "打单地址", type: "text" },
   { name: "发货单号", type: "text" },
   { name: "订单号", type: "text" },
-  { name: "寄回单号", type: "text" },
   // 「合作方式」已提成 typed 字段 cooperation_mode，不再走 source_extra —— 它决定成本
   // 口径与审核后的流转出口，必须是后端能校验的字段。
   { name: "合作形式", type: "select", options: ["线下", "拍单"] },
   { name: "负责PR", type: "text" },
-  { name: "点赞数", type: "number" },
-  { name: "收藏数", type: "number" },
-  { name: "评论数", type: "number" },
 ];
 const SOURCE_FIELD_NAMES = SOURCE_FIELDS.map((f) => f.name);
 
@@ -239,6 +238,10 @@ export function PromotionListPage() {
   const [publishForm] = Form.useForm();
   const [extraOpen, setExtraOpen] = useState(false);
   const [extraTarget, setExtraTarget] = useState<Promotion | null>(null);
+  // 打开弹窗那一刻的表单初值。保存时只交相对它改过的键（7a-5）。
+  // 不能从 extraTarget 现算：上传收款码会 setExtraTarget(新数据)，拿新数据比旧表单，
+  // 别人刚写进去的键会被当成「这边清空了」。
+  const [extraInitial, setExtraInitial] = useState<Record<string, unknown>>({});
   const [extraForm] = Form.useForm();
   const [paymentQrFile, setPaymentQrFile] = useState<File | null>(null);
   const [paymentQrUploading, setPaymentQrUploading] = useState(false);
@@ -376,8 +379,13 @@ export function PromotionListPage() {
   }
 
   const updateExtraMutation = useMutation({
-    mutationFn: ({ id, source_extra }: { id: string; source_extra: Record<string, unknown> }) =>
-      updatePromotion(id, { source_extra }),
+    mutationFn: ({
+      id,
+      source_extra,
+    }: {
+      id: string;
+      source_extra: Record<string, string | null>;
+    }) => updatePromotion(id, { source_extra }),
     onSuccess: () => {
       message.success("信息已保存");
       setExtraOpen(false);
@@ -406,14 +414,21 @@ export function PromotionListPage() {
     goodsForm.setFieldsValue({ goods_main_id: record.goods_main_id ?? undefined });
   }
 
+  function closeExtra() {
+    setExtraOpen(false);
+    setExtraTarget(null);
+    setPaymentQrFile(null);
+    extraForm.resetFields();
+  }
+
   function openExtra(record: Promotion) {
     setExtraTarget(record);
     setPaymentQrFile(null);
     const se = (record.source_extra ?? {}) as Record<string, unknown>;
+    const initial = Object.fromEntries(SOURCE_FIELD_NAMES.map((f) => [f, se[f] ?? ""]));
+    setExtraInitial(initial);
     extraForm.resetFields();
-    extraForm.setFieldsValue(
-      Object.fromEntries(SOURCE_FIELD_NAMES.map((f) => [f, se[f] ?? ""]))
-    );
+    extraForm.setFieldsValue(initial);
     setExtraOpen(true);
     // §11：按货号(款式)加载该款 SKU 的「颜色 + 尺码」组合作为下拉选项
     setColorSizeOptions([]);
@@ -1840,12 +1855,7 @@ export function PromotionListPage() {
       <Modal
         title="录入推广信息（地址/订单号等）"
         open={extraOpen}
-        onCancel={() => {
-          setExtraOpen(false);
-          setExtraTarget(null);
-          setPaymentQrFile(null);
-          extraForm.resetFields();
-        }}
+        onCancel={closeExtra}
         onOk={() => extraForm.submit()}
         confirmLoading={updateExtraMutation.isPending}
         destroyOnHidden
@@ -1857,19 +1867,15 @@ export function PromotionListPage() {
           style={{ marginTop: 16 }}
           onFinish={(values: Record<string, unknown>) => {
             if (!extraTarget) return;
-            // 仅提交非空字段，空值不覆盖
-            const source_extra: Record<string, unknown> = {
-              ...((extraTarget.source_extra ?? {}) as Record<string, unknown>),
-            };
-            for (const f of SOURCE_FIELD_NAMES) {
-              const v = values[f];
-              if (v === undefined || v === null || String(v).trim() === "") {
-                delete source_extra[f];
-              } else {
-                source_extra[f] = String(v).trim();
-              }
+            // 只交相对打开弹窗时改过的键；清空的给 null（后端删键），没碰的不带 ——
+            // 后端按键合并，表单外的键和仓库刚回填的发货单号都不会被冲掉（7a-5）
+            const patch = buildSourceExtraPatch(extraInitial, values, SOURCE_FIELD_NAMES);
+            if (Object.keys(patch).length === 0) {
+              message.info("没有改动");
+              closeExtra();
+              return;
             }
-            updateExtraMutation.mutate({ id: extraTarget.id, source_extra });
+            updateExtraMutation.mutate({ id: extraTarget.id, source_extra: patch });
           }}
         >
           {canManagePaymentQr && (
@@ -1977,8 +1983,6 @@ export function PromotionListPage() {
                   placeholder={`请选择${f.name}`}
                   options={(f.options ?? []).map((o) => ({ label: o, value: o }))}
                 />
-              ) : f.type === "number" ? (
-                <Input type="number" placeholder={`请输入${f.name}`} allowClear />
               ) : (
                 <Input placeholder={`请输入${f.name}`} allowClear />
               )}
