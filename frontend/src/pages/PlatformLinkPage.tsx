@@ -39,7 +39,7 @@ const CHANNELS = ["普通", "直播"];
  * 「平台链接」= 店铺里一条实际在卖的链接（千牛商品ID / 万相台主体ID）。它决定三件事：
  * 销售数据算到哪个商品头上、仓库发的是哪件衣服、以及这笔 GMV 算普通还是直播。
  *
- * 业务页面（款式管理）刻意不展示平台ID —— 绑错一条链接，整条销售数据就记到别的商品名下，
+ * 业务页面（商品 / 套装页的款式维护处）刻意不展示平台ID —— 绑错一条链接，整条销售数据就记到别的商品名下，
  * 这是运维职责。路由与菜单都限管理员 / 运营。
  */
 export function PlatformLinkPage() {
@@ -287,7 +287,7 @@ export function PlatformLinkPage() {
           {editing && (
             <Typography.Text type="secondary">
               关联款式：{editing.style_code ?? "—"} {editing.style_name ?? ""}
-              （款式不在这里改，要改去款式管理）
+              （款式不在这里改，要改去「商品 / 套装 → 款式」）
             </Typography.Text>
           )}
         </Form>

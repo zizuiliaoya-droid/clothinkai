@@ -63,6 +63,13 @@ class InvalidStyleReferenceError(ValidationError):
     code = "INVALID_STYLE_REFERENCE"
 
 
+class StyleCodeImmutableError(ValidationError):
+    """款号建档后不可改（8a FR-1.2）：款号是聚水潭导入与批量传图的匹配键，改了会让下次导入建出重复款式。"""
+
+    code = "STYLE_CODE_IMMUTABLE"
+    message = "款号建档后不可改"
+
+
 class InvalidBrandReferenceError(ValidationError):
     """style.brand_id 不存在 / 已停用。"""
 
@@ -125,6 +132,7 @@ __all__ = [
     "SkuNotFoundError",
     "SourcingPriceMismatchError",
     "StyleCodeConflictError",
+    "StyleCodeImmutableError",
     "StyleHasActiveSkuError",
     "StyleNotFoundError",
 ]

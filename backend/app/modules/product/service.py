@@ -45,6 +45,7 @@ from app.modules.product.exceptions import (
     SkuHasReferenceError,
     SkuNotFoundError,
     StyleCodeConflictError,
+    StyleCodeImmutableError,
     StyleHasActiveSkuError,
     StyleNotFoundError,
 )
@@ -100,14 +101,11 @@ class StyleService:
                 f"款式编码 {payload.style_code} 已被使用",
                 details={"style_code": payload.style_code},
             )
+        # 8a：简称 / 品牌 / 类目 / 季节不再由款式表单写入（类目为 NULL，其余归商品层）
         style = Style(
             style_code=payload.style_code,
             style_name=payload.style_name,
-            short_name=payload.short_name,
             qianniu_product_id=payload.qianniu_product_id,
-            brand_id=payload.brand_id,
-            category=payload.category,
-            season=payload.season,
             gender=payload.gender.value if payload.gender else None,
             tags=list(payload.tags),
             tag_color=list(payload.tag_color),
@@ -135,15 +133,10 @@ class StyleService:
         if style is None:
             raise StyleNotFoundError(f"款式 {style_id} 不存在")
 
-        # BR-U02-01: 若改 style_code，需重新校验唯一
-        if (
-            "style_code" in payload.model_fields_set
-            and payload.style_code is not None
-            and payload.style_code != style.style_code
-        ) and await self._styles.code_exists(payload.style_code):
-            raise StyleCodeConflictError(
-                f"款式编码 {payload.style_code} 已被使用",
-                details={"style_code": payload.style_code},
+        # 8a FR-1.2：款号建档后不可改（导入与批量传图按款号匹配）；传相同值照常
+        if payload.style_code is not None and payload.style_code != style.style_code:
+            raise StyleCodeImmutableError(
+                details={"style_code": style.style_code, "requested": payload.style_code},
             )
 
         changes = compute_style_changes(style, payload)

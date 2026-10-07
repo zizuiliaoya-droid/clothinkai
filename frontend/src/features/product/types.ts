@@ -46,7 +46,7 @@ export interface Style {
   style_code: string;
   style_name: string;
   short_name: string | null;
-  /** 千牛商品ID 属于平台链接层，只在运维视图维护，款式管理页不展示。 */
+  /** 千牛商品ID 属于平台链接层，只在运维视图维护，款式维护处不展示。 */
   qianniu_product_id?: string | null;
   /** 所属商品（后端派生）：主商品为非套装优先、货号次之。 */
   goods_code: string | null;
@@ -55,8 +55,9 @@ export interface Style {
   goods_is_suit: boolean;
   /** 所属套装的显示名（后端派生，有简称用简称）；不在任何套装里则为 null。 */
   suite_name: string | null;
+  /** 简称 / 品牌 / 类目 / 季节：只读存量值，款式表单不再维护（8a）；新建的款式类目为 null。 */
   brand_id: string | null;
-  category: string;
+  category: string | null;
   season: string | null;
   gender: string | null;
   tags: string[];
@@ -75,11 +76,7 @@ export interface Style {
 export interface StyleCreate {
   style_code: string;
   style_name: string;
-  short_name?: string | null;
   qianniu_product_id?: string | null;
-  brand_id?: string | null;
-  category: string;
-  season?: string | null;
   gender?: Gender | null;
   tags?: string[];
   tag_color?: string[];
@@ -90,13 +87,10 @@ export interface StyleCreate {
 }
 
 export interface StyleUpdate {
+  /** 款号建档后不可改：传与现值不同的值后端返回 422 STYLE_CODE_IMMUTABLE。 */
   style_code?: string;
   style_name?: string;
-  short_name?: string | null;
   qianniu_product_id?: string | null;
-  brand_id?: string | null;
-  category?: string;
-  season?: string | null;
   gender?: Gender | null;
   tags?: string[];
   tag_color?: string[];
@@ -192,7 +186,6 @@ export interface StyleListFilters {
   page_size?: number;
   keyword?: string;
   brand_id?: string;
-  category?: string;
   season?: string;
   gender?: string;
   design_status?: string;

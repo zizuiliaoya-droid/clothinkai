@@ -48,6 +48,8 @@ _IMPORT_SCOPE_NAME = "导入商品资料、配置其字段映射、处理其导�
 _PRODUCT_ALL_SCOPE = "product.*:*"
 _PRODUCT_ALL_NAME = "商品模块全部权限"
 _GRANT_ROLE = "operations"
+# downgrade 恢复 style.category NOT NULL 前给空类目补的值
+_CATEGORY_FALLBACK = "未分类"
 
 
 def _log(msg: str) -> None:
@@ -62,8 +64,10 @@ def _log(msg: str) -> None:
 def _upgrade_style(bind: Connection) -> None:
     """款式表：``style.category`` 放开 NOT NULL（8a-1）、加 ``external_image_url``（8a-4）。
 
-    由后续步骤填写；本步骤（8a-7）不改款式表。
+    8a-1：款式表单不再有类目，接口新建的款式类目为 NULL；已有值不动（设计 §3.1）。
     """
+    op.alter_column("style", "category", existing_type=sa.String(64), nullable=True)
+    _log("style.category 放开 NOT NULL")
 
 
 def _upgrade_import_tables(bind: Connection) -> None:
@@ -103,6 +107,11 @@ def _upgrade_permissions(bind: Connection) -> None:
 
 def _report(bind: Connection) -> None:
     """打印迁移后的权限状态（同 043 末尾）；后续步骤在这里追加各自的统计。"""
+    null_category = bind.execute(
+        sa.text("SELECT COUNT(*) FROM style WHERE category IS NULL")
+    ).scalar_one()
+    _log(f"类目为空的款式：{null_category} 个")
+
     scopes = (
         bind.execute(
             sa.text(
@@ -196,7 +205,17 @@ def _downgrade_import_tables(bind: Connection) -> None:
 
 
 def _downgrade_style(bind: Connection) -> None:
-    """撤回款式表的变更（8a-1 / 8a-4）。由后续步骤填写。"""
+    """撤回款式表的变更（8a-1 / 8a-4）。
+
+    8a-1：类目为空的款式先补「未分类」（056 及以前导入缺类目时写的就是它），再恢复 NOT NULL。
+    """
+    res = bind.execute(
+        sa.text("UPDATE style SET category = :fallback WHERE category IS NULL"),
+        {"fallback": _CATEGORY_FALLBACK},
+    )
+    _log(f"类目为空的款式补「{_CATEGORY_FALLBACK}」：{res.rowcount or 0} 个")
+    op.alter_column("style", "category", existing_type=sa.String(64), nullable=False)
+    _log("style.category 恢复 NOT NULL")
 
 
 def downgrade() -> None:

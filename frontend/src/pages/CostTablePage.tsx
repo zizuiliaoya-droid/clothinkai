@@ -417,16 +417,13 @@ export function CostTablePage() {
                 value={`${editing.style_code} ${editing.style_name}`}
                 disabled
               />
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                款名、简称、品牌属于款式，请到「款式管理」修改。
-              </Typography.Text>
             </Form.Item>
           ) : (
             <Form.Item
               name="style_id"
               label="所属款式"
               rules={[{ required: true, message: "请选择款式" }]}
-              extra="按货号或款名搜索。若款式还不存在，请先到「款式管理」新建。"
+              extra="按货号或款名搜索。款式还不存在的话，到「商品 / 套装 → 款式」新建"
             >
               <Select
                 showSearch
@@ -465,7 +462,7 @@ export function CostTablePage() {
                   label: c.value,
                   value: c.value,
                 }))}
-                notFoundContent="暂无颜色，请先在款式管理的「管理字典」中添加"
+                notFoundContent="暂无颜色，请先在「商品 / 套装」的「管理字典」中添加"
               />
             </Form.Item>
             <Form.Item
@@ -480,7 +477,7 @@ export function CostTablePage() {
                   label: s.value,
                   value: s.value,
                 }))}
-                notFoundContent="暂无规格，请先在款式管理的「管理字典」中添加"
+                notFoundContent="暂无规格，请先在「商品 / 套装」的「管理字典」中添加"
               />
             </Form.Item>
           </Space>

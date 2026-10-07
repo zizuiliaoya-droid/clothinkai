@@ -149,6 +149,8 @@ class AiAdvisoryService:
             }
             for b in candidates
         ]
+        # 8a 起款式类目可空：为空时不拼「（…）」
+        category_note = f"（{style.category}）" if style.category else ""
         messages = [
             {
                 "role": "system",
@@ -156,7 +158,7 @@ class AiAdvisoryService:
             },
             {
                 "role": "user",
-                "content": f"款式：{style.style_name}（{style.category}）。"
+                "content": f"款式：{style.style_name}{category_note}。"
                 f"候选博主：{json.dumps(cand_summary, ensure_ascii=False)}。"
                 f"请选 Top{top_n} 并给出 match_score(0-1) 和理由。",
             },
