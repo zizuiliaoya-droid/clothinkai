@@ -11,7 +11,6 @@ import hashlib
 import logging
 import secrets
 from datetime import UTC, datetime
-from ipaddress import ip_address, ip_network
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.audit import AuditService
 from app.core.db import AsyncSessionApp
 from app.core.metrics import worker_token_auth_failures_total
+from app.core.security.client_ip import ip_is_allowed
 from app.core.tenancy import bypass_rls_ctx, tenant_id_ctx
 from app.modules.auth.models import User
 from app.modules.auth.repository import RoleRepository
@@ -39,19 +39,8 @@ def hash_token(raw: str) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
-def ip_is_allowed(client_ip: str, allowlist: list[str]) -> bool:
-    """按单 IP/CIDR 白名单匹配；无效或空白名单一律拒绝。"""
-    try:
-        address = ip_address(client_ip)
-    except ValueError:
-        return False
-    for entry in allowlist:
-        try:
-            if address in ip_network(entry, strict=False):
-                return True
-        except ValueError:
-            continue
-    return False
+# ip_is_allowed 已提到 app.core.security.client_ip 与登录白名单共用（行为不变），
+# 这里继续 re-export：tests/unit/test_crawler_adapters.py 等从本模块 import。
 
 
 class WorkerTokenService:

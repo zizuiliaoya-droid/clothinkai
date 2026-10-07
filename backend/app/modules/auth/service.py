@@ -58,6 +58,7 @@ from app.modules.auth.repository import (
     PermissionRepository,
     RefreshTokenRepository,
     RoleRepository,
+    TenantRepository,
     UserRepository,
     UserRoleRepository,
 )
@@ -69,6 +70,9 @@ from app.modules.auth.schemas import (
 )
 
 log = logging.getLogger(__name__)
+
+# 登录时查不到用户，审计记到这个租户（与 main._ensure_initial_admin、迁移 003 同一约定）
+DEFAULT_TENANT_CODE = "default"
 
 
 def _utcnow() -> datetime:
@@ -94,10 +98,20 @@ class AuthService:
         self._tokens = RefreshTokenRepository(session)
         self._audit = AuditService(session)
         self._permissions = PermissionRepository(session)
+        self._tenants = TenantRepository(session)
 
     # ------------------------------------------------------------------ #
     # 登录
     # ------------------------------------------------------------------ #
+    async def _login_tenant_id(self, user: User | None) -> UUID | None:
+        """登录类审计记到哪个租户：查到用户用其租户，查不到用 default 租户。
+
+        登录请求的租户上下文为空或来自未验签的旧 token，不能用；必须显式传给 AuditService。
+        """
+        if user is not None:
+            return user.tenant_id
+        return await self._tenants.get_id_by_code(DEFAULT_TENANT_CODE)
+
     async def login(
         self,
         payload: LoginRequest,
@@ -108,21 +122,30 @@ class AuthService:
         """登录（BR-AUTH-001/002 双层失败处理）。
 
         返回：(access_token, refresh_token, user, must_change_password)
+
+        登录类审计（login / login_failed / login_locked / login_disabled / login_rate_limited /
+        user_lock）统一写 ``after.username``（原始输入，截 64 字）与显式 ``tenant_id``。
         """
         username = payload.username
+        # schema 已 strip 并限 64 字；截断只是防御，限流计数仍用完整 username
+        audit_username = username[:64]
         fail_key = _login_fail_key(ip, username)
 
         # L3: (IP, username) 维度限流
         fail_count = int(await cache.get(fail_key) or 0)
         if fail_count >= settings.LOGIN_FAIL_LIMIT_PER_IP_USERNAME:
             ttl = await cache.ttl(fail_key)
+            # 只为审计定租户多查一次：不计数、不改返回码
+            limited_user = await self._users.get_by_username(username)
             await self._audit.log(
                 action="login_rate_limited",
                 actor_type="unknown",
                 resource="user",
+                after={"username": audit_username},
                 purpose=f"ip+username over {settings.LOGIN_FAIL_LIMIT_PER_IP_USERNAME}/15min",
                 ip=ip,
                 user_agent=user_agent,
+                tenant_id=await self._login_tenant_id(limited_user),
             )
             await self._session.commit()
             raise RateLimitedError(retry_after_seconds=max(ttl, 1))
@@ -137,9 +160,10 @@ class AuthService:
                 action="login_failed",
                 actor_type="unknown",
                 resource="user",
-                after={"username": username},
+                after={"username": audit_username},
                 ip=ip,
                 user_agent=user_agent,
+                tenant_id=await self._login_tenant_id(None),
             )
             await self._session.commit()
             raise InvalidCredentialsError()
@@ -152,8 +176,10 @@ class AuthService:
                 user_id=user.id,
                 resource="user",
                 resource_id=user.id,
+                after={"username": audit_username},
                 ip=ip,
                 user_agent=user_agent,
+                tenant_id=user.tenant_id,
             )
             await self._session.commit()
             raise AccountLockedError()
@@ -164,8 +190,10 @@ class AuthService:
                 user_id=user.id,
                 resource="user",
                 resource_id=user.id,
+                after={"username": audit_username},
                 ip=ip,
                 user_agent=user_agent,
+                tenant_id=user.tenant_id,
             )
             await self._session.commit()
             raise AccountDisabledError()
@@ -173,15 +201,19 @@ class AuthService:
         # 校验密码
         if not verify_password(payload.password, user.password_hash):
             await self._record_fail(fail_key)
-            await self._increment_account_failure(user, ip=ip, user_agent=user_agent)
+            await self._increment_account_failure(
+                user, ip=ip, user_agent=user_agent, audit_username=audit_username
+            )
             await self._audit.log(
                 action="login_failed",
                 actor_type="user",
                 user_id=user.id,
                 resource="user",
                 resource_id=user.id,
+                after={"username": audit_username},
                 ip=ip,
                 user_agent=user_agent,
+                tenant_id=user.tenant_id,
             )
             await self._session.commit()
             raise InvalidCredentialsError()
@@ -223,8 +255,10 @@ class AuthService:
             user_id=user.id,
             resource="user",
             resource_id=user.id,
+            after={"username": audit_username},
             ip=ip,
             user_agent=user_agent,
+            tenant_id=user.tenant_id,
         )
         await self._session.commit()
         return access_token, refresh, user, user.password_must_change
@@ -240,6 +274,7 @@ class AuthService:
         *,
         ip: str,
         user_agent: str | None,
+        audit_username: str,
     ) -> None:
         """L4 账户级累计；超过阈值锁账户 + 写 user_lock 审计。"""
         user.failed_login_count += 1
@@ -255,9 +290,11 @@ class AuthService:
                 user_id=user.id,
                 resource="user",
                 resource_id=user.id,
+                after={"username": audit_username},
                 purpose="exceeded_login_attempts",
                 ip=ip,
                 user_agent=user_agent,
+                tenant_id=user.tenant_id,
             )
 
     # ------------------------------------------------------------------ #

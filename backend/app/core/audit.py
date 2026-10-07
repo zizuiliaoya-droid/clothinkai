@@ -54,17 +54,21 @@ class AuditService:
         purpose: str | None = None,
         ip: str | None = None,
         user_agent: str | None = None,
+        tenant_id: UUID | None = None,
     ) -> None:
         """写一条审计日志。
 
         若未传 actor_type / user_id / tenant_id，则尝试从 contextvars 读取。
+
+        ``tenant_id`` 显式传入时优先于上下文。登录等匿名请求必须显式传：这类请求的上下文
+        要么为空，要么来自 TenancyContextMiddleware 从**未验签**的旧 token 里解出的租户，都不可信。
         """
         # 延迟 import 避免循环依赖
         from app.modules.auth.models import AuditLog
 
         effective_actor = actor_type or actor_type_ctx.get() or "anonymous"
         effective_user_id = user_id or user_id_ctx.get()
-        effective_tenant_id = tenant_id_ctx.get()
+        effective_tenant_id = tenant_id if tenant_id is not None else tenant_id_ctx.get()
 
         entry = AuditLog(
             tenant_id=effective_tenant_id,

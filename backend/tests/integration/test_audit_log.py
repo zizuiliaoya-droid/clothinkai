@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from uuid import uuid4
+
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -61,6 +63,42 @@ class TestAuditLog:
             tenant_id_ctx.reset(t_token)
             user_id_ctx.reset(u_token)
             actor_type_ctx.reset(a_token)
+
+    async def test_explicit_tenant_id_overrides_context(
+        self, session: AsyncSession, tenant_a: Tenant, tenant_b: Tenant
+    ) -> None:
+        """显式 tenant_id 优先于上下文（登录请求的上下文可能来自未验签的旧 token）。"""
+        marker = uuid4().hex
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            await AuditService(session).log(
+                action="explicit_tenant_probe", resource_id=marker, tenant_id=tenant_b.id
+            )
+            await session.flush()
+        finally:
+            tenant_id_ctx.reset(token)
+
+        stmt = select(AuditLog).where(
+            AuditLog.action == "explicit_tenant_probe", AuditLog.resource_id == marker
+        )
+        entry = (await session.execute(stmt)).scalar_one()
+        assert entry.tenant_id == tenant_b.id
+
+    async def test_explicit_tenant_id_without_context(
+        self, session: AsyncSession, tenant_a: Tenant
+    ) -> None:
+        marker = uuid4().hex
+        assert tenant_id_ctx.get() is None
+        await AuditService(session).log(
+            action="explicit_tenant_probe", resource_id=marker, tenant_id=tenant_a.id
+        )
+        await session.flush()
+
+        stmt = select(AuditLog).where(
+            AuditLog.action == "explicit_tenant_probe", AuditLog.resource_id == marker
+        )
+        entry = (await session.execute(stmt)).scalar_one()
+        assert entry.tenant_id == tenant_a.id
 
     async def test_query_filters_combined(self, session: AsyncSession, tenant_a: Tenant) -> None:
         from app.modules.auth.repository import AuditLogRepository
