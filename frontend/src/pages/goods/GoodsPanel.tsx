@@ -492,7 +492,7 @@ export function GoodsPanel() {
             name="short_name"
             label="商品简称"
             tooltip="列表、报表和下拉里显示这个短名字；不填就显示全称"
-            style={{ width: 400 }}
+            style={{ width: 400, maxWidth: "100%" }}
           >
             <Input
               placeholder="如：冰雪飞狐皮草外套"
@@ -511,7 +511,8 @@ export function GoodsPanel() {
             <Input placeholder="店铺里显示的完整标题" />
           </Form.Item>
 
-          <Space align="start" style={{ display: "flex" }}>
+          {/* 窄屏（375）换行，不撑出弹窗 */}
+          <Space align="start" style={{ display: "flex" }} wrap>
             <Form.Item name="season" label="季节" style={{ width: 200 }}>
               <Select allowClear placeholder="选择季节" options={seasonOptions} />
             </Form.Item>
@@ -545,11 +546,11 @@ export function GoodsPanel() {
             {(fields, { add, remove }, { errors }) => (
               <>
                 {fields.map((field) => (
-                  <Space key={field.key} align="baseline" style={{ display: "flex" }}>
+                  <Space key={field.key} align="baseline" style={{ display: "flex" }} wrap>
                     <Form.Item
                       name={[field.name, "style_id"]}
                       rules={[{ required: true, message: "请选款式" }]}
-                      style={{ width: 380 }}
+                      style={{ width: 380, maxWidth: "calc(100vw - 96px)" }}
                     >
                       <Select
                         showSearch

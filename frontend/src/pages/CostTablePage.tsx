@@ -48,6 +48,17 @@ import { templateColumnsFromSpec } from "@/pages/cost/mappingColumns";
 const GOODS_SOURCE = "manual_style_sku";
 const IMPORT_COLUMNS_NOTE = "只读下列列，列名对上即可；其余列忽略，不用删列：";
 
+/** 卡片标题栏：宽屏标题在左、按钮在右；窄屏按钮换到下一行（antd 卡片标题默认不换行）。 */
+const CARD_HEAD_STYLE = {
+  display: "flex",
+  flexWrap: "wrap",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 8,
+  padding: "8px 0",
+  whiteSpace: "normal",
+} as const;
+
 const money = (v: string | null) => (v == null ? "—" : `¥${v}`);
 
 const SOURCING_TYPES: SourcingType[] = ["自产", "外采", "混合"];
@@ -351,45 +362,46 @@ export function CostTablePage() {
 
   return (
     <Card
+      // 标题与按钮放在同一个可换行的容器里：按钮放 extra 时不会换行，375 宽会撑出页面
       title={
-        <Space size="middle" wrap>
-          <Typography.Title level={4} style={{ margin: 0 }}>
-            商品成本表
-          </Typography.Title>
-          {canViewGoodsImport && pendingConflicts > 0 && (
-            <Button
-              size="small"
-              style={{ color: "#c2410c", borderColor: "#fdba74" }}
-              onClick={() =>
-                navigate(`/imports?tab=conflicts&source=${GOODS_SOURCE}`)
-              }
-            >
-              待处理冲突 {pendingConflicts}
+        <div style={CARD_HEAD_STYLE}>
+          <Space size="middle" wrap>
+            <Typography.Title level={4} style={{ margin: 0 }}>
+              商品成本表
+            </Typography.Title>
+            {canViewGoodsImport && pendingConflicts > 0 && (
+              <Button
+                size="small"
+                style={{ color: "#c2410c", borderColor: "#fdba74" }}
+                onClick={() =>
+                  navigate(`/imports?tab=conflicts&source=${GOODS_SOURCE}`)
+                }
+              >
+                待处理冲突 {pendingConflicts}
+              </Button>
+            )}
+          </Space>
+          <Space wrap>
+            {canMapGoods && (
+              <Button onClick={() => setMappingOpen(true)} disabled={!mappingSpec}>
+                字段映射
+              </Button>
+            )}
+            {canImportGoods && (
+              <ImportUploadButton
+                source={GOODS_SOURCE}
+                label="导入商品成本表"
+                invalidateKeys={[["cost-table"], ["styles"], ["skus"]]}
+                templateColumns={templateColumns}
+                columnsNote={IMPORT_COLUMNS_NOTE}
+                onUploaded={setResultBatchId}
+              />
+            )}
+            <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+              新增商品
             </Button>
-          )}
-        </Space>
-      }
-      extra={
-        <Space>
-          {canMapGoods && (
-            <Button onClick={() => setMappingOpen(true)} disabled={!mappingSpec}>
-              字段映射
-            </Button>
-          )}
-          {canImportGoods && (
-            <ImportUploadButton
-              source={GOODS_SOURCE}
-              label="导入商品成本表"
-              invalidateKeys={[["cost-table"], ["styles"], ["skus"]]}
-              templateColumns={templateColumns}
-              columnsNote={IMPORT_COLUMNS_NOTE}
-              onUploaded={setResultBatchId}
-            />
-          )}
-          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-            新增商品
-          </Button>
-        </Space>
+          </Space>
+        </div>
       }
     >
       <Space style={{ marginBottom: 16 }} wrap>

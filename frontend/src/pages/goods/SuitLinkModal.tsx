@@ -145,6 +145,8 @@ export function SuitLinkModal({ goods, onClose }: Props) {
       title={goods ? `绑定链接 · ${displayName}` : "绑定链接"}
       open={!!goods}
       onCancel={onClose}
+      // 表单实例跨开关保留：关掉就清空，下次打开不会带着上一次填的平台 ID
+      afterClose={() => form.resetFields()}
       onOk={() => form.submit()}
       okText="绑定"
       confirmLoading={createMutation.isPending}
@@ -161,6 +163,8 @@ export function SuitLinkModal({ goods, onClose }: Props) {
         loading={linksLoading}
         columns={columns}
         dataSource={links?.items ?? []}
+        // 窄屏（375）表格自身横向滚动，不把「千牛」「普通」挤成一字一行
+        scroll={{ x: 520 }}
         pagination={false}
         locale={{ emptyText: "还没有链接" }}
       />
