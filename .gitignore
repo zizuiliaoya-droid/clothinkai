@@ -81,6 +81,12 @@ local-dashboard.png
 # 临时工作目录（部署脚本、提交信息草稿等）
 .tmp-zeabur/
 
+# 调研任务简报与报告（本地产物）
+.agents/
+
+# 并行开发用的 git worktree
+.worktrees/
+
 # 本地存储回退（R2 未配置时；dev only）
 backend/.local_storage/
 
