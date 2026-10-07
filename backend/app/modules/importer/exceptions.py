@@ -110,6 +110,17 @@ class ImportBatchNotFoundError(AppException):
         super().__init__(f"导入批次 {batch_id} 不存在", details={"batch_id": str(batch_id)})
 
 
+class ImportMappingSpecUnavailableError(AppException):
+    """来源没有声明映射目录（mapping_targets），取不到目录（8a-4）。"""
+
+    code = "IMPORT_MAPPING_SPEC_UNAVAILABLE"
+    status_code = 404
+    message = "该导入来源没有字段映射目录"
+
+    def __init__(self, source: str) -> None:
+        super().__init__(f"导入来源 '{source}' 没有字段映射目录", details={"source": source})
+
+
 class ImportConflictNotFoundError(AppException):
     """裁决时有冲突取不到（不存在、跨租户或来源不可见），整单不处理（8a-6）。"""
 
@@ -212,6 +223,7 @@ __all__ = [
     "ImportFileTooLargeError",
     "ImportFormatUnsupportedError",
     "ImportMappingInvalidError",
+    "ImportMappingSpecUnavailableError",
     "ImportMappingVersionNotFoundError",
     "ImportRetryExhaustedError",
     "ImportSourceUnknownError",

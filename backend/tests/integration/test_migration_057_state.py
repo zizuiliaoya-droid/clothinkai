@@ -91,6 +91,23 @@ class TestMigration057ImportTables:
             .all()
         )
 
+    async def test_style_external_image_url(self, session: AsyncSession) -> None:
+        """8a-4：style.external_image_url VARCHAR(1024) NULL（§3.1）。"""
+        row = (
+            await session.execute(
+                text(
+                    "SELECT is_nullable, data_type, character_maximum_length "
+                    "FROM information_schema.columns WHERE table_schema = 'public' "
+                    "AND table_name = 'style' AND column_name = 'external_image_url'"
+                )
+            )
+        ).one()
+        assert (row.is_nullable, row.data_type, row.character_maximum_length) == (
+            "YES",
+            "character varying",
+            1024,
+        )
+
     async def test_import_batch_count_columns(self, session: AsyncSession) -> None:
         rows = (
             await session.execute(

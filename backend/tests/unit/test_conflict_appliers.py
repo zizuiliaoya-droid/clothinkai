@@ -1,4 +1,4 @@
-"""8a-6：applier 的校验与留痕（设计 §4.5.1、§4.5.2；本 FEAT 只有博主）。"""
+"""applier 的校验与留痕（设计 §4.5.1、§4.5.2）：博主（8a-6）、款式 / SKU / 商品（8a-4）。"""
 
 from __future__ import annotations
 
@@ -11,11 +11,18 @@ from uuid import uuid4
 import pytest
 from pydantic import BaseModel, ValidationError
 
+from app.modules.importer.compare import MONEY_REASON
 from app.modules.importer.conflict_appliers import (
+    BRAND_REASON,
     CONFLICT_APPLIERS,
+    EXTERNAL_IMAGE_REASON,
     GENERIC_INVALID_REASON,
+    SKU_SOURCING_VALUES,
     ApplierValueError,
     BloggerApplier,
+    GoodsApplier,
+    SkuApplier,
+    StyleApplier,
     build_object_audit,
     invalid_reason,
 )
@@ -200,3 +207,155 @@ class TestObjectAudit:
             "import_conflict_id": str(conflict_id),
         }
         json.dumps(after)
+
+
+# ---------------------------------------------------------------------------
+# 款式 / SKU / 商品（8a-4）
+# ---------------------------------------------------------------------------
+
+_STYLE = StyleApplier()
+_SKU = SkuApplier()
+_GOODS = GoodsApplier()
+
+
+def _sku(**kw: Any) -> SimpleNamespace:
+    base: dict[str, Any] = {
+        "color": "红",
+        "size": "M",
+        "base_price": None,
+        "cost_price": None,
+        "purchase_price": Decimal("55.00"),
+        "tag_price": None,
+        "sourcing_type": "采购",
+    }
+    base.update(kw)
+    return SimpleNamespace(**base)
+
+
+@pytest.mark.unit
+class TestStyleSkuGoodsAppliers:
+    def test_registered(self) -> None:
+        assert isinstance(CONFLICT_APPLIERS["style"], StyleApplier)
+        assert isinstance(CONFLICT_APPLIERS["sku"], SkuApplier)
+        assert isinstance(CONFLICT_APPLIERS["goods"], GoodsApplier)
+        assert (
+            CONFLICT_APPLIERS["goods"].audit_action,
+            CONFLICT_APPLIERS["goods"].audit_resource,
+        ) == (
+            "goods.update",
+            "goods_main",
+        )
+        assert CONFLICT_APPLIERS["style"].audit_action == "style.update"
+        assert CONFLICT_APPLIERS["sku"].audit_action == "sku.update"
+
+    @pytest.mark.parametrize(
+        ("applier", "field", "value", "reason"),
+        [
+            (_STYLE, "external_image_url", "javascript:alert(1)", EXTERNAL_IMAGE_REASON),
+            (_STYLE, "external_image_url", "ftp://x.invalid/a.jpg", EXTERNAL_IMAGE_REASON),
+            (_SKU, "color", "  ", "不能为空"),
+            (_SKU, "color", "x" * 65, "超过 64 字"),
+            (_SKU, "size", "x" * 33, "超过 32 字"),
+            (_SKU, "base_price", "100000000", MONEY_REASON),
+            (_SKU, "cost_price", "-1", MONEY_REASON),
+            (_SKU, "tag_price", "abc", MONEY_REASON),
+            (_SKU, "sourcing_type", "进口", "必须为 自产/外采/混合/采购/代发 之一"),
+            (_GOODS, "short_name", "x" * 33, "超过 32 字"),
+            (_GOODS, "season", "x" * 65, "超过 64 字"),
+            (_GOODS, "brand_id", "not-a-uuid", BRAND_REASON),
+        ],
+    )
+    def test_invalid(self, applier: Any, field: str, value: Any, reason: str) -> None:
+        with pytest.raises(ApplierValueError) as exc_info:
+            applier.check(field, value)
+        assert (exc_info.value.field, exc_info.value.reason) == (field, reason)
+
+    @pytest.mark.parametrize("sourcing", sorted(SKU_SOURCING_VALUES))
+    def test_sourcing_values_accepted(self, sourcing: str) -> None:
+        assert _SKU.check("sourcing_type", sourcing) == sourcing
+
+    def test_money_quantized(self) -> None:
+        assert _SKU.check("base_price", "60") == Decimal("60.00")
+        assert _SKU.check("cost_price", "99999999.99") == Decimal("99999999.99")
+
+    def test_current_values_purchase_sourcing_does_not_raise(self) -> None:
+        """库里「采购 / 代发」读当前值不经 SourcingType(...)，不抛异常（N8）。"""
+        for sourcing in ("采购", "代发"):
+            values = _SKU.current_values(_sku(sourcing_type=sourcing), [s.name for s in _SKU.specs])
+            assert values["sourcing_type"] == sourcing
+            assert values["purchase_price"] == "55.00"
+
+    async def test_self_produced_without_cost_can_write_base_price(self) -> None:
+        """不调 validate_sku_sourcing_price：自产、没有成本价的 SKU 也能写基本售价（N8）。"""
+        obj = _sku(sourcing_type="自产", cost_price=None)
+        session = _FakeSession()
+        changes = await _SKU.apply(
+            session,  # type: ignore[arg-type]
+            obj,
+            {"base_price": _SKU.check("base_price", "60.00")},
+        )
+        assert changes == {"base_price": (None, Decimal("60.00"))}
+        assert session.flushes == 1
+
+    async def test_purchase_sourcing_overwrite_cost(self) -> None:
+        obj = _sku(sourcing_type="采购", cost_price=Decimal("60.00"))
+        changes = await _SKU.apply(
+            _FakeSession(),  # type: ignore[arg-type]
+            obj,
+            {"cost_price": _SKU.check("cost_price", "65")},
+        )
+        assert changes == {"cost_price": (Decimal("60.00"), Decimal("65.00"))}
+
+    def test_audit_json_safe_and_sensitive(self) -> None:
+        """build_object_audit：基本售价 "60.00"、品牌 id 为字符串、成本价只记 _changed。"""
+        brand_id = uuid4()
+        before, after = build_object_audit(
+            _SKU,
+            {
+                "base_price": (None, Decimal("60")),
+                "cost_price": (Decimal("60.00"), Decimal("65.00")),
+                "color": ("红", " 蓝 "),
+            },
+            via="import_overwrite",
+            batch_id=uuid4(),
+            row_number=2,
+        )
+        assert before == {"base_price": None, "color": "红"}
+        assert after["base_price"] == "60.00"
+        assert after["cost_price_changed"] is True
+        assert "cost_price" not in after
+        assert after["color"] == " 蓝 "  # TEXT 不去空白
+        json.dumps(before)
+        assert "65.00" not in json.dumps(after)
+
+        gb, ga = build_object_audit(
+            _GOODS,
+            {"brand_id": (None, brand_id), "season": ("春", "夏")},
+            via="import_conflict",
+            batch_id=None,
+            conflict_id=uuid4(),
+        )
+        assert ga["brand_id"] == str(brand_id)
+        assert (gb["season"], ga["season"]) == ("春", "夏")
+        json.dumps(gb)
+        json.dumps(ga)
+
+        sb, sa = build_object_audit(
+            _STYLE,
+            {"external_image_url": (None, "https://img.example.invalid/a.jpg")},
+            via="import_fill",
+            batch_id=None,
+            row_number=1,
+        )
+        assert sb == {"external_image_url": None}
+        assert sa["external_image_url"] == "https://img.example.invalid/a.jpg"
+
+    def test_goods_current_brand_is_string(self) -> None:
+        brand_id = uuid4()
+        obj = SimpleNamespace(short_name=" 简 ", brand_id=brand_id, season=None)
+        assert _GOODS.current_values(obj, ["short_name", "brand_id", "season"]) == {
+            "short_name": "简",
+            "brand_id": str(brand_id),
+            "season": None,
+        }
+        assert _GOODS.check("brand_id", str(brand_id)) == brand_id

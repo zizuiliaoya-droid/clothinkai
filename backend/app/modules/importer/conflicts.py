@@ -42,6 +42,7 @@ from app.modules.importer.compare import FieldDiff, display_value, normalize
 from app.modules.importer.conflict_appliers import (
     APPLIER_VALUE_ERRORS,
     CONFLICT_APPLIERS,
+    ApplierValueError,
     invalid_reason,
     spec_map,
     write_object_audit,
@@ -799,6 +800,18 @@ class ImportConflictService:
                     field=name,
                     message=f"{specs[name].label} 的值不合法（{invalid_reason(exc)}）",
                 )
+        try:
+            await applier.check_refs(self._session, values)
+        except APPLIER_VALUE_ERRORS as exc:
+            name = exc.field if isinstance(exc, ApplierValueError) else ""
+            label = specs[name].label if name in specs else "字段"
+            return ConflictResolveResult(
+                id=c.id,
+                outcome="invalid_value",
+                status=c.status,
+                field=name or None,
+                message=f"{label} 的值不合法（{invalid_reason(exc)}）",
+            )
         changes = await applier.apply(self._session, obj, values)
         await write_object_audit(
             self._session,

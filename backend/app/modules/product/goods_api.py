@@ -13,8 +13,11 @@ from uuid import UUID
 from fastapi import APIRouter, Query, status
 
 from app.modules.auth.deps import CurrentActiveUser, SessionDep, require_permission
+from app.modules.product.brand_repository import BrandRepository
 from app.modules.product.goods_repository import GoodsListFilters
 from app.modules.product.goods_schemas import (
+    GoodsBrandOption,
+    GoodsBrandOptionsResponse,
     GoodsMainCreate,
     GoodsMainListResponse,
     GoodsMainResponse,
@@ -82,6 +85,26 @@ async def list_goods(
         page_size=page_size,
     )
     return GoodsMainListResponse(items=items, total=total, page=page, page_size=page_size)
+
+
+# 固定路径必须声明在 /{goods_id} 之前：路径参数是 UUID，排在前面会把它们解析成 422
+@router.get(
+    "/brand-options",
+    response_model=GoodsBrandOptionsResponse,
+    dependencies=[require_permission(SCOPE, "read")],
+)
+async def list_goods_brand_options(
+    session: SessionDep,
+    user: CurrentActiveUser,
+) -> GoodsBrandOptionsResponse:
+    """启用品牌（按名称），给成本表的品牌筛选用（J19）。
+
+    ``/api/brands/`` 只有管理员能读，跟单 / 运营的品牌下拉一直是空的；这里挂商品读权限。
+    """
+    rows = await BrandRepository(session).list_active_options(user.tenant_id)
+    return GoodsBrandOptionsResponse(
+        items=[GoodsBrandOption(id=brand_id, brand_name=name) for brand_id, name in rows]
+    )
 
 
 @router.get(

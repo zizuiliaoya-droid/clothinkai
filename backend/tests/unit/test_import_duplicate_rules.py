@@ -58,8 +58,8 @@ class TestDeclarations:
         assert set(DUPLICATE_RULES) == set(ImportAdapterRegistry.sources())
 
     def test_configurable_policies_supported(self) -> None:
-        # 商品资料 adapter 在 8a-4 重写后才按 policy 分支，届时把 manual_style_sku 加进来
-        for source in ("manual_blogger",):
+        # 两个可切换来源都按 policy 分支（商品资料 adapter 随 8a-4 重写）
+        for source in ("manual_style_sku", "manual_blogger"):
             adapter = ImportAdapterRegistry.get(source)
             supported = getattr(adapter, "supported_policies", None)
             assert supported is not None, source

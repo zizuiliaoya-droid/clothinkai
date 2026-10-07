@@ -91,17 +91,6 @@ class GoodsService:
                 )
         return items
 
-    async def _validate_brand(self, brand_id: UUID | None) -> None:
-        if brand_id is None:
-            return
-        brand = await self._session.get(Brand, brand_id)
-        if brand is None or not brand.is_active:
-            raise ValidationError(
-                "brand_id 不存在或已停用",
-                code="INVALID_BRAND",
-                details={"brand_id": str(brand_id)},
-            )
-
     # ------------------------------------------------------------------ #
     # 成员写入
     # ------------------------------------------------------------------ #
@@ -182,7 +171,6 @@ class GoodsService:
         self, payload: GoodsMainCreate, *, tenant_id: UUID, user_id: UUID
     ) -> GoodsMainResponse:
         items = await self._validate_items(payload.items)
-        await self._validate_brand(payload.brand_id)
         if await self._repo.code_exists(payload.goods_code):
             raise GoodsCodeConflictError(
                 f"商品编码已存在 ({payload.goods_code})",
@@ -195,7 +183,6 @@ class GoodsService:
             short_name=payload.short_name,
             category=payload.category,
             season=payload.season,
-            brand_id=payload.brand_id,
             main_image_key=payload.main_image_key,
             remark=payload.remark,
         )
@@ -245,9 +232,7 @@ class GoodsService:
             "is_suit": goods.is_suit,
             "is_active": goods.is_active,
         }
-        if payload.brand_id is not None:
-            await self._validate_brand(payload.brand_id)
-            goods.brand_id = payload.brand_id
+        # 品牌只读（8a-4，A12）：不再由商品接口改，只由商品资料导入与冲突裁决写入
         if payload.goods_title is not None:
             goods.goods_title = payload.goods_title
         # 简称可以清空：按「有没有传」判断，而不是「是不是 None」（见 GoodsMainUpdate）

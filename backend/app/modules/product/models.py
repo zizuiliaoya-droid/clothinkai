@@ -109,6 +109,9 @@ class Style(TenantScopedModel):
 
     业务通过 ``AttachmentService.get_public_url(key)`` 解析为公开 URL。
     若为 None 则前端使用占位图。"""
+    external_image_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    """聚水潭导出「图片」列的外部链接（057，8a-4）。只经导入与冲突裁决写入，
+    服务端任何环节都不请求这个地址（设计 §7.4）。"""
     remark: Mapped[str | None] = mapped_column(Text, nullable=True)
     owner_id: Mapped[UUID | None] = mapped_column(
         PGUUID(as_uuid=True),

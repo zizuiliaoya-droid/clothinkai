@@ -18,11 +18,12 @@ import {
 import { PlusOutlined, SearchOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnsType } from "antd/es/table";
+import { useNavigate } from "react-router-dom";
 import {
   createSku,
   deleteSku,
-  listBrands,
   listCostTable,
+  listGoodsBrandOptions,
   listDictItems,
   listStyles,
   updateSku,
@@ -33,9 +34,19 @@ import type {
   SkuCreate,
   SourcingType,
 } from "@/features/product/types";
-import { getImportAccess } from "@/features/import/api";
+import {
+  getImportAccess,
+  getImportConflictSummary,
+  getImportMappingSpec,
+} from "@/features/import/api";
 import { extractErrorMessage } from "@/services/apiClient";
 import { ImportUploadButton } from "@/components/ImportUploadButton";
+import { ImportResultModal } from "@/components/ImportResultModal/ImportResultModal";
+import { FieldMappingDrawer } from "@/pages/cost/FieldMappingDrawer";
+import { templateColumnsFromSpec } from "@/pages/cost/mappingColumns";
+
+const GOODS_SOURCE = "manual_style_sku";
+const IMPORT_COLUMNS_NOTE = "只读下列列，列名对上即可；其余列忽略，不用删列：";
 
 const money = (v: string | null) => (v == null ? "—" : `¥${v}`);
 
@@ -120,16 +131,45 @@ export function CostTablePage() {
     queryKey: ["import-access"],
     queryFn: getImportAccess,
   });
-  const canImportGoods =
-    importAccess?.some((a) => a.source === "manual_style_sku" && a.can_upload) ??
-    false;
+  const goodsAccess = importAccess?.find((a) => a.source === GOODS_SOURCE);
+  const canImportGoods = goodsAccess?.can_upload ?? false;
+  const canMapGoods = goodsAccess?.can_map ?? false;
+  const canViewGoodsImport = goodsAccess?.can_view ?? false;
+  const navigate = useNavigate();
+  const [resultBatchId, setResultBatchId] = useState<string | null>(null);
+  const [mappingOpen, setMappingOpen] = useState(false);
 
+  // 列说明由映射目录生成（有 can_upload 就有 can_view）；没取到时为空，组件就不显示「列说明」
+  const { data: mappingSpec } = useQuery({
+    queryKey: ["import-mapping-spec", GOODS_SOURCE],
+    queryFn: () => getImportMappingSpec(GOODS_SOURCE),
+    enabled: canImportGoods,
+  });
+  const templateColumns = useMemo(
+    () => templateColumnsFromSpec(mappingSpec),
+    [mappingSpec],
+  );
+
+  const { data: conflictSummary } = useQuery({
+    queryKey: ["import-conflicts", "summary", GOODS_SOURCE],
+    queryFn: () => getImportConflictSummary(GOODS_SOURCE),
+    enabled: canViewGoodsImport,
+  });
+  const pendingConflicts = conflictSummary?.pending ?? 0;
+
+  // /api/brands/ 只有管理员能读；品牌筛选改用商品读权限的 brand-options（按商品层品牌筛）
   const { data: brands } = useQuery({
-    queryKey: ["brands", "options"],
-    queryFn: () => listBrands({ page: 1, page_size: 100, is_active: true }),
+    queryKey: ["goods-brand-options"],
+    queryFn: listGoodsBrandOptions,
   });
   const brandOptions =
-    brands?.items.map((b) => ({ label: b.brand_name, value: b.id })) ?? [];
+    brands?.map((b) => ({ label: b.brand_name, value: b.id })) ?? [];
+
+  function closeResult() {
+    setResultBatchId(null);
+    void qc.invalidateQueries({ queryKey: ["cost-table"] });
+    void qc.invalidateQueries({ queryKey: ["import-conflicts"] });
+  }
 
   const { data: colors } = useQuery({
     queryKey: ["dict-items", "color"],
@@ -321,21 +361,38 @@ export function CostTablePage() {
   return (
     <Card
       title={
-        <Typography.Title level={4} style={{ margin: 0 }}>
-          商品成本表
-        </Typography.Title>
+        <Space size="middle" wrap>
+          <Typography.Title level={4} style={{ margin: 0 }}>
+            商品成本表
+          </Typography.Title>
+          {canViewGoodsImport && pendingConflicts > 0 && (
+            <Button
+              size="small"
+              style={{ color: "#c2410c", borderColor: "#fdba74" }}
+              onClick={() =>
+                navigate(`/imports?tab=conflicts&source=${GOODS_SOURCE}`)
+              }
+            >
+              待处理冲突 {pendingConflicts}
+            </Button>
+          )}
+        </Space>
       }
       extra={
         <Space>
+          {canMapGoods && (
+            <Button onClick={() => setMappingOpen(true)} disabled={!mappingSpec}>
+              字段映射
+            </Button>
+          )}
           {canImportGoods && (
             <ImportUploadButton
-              source="manual_style_sku"
+              source={GOODS_SOURCE}
               label="导入商品成本表"
               invalidateKeys={[["cost-table"], ["styles"], ["skus"]]}
-              templateColumns={[
-                "货号", "商品编码", "商品名称", "商品简称", "颜色及规格",
-                "颜色", "规格", "基本售价", "成本价", "采购价", "市场吊牌价", "品牌",
-              ]}
+              templateColumns={templateColumns}
+              columnsNote={IMPORT_COLUMNS_NOTE}
+              onUploaded={setResultBatchId}
             />
           )}
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
@@ -552,6 +609,20 @@ export function CostTablePage() {
           </Space>
         </Form>
       </Modal>
+
+      <ImportResultModal
+        open={resultBatchId != null}
+        batchId={resultBatchId}
+        onClose={closeResult}
+      />
+      {canMapGoods && (
+        <FieldMappingDrawer
+          open={mappingOpen}
+          source={GOODS_SOURCE}
+          spec={mappingSpec}
+          onClose={() => setMappingOpen(false)}
+        />
+      )}
     </Card>
   );
 }

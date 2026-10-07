@@ -117,6 +117,46 @@ class FieldMappingResponse(BaseModel):
     updated_at: datetime
 
 
+class MappingTargetItem(BaseModel):
+    """映射目录里的一个目标字段（8a-4）。``group`` 形如 ``组名:选项``（「其一必填」）。"""
+
+    field: str
+    label: str
+    type: str
+    default_col: str
+    aliases: list[str] = Field(default_factory=list)
+    required: bool = False
+    group: str | None = None
+    create_only: bool = False
+
+
+class ActiveMappingInfo(BaseModel):
+    version: int
+    columns: list[dict[str, Any]]
+    created_by_name: str | None = None
+    created_at: datetime
+
+
+class MappingSpecResponse(BaseModel):
+    """``GET /api/imports/sources/{source}/mapping-spec``：目录、内置默认映射与当前生效版本。"""
+
+    source: str
+    targets: list[MappingTargetItem]
+    builtin_columns: list[dict[str, Any]]
+    active: ActiveMappingInfo | None = None
+
+
+class FieldMappingResetRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    source: str = Field(min_length=1, max_length=32)
+
+
+class FieldMappingResetResponse(BaseModel):
+    source: str
+    active: None = None
+
+
 # ---------------------------------------------------------------------------
 # Upload 响应
 # ---------------------------------------------------------------------------
@@ -302,7 +342,12 @@ __all__ = [
     "ConflictSummary",
     "FieldMappingColumn",
     "FieldMappingCreate",
+    "ActiveMappingInfo",
+    "FieldMappingResetRequest",
+    "FieldMappingResetResponse",
     "FieldMappingResponse",
+    "MappingSpecResponse",
+    "MappingTargetItem",
     "ImportBatchListFilters",
     "ImportBatchPage",
     "ImportBatchResponse",

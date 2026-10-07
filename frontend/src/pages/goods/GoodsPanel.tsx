@@ -22,7 +22,6 @@ import {
   GOODS_SHORT_NAME_MAX_LEN,
   createGoods,
   deleteGoods,
-  listBrands,
   listDictItems,
   listGoods,
   listStyles,
@@ -42,7 +41,6 @@ interface FormValues {
   short_name?: string;
   category?: string;
   season?: string;
-  brand_id?: string;
   remark?: string;
   is_active?: boolean;
   items: { style_id: string; single_goods_cost?: number | null }[];
@@ -99,10 +97,6 @@ export function GoodsPanel() {
   const { data, isLoading } = useQuery({
     queryKey: ["goods", filters],
     queryFn: () => listGoods(filters),
-  });
-  const { data: brands } = useQuery({
-    queryKey: ["brands", "options"],
-    queryFn: () => listBrands({ page: 1, page_size: 100, is_active: true }),
   });
   const { data: categories } = useQuery({
     queryKey: ["dict-items", "category"],
@@ -163,7 +157,6 @@ export function GoodsPanel() {
           short_name: shortName,
           category: values.category ?? null,
           season: values.season ?? null,
-          brand_id: values.brand_id ?? null,
           remark: values.remark ?? null,
           is_active: values.is_active,
           items,
@@ -175,7 +168,6 @@ export function GoodsPanel() {
         short_name: shortName,
         category: values.category ?? null,
         season: values.season ?? null,
-        brand_id: values.brand_id ?? null,
         remark: values.remark ?? null,
         items,
       });
@@ -222,7 +214,6 @@ export function GoodsPanel() {
       short_name: record.short_name ?? undefined,
       category: record.category ?? undefined,
       season: record.season ?? undefined,
-      brand_id: record.brand_id ?? undefined,
       remark: record.remark ?? undefined,
       is_active: record.is_active,
       items: record.items.map((i) => ({
@@ -549,15 +540,13 @@ export function GoodsPanel() {
                 }))}
               />
             </Form.Item>
-            <Form.Item name="brand_id" label="品牌" style={{ width: 240 }}>
-              <Select
-                allowClear
-                placeholder="选择品牌"
-                options={(brands?.items ?? []).map((b) => ({
-                  label: b.brand_name,
-                  value: b.id,
-                }))}
-              />
+            {/* 品牌只读（8a-4，A12）：只由商品资料导入写入，这里不再提供选择 */}
+            <Form.Item
+              label="品牌"
+              style={{ width: 240 }}
+              extra="由商品资料导入写入，此处只读"
+            >
+              <Input value={editing?.brand_name || "—"} disabled aria-label="品牌（只读）" />
             </Form.Item>
           </Space>
 

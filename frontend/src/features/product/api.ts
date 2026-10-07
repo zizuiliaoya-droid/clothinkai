@@ -8,6 +8,7 @@ import type {
   BrandUpdate,
   CostTableFilters,
   CostTablePage,
+  GoodsBrandOption,
   MatchResponse,
   Sku,
   SkuCreate,
@@ -231,7 +232,7 @@ export interface GoodsCreate {
   short_name?: string | null;
   category?: string | null;
   season?: string | null;
-  brand_id?: string | null;
+  // 品牌只读（8a-4）：只由商品资料导入写入，商品接口不再收 brand_id
   remark?: string | null;
   items: GoodsStyleItemInput[];
 }
@@ -243,7 +244,6 @@ export interface GoodsUpdate {
   short_name?: string | null;
   category?: string | null;
   season?: string | null;
-  brand_id?: string | null;
   remark?: string | null;
   is_active?: boolean;
   /** 给了就整体替换成员列表；不给则不动成员。 */
@@ -404,6 +404,17 @@ export async function listBrands(params: {
     params,
   });
   return resp.data;
+}
+
+/**
+ * 启用品牌（按名称），商品读权限即可（/api/brands/ 只有管理员能读）。
+ * 成本表品牌筛选用（8a-4）。
+ */
+export async function listGoodsBrandOptions(): Promise<GoodsBrandOption[]> {
+  const resp = await apiClient.get<{ items: GoodsBrandOption[] }>(
+    "/api/goods/brand-options"
+  );
+  return resp.data.items;
 }
 
 export async function getBrand(brandId: string): Promise<Brand> {

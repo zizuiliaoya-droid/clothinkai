@@ -14,6 +14,7 @@ import type {
   ImportJobNotesPage,
   ImportSourceAccess,
   ImportUploadResponse,
+  MappingSpec,
 } from "./types";
 
 /**
@@ -167,6 +168,25 @@ export async function listFieldMappings(
   const resp = await apiClient.get<FieldMapping[]>(
     "/api/imports/field-mappings",
     { params: { source } }
+  );
+  return resp.data;
+}
+
+/** 映射目录 + 内置默认映射 + 当前生效版本（来源没有目录 → 404）。 */
+export async function getImportMappingSpec(source: string): Promise<MappingSpec> {
+  const resp = await apiClient.get<MappingSpec>(
+    `/api/imports/sources/${encodeURIComponent(source)}/mapping-spec`
+  );
+  return resp.data;
+}
+
+/** 恢复内置默认：下线生效版本（历史版本保留）。 */
+export async function resetFieldMapping(
+  source: string
+): Promise<{ source: string; active: null }> {
+  const resp = await apiClient.post<{ source: string; active: null }>(
+    "/api/imports/field-mappings/reset",
+    { source }
   );
   return resp.data;
 }

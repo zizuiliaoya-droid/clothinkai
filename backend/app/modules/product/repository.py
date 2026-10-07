@@ -22,6 +22,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.product.brand_repository import BrandRepository  # 再导出，见 __all__
+from app.modules.product.goods_models import GoodsMain, GoodsStyleItem
 from app.modules.product.models import Brand, Sku, Style
 
 # ---------------------------------------------------------------------------
@@ -299,10 +300,30 @@ class SkuRepository:
         page: int = 1,
         page_size: int = 20,
     ) -> tuple[list[Any], int]:
-        """商品成本表（SKU 级，join Style + Brand）。
+        """商品成本表（SKU 级，join 款式 + 款式的主商品 + 主商品的品牌）。
 
-        返回 (rows, total)，row 为带 style/brand 字段的命名元组。
+        「商品简称」「品牌」读商品层（8a-4，FR-4.7）：款式的主商品 = 非套装优先、商品编码次之
+        （与 ``StyleRepository.goods_by_style_ids`` 同序），用 LATERAL 子查询一页一次取，不逐行回表；
+        品牌筛选按主商品的品牌，关键词另搜主商品简称。
+
+        返回 (rows, total)，row 为带 style / 主商品 / brand 字段的命名元组。
         """
+        main_goods = (
+            select(
+                GoodsMain.short_name.label("goods_short_name"),
+                GoodsMain.brand_id.label("goods_brand_id"),
+            )
+            .join(GoodsStyleItem, GoodsStyleItem.goods_main_id == GoodsMain.id)
+            .where(
+                GoodsStyleItem.style_id == Style.id,
+                GoodsStyleItem.is_active.is_(True),
+                GoodsMain.is_deleted.is_(False),
+            )
+            .order_by(GoodsMain.is_suit.asc(), GoodsMain.goods_code.asc())
+            .limit(1)
+            .correlate(Style)
+            .lateral("main_goods")
+        )
         base = (
             select(
                 Sku.id.label("sku_id"),
@@ -318,13 +339,14 @@ class SkuRepository:
                 Style.id.label("style_id"),
                 Style.style_code,
                 Style.style_name,
-                Style.short_name,
+                main_goods.c.goods_short_name.label("short_name"),
                 Style.main_image_key,
                 Brand.brand_name,
             )
             .select_from(Sku)
             .join(Style, Style.id == Sku.style_id)
-            .outerjoin(Brand, Brand.id == Style.brand_id)
+            .outerjoin(main_goods, sa.true())
+            .outerjoin(Brand, Brand.id == main_goods.c.goods_brand_id)
             .where(Sku.is_deleted.is_(False), Style.is_deleted.is_(False))
         )
         if not include_inactive:
@@ -337,10 +359,11 @@ class SkuRepository:
                     Style.style_code.ilike(pattern),
                     Style.style_name.ilike(pattern),
                     Style.short_name.ilike(pattern),
+                    main_goods.c.goods_short_name.ilike(pattern),
                 )
             )
         if brand_id is not None:
-            base = base.where(Style.brand_id == brand_id)
+            base = base.where(main_goods.c.goods_brand_id == brand_id)
 
         total_stmt = select(func.count()).select_from(base.subquery())
         total = int((await self._session.execute(total_stmt)).scalar_one())

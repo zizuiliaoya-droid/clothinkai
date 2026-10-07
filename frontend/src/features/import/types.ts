@@ -224,3 +224,38 @@ export interface FieldMapping {
   created_at: string;
   updated_at: string;
 }
+
+/** 映射目录里的一个目标字段（8a-4）。group 形如「组名:选项」：同组至少满足一个选项（其一必填）。 */
+export interface MappingTarget {
+  field: string;
+  label: string;
+  type: string;
+  default_col: string;
+  aliases: string[];
+  required: boolean;
+  group: string | null;
+  /** 仅新建时写入：已有对象不比较、不覆盖 */
+  create_only: boolean;
+}
+
+/** 内置默认映射的一列（带别名）。 */
+export interface BuiltinMappingColumn {
+  source_col: string;
+  target_field: string;
+  type: string;
+  aliases?: string[];
+}
+
+/** GET /api/imports/sources/{source}/mapping-spec */
+export interface MappingSpec {
+  source: string;
+  targets: MappingTarget[];
+  builtin_columns: BuiltinMappingColumn[];
+  /** 当前生效的自定义映射；null = 用内置默认 */
+  active: {
+    version: number;
+    columns: FieldMappingColumn[];
+    created_by_name: string | null;
+    created_at: string;
+  } | null;
+}

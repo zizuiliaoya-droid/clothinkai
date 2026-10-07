@@ -73,6 +73,9 @@ def _upgrade_style(bind: Connection) -> None:
     """
     op.alter_column("style", "category", existing_type=sa.String(64), nullable=True)
     _log("style.category 放开 NOT NULL")
+    # 8a-4：聚水潭「图片」列的外部链接，只存不取（设计 §7.4）
+    op.add_column("style", sa.Column("external_image_url", sa.String(1024), nullable=True))
+    _log("style 加 external_image_url")
 
 
 def _drop_import_job_status_check(bind: Connection) -> None:
@@ -361,8 +364,11 @@ def _downgrade_import_tables(bind: Connection) -> None:
 def _downgrade_style(bind: Connection) -> None:
     """撤回款式表的变更（8a-1 / 8a-4）。
 
+    8a-4：删 ``external_image_url``（回退语义：外部图片链接随之丢弃）。
     8a-1：类目为空的款式先补「未分类」（056 及以前导入缺类目时写的就是它），再恢复 NOT NULL。
     """
+    op.drop_column("style", "external_image_url")
+    _log("style 删 external_image_url")
     res = bind.execute(
         sa.text("UPDATE style SET category = :fallback WHERE category IS NULL"),
         {"fallback": _CATEGORY_FALLBACK},

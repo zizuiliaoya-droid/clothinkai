@@ -13,6 +13,8 @@
 - POST   /api/imports/field-mappings                映射权限（importer.mapping:write） 新建映射版本
 - GET    /api/imports/field-mappings                来源可见，否则 403                列出版本
 - GET    /api/imports/field-mappings/active         来源可见，否则 403                取 active 版本
+- POST   /api/imports/field-mappings/reset          映射权限                          恢复内置默认（8a-4）
+- GET    /api/imports/sources/{source}/mapping-spec 来源可见，否则 403                映射目录（8a-4）
 - GET    /api/imports/batches/{id}/notes            来源可见，否则 404                行提示与补空明细（8a-6）
 - GET    /api/imports/conflicts                     可见来源                          冲突列表（脱敏，8a-6）
 - GET    /api/imports/conflicts/summary             来源可见，否则 403                待处理冲突条数
@@ -31,7 +33,7 @@ from datetime import date
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, File, Form, Query, UploadFile, status
+from fastapi import APIRouter, File, Form, Path, Query, UploadFile, status
 from fastapi.responses import StreamingResponse
 
 from app.core.config import settings
@@ -53,6 +55,8 @@ from app.modules.importer.schemas import (
     ConflictStatusFilter,
     ConflictSummary,
     FieldMappingCreate,
+    FieldMappingResetRequest,
+    FieldMappingResetResponse,
     FieldMappingResponse,
     ImportBatchPage,
     ImportBatchResponse,
@@ -60,6 +64,7 @@ from app.modules.importer.schemas import (
     ImportJobNotesPage,
     ImportSourceAccessResponse,
     ImportUploadResponse,
+    MappingSpecResponse,
 )
 
 router = APIRouter(prefix="/api/imports", tags=["importer"])
@@ -265,6 +270,32 @@ async def get_active_field_mapping(
     """取某 source 当前 active 映射版本（无 → null）。"""
     mapping = await service.get_active(source, user, perms)
     return FieldMappingResponse.model_validate(mapping) if mapping else None
+
+
+@router.post("/field-mappings/reset", response_model=FieldMappingResetResponse)
+async def reset_field_mapping(
+    payload: FieldMappingResetRequest,
+    user: CurrentActiveUser,
+    perms: CurrentPerms,
+    service: FieldMappingServiceDep,
+) -> FieldMappingResetResponse:
+    """恢复内置默认：下线生效版本（历史版本保留），之后的批次按内置默认读（8a-4）。"""
+    await service.reset(payload.source, user, perms)
+    return FieldMappingResetResponse(source=payload.source)
+
+
+@router.get("/sources/{source}/mapping-spec", response_model=MappingSpecResponse)
+async def get_mapping_spec(
+    source: Annotated[str, Path(max_length=32)],
+    user: CurrentActiveUser,
+    perms: CurrentPerms,
+    service: FieldMappingServiceDep,
+) -> MappingSpecResponse:
+    """映射目录（目标字段、必填 / 其一必填 / 仅新建时写入）、内置默认映射、当前生效版本。
+
+    看不到该来源 → 403；来源没有目录 → 404 ``IMPORT_MAPPING_SPEC_UNAVAILABLE``。
+    """
+    return await service.spec(source, user, perms)
 
 
 # ---------------------------------------------------------------------------

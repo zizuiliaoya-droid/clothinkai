@@ -85,7 +85,7 @@ class GoodsMainCreate(BaseModel):
     short_name: str | None = Field(default=None, max_length=GOODS_SHORT_NAME_MAX_LEN)
     category: str | None = Field(default=None, max_length=64)
     season: str | None = Field(default=None, max_length=64)
-    brand_id: UUID | None = None
+    # 品牌只读（8a-4，A12）：只由商品资料导入写入，接口不再收 brand_id（传了被忽略）
     main_image_key: str | None = Field(default=None, max_length=512)
     remark: str | None = None
 
@@ -108,7 +108,7 @@ class GoodsMainUpdate(BaseModel):
     """
     category: str | None = Field(default=None, max_length=64)
     season: str | None = Field(default=None, max_length=64)
-    brand_id: UUID | None = None
+    # 品牌只读（8a-4，A12）：接口不再收 brand_id（传了被忽略）
     main_image_key: str | None = Field(default=None, max_length=512)
     remark: str | None = None
     is_active: bool | None = None
@@ -150,6 +150,17 @@ class GoodsMainResponse(BaseModel):
     """挂在该商品上的平台链接数。为 0 说明商品还没上架到任何渠道。"""
 
 
+class GoodsBrandOption(BaseModel):
+    id: UUID
+    brand_name: str
+
+
+class GoodsBrandOptionsResponse(BaseModel):
+    """``GET /api/goods/brand-options``：启用品牌（按名称），给成本表的品牌筛选用（J19）。"""
+
+    items: list[GoodsBrandOption]
+
+
 class GoodsMainListResponse(BaseModel):
     items: list[GoodsMainResponse]
     total: int
@@ -159,6 +170,8 @@ class GoodsMainListResponse(BaseModel):
 
 __all__ = [
     "GOODS_SHORT_NAME_MAX_LEN",
+    "GoodsBrandOption",
+    "GoodsBrandOptionsResponse",
     "GoodsMainCreate",
     "GoodsMainListResponse",
     "GoodsMainResponse",

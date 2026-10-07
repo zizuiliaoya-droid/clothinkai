@@ -33,6 +33,22 @@ _SCRIPT = textwrap.dedent(
     )
     stmt.compile(dialect=postgresql.dialect())
     print("FK_TARGETS=" + ",".join(targets))
+
+    # 8a-4：导入路径在 worker 里新建单品商品（goods_main / goods_style_item）。worker 启动时注册
+    # adapter（worker_process_init），商品资料 adapter 的 import 链必须带上全部 FK 目标表
+    import app.modules.importer.adapters.style_sku  # noqa: F401
+    from app.modules.product.goods_models import GoodsMain, GoodsStyleItem
+
+    goods_targets = sorted(fk.column.table.name for fk in GoodsMain.__table__.foreign_keys)
+    insert(GoodsMain).values(
+        id=uuid4(), tenant_id=uuid4(), goods_code="c", goods_title="t", brand_id=uuid4(),
+        deleted_by=uuid4(),
+    ).compile(dialect=postgresql.dialect())
+    item_targets = sorted(fk.column.table.name for fk in GoodsStyleItem.__table__.foreign_keys)
+    insert(GoodsStyleItem).values(
+        id=uuid4(), tenant_id=uuid4(), goods_main_id=uuid4(), style_id=uuid4(),
+    ).compile(dialect=postgresql.dialect())
+    print("GOODS_FK_TARGETS=" + ",".join(goods_targets) + ";" + ",".join(item_targets))
     """
 )
 
@@ -51,3 +67,5 @@ def test_import_conflict_fk_targets_resolve_in_celery_path() -> None:
     assert "NoReferencedTableError" not in proc.stderr
     line = next(ln for ln in proc.stdout.splitlines() if ln.startswith("FK_TARGETS="))
     assert line == "FK_TARGETS=import_batch,tenant,user,user"
+    goods = next(ln for ln in proc.stdout.splitlines() if ln.startswith("GOODS_FK_TARGETS="))
+    assert goods == "GOODS_FK_TARGETS=brand,tenant,user;goods_main,style,tenant"

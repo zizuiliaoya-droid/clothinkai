@@ -56,8 +56,20 @@ async def _seed_batch(Maker, suffix: str, batch_id) -> Any:
 
 async def _cleanup(Maker, suffix: str, batch_id) -> None:
     async with Maker() as c:
+        await c.execute(text("DELETE FROM import_conflict WHERE batch_id = :id"), {"id": batch_id})
         await c.execute(text("DELETE FROM import_job WHERE batch_id = :id"), {"id": batch_id})
         await c.execute(text("DELETE FROM import_batch WHERE id = :id"), {"id": batch_id})
+        # 8a-4：导入会顺手建单品商品（编码 = 款号），先删商品再删款式（成员外键 RESTRICT）
+        await c.execute(
+            text(
+                "DELETE FROM goods_style_item WHERE goods_main_id IN "
+                "(SELECT id FROM goods_main WHERE goods_code LIKE :p)"
+            ),
+            {"p": f"ST{suffix}%"},
+        )
+        await c.execute(
+            text("DELETE FROM goods_main WHERE goods_code LIKE :p"), {"p": f"ST{suffix}%"}
+        )
         await c.execute(
             text("DELETE FROM sku WHERE sku_code LIKE :p"),
             {"p": f"SK{suffix}%"},
@@ -140,10 +152,83 @@ class TestStyleSkuImportEndToEnd:
                     )
                 ).fetchall()
                 assert [j[1] for j in jobs] == ["success", "success", "failed"]
-                assert "SKU编码" in (jobs[2][2] or "")
+                # 8a-4：文案用映射目录的界面名（旧「SKU编码不能为空」）
+                assert "商品编码不能为空" in (jobs[2][2] or "")
+                # 8a-4：类目不再写「未分类」；没有商品的款式顺手建了单品商品（编码 = 款号）
+                category = (
+                    await check.execute(
+                        text("SELECT category FROM style WHERE style_code = :c"),
+                        {"c": f"ST{suffix}A"},
+                    )
+                ).scalar_one()
+                assert category is None
+                goods_codes = (
+                    (
+                        await check.execute(
+                            text("SELECT goods_code FROM goods_main WHERE goods_code LIKE :p"),
+                            {"p": f"ST{suffix}%"},
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                assert goods_codes == [f"ST{suffix}A"]
         finally:
             ImportAdapterRegistry.clear()
             await _cleanup(Maker, suffix, batch_id)
+
+    async def test_same_sku_not_overwritten(self, engine: Any, monkeypatch) -> None:
+        """8a-4（补充一）：同编码 SKU 再导入不再覆盖——成本价不同进冲突，库里不变。
+
+        旧断言：第二次导入走 upsert_atomic 直接覆盖成新成本价；新断言：成本价不变、生成一条
+        待处理冲突（依据：设计 §5.2、AC 42）。
+        """
+        Maker = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+        monkeypatch.setattr(tasks, "AsyncSessionApp", Maker)
+        monkeypatch.setattr(tasks, "AsyncSessionBypass", Maker)
+        ImportAdapterRegistry.clear()
+        ImportAdapterRegistry.register(StyleSkuImportAdapter())
+
+        suffix = uuid4().hex[:8]
+        files = {"first": _csv(suffix), "second": _csv(suffix).replace(b"39.90", b"49.90")}
+        current = {"name": "first"}
+        import app.core.attachment as att_mod
+
+        monkeypatch.setattr(
+            att_mod.attachment_service,
+            "get_object_bytes",
+            lambda bucket, key: files[current["name"]],
+        )
+
+        batch1, batch2 = uuid4(), uuid4()
+        await _seed_batch(Maker, suffix, batch1)
+        try:
+            await _run_import_batch(batch1, only_failed=False)
+            current["name"] = "second"
+            await _seed_batch(Maker, f"{suffix}-2", batch2)
+            result = await _run_import_batch(batch2, only_failed=False)
+            assert result["status"] == "partial"  # 第 3 行仍缺商品编码
+            async with Maker() as check:
+                cost = (
+                    await check.execute(
+                        text("SELECT cost_price, id FROM sku WHERE sku_code = :c"),
+                        {"c": f"SK{suffix}A-红-L"},
+                    )
+                ).one()
+                assert cost[0] == Decimal("39.90")
+                conflicts = (
+                    await check.execute(
+                        text("SELECT status, fields FROM import_conflict WHERE object_id = :o"),
+                        {"o": cost[1]},
+                    )
+                ).fetchall()
+                assert [(c[0], [f["field"] for f in c[1]]) for c in conflicts] == [
+                    ("pending", ["cost_price"])
+                ]
+        finally:
+            ImportAdapterRegistry.clear()
+            await _cleanup(Maker, f"{suffix}-2", batch2)
+            await _cleanup(Maker, suffix, batch1)
 
     async def test_retry_only_failed_idempotent(self, engine: Any, monkeypatch) -> None:
         """retry only_failed：缺字段行重跑仍 failed，不产生重复 sku（幂等）。"""

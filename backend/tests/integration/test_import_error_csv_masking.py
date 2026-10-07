@@ -28,8 +28,10 @@ from app.modules.auth.models import Role
 from app.modules.auth.service import AuthService
 from app.modules.importer.adapters.blogger import BloggerImportAdapter
 from app.modules.importer.adapters.style_sku import StyleSkuImportAdapter
-from app.modules.importer.models import FieldMapping, ImportJob
+from app.modules.importer.field_mapping_service import FieldMappingService
+from app.modules.importer.models import ImportJob
 from app.modules.importer.registry import ImportAdapterRegistry
+from app.modules.importer.schemas import FieldMappingColumn, FieldMappingCreate
 from app.modules.importer.service import ImportService
 from app.tasks.import_tasks import _run_import_batch
 
@@ -175,39 +177,44 @@ class TestErrorCsvMasking:
         factory: Any,
         import_batch_factory: Any,
     ) -> None:
-        """自定义映射把成本价指到「进价」：「进价」与导出里仍在的「成本价」原列都遮。"""
+        """自定义映射把成本价指到「进价」：「进价」与导出里仍在的「成本价」原列都遮。
+
+        8a-4：映射走真实保存流程（``FieldMappingService.create_version``，过目录校验——必填与
+        颜色组都要映射）；自定义映射一个目标字段只读一列，不再存别名。
+        """
         token = tenant_id_ctx.set(tenant_a.id)
         try:
-            session.add(
-                FieldMapping(
-                    id=uuid4(),
-                    tenant_id=tenant_a.id,
+            role = (
+                await session.execute(select(Role).where(Role.code == "merchandiser"))
+            ).scalar_one()
+            owner = await factory.user(tenant_a, roles=[role])
+            owner_perms = await AuthService(session).load_effective_permissions(owner.id)
+            columns = [
+                ("款号", "style_code"),
+                ("商品编码", "sku_code"),
+                ("商品名称", "style_name"),
+                ("颜色", "color"),
+                ("规格", "size"),
+                ("进价", "cost_price"),
+                ("拿货价", "purchase_price"),
+            ]
+            mapping = await FieldMappingService(session).create_version(
+                FieldMappingCreate(
                     source="manual_style_sku",
-                    version=1,
-                    mapping_config={
-                        "columns": [
-                            {"source_col": "款号", "target_field": "style_code", "type": "str"},
-                            {"source_col": "进价", "target_field": "cost_price", "type": "decimal"},
-                            {
-                                "source_col": "拿货价",
-                                "target_field": "purchase_price",
-                                "type": "decimal",
-                                "aliases": ["进货价"],
-                            },
-                        ]
-                    },
-                    is_active=True,
-                )
+                    columns=[FieldMappingColumn(source_col=s, target_field=t) for s, t in columns],
+                ),
+                owner,
+                owner_perms,
             )
-            await session.flush()
             batch = await import_batch_factory.batch(
-                source="manual_style_sku", status="partial", mapping_version=1
+                source="manual_style_sku", status="partial", mapping_version=mapping.version
             )
             raw = {
                 "款号": "MK8A02",
                 "进价": "61.00",
                 "成本价": "60.00",
-                "进货价": "52.00",
+                "拿货价": "52.00",
+                "采购价": "51.00",
                 "颜色": "蓝",
             }
             await _failed_job(session, tenant_a.id, batch.id, raw)
@@ -216,7 +223,8 @@ class TestErrorCsvMasking:
                 "款号": "MK8A02",
                 "进价": "***",
                 "成本价": "***",
-                "进货价": "***",
+                "拿货价": "***",
+                "采购价": "***",
                 "颜色": "蓝",
             }
         finally:
@@ -265,7 +273,8 @@ class TestRunnerDbErrorNotLeaked:
                 raise IntegrityError(sql, params, orig)
             raise DataError(sql, params, None)  # type: ignore[arg-type]
 
-        monkeypatch.setattr(StyleSkuImportAdapter, "upsert", _boom)
+        # 8a-4：商品资料 adapter 走 upsert_with_context（runner 优先调它）
+        monkeypatch.setattr(StyleSkuImportAdapter, "upsert_with_context", _boom)
 
         batch_id = uuid4()
         async with Maker() as seed:

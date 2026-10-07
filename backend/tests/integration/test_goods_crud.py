@@ -832,3 +832,108 @@ class TestGoodsUpdateAuditSeason:
             assert log.after["season"] == "秋"
         finally:
             tenant_id_ctx.reset(token)
+
+
+class TestBrandReadOnly:
+    """8a-4（FR-4.6、A12）：商品接口不再收 brand_id；品牌只由商品资料导入写入。"""
+
+    async def test_create_and_update_ignore_brand_id(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
+    ) -> None:
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            user = await factory.user(tenant_a, roles=[admin_role])
+            brand = await product_factory.brand(brand_name="某品牌")
+            style = await product_factory.style(style_code="GB8A01")
+            svc = GoodsService(session)
+            created = await svc.create(
+                GoodsMainCreate.model_validate(
+                    {
+                        "goods_code": "GB8A01",
+                        "goods_title": "品牌只读",
+                        "brand_id": str(brand.id),
+                        "items": [{"style_id": str(style.id)}],
+                    }
+                ),
+                tenant_id=tenant_a.id,
+                user_id=user.id,
+            )
+            assert created.brand_id is None
+            updated = await svc.update(
+                created.id,
+                GoodsMainUpdate.model_validate({"brand_id": str(brand.id), "season": "夏"}),
+                user_id=user.id,
+            )
+            assert (updated.brand_id, updated.season) == (None, "夏")
+            # 已有品牌（由导入写入）照常读出 brand_name
+            goods = await GoodsRepository(session).get_by_id(created.id)
+            assert goods is not None
+            goods.brand_id = brand.id
+            await session.flush()
+            shown = await svc.get(created.id)
+            assert (shown.brand_id, shown.brand_name) == (brand.id, "某品牌")
+            assert "brand_id" not in GoodsMainCreate.model_fields
+            assert "brand_id" not in GoodsMainUpdate.model_fields
+            # 依据：设计 §12（PUT /api/goods/{id} 去掉 brand_id）、A12
+        finally:
+            tenant_id_ctx.reset(token)
+
+
+class TestBrandOptionsApi:
+    """GET /api/goods/brand-options：商品读权限即可，只返回启用品牌（按名称），声明在 /{goods_id} 之前。"""
+
+    async def test_brand_options(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        product_factory: Any,
+    ) -> None:
+        from httpx import ASGITransport, AsyncClient
+        from sqlalchemy import select
+
+        from app.core.db import get_session
+        from app.main import app
+        from app.modules.auth.deps import get_current_perms, get_current_user_active
+        from app.modules.auth.models import Role
+        from app.modules.auth.service import AuthService
+
+        token = tenant_id_ctx.set(tenant_a.id)
+
+        async def _session_override() -> Any:
+            yield session
+
+        try:
+            tag = "BO8A"
+            active_b = await product_factory.brand(brand_name=f"{tag}-b")
+            active_a = await product_factory.brand(brand_name=f"{tag}-a")
+            await product_factory.brand(brand_name=f"{tag}-off", is_active=False)
+            role = (
+                await session.execute(select(Role).where(Role.code == "merchandiser"))
+            ).scalar_one()
+            user = await factory.user(tenant_a, roles=[role])
+            perms = await AuthService(session).load_effective_permissions(user.id)
+            app.dependency_overrides[get_session] = _session_override
+            app.dependency_overrides[get_current_user_active] = lambda: user
+            app.dependency_overrides[get_current_perms] = lambda: perms
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+                resp = await c.get("/api/goods/brand-options")
+            assert resp.status_code == 200
+            mine = [i for i in resp.json()["items"] if i["brand_name"].startswith(tag)]
+            assert [i["brand_name"] for i in mine] == [f"{tag}-a", f"{tag}-b"]
+            assert {i["id"] for i in mine} == {str(active_a.id), str(active_b.id)}
+        finally:
+            for dep in (get_session, get_current_user_active, get_current_perms):
+                app.dependency_overrides.pop(dep, None)
+            tenant_id_ctx.reset(token)
+
+    def test_declared_before_goods_id(self) -> None:
+        from app.modules.product.goods_api import router
+
+        paths = [getattr(r, "path", "") for r in router.routes]
+        assert paths.index("/api/goods/brand-options") < paths.index("/api/goods/{goods_id}")

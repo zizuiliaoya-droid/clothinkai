@@ -27,6 +27,26 @@ describe("conflictFieldOptions", () => {
     expect(CONFLICT_FIELD_LABELS.manual_blogger.quote).toBe("报价");
   });
 
+  it("商品资料来源列出款式 / SKU / 商品的比较字段（8a-4）", () => {
+    const values = conflictFieldOptions("manual_style_sku").map((o) => o.value);
+    expect(values.sort()).toEqual(
+      [
+        "external_image_url",
+        "color",
+        "size",
+        "base_price",
+        "cost_price",
+        "purchase_price",
+        "tag_price",
+        "sourcing_type",
+        "short_name",
+        "brand_id",
+        "season",
+      ].sort()
+    );
+    expect(CONFLICT_FIELD_LABELS.manual_style_sku.brand_id).toBe("品牌");
+  });
+
   it("没选来源或未知来源时没有选项", () => {
     expect(conflictFieldOptions(undefined)).toEqual([]);
     expect(conflictFieldOptions("qianniu")).toEqual([]);

@@ -33,6 +33,8 @@ from app.modules.importer.exceptions import (
 )
 from app.modules.importer.models import ImportConflict
 from app.modules.importer.schemas import ConflictResolveRequest
+from app.modules.product.goods_models import GoodsMain, GoodsStyleItem
+from app.modules.product.models import Sku, Style
 
 BLOGGER = "manual_blogger"
 STYLE_SKU = "manual_style_sku"
@@ -622,3 +624,228 @@ class TestListAndCsv:
         quote = by_field["报价"]
         assert (quote[9], quote[10]) == ("有差异", "有差异")
         assert "65.00" not in data.decode("utf-8")
+
+
+# ---------------------------------------------------------------------------
+# 商品资料（款式 / SKU / 商品，8a-4）：裁决写入与留痕（AC 44、45，N8、N9）
+# ---------------------------------------------------------------------------
+
+
+def _pf(
+    field: str,
+    label: str,
+    system: Any,
+    file: Any,
+    *,
+    sensitive: list[str] | None = None,
+    displays: tuple[str | None, str | None] | None = None,
+) -> dict[str, Any]:
+    sys_d, file_d = displays or (system, file)
+    return {
+        "field": field,
+        "label": label,
+        "system": system,
+        "file": file,
+        "system_display": sys_d,
+        "file_display": file_d,
+        "sensitive": sensitive,
+    }
+
+
+async def _goods(world: _World, style: Any, **kw: Any) -> GoodsMain:
+    goods = GoodsMain(
+        tenant_id=world.tenant.id,
+        goods_code=kw.pop("goods_code", style.style_code),
+        goods_title=kw.pop("goods_title", "单品全称"),
+        is_suit=False,
+        **kw,
+    )
+    world.session.add(goods)
+    await world.session.flush()
+    world.session.add(
+        GoodsStyleItem(tenant_id=world.tenant.id, goods_main_id=goods.id, style_id=style.id)
+    )
+    await world.session.flush()
+    return goods
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+class TestResolveStyleSku:
+    async def test_overwrite_style_external_url_audit(
+        self, world: _World, product_factory: Any
+    ) -> None:
+        """N9：覆盖款式外部链接 → style.update 审计有 external_image_url 前后值（AC 44）。"""
+        user, perms = await world.user("merchandiser")
+        old, new = "https://img.example.invalid/0.jpg", "https://img.example.invalid/1.jpg"
+        style = await product_factory.style()
+        style.external_image_url = old
+        await world.session.flush()
+        c = await world.conflict(
+            style.id,
+            [_pf("external_image_url", "图片", old, new)],
+            source=STYLE_SKU,
+            object_type="style",
+        )
+        resp = await world.svc.resolve(
+            _req("overwrite", (c.id, {"external_image_url": old})), user, perms
+        )
+        assert [(r.outcome, r.status) for r in resp.results] == [("resolved", "overwritten")]
+        assert (await world.reload(Style, style.id)).external_image_url == new
+        c = await world.reload(ImportConflict, c.id)
+        assert (c.status, c.resolved_by) == ("overwritten", user.id)
+        [audit] = await world.audits("style.update", style.id)
+        assert audit.before == {"external_image_url": old}
+        assert audit.after["external_image_url"] == new
+        assert (audit.after["via"], audit.after["import_conflict_id"]) == (
+            "import_conflict",
+            str(c.id),
+        )
+
+    async def test_overwrite_goods_season_brand_audit(
+        self, world: _World, product_factory: Any
+    ) -> None:
+        """N9：覆盖商品季节 / 品牌 → goods.update 审计有 season / brand_id 与 brand_name。"""
+        user, perms = await world.user("operations")
+        b1 = await product_factory.brand(brand_name="旧品牌")
+        b2 = await product_factory.brand(brand_name="新品牌")
+        style = await product_factory.style()
+        goods = await _goods(world, style, season="春", brand_id=b1.id)
+        c = await world.conflict(
+            goods.id,
+            [
+                _pf("season", "季节", "春", "夏"),
+                _pf("brand_id", "品牌", str(b1.id), str(b2.id), displays=("旧品牌", "新品牌")),
+            ],
+            source=STYLE_SKU,
+            object_type="goods",
+        )
+        resp = await world.svc.resolve(
+            _req("overwrite", (c.id, {"season": "春", "brand_id": str(b1.id)})), user, perms
+        )
+        assert [r.outcome for r in resp.results] == ["resolved"]
+        g = await world.reload(GoodsMain, goods.id)
+        assert (g.season, g.brand_id) == ("夏", b2.id)
+        [audit] = await world.audits("goods.update", goods.id)
+        assert audit.before == {"season": "春", "brand_id": str(b1.id), "brand_name": "旧品牌"}
+        assert (audit.after["season"], audit.after["brand_id"], audit.after["brand_name"]) == (
+            "夏",
+            str(b2.id),
+            "新品牌",
+        )
+
+    async def test_overwrite_cost_price_purchase_sourcing(
+        self, world: _World, product_factory: Any
+    ) -> None:
+        """N8 / N9：库里货源「采购」的 SKU 覆盖成本价 → resolved；sku.update 只记 cost_price_changed。"""
+        user, perms = await world.user("merchandiser")
+        style = await product_factory.style()
+        sku = await product_factory.sku(
+            style, sourcing_type="采购", cost_price=Decimal("60.00"), base_price=Decimal("199.00")
+        )
+        c = await world.conflict(
+            sku.id,
+            [
+                _pf("cost_price", "成本价", "60.00", "65.00", sensitive=["sku", "cost_price"]),
+                _pf("base_price", "基本售价", "199.00", "209.00"),
+            ],
+            source=STYLE_SKU,
+            object_type="sku",
+        )
+        resp = await world.svc.resolve(
+            _req("overwrite", (c.id, {"cost_price": "60.00", "base_price": "199"})), user, perms
+        )
+        assert [r.outcome for r in resp.results] == ["resolved"]
+        s = await world.reload(Sku, sku.id)
+        assert (s.cost_price, s.base_price, s.sourcing_type) == (
+            Decimal("65.00"),
+            Decimal("209.00"),
+            "采购",
+        )
+        [audit] = await world.audits("sku.update", sku.id)
+        assert audit.after["cost_price_changed"] is True
+        assert "cost_price" not in audit.before and "cost_price" not in audit.after
+        assert (audit.before["base_price"], audit.after["base_price"]) == ("199.00", "209.00")
+
+    async def test_invalid_values(self, world: _World, product_factory: Any) -> None:
+        """价格 ≥ 1 亿 → invalid_value（原因不含值）；品牌已停用 → invalid_value；都不改。"""
+        user, perms = await world.user("merchandiser")
+        style = await product_factory.style()
+        sku = await product_factory.sku(style)
+        money = await world.conflict(
+            sku.id,
+            [_pf("base_price", "基本售价", "200.00", "100000000.00")],
+            source=STYLE_SKU,
+            object_type="sku",
+        )
+        off = await product_factory.brand(brand_name="停用品牌", is_active=False)
+        goods = await _goods(world, style)
+        brand = await world.conflict(
+            goods.id,
+            [_pf("brand_id", "品牌", None, str(off.id))],
+            source=STYLE_SKU,
+            object_type="goods",
+        )
+        resp = await world.svc.resolve(
+            _req("overwrite", (money.id, {"base_price": "200.00"}), (brand.id, {"brand_id": None})),
+            user,
+            perms,
+        )
+        by_id = {r.id: r for r in resp.results}
+        assert by_id[money.id].outcome == "invalid_value"
+        assert by_id[money.id].field == "base_price"
+        assert "100000000" not in (by_id[money.id].message or "")
+        assert (by_id[brand.id].outcome, by_id[brand.id].field) == ("invalid_value", "brand_id")
+        assert "品牌不存在或已停用" in (by_id[brand.id].message or "")
+        assert (await world.reload(Sku, sku.id)).base_price == Decimal("200.00")
+        assert (await world.reload(GoodsMain, goods.id)).brand_id is None
+
+    async def test_key_conflict_keep_closes_carried(
+        self, world: _World, product_factory: Any
+    ) -> None:
+        """键冲突 → 覆盖 not_overwritable；带并入字段时「保留系统值」一并关闭并列出字段名。"""
+        user, perms = await world.user("merchandiser")
+        style = await product_factory.style()
+        sku = await product_factory.sku(style)
+        c = await world.conflict(
+            sku.id,
+            [_pf("cost_price", "成本价", "100.00", "65.00", sensitive=["sku", "cost_price"])],
+            source=STYLE_SKU,
+            object_type="sku",
+            kind="key",
+            message="SKU 编码已属于款式 X",
+        )
+        resp = await world.svc.resolve(_req("overwrite", (c.id, {})), user, perms)
+        assert [r.outcome for r in resp.results] == ["not_overwritable"]
+        resp = await world.svc.resolve(_req("keep", (c.id, None)), user, perms)
+        assert [r.outcome for r in resp.results] == ["resolved"]
+        c = await world.reload(ImportConflict, c.id)
+        assert c.status == "kept"
+        assert "cost_price" in (c.resolution_note or "")
+
+    async def test_pr_cannot_resolve_goods(self, world: _World, product_factory: Any) -> None:
+        user, perms = await world.user("pr")
+        style = await product_factory.style()
+        goods = await _goods(world, style, season="春")
+        c = await world.conflict(
+            goods.id, [_pf("season", "季节", "春", "夏")], source=STYLE_SKU, object_type="goods"
+        )
+        with pytest.raises(PermissionDeniedError):
+            await world.svc.resolve(_req("overwrite", (c.id, {"season": "春"})), user, perms)
+        assert (await world.reload(GoodsMain, goods.id)).season == "春"
+
+    async def test_ac45_revoked_cost_write_403(self, world: _World, product_factory: Any) -> None:
+        """AC 45：撤销了 field.sku.cost_price:write 的跟单覆盖成本价 → 403、零改动。"""
+        user, perms = await world.user("merchandiser", revoke=("field.sku.cost_price:write",))
+        style = await product_factory.style()
+        sku = await product_factory.sku(style, cost_price=Decimal("60.00"))
+        c = await world.conflict(
+            sku.id,
+            [_pf("cost_price", "成本价", "60.00", "65.00", sensitive=["sku", "cost_price"])],
+            source=STYLE_SKU,
+            object_type="sku",
+        )
+        with pytest.raises(ImportConflictFieldPermissionError):
+            await world.svc.resolve(_req("overwrite", (c.id, {"cost_price": "60.00"})), user, perms)
+        assert (await world.reload(Sku, sku.id)).cost_price == Decimal("60.00")
+        assert (await world.reload(ImportConflict, c.id)).status == "pending"

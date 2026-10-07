@@ -16,8 +16,20 @@ export const CONFLICT_FIELD_LABELS: Record<string, Record<string, string>> = {
     cooperation_history: "合作历史",
     remark: "备注",
   },
-  // 商品资料（款式 / SKU / 商品）的比较字段随 8a-4 补齐
-  manual_style_sku: {},
+  // 商品资料：款式（图片）、SKU（颜色…货源类型）、商品（简称、品牌、季节）；中文名与映射目录一致
+  manual_style_sku: {
+    external_image_url: "图片",
+    color: "颜色",
+    size: "规格",
+    base_price: "基本售价",
+    cost_price: "成本价",
+    purchase_price: "采购价",
+    tag_price: "市场|吊牌价",
+    sourcing_type: "货源类型",
+    short_name: "商品简称",
+    brand_id: "品牌",
+    season: "季节",
+  },
 };
 
 /** 某来源可筛选的字段（下拉选项）；没有声明的来源返回空列表。 */

@@ -27,6 +27,12 @@ export interface Brand {
   updated_at: string;
 }
 
+/** GET /api/goods/brand-options 的一项：启用品牌（商品读权限即可取，8a-4）。 */
+export interface GoodsBrandOption {
+  id: string;
+  brand_name: string;
+}
+
 export interface BrandCreate {
   brand_code: string;
   brand_name: string;
