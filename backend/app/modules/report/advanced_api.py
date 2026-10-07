@@ -103,9 +103,14 @@ async def get_store_daily(
     preset: _PresetQ = "last_30d",
     date_from: _FromQ = None,
     date_to: _ToQ = None,
+    granularity: Annotated[
+        str,
+        Query(pattern=r"^(day|week|month|year)$", description="统计粒度"),
+    ] = "day",
 ) -> list[StoreDailyRow]:
+    """店铺数据；按周 / 月 / 年时 date 是桶首日（不传 = 按日，旧调用不变）。"""
     tr = resolve_time_range(preset, date_from, date_to)
-    return await service.get_dashboard(user.tenant_id, tr)
+    return await service.get_dashboard(user.tenant_id, tr, granularity=granularity)
 
 
 @router.put(

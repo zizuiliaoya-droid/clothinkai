@@ -3,7 +3,6 @@ import { Button, Card, Select, Space, Table, message } from "antd";
 import { DownloadOutlined } from "@ant-design/icons";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import type { ColumnsType } from "antd/es/table";
-import dayjs from "dayjs";
 import { exportReport, getStoreDaily } from "@/features/report/api";
 import type { StoreDailyRow, TimeGranularity, TimePreset } from "@/features/report/types";
 import { extractErrorMessage } from "@/services/apiClient";
@@ -25,17 +24,11 @@ const GRANULARITY: Array<{ label: string; value: TimeGranularity }> = [
   { label: "按年", value: "year" },
 ];
 
-// 周起始（周一）YYYY-MM-DD；仅做日历日期运算，不转 UTC，避免时区偏移。
-function weekKey(value: string): string {
-  const current = dayjs(value);
-  const daysFromMonday = (current.day() + 6) % 7;
-  return current.subtract(daysFromMonday, "day").format("YYYY-MM-DD");
-}
-
-function groupKey(value: string, granularity: TimeGranularity): string {
+// 后端给的是桶首日（YYYY-MM-DD）：按月只显示年月、按年只显示年份，周与日原样。
+function bucketLabel(value: string, granularity: TimeGranularity): string {
   if (granularity === "year") return value.slice(0, 4);
   if (granularity === "month") return value.slice(0, 7);
-  return weekKey(value);
+  return value;
 }
 
 export function StoreDailyPage() {
@@ -44,9 +37,10 @@ export function StoreDailyPage() {
   const [granularity, setGranularity] = useState<TimeGranularity>("day");
   const { dateFrom: df, dateTo: dt, enabled } = useReportTimeRange(preset, range);
   const { data: raw, isLoading } = useQuery({
-    queryKey: ["store-daily", preset, df, dt],
+    queryKey: ["store-daily", preset, df, dt, granularity],
     enabled,
-    queryFn: () => getStoreDaily({ preset, date_from: df, date_to: dt }),
+    queryFn: () =>
+      getStoreDaily({ preset, date_from: df, date_to: dt, granularity }),
   });
   const exportMutation = useMutation({
     mutationFn: () =>
@@ -60,38 +54,11 @@ export function StoreDailyPage() {
     onError: (error) => message.error(extractErrorMessage(error, "导出失败")),
   });
 
-  // 按日/周/月/年聚合；保持既有可转数字字段求和口径。
+  // 周 / 月 / 年由后端分桶，extra 也在后端按规则聚合（比率、累计不相加），页面不再自己加。
+  // 后端按桶升序；非「按日」时倒过来，保持原来「最新在上」。
   const data = useMemo<StoreDailyRow[]>(() => {
     const rows = raw ?? [];
-    if (granularity === "day") return rows;
-    const groups = new Map<string, StoreDailyRow>();
-    for (const r of rows) {
-      const key = groupKey(String(r.date), granularity);
-      const g = groups.get(key);
-      if (!g) {
-        groups.set(key, { ...r, date: key, extra: { ...(r.extra ?? {}) } });
-        continue;
-      }
-      const aggregate = g as unknown as Record<string, unknown>;
-      for (const [k, v] of Object.entries(r)) {
-        if (k === "date" || k === "extra") continue;
-        const n = Number(v);
-        if (!Number.isNaN(n) && v != null && v !== "") {
-          aggregate[k] = Number(aggregate[k] ?? 0) + n;
-        }
-      }
-      const ge = (g.extra ?? {}) as Record<string, unknown>;
-      for (const [k, v] of Object.entries(r.extra ?? {})) {
-        const n = Number(v);
-        if (!Number.isNaN(n) && v != null && v !== "") {
-          ge[k] = Number(ge[k] ?? 0) + n;
-        }
-      }
-      g.extra = ge;
-    }
-    return Array.from(groups.values()).sort((a, b) =>
-      String(a.date) < String(b.date) ? 1 : -1
-    );
+    return granularity === "day" ? rows : [...rows].reverse();
   }, [raw, granularity]);
 
   // typed 列（核心）+ 动态展开千牛汇总 extra（对齐 final.xlsx 店铺数据 24 列）
@@ -112,7 +79,13 @@ export function StoreDailyPage() {
   }, [data]);
 
   const columns: ColumnsType<StoreDailyRow> = [
-    { title: "日期", dataIndex: "date", width: 120, fixed: "left" },
+    {
+      title: "日期",
+      dataIndex: "date",
+      width: 120,
+      fixed: "left",
+      render: (v: string) => bucketLabel(v, granularity),
+    },
     { title: "访客数", dataIndex: "visitors", width: 100 },
     { title: "支付金额", dataIndex: "pay_amount", width: 120, render: money },
     { title: "支付订单数", dataIndex: "pay_orders", width: 110 },

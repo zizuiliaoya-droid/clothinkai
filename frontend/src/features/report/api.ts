@@ -60,7 +60,13 @@ export async function getPublishCards(
 }
 
 export async function getStoreDaily(
-  params: { preset?: string; date_from?: string; date_to?: string } = {}
+  params: {
+    preset?: string;
+    date_from?: string;
+    date_to?: string;
+    /** 按周 / 月 / 年由后端分桶，date 是桶首日；不传 = 按日。 */
+    granularity?: TimeGranularity;
+  } = {}
 ): Promise<StoreDailyRow[]> {
   const resp = await apiClient.get<StoreDailyRow[]>(
     "/api/reports/store-daily",

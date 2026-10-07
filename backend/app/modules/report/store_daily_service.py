@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from collections.abc import Mapping
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func
+from sqlalchemy import func, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,8 +21,17 @@ from app.modules.report.advanced_schemas import (
     StoreDailyManualUpdate,
     StoreDailyRow,
 )
+from app.modules.report.domain import bucket_start
+from app.modules.report.extra_metrics import aggregate_extra
 from app.modules.report.summary_read import SummaryReadRepository, record_source
 from app.modules.report.work_progress_models import StoreDaily
+
+
+def _sum_optional(current: Decimal | None, value: Decimal | None) -> Decimal | None:
+    """手填的广告消耗：整个桶都没填保持 None（页面显示「—」），填了几天就加那几天。"""
+    if value is None:
+        return current
+    return value if current is None else current + value
 
 
 class StoreDailyService:
@@ -32,12 +42,15 @@ class StoreDailyService:
         self._audit = AuditService(session)
 
     async def get_dashboard(
-        self, tenant_id: UUID, time_range: tuple[date, date]
+        self, tenant_id: UUID, time_range: tuple[date, date], granularity: str = "day"
     ) -> list[StoreDailyRow]:
-        """店铺日数据。区间被汇总表完整覆盖就读汇总表，否则实时。
+        """店铺数据。区间被汇总表完整覆盖就读汇总表，否则实时。
 
         手填的 3 个广告消耗两条路径都是读取时 LEFT JOIN ``store_daily``，填完立即生效；
         extra（千牛导出的其余几十列）汇总表不存，始终实时。
+
+        ``granularity`` 默认 day（一天一行）；week / month / year 时把日行按桶合并，
+        date 是桶首日、按桶升序。页面与导出都从这里取，周 / 月 / 年怎么合并只有这一份。
         """
         date_from, date_to = time_range
         fresh = await self._summary.freshness(tenant_id, date_from, date_to)
@@ -52,23 +65,22 @@ class StoreDailyService:
                 rows = await self._repo.aggregate(
                     tenant_id=tenant_id, date_from=date_from, date_to=date_to
                 )
-        extra_by_date = await self._aggregate_extra(tenant_id, time_range[0], time_range[1])
-        result = []
-        for r in rows:
-            row = self._to_row(r)
-            row.extra = extra_by_date.get(str(r["date"]), {})
-            result.append(row)
+        extra_by_bucket = await self._aggregate_extra(tenant_id, date_from, date_to, granularity)
+        result = [self._to_row(r) for r in rows]
+        if granularity != "day":
+            result = self._merge_buckets(result, granularity)
+        for row in result:
+            row.extra = extra_by_bucket.get(str(row.date), {})
         return result
 
     async def _aggregate_extra(
-        self, tenant_id: UUID, date_from: date, date_to: date
-    ) -> dict[str, dict[str, Any]]:
-        """按日 SUM qianniu_daily.extra 的数值列（对齐 final.xlsx 店铺数据 24 列）。"""
-        from collections import defaultdict
-        from decimal import Decimal, InvalidOperation
+        self, tenant_id: UUID, date_from: date, date_to: date, granularity: str
+    ) -> dict[str, dict[str, str | None]]:
+        """按日（或周 / 月 / 年桶）聚合 qianniu_daily.extra（对齐 final.xlsx 店铺数据 24 列）。
 
-        from sqlalchemy import text
-
+        规则在 ``extra_metrics``：比率 / 均值 / 评分不相加，常用比率按分子分母重算；
+        累计列只有按日（同一天跨商品）时相加，按周 / 月 / 年跨了天就不加。
+        """
         sql = text(
             "SELECT date, extra FROM qianniu_daily "
             "WHERE tenant_id = :t AND date BETWEEN :f AND :to AND extra IS NOT NULL"
@@ -76,37 +88,40 @@ class StoreDailyService:
         rows = (
             await self._session.execute(sql, {"t": str(tenant_id), "f": date_from, "to": date_to})
         ).all()
-        agg: dict[str, dict[str, Decimal]] = defaultdict(lambda: defaultdict(Decimal))
-        # 非指标列（ID/文本类）不参与按日求和
-        skip = {
-            "统计日期",
-            "日期",
-            "商品ID",
-            "主商品ID",
-            "货号",
-            "商品名称",
-            "商品简称",
-            "商商品简称称",
-            "商品类型",
-            "商品状态",
-            "商品标签",
-        }
+        by_bucket: dict[str, list[Any]] = defaultdict(list)
         for d, extra in rows:
-            if not isinstance(extra, dict):
-                continue
-            day = str(d)
-            for k, v in extra.items():
-                if k in skip or v is None or v == "":
-                    continue
-                try:
-                    num = Decimal(str(v).replace(",", "").replace("%", "").strip())
-                except (InvalidOperation, ValueError):
-                    continue
-                agg[day][k] += num
-        # Decimal → str（保留两位以内）
+            by_bucket[str(bucket_start(d, granularity))].append(extra)
+        same_day = granularity == "day"
         return {
-            day: {k: format(val, "f") for k, val in fields.items()} for day, fields in agg.items()
+            bucket: aggregate_extra(extras, same_day=same_day)
+            for bucket, extras in by_bucket.items()
         }
+
+    @staticmethod
+    def _merge_buckets(rows: list[StoreDailyRow], granularity: str) -> list[StoreDailyRow]:
+        """日行 → 桶行：访客、支付额、支付订单相加；广告消耗按 ``_sum_optional``。"""
+        buckets: dict[date, StoreDailyRow] = {}
+        for row in rows:
+            start = bucket_start(row.date, granularity)
+            merged = buckets.get(start)
+            if merged is None:
+                buckets[start] = StoreDailyRow(
+                    date=start,
+                    visitors=row.visitors,
+                    pay_amount=row.pay_amount,
+                    pay_orders=row.pay_orders,
+                    ad_spend_total=row.ad_spend_total,
+                    zhitongche_spend=row.zhitongche_spend,
+                    yinli_spend=row.yinli_spend,
+                )
+                continue
+            merged.visitors += row.visitors
+            merged.pay_amount += row.pay_amount
+            merged.pay_orders += row.pay_orders
+            merged.ad_spend_total = _sum_optional(merged.ad_spend_total, row.ad_spend_total)
+            merged.zhitongche_spend = _sum_optional(merged.zhitongche_spend, row.zhitongche_spend)
+            merged.yinli_spend = _sum_optional(merged.yinli_spend, row.yinli_spend)
+        return [buckets[start] for start in sorted(buckets)]
 
     @staticmethod
     def _to_row(r: Mapping[str, Any]) -> StoreDailyRow:

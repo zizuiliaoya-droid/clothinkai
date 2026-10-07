@@ -67,6 +67,8 @@ class TestReportExportApiContract:
             unit_deal_cost=Decimal("12"),
             extra={dangerous_header: "3"},
         )
+        # service 给什么行导出就写什么行：分桶与 extra 聚合都在 StoreDailyService 里。
+        # 两行故意落在同一周 —— 导出要是自己再按周合并一次，这里会变成一行。
         store_rows = [
             SimpleNamespace(
                 date=date(2026, 8, 3),
@@ -76,7 +78,8 @@ class TestReportExportApiContract:
                 ad_spend_total=Decimal("3"),
                 zhitongche_spend=Decimal("1"),
                 yinli_spend=None,
-                extra={"成交人数": "2"},
+                # 多行时算不出来的比率是 None → 导出为空单元格
+                extra={"成交人数": "2", "下单转化率": None},
             ),
             SimpleNamespace(
                 date=date(2026, 8, 4),
@@ -86,9 +89,10 @@ class TestReportExportApiContract:
                 ad_spend_total=None,
                 zhitongche_spend=Decimal("2"),
                 yinli_spend=Decimal("4"),
-                extra={"成交人数": "1"},
+                extra={"成交人数": "1", "下单转化率": "0.63"},
             ),
         ]
+        store_calls: list[dict[str, object]] = []
         work_row = SimpleNamespace(
             pr_name="PR甲",
             quote_count=10,
@@ -123,7 +127,8 @@ class TestReportExportApiContract:
             def __init__(self, _session: object) -> None:
                 pass
 
-            async def get_dashboard(self, *_args: object) -> list[object]:
+            async def get_dashboard(self, *_args: object, **kwargs: object) -> list[object]:
+                store_calls.append(kwargs)
                 return store_rows
 
         class FakeWorkProgressService:
@@ -177,9 +182,33 @@ class TestReportExportApiContract:
             "直通车花费",
             "引力魔方花费",
         ]
-        assert store_headers[-1] == "成交人数"
-        assert grouped_store_rows[0][1:4] == [15, Decimal("28"), 3]
-        assert grouped_store_rows[0][-1] == Decimal("3")
+        # 粒度原样交给 service，导出不再自己分桶、相加
+        assert store_calls == [{"granularity": "week"}]
+        assert store_headers[7:] == ["下单转化率", "成交人数"]
+        assert grouped_store_rows == [
+            [
+                date(2026, 8, 3),
+                10,
+                Decimal("20"),
+                2,
+                Decimal("3"),
+                Decimal("1"),
+                None,
+                None,
+                Decimal("2"),
+            ],
+            [
+                date(2026, 8, 4),
+                5,
+                Decimal("8"),
+                1,
+                None,
+                Decimal("2"),
+                Decimal("4"),
+                Decimal("0.63"),
+                Decimal("1"),
+            ],
+        ]
 
         work_headers, work_rows = await service._fetch_rows(
             uuid4(),
@@ -215,3 +244,13 @@ class TestReportExportApiContract:
         assert worksheet.cell(2, 2).data_type != "f"
         assert worksheet.cell(2, 3).value == f"'{dangerous_text}"
         assert worksheet.cell(2, 3).data_type != "f"
+
+        store_response = await service.export(uuid4(), "store-daily", period, granularity="week")
+        store_body = b"".join([chunk async for chunk in store_response.body_iterator])
+        store_sheet = load_workbook(io.BytesIO(store_body), data_only=False).active
+        assert store_calls[-1] == {"granularity": "week"}
+        assert store_sheet.max_row == 3  # 表头 + service 给的两行，没有再合并
+        # 第 8 列「下单转化率」：None 写成空单元格，有值的是 Excel 数值
+        assert store_sheet.cell(1, 8).value == "下单转化率"
+        assert store_sheet.cell(2, 8).value in (None, "")
+        assert store_sheet.cell(3, 8).value == 0.63
