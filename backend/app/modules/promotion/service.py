@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import builtins
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
@@ -79,6 +79,7 @@ from app.modules.promotion.exceptions import (
     InvalidStyleReferenceError,
     MetricsScreenshotRequiredError,
     PromotionNotFoundError,
+    PublishDateInFutureError,
     PublishUrlRequiredError,
     RejectReasonCategoryRequiredError,
     RetroContentMissingError,
@@ -150,6 +151,22 @@ log = logging.getLogger(__name__)
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+def _assert_not_future_publish_date(actual: date | None) -> None:
+    """实际发布日期不能晚于今天（7a-7，publish 与 resubmit 共用）。
+
+    「今天」按 Asia/Shanghai（get_today），不用 date.today()——容器是 UTC，
+    北京时间 0~8 点会把当天误判成明天。调用方要放在状态机判定之后（plan D4）。
+    """
+    if actual is None:
+        return
+    today = get_today()
+    if actual > today:
+        raise PublishDateInFutureError(
+            f"实际发布日期不能晚于今天（{today.isoformat()}）",
+            details={"actual_publish_date": actual.isoformat(), "today": today.isoformat()},
+        )
 
 
 class PromotionService:
@@ -758,6 +775,7 @@ class PromotionService:
             to_state=PublishStatus.PUBLISHED.value,
             action="publish",
         )
+        _assert_not_future_publish_date(payload.actual_publish_date)
 
         # PRD 改动 5：品牌词评论截图在提交发布审核时必传。
         # 后端拦，不只靠前端 —— 和寄拍寄回单号同一个处理方式。

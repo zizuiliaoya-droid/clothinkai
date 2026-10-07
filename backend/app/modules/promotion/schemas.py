@@ -165,6 +165,9 @@ class PromotionPublishRequest(BaseModel):
 
     publish_url: str = Field(min_length=1, max_length=512)
     actual_publish_date: date
+    # 「不能晚于今天」刻意不在这里校验（7a-7 / plan D4）：schema 先于状态机执行，
+    # 已发布的单再点发布会报日期错而不是状态错。放在 service 的
+    # _assert_not_future_publish_date，状态机之后判，按 Asia/Shanghai 取今天。
 
     @field_validator("publish_url")
     @classmethod

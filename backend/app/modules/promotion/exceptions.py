@@ -88,6 +88,17 @@ class PublishUrlRequiredError(ValidationError):
     code = "PUBLISH_URL_REQUIRED"
 
 
+class PublishDateInFutureError(ValidationError):
+    """实际发布日期晚于今天（Asia/Shanghai）。
+
+    7a-7：实际发布日期是「已经发出来的那天」，填未来日期会让催发、7 天数据的倒计时全部错位。
+    在 service 里判（状态机之后），不放 schema——schema 先于状态机执行，
+    会让「已发布的单再点发布」报日期错而不是状态错。publish 与 resubmit 共用。
+    """
+
+    code = "PUBLISH_DATE_IN_FUTURE"
+
+
 class CancelReasonRequiredError(ValidationError):
     """cancel 时 cancel_reason 必填。"""
 
@@ -248,6 +259,7 @@ __all__ = [
     "MetricsScreenshotRequiredError",
     "PromotionInternalCodeConflictError",
     "PromotionNotFoundError",
+    "PublishDateInFutureError",
     "PublishUrlRequiredError",
     "RetroContentMissingError",
     "RetroSelfConfirmForbiddenError",

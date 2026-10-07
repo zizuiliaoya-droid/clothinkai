@@ -30,6 +30,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnsType } from "antd/es/table";
 import dayjs from "dayjs";
+import type { Dayjs } from "dayjs";
 import {
   cancelPromotion,
   confirmRetrospective,
@@ -72,6 +73,9 @@ import { StyleImageThumbnail } from "@/components/StyleImageThumbnail/StyleImage
 
 const PLATFORMS = ["小红书", "抖音", "快手", "B站"];
 const PUBLISH_STATUS = ["未发布", "已发布", "已取消", "异常", "已删除"];
+
+/** 实际发布日期不能晚于今天（7a-7）。后端按北京时间再判一次，这里只是不让选。 */
+const disableFutureDate = (d: Dayjs) => d.isAfter(dayjs(), "day");
 
 // 站外推广人工源列（对齐 final.xlsx），从 source_extra 读取
 type SourceField = {
@@ -1626,7 +1630,7 @@ export function PromotionListPage() {
             label="实际发布日期"
             rules={[{ required: true, message: "请选择发布日期" }]}
           >
-            <DatePicker style={{ width: "100%" }} />
+            <DatePicker style={{ width: "100%" }} disabledDate={disableFutureDate} />
           </Form.Item>
           <Form.Item
             label="品牌词评论截图"
