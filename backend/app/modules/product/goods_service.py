@@ -27,6 +27,7 @@ from app.core.exceptions import (
     ResourceNotFoundError,
     ValidationError,
 )
+from app.modules.product.goods_codes import GoodsCodeExhaustedError, generate_goods_code
 from app.modules.product.goods_models import GoodsMain, GoodsStyleItem
 from app.modules.product.goods_repository import GoodsListFilters, GoodsRepository
 from app.modules.product.goods_schemas import (
@@ -39,6 +40,9 @@ from app.modules.product.goods_schemas import (
 )
 from app.modules.product.images import resolve_style_image
 from app.modules.product.models import Brand, Style
+
+CODE_GENERATE_ATTEMPTS = 3
+"""系统生成编码时，插入撞唯一索引（并发新建）后重新生成的次数上限。"""
 
 
 class GoodsCodeConflictError(DuplicateResourceError):
@@ -197,30 +201,13 @@ class GoodsService:
         self, payload: GoodsMainCreate, *, tenant_id: UUID, user_id: UUID
     ) -> GoodsMainResponse:
         items = await self._validate_items(payload.items)
-        if await self._repo.code_exists(payload.goods_code):
-            raise GoodsCodeConflictError(
-                f"商品编码已存在 ({payload.goods_code})",
-                details={"goods_code": payload.goods_code},
-            )
-        goods = GoodsMain(
-            tenant_id=tenant_id,
-            goods_code=payload.goods_code,
-            goods_title=payload.goods_title,
-            short_name=payload.short_name,
-            season=payload.season,
-            remark=payload.remark,
-        )
-        self._repo.add(goods)
-        try:
-            await self._session.flush()
-        except IntegrityError as exc:
-            await self._session.rollback()
-            if "uq_goods_main_code" in str(getattr(exc, "orig", exc)):
-                raise GoodsCodeConflictError(
-                    f"商品编码已存在 ({payload.goods_code})",
-                    details={"goods_code": payload.goods_code},
-                ) from exc
-            raise
+        notices: builtins.list[str] = []
+        if payload.goods_code is not None:
+            goods = await self._insert_with_code(payload, payload.goods_code, tenant_id=tenant_id)
+        else:
+            goods, notice = await self._insert_generated(payload, items, tenant_id=tenant_id)
+            if notice:
+                notices.append(notice)
         await self._write_items(goods, items)
         await self._session.flush()
         await self._audit.log(
@@ -237,7 +224,77 @@ class GoodsService:
             user_id=user_id,
         )
         await self._session.commit()
-        return await self._to_response(goods)
+        resp = await self._to_response(goods)
+        return resp.model_copy(update={"notices": notices}) if notices else resp
+
+    def _new_goods(self, payload: GoodsMainCreate, goods_code: str, tenant_id: UUID) -> GoodsMain:
+        return GoodsMain(
+            tenant_id=tenant_id,
+            goods_code=goods_code,
+            goods_title=payload.goods_title,
+            short_name=payload.short_name,
+            season=payload.season,
+            remark=payload.remark,
+        )
+
+    async def _insert_with_code(
+        self, payload: GoodsMainCreate, goods_code: str, *, tenant_id: UUID
+    ) -> GoodsMain:
+        """调用方指定了编码（脚本 / 测试兼容的旧路径）：被占用（含已软删）→ 409。"""
+        if await self._repo.code_exists(goods_code):
+            raise GoodsCodeConflictError(
+                f"商品编码已存在 ({goods_code})",
+                details={"goods_code": goods_code},
+            )
+        goods = self._new_goods(payload, goods_code, tenant_id)
+        self._repo.add(goods)
+        try:
+            await self._session.flush()
+        except IntegrityError as exc:
+            await self._session.rollback()
+            if "uq_goods_main_code" in str(getattr(exc, "orig", exc)):
+                raise GoodsCodeConflictError(
+                    f"商品编码已存在 ({goods_code})",
+                    details={"goods_code": goods_code},
+                ) from exc
+            raise
+        return goods
+
+    async def _insert_generated(
+        self,
+        payload: GoodsMainCreate,
+        items: builtins.list[GoodsStyleItemIn],
+        *,
+        tenant_id: UUID,
+    ) -> tuple[GoodsMain, str | None]:
+        """编码由系统生成（补充 3，§11.2）。
+
+        预检（``code_exists``）与插入之间可能被并发新建抢走同一个编码：插入放在保存点里，
+        撞 ``uq_goods_main_code`` 就回滚保存点、重新生成，最多 ``CODE_GENERATE_ATTEMPTS`` 次。
+        409 的提示不带编码（界面不显示编码，补充 2）。
+        """
+        member_codes: builtins.list[str] = []
+        for item in items:
+            # _validate_items 已校验存在且未删，这里从会话的身份映射里取
+            style = await self._session.get(Style, item.style_id)
+            if style is not None:
+                member_codes.append(style.style_code)
+        for _ in range(CODE_GENERATE_ATTEMPTS):
+            try:
+                code, notice = await generate_goods_code(self._repo, member_codes)
+            except GoodsCodeExhaustedError as exc:
+                raise GoodsCodeConflictError("没能为新商品生成可用的内部编码，请重试") from exc
+            goods = self._new_goods(payload, code, tenant_id)
+            try:
+                async with self._session.begin_nested():
+                    self._repo.add(goods)
+                    await self._session.flush()
+            except IntegrityError as exc:
+                if "uq_goods_main_code" in str(getattr(exc, "orig", exc)):
+                    continue  # 并发：刚被别人用了，重新生成
+                raise
+            return goods, notice
+        raise GoodsCodeConflictError("没能为新商品生成可用的内部编码，请重试")
 
     # ------------------------------------------------------------------ #
     # update

@@ -769,6 +769,38 @@ class TestGoodsShortName:
         finally:
             tenant_id_ctx.reset(token)
 
+    async def test_ac62_keyword_matches_generated_goods_code(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
+    ) -> None:
+        """补充 2：界面不显示编码，但按商品编码搜仍能搜到（含系统生成的套装编码）。"""
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            user = await factory.user(tenant_a, roles=[admin_role])
+            a = await product_factory.style(style_code="AC62A", style_name="款A")
+            b = await product_factory.style(style_code="AC62B", style_name="款B")
+            svc = GoodsService(session)
+            created = await svc.create(
+                GoodsMainCreate(
+                    goods_title="不含关键词的套装",
+                    items=[GoodsStyleItemIn(style_id=a.id), GoodsStyleItemIn(style_id=b.id)],
+                ),
+                tenant_id=tenant_a.id,
+                user_id=user.id,
+            )
+            assert created.goods_code.startswith("SUIT-AC62A_AC62B")
+            items, total = await svc.list_goods(
+                tenant_id=tenant_a.id, filters=GoodsListFilters(keyword=created.goods_code)
+            )
+            assert total == 1
+            assert items[0].id == created.id
+        finally:
+            tenant_id_ctx.reset(token)
+
     async def test_short_name_over_limit_rejected(self) -> None:
         from pydantic import ValidationError as PydanticValidationError
 

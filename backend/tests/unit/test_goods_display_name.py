@@ -38,8 +38,9 @@ class TestAnomalyAlertGoodsLine:
         )
         return next(ln for ln in text.splitlines() if ln.startswith("> 商品："))
 
+    # 补充 2：消息里不再带商品编码（原断言「> 商品：240627 芭蕾风阔腿裤」）
     def test_uses_short_name(self) -> None:
-        assert self._goods_line("芭蕾风阔腿裤") == "> 商品：240627 芭蕾风阔腿裤"
+        assert self._goods_line("芭蕾风阔腿裤") == "> 商品：芭蕾风阔腿裤"
 
     def test_without_short_name_shows_full_title(self) -> None:
-        assert self._goods_line(None) == f"> 商品：240627 {FULL}"
+        assert self._goods_line(None) == f"> 商品：{FULL}"

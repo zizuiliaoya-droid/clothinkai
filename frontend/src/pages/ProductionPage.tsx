@@ -157,31 +157,28 @@ export function ProductionPage() {
       width: 68,
       fixed: "left",
       render: (src: string | null, row) => (
-        <StyleImageThumbnail src={src} alt={`${row.goods_code} 商品主图`} />
+        <StyleImageThumbnail
+          src={src}
+          alt={`${goodsDisplayName(row.goods_title, row.goods_short_name)} 商品主图`}
+        />
       ),
     },
     {
-      title: "商品编码",
-      dataIndex: "goods_code",
-      width: 130,
-      fixed: "left",
-      render: (code: string, row: ProductionRow) =>
-        row.is_suit ? (
-          <Space size={4}>
-            <span>{code}</span>
-            <Tag color="purple">套装</Tag>
-          </Space>
-        ) : (
-          code
-        ),
-    },
-    {
-      title: "商品简称",
+      // 不显示商品编码（补充 2）；导出 Excel 仍保留「商品编码」列
+      title: "商品",
       dataIndex: "goods_short_name",
-      width: 180,
+      width: 220,
+      fixed: "left",
       ellipsis: { showTitle: false },
       render: (_: string | null, row: ProductionRow) => (
-        <GoodsNameCell goodsTitle={row.goods_title} shortName={row.goods_short_name} />
+        <>
+          {row.is_suit && (
+            <Tag color="purple" style={{ marginInlineEnd: 4 }}>
+              套装
+            </Tag>
+          )}
+          <GoodsNameCell goodsTitle={row.goods_title} shortName={row.goods_short_name} />
+        </>
       ),
     },
     {
@@ -300,7 +297,7 @@ export function ProductionPage() {
       <Modal
         title={
           trendGoods
-            ? `投产趋势 · ${trendGoods.goods_code} ${goodsDisplayName(trendGoods.goods_title, trendGoods.goods_short_name)}`
+            ? `投产趋势 · ${goodsDisplayName(trendGoods.goods_title, trendGoods.goods_short_name)}`
             : "投产趋势"
         }
         open={!!trendGoods}

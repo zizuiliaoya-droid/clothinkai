@@ -228,6 +228,8 @@ export interface Goods {
   cost_missing_count: number;
   /** 挂在该商品上的平台链接数，0 表示还没上架到任何渠道。 */
   link_count: number;
+  /** 给界面的提示（只在新建时有内容），如「该款已有商品「…」，已为新商品另行生成内部编码」。 */
+  notices: string[];
 }
 
 export interface GoodsPage {
@@ -250,7 +252,8 @@ export interface GoodsFilters {
 }
 
 export interface GoodsCreate {
-  goods_code: string;
+  /** 不传由系统生成（补充 3）：单品 = 款号（被占用另生成），套装 = SUIT- + 成员款号组合。商品页不再传。 */
+  goods_code?: string;
   goods_title: string;
   short_name?: string | null;
   season?: string | null;

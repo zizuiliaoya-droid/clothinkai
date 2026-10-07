@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   Button,
   Card,
@@ -19,8 +19,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnsType } from "antd/es/table";
 import {
   deletePlatformLink,
-  goodsDisplayName,
-  goodsOptionLabel,
   listGoodsForStyle,
   listPlatformLinks,
   updatePlatformLink,
@@ -28,7 +26,9 @@ import {
   type PlatformLink,
   type PlatformLinkFilters,
 } from "@/features/product/api";
+import { goodsPickerLabel, platformIdsByGoods } from "@/features/product/goodsLabels";
 import { PLATFORM_LINK_RISK_TEXT } from "@/features/product/platformLinkRisk";
+import { GoodsNameCell } from "@/components/GoodsNameCell/GoodsNameCell";
 import { extractErrorMessage } from "@/services/apiClient";
 
 const PLATFORMS = ["千牛", "万相台"];
@@ -62,6 +62,17 @@ export function PlatformLinkPage() {
     enabled: !!editing,
     queryFn: () => listGoodsForStyle(editing!.style_id),
   });
+  // 下拉里同名的商品用「本款式在它名下的平台 ID」区分（补充 2，§11.1）。
+  // 页面列表查询带着分页筛选，拿不到这个款式的全部链接，所以单独查一次。
+  const { data: styleLinks } = useQuery({
+    queryKey: ["platform-links", "by-style", editing?.style_id],
+    enabled: !!editing,
+    queryFn: () => listPlatformLinks({ style_id: editing!.style_id, page_size: 100 }),
+  });
+  const linksByGoods = useMemo(
+    () => platformIdsByGoods(styleLinks?.items ?? []),
+    [styleLinks]
+  );
 
   const saveMutation = useMutation({
     mutationFn: (values: {
@@ -117,16 +128,20 @@ export function PlatformLinkPage() {
     },
     {
       title: "归属商品",
-      dataIndex: "goods_code",
+      dataIndex: "goods_main_id",
       width: 180,
-      render: (code: string | null, row) =>
-        code ? (
-          <Space size={4}>
-            <Tooltip title={goodsDisplayName(row.goods_title, row.goods_short_name) || undefined}>
-              <span>{code}</span>
-            </Tooltip>
-            {row.goods_is_suit && <Tag color="purple">套装</Tag>}
-          </Space>
+      ellipsis: { showTitle: false },
+      // 不显示商品编码（补充 2）：显示名 + 套装标记，悬停看全称；按编码搜索照常可用
+      render: (_: string | null, row) =>
+        row.goods_main_id ? (
+          <>
+            {row.goods_is_suit && (
+              <Tag color="purple" style={{ marginInlineEnd: 4 }}>
+                套装
+              </Tag>
+            )}
+            <GoodsNameCell goodsTitle={row.goods_title} shortName={row.goods_short_name} />
+          </>
         ) : (
           <Tag color="red">未归属</Tag>
         ),
@@ -267,7 +282,7 @@ export function PlatformLinkPage() {
             <Select
               placeholder="选择归属商品"
               options={(goodsOptions ?? []).map((g: GoodsOption) => ({
-                label: goodsOptionLabel(g),
+                label: goodsPickerLabel(g, linksByGoods, goodsOptions ?? []),
                 value: g.goods_main_id,
               }))}
             />

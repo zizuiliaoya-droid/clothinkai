@@ -90,7 +90,9 @@ class GoodsImage(BaseModel):
 class GoodsMainCreate(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
-    goods_code: str = Field(..., min_length=1, max_length=64)
+    goods_code: str | None = Field(default=None, min_length=1, max_length=64)
+    """不传由系统生成（补充 3，``goods_codes.generate_goods_code``）；传了照旧用它（脚本 / 测试兼容，
+    被占用 409）。商品页已不再提供编码输入。"""
     goods_title: str = Field(..., min_length=1, max_length=512)
     short_name: str | None = Field(default=None, max_length=GOODS_SHORT_NAME_MAX_LEN)
     # 类目已下线（8a-3，J12）：接口不再收 category（传了被忽略），goods_main.category 列保留
@@ -160,6 +162,9 @@ class GoodsMainResponse(BaseModel):
     cost_missing_count: int = 0
     link_count: int = 0
     """挂在该商品上的平台链接数。为 0 说明商品还没上架到任何渠道。"""
+
+    notices: list[str] = Field(default_factory=list)
+    """给界面的提示（只在新建时有内容），如「该款已有商品「…」，已为新商品另行生成内部编码」。不含编码。"""
 
 
 class GoodsBrandOption(BaseModel):

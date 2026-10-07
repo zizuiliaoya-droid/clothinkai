@@ -43,7 +43,6 @@ import { SuitLinkModal } from "./SuitLinkModal";
 const LINK_ROLES = ["admin", "platform_admin", "operations"];
 
 interface FormValues {
-  goods_code: string;
   goods_title: string;
   short_name?: string;
   season?: string;
@@ -166,8 +165,8 @@ export function GoodsPanel() {
           items,
         });
       }
+      // 不传编码：由系统生成（补充 3），界面不显示编码（补充 2）
       return createGoods({
-        goods_code: values.goods_code,
         goods_title: values.goods_title,
         short_name: shortName,
         season: values.season ?? null,
@@ -179,6 +178,8 @@ export function GoodsPanel() {
       message.success(
         saved.is_suit ? "已保存（含多个款式，记为套装）" : "已保存"
       );
+      // 新建时的提示，如「该款已有商品「…」，已为新商品另行生成内部编码」
+      for (const notice of saved.notices ?? []) message.warning(notice);
       closeModal();
       void qc.invalidateQueries({ queryKey: ["goods"] });
     },
@@ -212,7 +213,6 @@ export function GoodsPanel() {
     setEditing(record);
     form.resetFields();
     form.setFieldsValue({
-      goods_code: record.goods_code,
       goods_title: record.goods_title,
       short_name: record.short_name ?? undefined,
       season: record.season ?? undefined,
@@ -258,14 +258,8 @@ export function GoodsPanel() {
       ),
     },
     {
-      title: "商品编码",
-      dataIndex: "goods_code",
-      width: 170,
-      fixed: "left",
-      render: (v: string) => <Typography.Text copyable>{v}</Typography.Text>,
-    },
-    {
-      title: "商品简称",
+      // 不显示商品编码（补充 2）：简称，没填回落全称 + 套装标记 + 悬停看全称 + 「未填简称」标记
+      title: "商品",
       dataIndex: "short_name",
       width: 260,
       ellipsis: { showTitle: false },
@@ -475,7 +469,11 @@ export function GoodsPanel() {
       />
 
       <Modal
-        title={editing ? `编辑商品 · ${editing.goods_code}` : "新建商品"}
+        title={
+          editing
+            ? `编辑商品 · ${goodsDisplayName(editing.goods_title, editing.short_name)}`
+            : "新建商品"
+        }
         open={open}
         onCancel={closeModal}
         onOk={() => form.submit()}
@@ -489,34 +487,20 @@ export function GoodsPanel() {
           style={{ marginTop: 16 }}
           onFinish={(v) => saveMutation.mutate(v)}
         >
-          <Space align="start" style={{ display: "flex" }}>
-            <Form.Item
-              name="goods_code"
-              label="商品编码"
-              rules={[{ required: true, message: "请填商品编码" }]}
-              tooltip={
-                editing
-                  ? "建档后不可改：报表、平台链接与推广记录都按它引用商品"
-                  : "租户内唯一，建档后不可改。套装可用 SUIT- 前缀便于识别。"
-              }
-              style={{ width: 240 }}
-            >
-              <Input placeholder="如 260419 或 SUIT-1074568657697" disabled={!!editing} />
-            </Form.Item>
-            <Form.Item
-              name="short_name"
-              label="商品简称"
-              tooltip="列表、报表和下拉里显示这个短名字；不填就显示全称"
-              style={{ width: 400 }}
-            >
-              <Input
-                placeholder="如：冰雪飞狐皮草外套"
-                maxLength={GOODS_SHORT_NAME_MAX_LEN}
-                showCount
-                allowClear
-              />
-            </Form.Item>
-          </Space>
+          {/* 商品编码由系统生成、界面不显示（补充 2、3）：这里没有编码输入 */}
+          <Form.Item
+            name="short_name"
+            label="商品简称"
+            tooltip="列表、报表和下拉里显示这个短名字；不填就显示全称"
+            style={{ width: 400 }}
+          >
+            <Input
+              placeholder="如：冰雪飞狐皮草外套"
+              maxLength={GOODS_SHORT_NAME_MAX_LEN}
+              showCount
+              allowClear
+            />
+          </Form.Item>
 
           <Form.Item
             name="goods_title"

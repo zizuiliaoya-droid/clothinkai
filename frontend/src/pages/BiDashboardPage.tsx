@@ -16,6 +16,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { ColumnsType } from "antd/es/table";
 import { GoodsNameCell } from "@/components/GoodsNameCell/GoodsNameCell";
 import { MiniLineChart } from "@/components/MiniLineChart/MiniLineChart";
+import { goodsDisplayName } from "@/features/product/api";
 import {
   ReportTimeRangeFilter,
   type ReportDateRange,
@@ -172,31 +173,28 @@ export function BiDashboardPage() {
       width: 68,
       fixed: "left",
       render: (src: string | null, row) => (
-        <StyleImageThumbnail src={src} alt={`${row.goods_code} 商品主图`} />
+        <StyleImageThumbnail
+          src={src}
+          alt={`${goodsDisplayName(row.goods_title, row.goods_short_name)} 商品主图`}
+        />
       ),
     },
     {
-      title: "商品编码",
-      dataIndex: "goods_code",
-      width: 130,
-      fixed: "left",
-      render: (code: string, row: BiStylePerformance) =>
-        row.is_suit ? (
-          <Space size={4}>
-            <span>{code}</span>
-            <Tag color="purple">套装</Tag>
-          </Space>
-        ) : (
-          code
-        ),
-    },
-    {
-      title: "商品简称",
+      // 不显示商品编码（补充 2）；图表标签由后端给显示名
+      title: "商品",
       dataIndex: "goods_short_name",
-      width: 180,
+      width: 220,
+      fixed: "left",
       ellipsis: { showTitle: false },
       render: (_: string | null, row: BiStylePerformance) => (
-        <GoodsNameCell goodsTitle={row.goods_title} shortName={row.goods_short_name} />
+        <>
+          {row.is_suit && (
+            <Tag color="purple" style={{ marginInlineEnd: 4 }}>
+              套装
+            </Tag>
+          )}
+          <GoodsNameCell goodsTitle={row.goods_title} shortName={row.goods_short_name} />
+        </>
       ),
     },
     {

@@ -180,9 +180,10 @@ class TestPlatformProduct:
         token = tenant_id_ctx.set(tenant_a.id)
         try:
             style = await product_factory.style()
+            goods_code = f"G{uuid4().hex[:8]}"
             goods = GoodsMain(
                 tenant_id=tenant_a.id,
-                goods_code=f"G{uuid4().hex[:8]}",
+                goods_code=goods_code,
                 goods_title="很长的商品全称",
                 short_name="短名",
             )
@@ -209,5 +210,10 @@ class TestPlatformProduct:
             assert total == 1
             assert items[0].goods_short_name == "短名"
             assert items[0].goods_title == "很长的商品全称"
+
+            # AC 62（补充 2）：界面不显示商品编码，但平台链接列表按商品编码搜仍命中
+            items, total = await svc.list_detailed(tenant_id=tenant_a.id, keyword=goods_code)
+            assert total == 1
+            assert items[0].platform_id == "SN1"
         finally:
             tenant_id_ctx.reset(token)

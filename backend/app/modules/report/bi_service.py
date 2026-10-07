@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections import Counter
+from collections.abc import Mapping, Sequence
 from datetime import date
 from decimal import Decimal
 from typing import Any
@@ -10,6 +11,7 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.product.goods_schemas import goods_display_name
 from app.modules.promotion.urge_calculator import get_today
 from app.modules.report.advanced_repository import BiRepository
 from app.modules.report.advanced_schemas import (
@@ -32,6 +34,28 @@ DEFAULT_BI_LAYOUT = {
 
 _TOP_N = 10
 _Q4 = Decimal("0.0001")
+_LABEL_MAX_STYLE_CODES = 3
+
+
+def bi_chart_labels(rows: Sequence[BiStylePerformance]) -> list[str]:
+    """BI 图表标签（补充 2，§11.1）：显示名 + 套装标记，不出现商品编码。
+
+    同一张图里显示名重复的，追加成员款号「（款号 A、B）」区分，超过 3 个写前 3 个加「等」。
+    """
+    names = [
+        goods_display_name(row.goods_title, row.goods_short_name)
+        + ("（套装）" if row.is_suit else "")
+        for row in rows
+    ]
+    counts = Counter(names)
+    labels: list[str] = []
+    for name, row in zip(names, rows, strict=True):
+        if counts[name] > 1 and row.style_codes:
+            codes = "、".join(row.style_codes[:_LABEL_MAX_STYLE_CODES])
+            more = "等" if len(row.style_codes) > _LABEL_MAX_STYLE_CODES else ""
+            name = f"{name}（款号 {codes}{more}）"
+        labels.append(name)
+    return labels
 
 
 class BiService:
@@ -115,7 +139,7 @@ class BiService:
             {
                 "type": "bar",
                 "title": "商品净投产比 Top10",
-                "labels": [row.goods_code for row in roi_top],
+                "labels": bi_chart_labels(roi_top),
                 "series": [
                     {
                         "name": "净投产比",
@@ -126,7 +150,7 @@ class BiService:
             {
                 "type": "pie",
                 "title": "商品支付额占比 Top10",
-                "labels": [row.goods_code for row in sales_top],
+                "labels": bi_chart_labels(sales_top),
                 "series": [
                     {
                         "name": "支付额",
@@ -211,6 +235,7 @@ class BiService:
             goods_title=row.goods_title,
             goods_short_name=row.goods_short_name,
             is_suit=row.is_suit,
+            style_codes=list(row.style_codes),
             main_image_url=row.main_image_url,
             sales_amount=row.pay_amount,
             refund_amount=row.refund_amount,
@@ -223,4 +248,4 @@ class BiService:
         )
 
 
-__all__ = ["BiService", "DEFAULT_BI_LAYOUT"]
+__all__ = ["BiService", "DEFAULT_BI_LAYOUT", "bi_chart_labels"]

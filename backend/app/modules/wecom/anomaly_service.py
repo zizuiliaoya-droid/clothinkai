@@ -149,12 +149,14 @@ class AnomalyAlertService:
 
     @staticmethod
     def _render(alert_type: str, row: Any, detail: dict) -> str:
-        styles = "、".join(row.style_codes) if row.style_codes else row.goods_code
+        # 消息里不出现商品编码（补充 2）：商品用显示名，「含款号」为空写「—」而不是回落编码。
+        # 编码只进 WecomAlertLog.detail 作内部留档。
+        styles = "、".join(row.style_codes) if row.style_codes else "—"
         suit_tag = "（套装）" if row.is_suit else ""
         name = goods_display_name(row.goods_title, row.goods_short_name)
         return (
             f"**异常预警·{_TITLES.get(alert_type, alert_type)}**\n"
-            f"> 商品：{row.goods_code} {name}{suit_tag}\n"
+            f"> 商品：{name}{suit_tag}\n"
             f"> 含款号：{styles}\n"
             f"> 当前值：{detail['value']}（阈值：{detail['threshold']}）\n"
             f"> 建议：{_ADVICE.get(alert_type, '请关注')}"
