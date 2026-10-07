@@ -1090,6 +1090,7 @@ class PromotionService:
 
         approve 时同事务发 SettlementRequested 事件（FB1：required_handler）。
         失败时 audit 脱敏 + 兜底（FB5）。
+        review_reason / review_reason_category 只在 reject 时写，approve 不清（7a-4）。
         """
         promotion = await self._repo.get_by_id(promotion_id)
         if promotion is None:
@@ -1113,6 +1114,7 @@ class PromotionService:
             )
 
         is_barter = promotion.cooperation_mode == CooperationMode.BARTER.value
+        reject_category: str | None = None
         if payload.action == ReviewAction.APPROVE:
             # 寄拍硬门槛：没有博主寄回衣服单号不许往财务走。
             # PRD 原文「不上传单号财务看不到单据，禁止结款」，且明确要求后端校验。
@@ -1141,6 +1143,7 @@ class PromotionService:
                 raise RejectReasonCategoryRequiredError(
                     "驳回时必须选择原因分类（延迟发文 / 流量差补发 / 衣服未寄回）"
                 )
+            reject_category = payload.review_reason_category.value
             to_state = SettlementStatus.REJECTED.value
             action_name = "reject"
 
@@ -1151,23 +1154,24 @@ class PromotionService:
         )
 
         now = _utcnow()
+        extra_fields: dict[str, Any] = {
+            "reviewed_by": user.id,
+            "reviewed_at": now,
+            "review_action": payload.action.value,
+        }
+        if payload.action == ReviewAction.REJECT:
+            # 驳回说明与分类只在驳回时写，通过时不动：这两列表示「最近一次驳回」。
+            # 驳回 → 重新提交（7a-4）→ 通过之后，结款环节仍要看得到上一轮为什么驳；
+            # 从没驳回过的单这两列本来就是 NULL，通过时不受影响
+            extra_fields["review_reason"] = payload.review_reason
+            extra_fields["review_reason_category"] = reject_category
         updated = await self._repo.update_state(
             promotion_id=promotion_id,
             tenant_id=user.tenant_id,
             from_state_field="settlement_status",
             from_state_value=SettlementStatus.PENDING_REVIEW.value,
             to_state_value=to_state,
-            extra_fields={
-                "reviewed_by": user.id,
-                "reviewed_at": now,
-                "review_action": payload.action.value,
-                "review_reason": payload.review_reason,
-                "review_reason_category": (
-                    payload.review_reason_category.value
-                    if payload.review_reason_category is not None
-                    else None
-                ),
-            },
+            extra_fields=extra_fields,
         )
         if updated is None:
             raise StateTransitionConflictError(
@@ -1189,11 +1193,7 @@ class PromotionService:
                 "settlement_status": to_state,
                 "review_action": payload.action.value,
                 "cooperation_mode": promotion.cooperation_mode,
-                "review_reason_category": (
-                    payload.review_reason_category.value
-                    if payload.review_reason_category is not None
-                    else None
-                ),
+                "review_reason_category": reject_category,
             },
             user_id=user.id,
         )
@@ -1243,7 +1243,8 @@ class PromotionService:
         - 状态机先判，再判日期（plan D4）
         - 可同改发布链接 / 实际发布日期：不传不动；传了且与现值不同才写入、才进 audit
         - 上一轮 reviewed_* / review_action / review_reason / review_reason_category **不清**，
-          主管再审时能看到上次为什么驳；resubmit_note / resubmitted_at 每轮覆盖
+          主管再审时能看到上次为什么驳（再审通过也不清驳回原因，见 ``review``）；
+          resubmit_note / resubmitted_at 每轮覆盖
         """
         promotion = await self._repo.get_by_id(promotion_id)
         if promotion is None:

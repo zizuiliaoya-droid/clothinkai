@@ -457,6 +457,91 @@ class TestResubmit:
         finally:
             tenant_id_ctx.reset(token)
 
+    @pytest.mark.parametrize(
+        ("cooperation_mode", "approve_reason", "expected_status"),
+        [
+            (None, None, "待付款"),
+            ("置换", None, "已付款"),
+            # 接口允许通过时带说明（前端不传）：同样不覆盖上一轮的驳回说明
+            (None, "通过备注", "待付款"),
+        ],
+    )
+    async def test_approve_after_resubmit_keeps_last_reject_reason(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        pr_role: Any,
+        pr_manager_role: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        event_capture: list[Any],
+        cooperation_mode: str | None,
+        approve_reason: str | None,
+        expected_status: str,
+    ) -> None:
+        """⑥c 驳回 → 重提 → 通过：上一轮驳回说明、分类与重提说明都还在（响应、库、列表）。
+
+        「最近一轮的驳回原因与重提说明」要留到结款环节（7d-3）；结算状态列在待付款 /
+        已付款上靠 review_reason_category 显示「上轮驳回」。通过时清掉就再也找不回来了：
+        驳回的 audit 只记分类，不记说明文字。
+        """
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            ctx = await _make(
+                session,
+                tenant_a,
+                factory,
+                pr_role,
+                pr_manager_role,
+                product_factory,
+                blogger_factory,
+                promotion_factory,
+                cooperation_mode=cooperation_mode,
+            )
+            await ctx.svc.resubmit(ctx.promotion.id, PromotionResubmitRequest(note="补了"), ctx.pr)
+            resp = await ctx.svc.review(
+                ctx.promotion.id,
+                PromotionReviewRequest(action=ReviewAction.APPROVE, review_reason=approve_reason),
+                ctx.reviewer,
+            )
+            assert resp.settlement_status == expected_status
+            # 审核人 / 动作 / 时间是这一次通过的
+            assert resp.review_action == "approve"
+            assert resp.reviewed_by == ctx.reviewer.id
+            # 驳回说明与分类是上一轮驳回的
+            assert resp.review_reason == _REJECT_REASON
+            assert resp.review_reason_category == "延迟发文"
+            assert resp.resubmit_note == "补了"
+            assert resp.resubmitted_at is not None
+            settlement_events = [
+                e.promotion_id for e in event_capture if e.event_type == "SettlementRequested"
+            ]
+            assert settlement_events == ([] if expected_status == "已付款" else [ctx.promotion.id])
+
+            row = await _reload(session, ctx.promotion.id)
+            assert row.settlement_status == expected_status
+            assert row.review_reason == _REJECT_REASON
+            assert row.review_reason_category == "延迟发文"
+            assert row.resubmit_note == "补了"
+
+            page = await ctx.svc.list_promotions(
+                filters=PromotionListFilters(keyword=ctx.promotion.internal_code),
+                page=1,
+                page_size=20,
+                user=ctx.pr,
+            )
+            items = [p for p in page.items if p.id == ctx.promotion.id]
+            assert len(items) == 1
+            item = items[0]
+            assert item.settlement_status == expected_status
+            assert item.review_reason == _REJECT_REASON
+            assert item.review_reason_category == "延迟发文"
+            assert item.resubmit_note == "补了"
+        finally:
+            tenant_id_ctx.reset(token)
+
     async def test_resubmit_then_reject_again_overwrites_reason_keeps_note(
         self,
         session: AsyncSession,

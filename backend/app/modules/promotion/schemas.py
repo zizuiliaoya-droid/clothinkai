@@ -247,6 +247,7 @@ class PromotionReviewRequest(BaseModel):
 
     action: ReviewAction
     review_reason: str | None = Field(default=None, max_length=2000)
+    """驳回说明，驳回时必填。审核通过时忽略：单据上保留的是最近一次驳回的说明（7a-4）。"""
     review_reason_category: RejectReasonCategory | None = None
     """驳回原因分类，驳回时必填（PRD 改动 5 三选一）。审核通过时忽略。"""
 
@@ -479,6 +480,8 @@ class PromotionResponse(BaseModel):
     reviewed_by: UUID | None = None
     reviewed_at: datetime | None = None
     review_action: str | None = None
+    # review_reason / review_reason_category = 最近一次驳回的说明与分类：只在驳回时写，
+    # 重新提交、再审通过都不清（7a-4）
     review_reason: str | None = None
     review_reason_category: str | None = None
     resubmit_note: str | None = None

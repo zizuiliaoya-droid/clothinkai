@@ -243,12 +243,15 @@ class Promotion(TenantScopedModel):
     review_action: Mapped[str | None] = mapped_column(String(16), nullable=True)
     review_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     review_reason_category: Mapped[str | None] = mapped_column(String(16), nullable=True)
-    """驳回原因分类：延迟发文 / 流量差补发 / 衣服未寄回（PRD 改动 5，驳回时必填）。"""
+    """驳回原因分类：延迟发文 / 流量差补发 / 衣服未寄回（PRD 改动 5，驳回时必填）。
+
+    与 review_reason 一起只在驳回时写，重提、再审通过都不清：表示最近一次驳回（7a-4）。
+    """
     resubmit_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     """驳回后 PR 重新提交时写的说明（7a-4，重提必填）。
 
     首版只留最近一轮，每次重提覆盖；完整历史随 7d-1 的时间线做。
-    重提不清 review_* 字段，上一轮驳回原因仍可见。
+    重提与再审通过都不清 review_reason / review_reason_category，上一轮驳回原因一直可见。
     """
     resubmitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     """最近一次重新提交的时间（7a-4，与 resubmit_note 同轮覆盖）。"""

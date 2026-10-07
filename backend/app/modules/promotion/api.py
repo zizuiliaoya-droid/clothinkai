@@ -359,7 +359,8 @@ async def review_promotion(
     - 送拍：直接到待财务付款
     - 置换：直接到已付款，不发 SettlementRequested（没有钱要付，不建结款单）
 
-    驳回要同时给 review_reason 与 review_reason_category（三选一）。
+    驳回要同时给 review_reason 与 review_reason_category（三选一）；通过时不改这两列
+    （保留最近一次驳回，重提后通过仍看得到上一轮驳回原因，7a-4）。
     禁止自审（reviewer != pr_id）。
     """
     return await service.review(promotion_id, payload, user)
