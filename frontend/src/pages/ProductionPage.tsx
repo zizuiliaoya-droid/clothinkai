@@ -14,13 +14,23 @@ import {
 import { DownloadOutlined } from "@ant-design/icons";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import type { ColumnsType } from "antd/es/table";
-import { exportReport, getProduction, getProductionTrend } from "@/features/report/api";
+import {
+  exportReport,
+  getProduction,
+  getProductionTrend,
+  getReportSeasonOptions,
+} from "@/features/report/api";
+import {
+  restoreProductionFilters,
+  toProductionMemory,
+  type ProductionFilterMemory,
+} from "@/features/report/productionFilters";
 import type {
   ProductionRow,
   TimeGranularity,
   TimePreset,
 } from "@/features/report/types";
-import { goodsDisplayName, listDictItems } from "@/features/product/api";
+import { goodsDisplayName } from "@/features/product/api";
 import { GoodsNameCell } from "@/components/GoodsNameCell/GoodsNameCell";
 import { MiniLineChart } from "@/components/MiniLineChart/MiniLineChart";
 import {
@@ -52,36 +62,20 @@ function trendLabel(value: string, granularity: TimeGranularity): string {
   return value;
 }
 
-/** 记忆到 user_preference 的筛选形态。日期区间不记（每次进来通常想看最新）。 */
-interface ProductionFilterMemory {
-  preset: TimePreset;
-  season: string[];
-  category: string[];
-  exclude_brushing: boolean;
-}
-
 export function ProductionPage() {
   const [preset, setPreset] = useState<TimePreset>("last_30d");
   const [range, setRange] = useState<ReportDateRange>(null);
   const [excludeBrushing, setExcludeBrushing] = useState(true);
   const [season, setSeason] = useState<string[]>([]);
-  const [category, setCategory] = useState<string[]>([]);
   const [trendGoods, setTrendGoods] = useState<ProductionRow | null>(null);
   const [trendGranularity, setTrendGranularity] = useState<TimeGranularity>("day");
 
+  // 季节选项由报表侧提供（投产读权限即可，主管也能拿到，8a-3）；类目筛选已下线
   const { data: seasons } = useQuery({
-    queryKey: ["dict-items", "season"],
-    queryFn: () => listDictItems("season"),
+    queryKey: ["reports", "season-options"],
+    queryFn: getReportSeasonOptions,
   });
-  const seasonOptions = (seasons ?? []).map((s) => ({ label: s.value, value: s.value }));
-  const { data: categories } = useQuery({
-    queryKey: ["dict-items", "category"],
-    queryFn: () => listDictItems("category"),
-  });
-  const categoryOptions = (categories ?? []).map((c) => ({
-    label: c.value,
-    value: c.value,
-  }));
+  const seasonOptions = (seasons ?? []).map((s) => ({ label: s, value: s }));
 
   // 筛选记忆：回填上次的选择，之后变更自动保存（节流）。
   const memory = useFilterMemory<ProductionFilterMemory>("product_roi");
@@ -89,28 +83,22 @@ export function ProductionPage() {
   useEffect(() => {
     if (!memory.ready || restoredRef.current) return;
     restoredRef.current = true;
-    const saved = memory.restored;
-    if (!saved) return;
+    // 旧记录里的 category 与类型不对的值在这里被丢掉（后端读写也会剔 category）
+    const saved = restoreProductionFilters(memory.restored);
     if (saved.preset) setPreset(saved.preset);
     if (saved.season) setSeason(saved.season);
-    if (saved.category) setCategory(saved.category);
-    if (typeof saved.exclude_brushing === "boolean") {
-      setExcludeBrushing(saved.exclude_brushing);
-    }
+    if (saved.exclude_brushing !== undefined) setExcludeBrushing(saved.exclude_brushing);
   }, [memory.ready, memory.restored]);
 
   useEffect(() => {
     // 回填完成前不要把默认值写回去，否则会把用户存的偏好冲掉。
     if (!restoredRef.current) return;
-    memory.persist({
-      preset,
-      season,
-      category,
-      exclude_brushing: excludeBrushing,
-    });
+    memory.persist(
+      toProductionMemory({ preset, season, exclude_brushing: excludeBrushing })
+    );
     // memory.persist 每次渲染都是新函数，不进依赖，否则每次渲染都会触发保存。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [preset, season, category, excludeBrushing]);
+  }, [preset, season, excludeBrushing]);
 
   const { dateFrom: df, dateTo: dt, enabled } = useReportTimeRange(preset, range);
 
@@ -136,7 +124,7 @@ export function ProductionPage() {
   });
 
   const { data, isLoading } = useQuery({
-    queryKey: ["production", preset, df, dt, excludeBrushing, season, category],
+    queryKey: ["production", preset, df, dt, excludeBrushing, season],
     // 等偏好回填完再查，避免先用默认值查一次、回填后又查一次。
     enabled: enabled && memory.ready,
     queryFn: () =>
@@ -146,7 +134,6 @@ export function ProductionPage() {
         date_to: dt,
         exclude_brushing: excludeBrushing,
         season: season.length ? season : undefined,
-        category: category.length ? category : undefined,
       }),
   });
   const exportMutation = useMutation({
@@ -157,7 +144,6 @@ export function ProductionPage() {
         date_to: dt,
         exclude_brushing: excludeBrushing,
         season: season.length ? season : undefined,
-        category: category.length ? category : undefined,
       }),
     onSuccess: (filename) => message.success(`已导出 ${filename}`),
     onError: (error) => message.error(extractErrorMessage(error, "导出失败")),
@@ -171,31 +157,28 @@ export function ProductionPage() {
       width: 68,
       fixed: "left",
       render: (src: string | null, row) => (
-        <StyleImageThumbnail src={src} alt={`${row.goods_code} 商品主图`} />
+        <StyleImageThumbnail
+          src={src}
+          alt={`${goodsDisplayName(row.goods_title, row.goods_short_name)} 商品主图`}
+        />
       ),
     },
     {
-      title: "商品编码",
-      dataIndex: "goods_code",
-      width: 130,
-      fixed: "left",
-      render: (code: string, row: ProductionRow) =>
-        row.is_suit ? (
-          <Space size={4}>
-            <span>{code}</span>
-            <Tag color="purple">套装</Tag>
-          </Space>
-        ) : (
-          code
-        ),
-    },
-    {
-      title: "商品简称",
+      // 不显示商品编码（补充 2）；导出 Excel 仍保留「商品编码」列
+      title: "商品",
       dataIndex: "goods_short_name",
-      width: 180,
+      width: 220,
+      fixed: "left",
       ellipsis: { showTitle: false },
       render: (_: string | null, row: ProductionRow) => (
-        <GoodsNameCell goodsTitle={row.goods_title} shortName={row.goods_short_name} />
+        <>
+          {row.is_suit && (
+            <Tag color="purple" style={{ marginInlineEnd: 4 }}>
+              套装
+            </Tag>
+          )}
+          <GoodsNameCell goodsTitle={row.goods_title} shortName={row.goods_short_name} />
+        </>
       ),
     },
     {
@@ -286,18 +269,6 @@ export function ProductionPage() {
           options={seasonOptions}
           onChange={(v: string[]) => setSeason(v)}
         />
-        <span style={{ marginLeft: 12 }}>类目：</span>
-        <Select
-          aria-label="类目"
-          mode="multiple"
-          value={category}
-          style={{ minWidth: 180, maxWidth: 320 }}
-          placeholder="全部"
-          allowClear
-          maxTagCount="responsive"
-          options={categoryOptions}
-          onChange={(v: string[]) => setCategory(v)}
-        />
         <span style={{ marginLeft: 12 }}>剔除刷单：</span>
         <Switch
           aria-label="剔除刷单"
@@ -326,7 +297,7 @@ export function ProductionPage() {
       <Modal
         title={
           trendGoods
-            ? `投产趋势 · ${trendGoods.goods_code} ${goodsDisplayName(trendGoods.goods_title, trendGoods.goods_short_name)}`
+            ? `投产趋势 · ${goodsDisplayName(trendGoods.goods_title, trendGoods.goods_short_name)}`
             : "投产趋势"
         }
         open={!!trendGoods}

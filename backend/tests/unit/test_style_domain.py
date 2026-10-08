@@ -84,6 +84,51 @@ class TestComputeStyleChanges:
         changes = compute_style_changes(style, payload)
         assert set(changes.keys()) == {"remark"}
 
+    def test_removed_fields_never_in_diff(self) -> None:
+        """8a：旧客户端传简称 / 品牌 / 类目 / 季节被忽略，不出现在变更里。"""
+        style = self._new_style(short_name="旧简称", season="春")
+        payload = StyleUpdate.model_validate(
+            {
+                "remark": "新备注",
+                "short_name": "新简称",
+                "brand_id": str(uuid4()),
+                "category": "外套",
+                "season": "秋",
+            }
+        )
+        changes = compute_style_changes(style, payload)
+        assert set(changes.keys()) == {"remark"}
+
+
+class TestStyleFormFields:
+    """8a（J8）：款式表单不再接收简称、品牌、类目、季节；款号建档后不可改由服务层拒绝。"""
+
+    _REMOVED = frozenset({"short_name", "brand_id", "category", "season"})
+
+    def test_create_and_update_drop_fields(self) -> None:
+        assert self._REMOVED.isdisjoint(StyleCreate.model_fields)
+        assert self._REMOVED.isdisjoint(StyleUpdate.model_fields)
+        # 款号字段仍在 StyleUpdate 上：传了不同的值由服务层明确拒绝（旧客户端能看到原因）
+        assert "style_code" in StyleUpdate.model_fields
+
+    def test_create_needs_only_code_and_name(self) -> None:
+        payload = StyleCreate(style_code="ST100", style_name="只填两项")
+        assert payload.style_code == "ST100"
+        assert payload.style_name == "只填两项"
+
+    def test_old_client_fields_ignored(self) -> None:
+        payload = StyleCreate.model_validate(
+            {
+                "style_code": "ST101",
+                "style_name": "旧客户端",
+                "short_name": "简",
+                "brand_id": str(uuid4()),
+                "category": "连衣裙",
+                "season": "春",
+            }
+        )
+        assert self._REMOVED.isdisjoint(payload.model_dump())
+
 
 class TestTagColorNormalization:
     """颜色明细（tag_color）录入校验。
@@ -96,7 +141,6 @@ class TestTagColorNormalization:
         payload = StyleCreate(
             style_code="ST001",
             style_name="测试款式",
-            category="连衣裙",
             tag_color=[" 卡其 ", "黑色", "卡其"],
         )
         assert payload.tag_color == ["卡其", "黑色"]
@@ -123,7 +167,6 @@ class TestTagColorNormalization:
             StyleCreate(
                 style_code="ST002",
                 style_name="测试款式",
-                category="连衣裙",
                 tag_color=bad,
             )
 

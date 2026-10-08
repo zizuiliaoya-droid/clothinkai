@@ -15,7 +15,6 @@ interface Props {
 }
 
 const SECTIONS: { type: string; label: string }[] = [
-  { type: "category", label: "类目" },
   { type: "season", label: "季节 / 系列" },
   { type: "color", label: "颜色" },
   { type: "size", label: "尺码" },
@@ -29,11 +28,20 @@ function DictSection({ type, label }: { type: string; label: string }) {
     queryFn: () => listDictItems(type),
   });
 
+  /** 字典变了，下拉跟着刷新；季节另有商品页、投产页两个选项查询（8a-3）。 */
+  function invalidateOptions() {
+    void qc.invalidateQueries({ queryKey: ["dict-items", type] });
+    if (type === "season") {
+      void qc.invalidateQueries({ queryKey: ["goods", "season-options"] });
+      void qc.invalidateQueries({ queryKey: ["reports", "season-options"] });
+    }
+  }
+
   const addMutation = useMutation({
     mutationFn: (v: string) => createDictItem(type, v),
     onSuccess: () => {
       setValue("");
-      void qc.invalidateQueries({ queryKey: ["dict-items", type] });
+      invalidateOptions();
     },
     onError: (err) => message.error(extractErrorMessage(err)),
   });
@@ -41,7 +49,7 @@ function DictSection({ type, label }: { type: string; label: string }) {
   const delMutation = useMutation({
     mutationFn: (id: string) => deleteDictItem(id),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["dict-items", type] });
+      invalidateOptions();
     },
     onError: (err) => message.error(extractErrorMessage(err)),
   });
@@ -87,11 +95,11 @@ function DictSection({ type, label }: { type: string; label: string }) {
   );
 }
 
-/** 类目 / 季节(系列) 字典管理弹窗 —— 增删由租户自维护。 */
+/** 季节(系列) / 颜色 / 尺码 字典管理弹窗 —— 增删由租户自维护。 */
 export function DictManagerModal({ open, onClose }: Props) {
   return (
     <Modal
-      title="管理字典（类目 / 季节 / 颜色 / 尺码）"
+      title="管理字典（季节 / 颜色 / 尺码）"
       open={open}
       onCancel={onClose}
       onOk={onClose}

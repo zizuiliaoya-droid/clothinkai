@@ -183,6 +183,8 @@ export interface BiStylePerformance {
   goods_title: string;
   goods_short_name: string | null;
   is_suit: boolean;
+  /** 成员款号（补充 2 起返回）；后端图表标签同名时用它区分。 */
+  style_codes: string[];
   main_image_url: string | null;
   sales_amount: string;
   refund_amount: string;

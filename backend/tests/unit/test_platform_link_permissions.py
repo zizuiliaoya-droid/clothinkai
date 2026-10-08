@@ -58,6 +58,11 @@ class TestDefaultRoleMatrix:
         assert "ops.platform_link:read" in ops_role.permissions
         assert "ops.platform_link:write" in ops_role.permissions
 
+    def test_product_all_does_not_cover_platform_link(self) -> None:
+        """8a-7 运营与跟单同持 product.*:*：它带不出平台链接权限（ops. 一级域）。"""
+        assert not _perms("product.*:*").has("ops.platform_link", "read")
+        assert not _perms("product.*:*").has("ops.platform_link", "write")
+
     def test_business_roles_do_not_get_platform_link(self) -> None:
         """跟单、设计、PR、财务、仓库都不该碰平台链接。"""
         for role in DEFAULT_ROLES:

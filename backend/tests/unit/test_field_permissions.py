@@ -40,10 +40,13 @@ def _ctx(
 
 @pytest.mark.unit
 class TestRegistryValues:
-    def test_sku_price_roles(self) -> None:
-        rule = FIELD_PERMISSION_REGISTRY["sku"]["cost_price"]
-        assert rule.visible_roles == frozenset({"admin", "merchandiser", "finance"})
-        assert rule.writable_roles == frozenset({"admin", "merchandiser", "finance"})
+    @pytest.mark.parametrize("field", ["cost_price", "purchase_price"])
+    def test_sku_price_roles(self, field: str) -> None:
+        # 8a-7（补充二 Q4）：运营可看可改成本价、采购价
+        rule = FIELD_PERMISSION_REGISTRY["sku"][field]
+        expected = frozenset({"admin", "merchandiser", "finance", "operations"})
+        assert rule.visible_roles == expected
+        assert rule.writable_roles == expected
 
     def test_blogger_quote_finance_readonly(self) -> None:
         rule = FIELD_PERMISSION_REGISTRY["blogger"]["quote"]
@@ -70,8 +73,11 @@ class TestCanReadField:
             ({"admin"}, True),
             ({"merchandiser"}, True),
             ({"finance"}, True),
+            ({"operations"}, True),
             ({"pr"}, False),
+            ({"pr_manager"}, False),
             ({"designer"}, False),
+            ({"design_assistant"}, False),
             (set(), False),
         ],
     )

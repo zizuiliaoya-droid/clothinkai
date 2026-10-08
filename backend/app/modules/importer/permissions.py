@@ -6,6 +6,12 @@
 - importer.batch:read  → admin / operations / pr / pr_manager
 - importer.batch:write → admin / pr / pr_manager
 - importer.mapping:write → admin / pr_manager（字段映射限管理员场景）
+
+以上是**默认来源**的权限。权限按来源判断（``importer/access.py::SOURCE_ACCESS``，8a-7）：
+商品资料（manual_style_sku）的上传 / 重试 / 映射 / 查看 / 冲突裁决只认
+``product.import:write`` → admin（``*``）/ merchandiser / operations（``product.*:*``）；
+PR / 主管不再能导入商品资料（仍可凭 importer.batch:read 查看批次，成本价、采购价脱敏）。
+博主（manual_blogger）的冲突裁决看 ``blogger:write``。
 """
 
 from __future__ import annotations

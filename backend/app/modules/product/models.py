@@ -94,7 +94,8 @@ class Style(TenantScopedModel):
     )
     # 类目/季节自 migration 027 起由 dict_item 维护（value 是 varchar(64)），
     # 这两列跟着放宽到 64，否则字典里能选的值保存时会被拒。
-    category: Mapped[str] = mapped_column(String(64), nullable=False)
+    # 8a 起类目下线：款式表单与导入不再写类目，058 放开 NOT NULL，已有值保留。
+    category: Mapped[str | None] = mapped_column(String(64), nullable=True)
     season: Mapped[str | None] = mapped_column(String(64), nullable=True)
     gender: Mapped[str | None] = mapped_column(String(8), nullable=True)
     tags: Mapped[list[str]] = mapped_column(
@@ -108,6 +109,9 @@ class Style(TenantScopedModel):
 
     业务通过 ``AttachmentService.get_public_url(key)`` 解析为公开 URL。
     若为 None 则前端使用占位图。"""
+    external_image_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    """聚水潭导出「图片」列的外部链接（058，8a-4）。只经导入与冲突裁决写入，
+    服务端任何环节都不请求这个地址（设计 §7.4）。"""
     remark: Mapped[str | None] = mapped_column(Text, nullable=True)
     owner_id: Mapped[UUID | None] = mapped_column(
         PGUUID(as_uuid=True),

@@ -83,8 +83,7 @@ export async function getProduction(
     exclude_brushing?: boolean;
     /** 季节多选（PRD 第 4 章）。axios 已配 indexes:null，会序列化成重复键。 */
     season?: string[];
-    /** 类目多选。 */
-    category?: string[];
+    // 类目筛选已下线（8a-3）
   } = {}
 ): Promise<ProductionReport> {
   const resp = await apiClient.get<ProductionReport>(
@@ -92,6 +91,15 @@ export async function getProduction(
     { params }
   );
   return resp.data;
+}
+
+/**
+ * 投产页季节选项（8a-3，C-02）：字典 season 启用值 + 商品上出现过的值。
+ * 只要投产报表读权限（主管也能拿到）；查询键 ["reports", "season-options"]。
+ */
+export async function getReportSeasonOptions(): Promise<string[]> {
+  const resp = await apiClient.get<{ items: string[] }>("/api/reports/season-options");
+  return resp.data.items;
 }
 
 export async function getProductionTrend(
@@ -157,7 +165,6 @@ export interface ReportExportParams {
   date_to?: string;
   exclude_brushing?: boolean;
   season?: string[];
-  category?: string[];
   granularity?: TimeGranularity;
 }
 

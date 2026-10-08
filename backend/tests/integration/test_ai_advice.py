@@ -122,6 +122,47 @@ class TestBloggerSuggest:
         finally:
             tenant_id_ctx.reset(tok)
 
+    @pytest.mark.parametrize(
+        ("category", "expected"),
+        [(None, "款式：空类目款。"), ("连衣裙", "款式：空类目款（连衣裙）。")],
+    )
+    async def test_prompt_tolerates_empty_category(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        pr_role: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        monkeypatch: Any,
+        category: str | None,
+        expected: str,
+    ) -> None:
+        """8a 起款式类目可空：为空时提示词不拼「（…）」，也不出现「None」。"""
+        captured: list[list[dict[str, Any]]] = []
+
+        async def _capture_chat(self: Any, messages: Any, *, model: Any = None) -> dict:
+            captured.append(messages)
+            return await _ok_chat(self, messages, model=model)
+
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            monkeypatch.setattr(DeepSeekClient, "chat", _capture_chat)
+            user = await factory.user(tenant_a, roles=[pr_role])
+            style = await product_factory.style(style_name="空类目款", category=category)
+            await blogger_factory.blogger(nickname="博主D")
+            await session.commit()
+
+            out = await AiAdvisoryService(session).blogger_suggest(style.id, 1, user)
+            assert len(out) == 1
+            assert len(captured) == 1
+            prompt = captured[0][1]["content"]
+            assert prompt.startswith(expected)
+            assert "None" not in prompt
+            assert "（）" not in prompt
+        finally:
+            tenant_id_ctx.reset(tok)
+
     async def test_style_not_found(
         self,
         session: AsyncSession,

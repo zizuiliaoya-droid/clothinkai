@@ -18,6 +18,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.audit import AuditService
 from app.core.db import get_session
 from app.modules.auth.deps import CurrentActiveUser, require_permission
 from app.modules.product.dict_models import DictItem
@@ -110,6 +111,14 @@ async def create_dict_item(
         ).scalar_one()
         row = existing
     else:
+        # 运营也能改字典（8a-7），靠审计留痕；已存在（冲突查回）不算新增，不记
+        await AuditService(session).log(
+            action="dict_item.create",
+            resource="dict_item",
+            resource_id=row.id,
+            after={"dict_type": row.dict_type, "value": row.value},
+            user_id=user.id,
+        )
         await session.commit()
     return DictItemResponse(
         id=str(row.id),
@@ -130,9 +139,22 @@ async def delete_dict_item(
     user: CurrentActiveUser,
     session: SessionDep,
 ) -> Response:
-    await session.execute(
-        delete(DictItem).where(DictItem.id == item_id, DictItem.tenant_id == user.tenant_id)
-    )
+    deleted = (
+        await session.execute(
+            delete(DictItem)
+            .where(DictItem.id == item_id, DictItem.tenant_id == user.tenant_id)
+            .returning(DictItem.dict_type, DictItem.value)
+        )
+    ).first()
+    if deleted is not None:
+        # 运营也能改字典（8a-7），靠审计留痕
+        await AuditService(session).log(
+            action="dict_item.delete",
+            resource="dict_item",
+            resource_id=item_id,
+            before={"dict_type": deleted.dict_type, "value": deleted.value},
+            user_id=user.id,
+        )
     await session.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 

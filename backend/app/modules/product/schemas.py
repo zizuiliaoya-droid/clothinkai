@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -63,13 +63,9 @@ class StyleBase(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
     style_name: str = Field(min_length=1, max_length=255)
-    short_name: str | None = Field(default=None, max_length=64)
+    # 8a 起简称、季节、品牌归商品层，类目下线：款式表单不再接收这四项
+    # （旧客户端传了被忽略——模型没有 extra="forbid"），列与存量值保留、响应照常返回。
     qianniu_product_id: str | None = Field(default=None, max_length=64)
-    brand_id: UUID | None = None
-    # 类目/季节改为可维护字典（dict_item），后端不再限制为固定枚举，仅做长度校验。
-    # 上限与 dict_item.value 一致（64），否则字典里能选的值在这里会被拒。
-    category: str = Field(min_length=1, max_length=64)
-    season: str | None = Field(default=None, max_length=64)
     gender: _GenderField | None = None
     tags: list[str] = Field(default_factory=list, max_length=20)
     tag_color: list[str] = Field(default_factory=list, max_length=20)
@@ -128,7 +124,10 @@ class StyleCreate(StyleBase):
 
 
 class StyleUpdate(BaseModel):
-    """部分更新；style_code 可改但需通过唯一性校验。"""
+    """部分更新；style_code 建档后不可改，传了不同的值会被拒（422 STYLE_CODE_IMMUTABLE）。
+
+    简称、品牌、类目、季节不再接收（同 ``StyleBase``，旧客户端传了被忽略）。
+    """
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
@@ -136,11 +135,7 @@ class StyleUpdate(BaseModel):
         default=None, min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_\-]+$"
     )
     style_name: str | None = Field(default=None, min_length=1, max_length=255)
-    short_name: str | None = Field(default=None, max_length=64)
     qianniu_product_id: str | None = Field(default=None, max_length=64)
-    brand_id: UUID | None = None
-    category: str | None = Field(default=None, min_length=1, max_length=64)
-    season: str | None = Field(default=None, max_length=64)
     gender: _GenderField | None = None
     tags: list[str] | None = Field(default=None, max_length=20)
     tag_color: list[str] | None = Field(default=None, max_length=20)
@@ -181,13 +176,20 @@ class StyleResponse(BaseModel):
     款式可以既单卖又进套装，那时 ``goods_code`` 是单品、``suite_name`` 另外给出。
     """
     brand_id: UUID | None = None
-    category: str
+    category: str | None = None
+    """类目已下线（8a）：只读返回存量值，新建的款式为 None。"""
     season: str | None = None
     gender: str | None = None
     tags: list[str] = Field(default_factory=list)
     tag_color: list[str] = Field(default_factory=list)
     main_image_key: str | None = None
     main_image_url: str | None = None
+    """已上传主图的签名 URL（保留给旧调用方）；展示请用 ``image_url``。"""
+    external_image_url: str | None = None
+    """聚水潭「图片」列导入的外部链接：只存不取，只经导入与冲突裁决写入（8a-4）。"""
+    image_url: str | None = None
+    """款式图（8a-2，``resolve_style_image``）：已上传主图签名 URL > 外部链接 > None。"""
+    image_source: Literal["upload", "external"] | None = None
     remark: str | None = None
     owner_id: UUID | None = None
     design_status: str
@@ -195,6 +197,33 @@ class StyleResponse(BaseModel):
     is_deleted: bool
     created_at: datetime
     updated_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# 款式主图批量上传（8a-2，设计 §7.3 第 8 步）
+# ---------------------------------------------------------------------------
+
+
+class StyleImageBatchItem(BaseModel):
+    filename: str
+    stem: str
+    status: Literal["created", "replaced", "unmatched", "rejected", "failed"]
+    style_id: UUID | None = None
+    style_code: str | None = None
+    reason: str | None = None
+
+
+class StyleImageBatchSummary(BaseModel):
+    created: int = 0
+    replaced: int = 0
+    unmatched: int = 0
+    rejected: int = 0
+    failed: int = 0
+
+
+class StyleImageBatchResponse(BaseModel):
+    results: list[StyleImageBatchItem]
+    summary: StyleImageBatchSummary
 
 
 # ---------------------------------------------------------------------------
@@ -308,6 +337,9 @@ __all__ = [
     "SkuResponse",
     "SkuUpdate",
     "StyleCreate",
+    "StyleImageBatchItem",
+    "StyleImageBatchResponse",
+    "StyleImageBatchSummary",
     "StylePage",
     "StyleResponse",
     "StyleUpdate",
@@ -327,6 +359,10 @@ class CostTableRow(BaseModel):
     sku_id: UUID
     style_id: UUID
     image_key: str | None = None
+    """款式主图的 R2 key（保留给旧调用方）；展示请用 ``image_url``（修 S8）。"""
+    image_url: str | None = None
+    """款式图（8a-2）：已上传主图签名 URL > 外部链接 > None。"""
+    image_source: Literal["upload", "external"] | None = None
     style_code: str
     sku_code: str
     style_name: str

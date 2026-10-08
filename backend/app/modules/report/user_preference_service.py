@@ -36,6 +36,22 @@ MAX_PREF_BYTES = 8 * 1024
 
 _FILTER_KEY_PREFIX = "filter:"
 
+DEPRECATED_FILTER_KEYS: dict[str, frozenset[str]] = {
+    "product_roi": frozenset({"category"}),  # 类目下线（8a-3，J12）
+}
+"""已下线的筛选项：存取两头都剔掉。
+
+后端兜底——旧前端还会把 ``category`` 存进来，库里也有存量；前端回填时同样忽略（§8.4）。
+"""
+
+
+def sanitize_filter_payload(page_code: str, payload: dict) -> dict:
+    """剔掉该页面已下线的筛选键；不改入参，返回新字典（没有要剔的键时原样返回）。"""
+    deprecated = DEPRECATED_FILTER_KEYS.get(page_code)
+    if not deprecated or not isinstance(payload, dict):
+        return payload
+    return {key: value for key, value in payload.items() if key not in deprecated}
+
 
 def _filter_key(page_code: str) -> str:
     return f"{_FILTER_KEY_PREFIX}{page_code}"
@@ -99,8 +115,10 @@ class UserPreferenceService:
 
 
 __all__ = [
+    "DEPRECATED_FILTER_KEYS",
     "FILTER_PAGE_CODES",
     "MAX_PREF_BYTES",
     "UserPreferenceService",
+    "sanitize_filter_payload",
     "validate_filter_payload",
 ]

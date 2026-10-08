@@ -187,3 +187,68 @@ def test_validate_optional_none_ok():
     # follower/quote/tags 空 → 通过
     p = {"xiaohongshu_id": "x", "nickname": "n"}
     assert _adapter().validate(p) == []
+
+
+# ---------------------------------------------------------------------------
+# 8a-6 N17：占位符当没给值（设计 §5.5）
+# ---------------------------------------------------------------------------
+
+
+def _parse(**cells: str) -> dict:
+    row = {"小红书ID": "xhs001", "昵称": "小美", **cells}
+    return _adapter().parse_row(row, None)
+
+
+def test_placeholder_numbers_are_none_and_valid():
+    parsed = _parse(粉丝数="-", 报价="--")
+    assert parsed["follower_count"] is None
+    assert parsed["quote"] is None
+    assert _adapter().validate(parsed) == []
+
+
+def test_placeholder_text_is_none():
+    parsed = _parse(微信="—", 手机号="——", 备注=" - ")
+    assert parsed["wechat"] is None
+    assert parsed["phone"] is None
+    assert parsed["remark"] is None
+
+
+def test_placeholder_tags():
+    assert _parse(类目标签="-")["category_tags"] is None
+    assert _parse(类目标签="美妆;-")["category_tags"] == ["美妆"]
+    assert _parse(质量标签="—，优质")["quality_tags"] == ["优质"]
+    assert _split_tags("美妆;--;护肤") == ["美妆", "护肤"]
+
+
+def test_placeholder_required_fails():
+    parsed = _parse(小红书ID="-")
+    assert parsed["xiaohongshu_id"] is None
+    assert "小红书ID不能为空" in _adapter().validate(parsed)
+    parsed = _parse(昵称="--")
+    assert "昵称不能为空" in _adapter().validate(parsed)
+
+
+def test_compare_fields_declared():
+    adapter = _adapter()
+    names = adapter.compare_field_names()
+    assert "xiaohongshu_id" not in names
+    assert names == {
+        "nickname",
+        "platform",
+        "wechat",
+        "phone",
+        "follower_count",
+        "blogger_type",
+        "gender_target",
+        "category_tags",
+        "quality_tags",
+        "quote",
+        "cooperation_history",
+        "remark",
+    }
+    sensitive = {s.name: s.sensitive for s in adapter.compare_specs() if s.sensitive}
+    assert sensitive == {
+        "wechat": ("blogger", "wechat"),
+        "phone": ("blogger", "phone"),
+        "quote": ("blogger", "quote"),
+    }

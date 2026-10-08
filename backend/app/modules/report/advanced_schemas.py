@@ -206,6 +206,8 @@ class BiStylePerformance(BaseModel):
     goods_title: str
     goods_short_name: str | None = None
     is_suit: bool = False
+    style_codes: list[str] = Field(default_factory=list)
+    """成员款号（来自 ``ProductionRow.style_codes``）；图表标签同名时用它区分（补充 2，§11.1）。"""
     main_image_url: str | None = None
     sales_amount: Decimal
     refund_amount: Decimal

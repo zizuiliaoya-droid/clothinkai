@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   Button,
   Card,
@@ -19,8 +19,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnsType } from "antd/es/table";
 import {
   deletePlatformLink,
-  goodsDisplayName,
-  goodsOptionLabel,
   listGoodsForStyle,
   listPlatformLinks,
   updatePlatformLink,
@@ -28,6 +26,9 @@ import {
   type PlatformLink,
   type PlatformLinkFilters,
 } from "@/features/product/api";
+import { goodsPickerLabel, platformIdsByGoods } from "@/features/product/goodsLabels";
+import { PLATFORM_LINK_RISK_TEXT } from "@/features/product/platformLinkRisk";
+import { GoodsNameCell } from "@/components/GoodsNameCell/GoodsNameCell";
 import { extractErrorMessage } from "@/services/apiClient";
 
 const PLATFORMS = ["千牛", "万相台"];
@@ -39,7 +40,7 @@ const CHANNELS = ["普通", "直播"];
  * 「平台链接」= 店铺里一条实际在卖的链接（千牛商品ID / 万相台主体ID）。它决定三件事：
  * 销售数据算到哪个商品头上、仓库发的是哪件衣服、以及这笔 GMV 算普通还是直播。
  *
- * 业务页面（款式管理）刻意不展示平台ID —— 绑错一条链接，整条销售数据就记到别的商品名下，
+ * 业务页面（商品 / 套装页的款式维护处）刻意不展示平台ID —— 绑错一条链接，整条销售数据就记到别的商品名下，
  * 这是运维职责。路由与菜单都限管理员 / 运营。
  */
 export function PlatformLinkPage() {
@@ -61,6 +62,17 @@ export function PlatformLinkPage() {
     enabled: !!editing,
     queryFn: () => listGoodsForStyle(editing!.style_id),
   });
+  // 下拉里同名的商品用「本款式在它名下的平台 ID」区分（补充 2，§11.1）。
+  // 页面列表查询带着分页筛选，拿不到这个款式的全部链接，所以单独查一次。
+  const { data: styleLinks } = useQuery({
+    queryKey: ["platform-links", "by-style", editing?.style_id],
+    enabled: !!editing,
+    queryFn: () => listPlatformLinks({ style_id: editing!.style_id, page_size: 100 }),
+  });
+  const linksByGoods = useMemo(
+    () => platformIdsByGoods(styleLinks?.items ?? []),
+    [styleLinks]
+  );
 
   const saveMutation = useMutation({
     mutationFn: (values: {
@@ -116,16 +128,20 @@ export function PlatformLinkPage() {
     },
     {
       title: "归属商品",
-      dataIndex: "goods_code",
+      dataIndex: "goods_main_id",
       width: 180,
-      render: (code: string | null, row) =>
-        code ? (
-          <Space size={4}>
-            <Tooltip title={goodsDisplayName(row.goods_title, row.goods_short_name) || undefined}>
-              <span>{code}</span>
-            </Tooltip>
-            {row.goods_is_suit && <Tag color="purple">套装</Tag>}
-          </Space>
+      ellipsis: { showTitle: false },
+      // 不显示商品编码（补充 2）：显示名 + 套装标记，悬停看全称；按编码搜索照常可用
+      render: (_: string | null, row) =>
+        row.goods_main_id ? (
+          <>
+            {row.goods_is_suit && (
+              <Tag color="purple" style={{ marginInlineEnd: 4 }}>
+                套装
+              </Tag>
+            )}
+            <GoodsNameCell goodsTitle={row.goods_title} shortName={row.goods_short_name} />
+          </>
         ) : (
           <Tag color="red">未归属</Tag>
         ),
@@ -182,7 +198,7 @@ export function PlatformLinkPage() {
       }
     >
       <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
-        店铺里每条在卖的链接与商品、款式、渠道的绑定关系。绑错会让销售数据算到别的商品头上，
+        店铺里每条在卖的链接与商品、款式、渠道的绑定关系。{PLATFORM_LINK_RISK_TEXT}，
         所以这个视图只对管理员与运营开放。
       </Typography.Paragraph>
 
@@ -266,7 +282,7 @@ export function PlatformLinkPage() {
             <Select
               placeholder="选择归属商品"
               options={(goodsOptions ?? []).map((g: GoodsOption) => ({
-                label: goodsOptionLabel(g),
+                label: goodsPickerLabel(g, linksByGoods, goodsOptions ?? []),
                 value: g.goods_main_id,
               }))}
             />
@@ -287,7 +303,7 @@ export function PlatformLinkPage() {
           {editing && (
             <Typography.Text type="secondary">
               关联款式：{editing.style_code ?? "—"} {editing.style_name ?? ""}
-              （款式不在这里改，要改去款式管理）
+              （款式不在这里改，要改去「商品 / 套装 → 款式」）
             </Typography.Text>
           )}
         </Form>

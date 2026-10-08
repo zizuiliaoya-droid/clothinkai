@@ -45,9 +45,11 @@ from app.modules.product.exceptions import (
     SkuHasReferenceError,
     SkuNotFoundError,
     StyleCodeConflictError,
+    StyleCodeImmutableError,
     StyleHasActiveSkuError,
     StyleNotFoundError,
 )
+from app.modules.product.images import resolve_style_image
 from app.modules.product.models import Sku, Style
 from app.modules.product.repository import (
     SkuRepository,
@@ -67,15 +69,14 @@ from app.modules.product.schemas import (
     StyleResponse,
     StyleUpdate,
 )
+from app.modules.product.style_image_service import (
+    STYLE_IMAGE_MIME_EXTENSIONS,
+    StyleMainImageStore,
+    validate_style_main_image,
+)
 from app.modules.promotion.repository import PromotionRepository
 
 log = logging.getLogger(__name__)
-STYLE_MAIN_IMAGE_MAX_BYTES = 300 * 1024
-_STYLE_IMAGE_MIME_EXTENSIONS = {
-    "image/jpeg": "jpg",
-    "image/png": "png",
-    "image/webp": "webp",
-}
 
 
 # ---------------------------------------------------------------------------
@@ -100,14 +101,11 @@ class StyleService:
                 f"款式编码 {payload.style_code} 已被使用",
                 details={"style_code": payload.style_code},
             )
+        # 8a：简称 / 品牌 / 类目 / 季节不再由款式表单写入（类目为 NULL，其余归商品层）
         style = Style(
             style_code=payload.style_code,
             style_name=payload.style_name,
-            short_name=payload.short_name,
             qianniu_product_id=payload.qianniu_product_id,
-            brand_id=payload.brand_id,
-            category=payload.category,
-            season=payload.season,
             gender=payload.gender.value if payload.gender else None,
             tags=list(payload.tags),
             tag_color=list(payload.tag_color),
@@ -135,15 +133,10 @@ class StyleService:
         if style is None:
             raise StyleNotFoundError(f"款式 {style_id} 不存在")
 
-        # BR-U02-01: 若改 style_code，需重新校验唯一
-        if (
-            "style_code" in payload.model_fields_set
-            and payload.style_code is not None
-            and payload.style_code != style.style_code
-        ) and await self._styles.code_exists(payload.style_code):
-            raise StyleCodeConflictError(
-                f"款式编码 {payload.style_code} 已被使用",
-                details={"style_code": payload.style_code},
+        # 8a FR-1.2：款号建档后不可改（导入与批量传图按款号匹配）；传相同值照常
+        if payload.style_code is not None and payload.style_code != style.style_code:
+            raise StyleCodeImmutableError(
+                details={"style_code": style.style_code, "requested": payload.style_code},
             )
 
         changes = compute_style_changes(style, payload)
@@ -273,79 +266,39 @@ class StyleService:
         if style is None:
             raise StyleNotFoundError(f"款式 {style_id} 不存在")
 
-        if mime_type not in _STYLE_IMAGE_MIME_EXTENSIONS:
+        # 与批量上传共用同一套校验与存储（8a-2，§7.3）；对外文案与判断顺序不变
+        reject = validate_style_main_image(mime_type, data)
+        if reject == "type":
             raise InvalidAttachmentReferenceError(
                 "主图仅支持 JPG、PNG、WebP 图片",
                 details={
-                    "allowed": sorted(_STYLE_IMAGE_MIME_EXTENSIONS),
+                    "allowed": sorted(STYLE_IMAGE_MIME_EXTENSIONS),
                     "actual": mime_type,
                 },
             )
-        if not data:
+        if reject == "empty":
             raise InvalidAttachmentReferenceError("主图文件不能为空")
-        if len(data) >= STYLE_MAIN_IMAGE_MAX_BYTES:
+        if reject == "too_large":
             raise InvalidAttachmentReferenceError("主图文件必须小于 300KB")
         if filename is not None and len(filename) > 255:
             raise InvalidAttachmentReferenceError("主图文件名不能超过 255 个字符")
-
-        valid_signature = (
-            (mime_type == "image/jpeg" and data.startswith(b"\xff\xd8\xff"))
-            or (mime_type == "image/png" and data.startswith(b"\x89PNG\r\n\x1a\n"))
-            or (
-                mime_type == "image/webp"
-                and len(data) >= 12
-                and data[:4] == b"RIFF"
-                and data[8:12] == b"WEBP"
-            )
-        )
-        if not valid_signature:
+        if reject == "signature" or mime_type is None:
             raise InvalidAttachmentReferenceError("主图内容与声明格式不一致")
 
-        extension = _STYLE_IMAGE_MIME_EXTENSIONS[mime_type]
-        new_key = attachment_service.make_tenant_key(
-            user.tenant_id,
-            f"styles/{style_id}/main",
-            filename=f"main.{extension}",
+        tenant_id, user_id = user.tenant_id, user.id
+        written = await StyleMainImageStore(self._session).replace(
+            style_id=style_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            mime_type=mime_type,
+            data=data,
         )
-        old_key = style.main_image_key
-        try:
-            await run_in_threadpool(
-                attachment_service.upload_bytes,
-                data,
-                bucket="private",
-                key=new_key,
-                content_type=mime_type,
-            )
-            style.main_image_key = new_key
-            await self._audit.log(
-                action="style.main_image.update",
-                resource="style",
-                resource_id=style.id,
-                before={"main_image_changed": old_key is not None},
-                after={"main_image_changed": True},
-                user_id=user.id,
-            )
-            await self._session.commit()
-        except Exception:
-            await self._session.rollback()
-            try:
-                await run_in_threadpool(attachment_service.delete, "private", new_key)
-            except Exception:
-                log.warning(
-                    "style_main_image_compensation_delete_failed",
-                    extra={"style_id": str(style_id), "key": new_key},
-                )
-            raise
-
-        if old_key and old_key != new_key:
-            try:
-                await run_in_threadpool(attachment_service.delete, "private", old_key)
-            except Exception:
-                log.warning(
-                    "style_main_image_old_object_delete_failed",
-                    extra={"style_id": str(style_id), "key": old_key},
-                )
-        return await self._to_response(style, user)
+        if written.status == "failed":
+            if written.error is not None:
+                raise written.error
+            raise StyleNotFoundError(f"款式 {style_id} 不存在")
+        assert written.style is not None  # 成功结果必带款式
+        return await self._to_response(written.style, user)
 
     async def remove_main_image(self, style_id: UUID, user: User) -> None:
         """解除款式主图绑定，并尽力清理 private R2 对象。"""
@@ -462,14 +415,9 @@ class StyleService:
             goods_by_style = await self._styles.goods_by_style_ids([style.id])
         goods = goods_by_style.get(style.id) or {}
 
-        main_url: str | None = None
-        if style.main_image_key and attachment_service.is_configured:
-            try:
-                main_url = attachment_service.get_signed_url(
-                    "private", style.main_image_key, expires_in=3600
-                )
-            except Exception:
-                main_url = None
+        image = resolve_style_image(style.main_image_key, style.external_image_url)
+        # main_image_url 保持原义：只有已上传主图的签名 URL
+        main_url = image.url if image is not None and image.source == "upload" else None
         return StyleResponse(
             id=style.id,
             style_code=style.style_code,
@@ -489,6 +437,9 @@ class StyleService:
             tag_color=list(style.tag_color or []),
             main_image_key=style.main_image_key,
             main_image_url=main_url,
+            external_image_url=style.external_image_url,
+            image_url=image.url if image is not None else None,
+            image_source=image.source if image is not None else None,
             remark=style.remark,
             owner_id=style.owner_id,
             design_status=style.design_status,
@@ -581,7 +532,10 @@ class SkuService:
         page_size: int,
         user: User,
     ) -> CostTablePage:
-        """商品成本表（SKU 级，join 款式+品牌）。"""
+        """商品成本表（SKU 级，join 款式+品牌）。
+
+        成本价 / 采购价按查看者字段权限置 None（与单条 ``_to_response`` 同口径，8a-7）。
+        """
         rows, total = await self._skus.list_cost_table(
             keyword=keyword,
             brand_id=brand_id,
@@ -589,11 +543,18 @@ class SkuService:
             page=page,
             page_size=page_size,
         )
+        # 整页取一次字段权限上下文
+        ctx = await build_field_perm_context(user.id, self._roles, self._perms)
+        can_see_cost = can_read_field("sku", "cost_price", ctx)
+        can_see_purchase = can_read_field("sku", "purchase_price", ctx)
         items = [
             CostTableRow(
                 sku_id=r.sku_id,
                 style_id=r.style_id,
                 image_key=r.main_image_key,
+                # 图片列用签名 URL / 外部链接，不再把 R2 key 当 src（修 S8，8a-2）
+                image_url=image.url if image is not None else None,
+                image_source=image.source if image is not None else None,
                 style_code=r.style_code,
                 sku_code=r.sku_code,
                 style_name=r.style_name,
@@ -602,14 +563,15 @@ class SkuService:
                 color=r.color,
                 size=r.size,
                 base_price=r.base_price,
-                cost_price=r.cost_price,
-                purchase_price=r.purchase_price,
+                cost_price=r.cost_price if can_see_cost else None,
+                purchase_price=r.purchase_price if can_see_purchase else None,
                 tag_price=r.tag_price,
                 brand_name=r.brand_name,
                 sourcing_type=r.sourcing_type,
                 is_active=r.is_active,
             )
             for r in rows
+            for image in (resolve_style_image(r.main_image_key, r.external_image_url),)
         ]
         return CostTablePage(items=items, total=total, page=page, page_size=page_size)
 

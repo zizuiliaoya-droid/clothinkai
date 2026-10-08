@@ -22,7 +22,17 @@ def test_batch_status_values():
 def test_job_status_values():
     assert ImportJobStatus.SUCCESS.value == "success"
     assert ImportJobStatus.FAILED.value == "failed"
-    assert {s.value for s in ImportJobStatus} == {"success", "failed"}
+    # 8a-6：补空 / 重复已跳过 / 冲突三种行结果（与 058 的 ck_import_job_status 一致）
+    assert ImportJobStatus.FILLED.value == "filled"
+    assert ImportJobStatus.SKIPPED.value == "skipped"
+    assert ImportJobStatus.CONFLICT.value == "conflict"
+    assert {s.value for s in ImportJobStatus} == {
+        "success",
+        "failed",
+        "filled",
+        "skipped",
+        "conflict",
+    }
 
 
 def test_batch_status_str_enum():

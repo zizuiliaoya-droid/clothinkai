@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.audit import AuditService
 from app.core.exceptions import DuplicateResourceError, ResourceNotFoundError, ValidationError
 from app.modules.product.goods_models import GoodsMain, GoodsStyleItem
+from app.modules.product.goods_schemas import goods_display_name
 from app.modules.product.models import Sku, Style
 from app.modules.product.platform_product_models import PlatformProduct
 from app.modules.product.platform_product_schemas import (
@@ -127,6 +128,47 @@ class PlatformProductService:
             resp = resp.model_copy(update=dict(row))
         return resp
 
+    async def _conflict_error(
+        self, existing: PlatformProduct | None
+    ) -> PlatformProductConflictError:
+        """平台 ID 已有链接时的 409：告知归属商品的显示名（8a-5，§9.1）。
+
+        不露商品编码、不覆盖、不改归属——改归属仍去平台链接页（FR-5.5）。
+        """
+        if existing is None:
+            # 撞索引之后那条又被删了（极少）
+            return PlatformProductConflictError(
+                "这个平台 ID 已存在；要改归属请到平台链接页",
+                details={
+                    "existing_id": None,
+                    "existing_goods_name": None,
+                    "existing_goods_is_suit": None,
+                },
+            )
+        goods = (
+            await self._session.get(GoodsMain, existing.goods_main_id)
+            if existing.goods_main_id is not None
+            else None
+        )
+        if goods is None:
+            return PlatformProductConflictError(
+                "这个平台 ID 已存在（还没有归属商品）；要改归属请到平台链接页",
+                details={
+                    "existing_id": str(existing.id),
+                    "existing_goods_name": None,
+                    "existing_goods_is_suit": None,
+                },
+            )
+        name = goods_display_name(goods.goods_title, goods.short_name)
+        return PlatformProductConflictError(
+            f"平台 ID 已绑定在「{name}」上；要改归属请到平台链接页",
+            details={
+                "existing_id": str(existing.id),
+                "existing_goods_name": name,
+                "existing_goods_is_suit": bool(goods.is_suit),
+            },
+        )
+
     # ------------------------------------------------------------------ #
     # create（HTTP，严格新建）
     # ------------------------------------------------------------------ #
@@ -151,10 +193,7 @@ class PlatformProductService:
             await self._session.rollback()
             if "uq_platform_product_" in str(getattr(exc, "orig", exc)):
                 existing = await self._find(payload.platform, payload.platform_id)
-                raise PlatformProductConflictError(
-                    f"平台商品映射已存在 ({payload.platform}/{payload.platform_id})",
-                    details={"existing_id": str(existing.id) if existing else None},
-                ) from exc
+                raise await self._conflict_error(existing) from exc
             raise
         await self._audit.log(
             action="platform_product.create",

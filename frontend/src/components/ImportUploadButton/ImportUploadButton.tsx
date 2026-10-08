@@ -15,8 +15,14 @@ interface Props {
   invalidateKeys?: (string | number)[][];
   /** 模板列名提示（可选，展示在弹窗里帮助用户对齐表头）。 */
   templateColumns?: string[];
+  /** 列说明弹窗里的提示语（可选；不传保留原文案）。 */
+  columnsNote?: string;
+  /** 上传成功后回调（可选），参数为新建的批次 id。 */
+  onUploaded?: (batchId: string) => void;
   size?: "small" | "middle" | "large";
 }
+
+const DEFAULT_COLUMNS_NOTE = "上传文件首行需包含以下任一列名（多余列会原样保留）：";
 
 /**
  * 通用「上传 Excel/CSV 导入」按钮 —— 复用于各业务模块。
@@ -28,6 +34,8 @@ export function ImportUploadButton({
   label = "导入 Excel",
   invalidateKeys = [],
   templateColumns,
+  columnsNote = DEFAULT_COLUMNS_NOTE,
+  onUploaded,
   size = "middle",
 }: Props) {
   const qc = useQueryClient();
@@ -44,9 +52,10 @@ export function ImportUploadButton({
     beforeUpload: async (file) => {
       setUploading(true);
       try {
-        await uploadImportFile(source, file as File);
+        const resp = await uploadImportFile(source, file as File);
         message.success("上传成功，已创建导入批次，解析中…");
         refresh();
+        onUploaded?.(resp.batch_id);
       } catch (err) {
         message.error(extractErrorMessage(err));
       } finally {
@@ -65,9 +74,7 @@ export function ImportUploadButton({
       width: 560,
       content: (
         <div style={{ maxHeight: 320, overflow: "auto" }}>
-          <p style={{ color: "#475569", marginBottom: 8 }}>
-            上传文件首行需包含以下任一列名（多余列会原样保留）：
-          </p>
+          <p style={{ color: "#475569", marginBottom: 8 }}>{columnsNote}</p>
           <div>{templateColumns.join("、")}</div>
         </div>
       ),

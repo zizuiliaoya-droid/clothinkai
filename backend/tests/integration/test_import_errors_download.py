@@ -8,9 +8,16 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.security.permissions import EffectivePermissions
 from app.core.tenancy import tenant_id_ctx
+from app.modules.auth.service import AuthService
 from app.modules.importer.models import ImportJob
 from app.modules.importer.service import ImportService
+
+
+async def _perms(session: AsyncSession, user: Any) -> EffectivePermissions:
+    """8a-7：build_error_csv 多收查看者的有效权限（来源可见性 + 字段权限脱敏）。"""
+    return await AuthService(session).load_effective_permissions(user.id)
 
 
 async def _add_failed_job(session, tenant_id, batch_id, row_number, raw_data, error):
@@ -53,7 +60,7 @@ class TestErrorsDownload:
                 "=DANGER",
             )
             svc = ImportService(session)
-            data = await svc.build_error_csv(batch.id, user)
+            data = await svc.build_error_csv(batch.id, user, await _perms(session, user))
             text = data.decode("utf-8")
 
             assert text.startswith("\ufeff")  # BOM
@@ -82,7 +89,9 @@ class TestErrorsDownload:
                 session, tenant_a.id, batch.id, 2, {"name": "正常名称"}, "字段缺失"
             )
             svc = ImportService(session)
-            text = (await svc.build_error_csv(batch.id, user)).decode("utf-8")
+            text = (await svc.build_error_csv(batch.id, user, await _perms(session, user))).decode(
+                "utf-8"
+            )
             assert "正常名称" in text
             assert "字段缺失" in text
         finally:
@@ -115,7 +124,9 @@ class TestErrorsDownload:
             )
             await session.flush()
             svc = ImportService(session)
-            text = (await svc.build_error_csv(batch.id, user)).decode("utf-8")
+            text = (await svc.build_error_csv(batch.id, user, await _perms(session, user))).decode(
+                "utf-8"
+            )
             assert "fail" in text
             assert "ok" not in text
         finally:

@@ -8,12 +8,15 @@ import type {
   BrandUpdate,
   CostTableFilters,
   CostTablePage,
+  GoodsBrandOption,
+  GoodsImage,
   MatchResponse,
   Sku,
   SkuCreate,
   SkuUpdate,
   Style,
   StyleCreate,
+  StyleImageBatchResponse,
   StyleListFilters,
   StylePage,
   StyleUpdate,
@@ -72,6 +75,24 @@ export async function uploadStyleMainImage(
   const resp = await apiClient.post<Style>(
     `/api/styles/${styleId}/main-image`,
     body
+  );
+  return resp.data;
+}
+
+/**
+ * 按文件名 = 款号批量上传款式主图（8a-2）。一次最多 20 张，前端按 10 张一批调用。
+ * 文件名只用来匹配款号（不区分大小写），对象 key 由服务端生成。
+ */
+export async function uploadStyleMainImagesBatch(
+  files: File[]
+): Promise<StyleImageBatchResponse> {
+  const body = new FormData();
+  for (const f of files) body.append("files", f, f.name);
+  const resp = await apiClient.post<StyleImageBatchResponse>(
+    "/api/styles/main-images/batch",
+    body,
+    // 一批最多约 3MB，服务端逐张写 R2、逐张提交，慢网下 30 秒的默认超时不够
+    { timeout: 120_000 }
   );
   return resp.data;
 }
@@ -150,12 +171,6 @@ export function goodsDisplayName(
   return shortName || goodsTitle || "";
 }
 
-/** 商品下拉的选项文字：编码 + 显示名 + 套装标记。 */
-export function goodsOptionLabel(g: GoodsOption): string {
-  const name = goodsDisplayName(g.goods_title, g.goods_short_name);
-  return `${g.goods_code} ${name}${g.is_suit ? "（套装）" : ""}`;
-}
-
 /** 款式归属的商品，非套装优先。返回多条说明该款既单卖又进套装，需要人工指定归属。 */
 export async function listGoodsForStyle(styleId: string): Promise<GoodsOption[]> {
   const resp = await apiClient.get<GoodsOption[]>(
@@ -187,12 +202,16 @@ export interface Goods {
   goods_title: string;
   /** 商品简称；没填为 null，界面回落显示全称。 */
   short_name: string | null;
-  category: string | null;
+  // 类目已下线（8a-3）：接口不再返回 category
   season: string | null;
   brand_id: string | null;
   brand_name: string | null;
-  main_image_key: string | null;
   remark: string | null;
+  /**
+   * 商品图由启用成员款式派生（8a-2）：按成员顺序、只含有图的成员；单品最多 1 张，
+   * 套装并排、缺图不占位，都没有为 []。（main_image_key 已废弃，接口不再返回。）
+   */
+  images: GoodsImage[];
   is_suit: boolean;
   is_active: boolean;
   created_at: string;
@@ -203,6 +222,8 @@ export interface Goods {
   cost_missing_count: number;
   /** 挂在该商品上的平台链接数，0 表示还没上架到任何渠道。 */
   link_count: number;
+  /** 给界面的提示（只在新建时有内容），如「该款已有商品「…」，已为新商品另行生成内部编码」。 */
+  notices: string[];
 }
 
 export interface GoodsPage {
@@ -214,7 +235,6 @@ export interface GoodsPage {
 
 export interface GoodsFilters {
   keyword?: string;
-  category?: string;
   season?: string;
   brand_id?: string;
   is_suit?: boolean;
@@ -226,12 +246,12 @@ export interface GoodsFilters {
 }
 
 export interface GoodsCreate {
-  goods_code: string;
+  /** 不传由系统生成（补充 3）：单品 = 款号（被占用另生成），套装 = SUIT- + 成员款号组合。商品页不再传。 */
+  goods_code?: string;
   goods_title: string;
   short_name?: string | null;
-  category?: string | null;
   season?: string | null;
-  brand_id?: string | null;
+  // 品牌只读（8a-4）：只由商品资料导入写入，商品接口不再收 brand_id
   remark?: string | null;
   items: GoodsStyleItemInput[];
 }
@@ -241,9 +261,7 @@ export interface GoodsUpdate {
   goods_title?: string;
   /** 不传不动；传 null 清掉简称。 */
   short_name?: string | null;
-  category?: string | null;
   season?: string | null;
-  brand_id?: string | null;
   remark?: string | null;
   is_active?: boolean;
   /** 给了就整体替换成员列表；不给则不动成员。 */
@@ -339,6 +357,28 @@ export async function listPlatformLinks(
   return resp.data;
 }
 
+/** 新建平台链接（8a-5 套装「绑定链接」）。后端会去掉平台 ID 的前导单引号与首尾空白。 */
+export interface PlatformLinkCreate {
+  platform: string;
+  platform_id: string;
+  style_id: string;
+  /** 归属商品；必须以 style_id 为启用成员，否则 422 INVALID_GOODS_REFERENCE。 */
+  goods_main_id?: string;
+  channel?: string;
+  title?: string | null;
+}
+
+/**
+ * POST /api/platform-products/（ops.platform_link:write）。
+ * 平台 ID 已有链接 → 409 PLATFORM_PRODUCT_CONFLICT，message 里是归属商品的显示名，不覆盖。
+ */
+export async function createPlatformLink(
+  payload: PlatformLinkCreate
+): Promise<PlatformLink> {
+  const resp = await apiClient.post<PlatformLink>("/api/platform-products/", payload);
+  return resp.data;
+}
+
 export async function updatePlatformLink(
   id: string,
   payload: PlatformLinkUpdate
@@ -404,6 +444,26 @@ export async function listBrands(params: {
     params,
   });
   return resp.data;
+}
+
+/**
+ * 启用品牌（按名称），商品读权限即可（/api/brands/ 只有管理员能读）。
+ * 成本表品牌筛选用（8a-4）。
+ */
+export async function listGoodsBrandOptions(): Promise<GoodsBrandOption[]> {
+  const resp = await apiClient.get<{ items: GoodsBrandOption[] }>(
+    "/api/goods/brand-options"
+  );
+  return resp.data.items;
+}
+
+/**
+ * 商品页季节选项（8a-3）：字典 season 启用值在前，再接商品上出现过的值。
+ * 查询键 ["goods", "season-options"]；字典季节增删后由 DictManagerModal 失效。
+ */
+export async function getGoodsSeasonOptions(): Promise<string[]> {
+  const resp = await apiClient.get<{ items: string[] }>("/api/goods/season-options");
+  return resp.data.items;
 }
 
 export async function getBrand(brandId: string): Promise<Brand> {

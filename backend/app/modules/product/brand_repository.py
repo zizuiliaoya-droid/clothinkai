@@ -22,6 +22,15 @@ class BrandRepository:
         stmt = select(Brand).where(Brand.brand_code == brand_code)
         return (await self._session.execute(stmt)).scalar_one_or_none()
 
+    async def list_active_options(self, tenant_id: UUID) -> Sequence[tuple[UUID, str]]:
+        """启用品牌的 (id, 名称)，按名称排序（商品页 / 成本表的品牌筛选，8a-4）。"""
+        stmt = (
+            select(Brand.id, Brand.brand_name)
+            .where(Brand.tenant_id == tenant_id, Brand.is_active.is_(True))
+            .order_by(Brand.brand_name.asc(), Brand.brand_code.asc())
+        )
+        return (await self._session.execute(stmt)).tuples().all()
+
     async def list(
         self,
         *,

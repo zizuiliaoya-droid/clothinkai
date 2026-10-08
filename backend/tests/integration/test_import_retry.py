@@ -7,7 +7,9 @@ from typing import Any
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.security.permissions import EffectivePermissions
 from app.core.tenancy import tenant_id_ctx
+from app.modules.auth.service import AuthService
 from app.modules.importer.exceptions import (
     ImportBatchBusyError,
     ImportBatchNotFoundError,
@@ -15,6 +17,11 @@ from app.modules.importer.exceptions import (
 )
 from app.modules.importer.repository import ImportBatchRepository
 from app.modules.importer.service import ImportService
+
+
+async def _perms(session: AsyncSession, user: Any) -> EffectivePermissions:
+    """8a-7：retry 多收重试人的有效权限（来源可见性 + 来源级写权限）。"""
+    return await AuthService(session).load_effective_permissions(user.id)
 
 
 @pytest.fixture(autouse=True)
@@ -51,9 +58,35 @@ class TestRetry:
                 status="partial", failed=2, imported=3, total_rows=5
             )
             svc = ImportService(session)
-            claimed = await svc.retry(batch.id, user)
+            claimed = await svc.retry(batch.id, user, await _perms(session, user))
             assert claimed.status == "processing"
             assert claimed.retry_count == 1
+            assert _intercept_celery[0]["kwargs"]["only_failed"] is True
+        finally:
+            tenant_id_ctx.reset(token)
+
+    async def test_retry_with_conflicts_reruns_failed_only(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        pr_role: Any,
+        import_batch_factory: Any,
+        _intercept_celery: list,
+    ) -> None:
+        """8a-6 AC 50：冲突 / 补空 / 跳过的行不重跑，只重跑失败行（计数由 runner 按 import_job 重算）。"""
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            user = await factory.user(tenant_a, roles=[pr_role])
+            batch = await import_batch_factory.batch(
+                source="manual_blogger", status="partial", failed=1, total_rows=6
+            )
+            batch.conflicted, batch.skipped, batch.filled = 3, 1, 1
+            await session.flush()
+            claimed = await ImportService(session).retry(
+                batch.id, user, await _perms(session, user)
+            )
+            assert claimed.status == "processing"
             assert _intercept_celery[0]["kwargs"]["only_failed"] is True
         finally:
             tenant_id_ctx.reset(token)
@@ -75,7 +108,7 @@ class TestRetry:
                 status="failed", failed=0, imported=0, total_rows=0
             )
             svc = ImportService(session)
-            await svc.retry(batch.id, user)
+            await svc.retry(batch.id, user, await _perms(session, user))
             assert _intercept_celery[0]["kwargs"]["only_failed"] is False
         finally:
             tenant_id_ctx.reset(token)
@@ -95,7 +128,7 @@ class TestRetry:
             batch = await import_batch_factory.batch(status="failed", retry_count=3)
             svc = ImportService(session)
             with pytest.raises(ImportRetryExhaustedError):
-                await svc.retry(batch.id, user)
+                await svc.retry(batch.id, user, await _perms(session, user))
         finally:
             tenant_id_ctx.reset(token)
 
@@ -114,7 +147,7 @@ class TestRetry:
             batch = await import_batch_factory.batch(status="processing")
             svc = ImportService(session)
             with pytest.raises(ImportBatchBusyError):
-                await svc.retry(batch.id, user)
+                await svc.retry(batch.id, user, await _perms(session, user))
         finally:
             tenant_id_ctx.reset(token)
 
@@ -128,7 +161,7 @@ class TestRetry:
             user = await factory.user(tenant_a, roles=[pr_role])
             svc = ImportService(session)
             with pytest.raises(ImportBatchNotFoundError):
-                await svc.retry(uuid4(), user)
+                await svc.retry(uuid4(), user, await _perms(session, user))
         finally:
             tenant_id_ctx.reset(token)
 

@@ -1,7 +1,7 @@
 """商品 / 套装管理 API（/api/goods）。
 
-权限走 ``product.goods`` —— 刻意留在 ``product.*`` 下，让跟单的 ``product.*:*``
-自然可写、运营与设计的 ``product.*:read`` 自然只读。这与平台链接（``ops.platform_link``）
+权限走 ``product.goods`` —— 刻意留在 ``product.*`` 下，让跟单与运营（8a-7 起）的
+``product.*:*`` 自然可写、设计的 ``product.*:read`` 自然只读。这与平台链接（``ops.platform_link``）
 相反：那组必须躲开 ``product.*`` 才挡得住业务角色，而商品本来就是产品主数据。
 """
 
@@ -13,14 +13,19 @@ from uuid import UUID
 from fastapi import APIRouter, Query, status
 
 from app.modules.auth.deps import CurrentActiveUser, SessionDep, require_permission
+from app.modules.product.brand_repository import BrandRepository
 from app.modules.product.goods_repository import GoodsListFilters
 from app.modules.product.goods_schemas import (
+    GoodsBrandOption,
+    GoodsBrandOptionsResponse,
     GoodsMainCreate,
     GoodsMainListResponse,
     GoodsMainResponse,
     GoodsMainUpdate,
+    SeasonOptionsResponse,
 )
 from app.modules.product.goods_service import GoodsService
+from app.modules.product.season_options import list_season_options
 
 router = APIRouter(prefix="/api/goods", tags=["product"])
 
@@ -56,7 +61,6 @@ async def list_goods(
     keyword: Annotated[
         str | None, Query(max_length=64, description="商品编码 / 商品名 / 成员货号 / 款名")
     ] = None,
-    category: Annotated[str | None, Query(max_length=64)] = None,
     season: Annotated[str | None, Query(max_length=64)] = None,
     brand_id: UUID | None = None,
     is_suit: bool | None = None,
@@ -70,7 +74,6 @@ async def list_goods(
         tenant_id=user.tenant_id,
         filters=GoodsListFilters(
             keyword=keyword,
-            category=category,
             season=season,
             brand_id=brand_id,
             is_suit=is_suit,
@@ -82,6 +85,39 @@ async def list_goods(
         page_size=page_size,
     )
     return GoodsMainListResponse(items=items, total=total, page=page, page_size=page_size)
+
+
+# 固定路径必须声明在 /{goods_id} 之前：路径参数是 UUID，排在前面会把它们解析成 422
+@router.get(
+    "/brand-options",
+    response_model=GoodsBrandOptionsResponse,
+    dependencies=[require_permission(SCOPE, "read")],
+)
+async def list_goods_brand_options(
+    session: SessionDep,
+    user: CurrentActiveUser,
+) -> GoodsBrandOptionsResponse:
+    """启用品牌（按名称），给成本表的品牌筛选用（J19）。
+
+    ``/api/brands/`` 只有管理员能读，跟单 / 运营的品牌下拉一直是空的；这里挂商品读权限。
+    """
+    rows = await BrandRepository(session).list_active_options(user.tenant_id)
+    return GoodsBrandOptionsResponse(
+        items=[GoodsBrandOption(id=brand_id, brand_name=name) for brand_id, name in rows]
+    )
+
+
+@router.get(
+    "/season-options",
+    response_model=SeasonOptionsResponse,
+    dependencies=[require_permission(SCOPE, "read")],
+)
+async def list_goods_season_options(
+    session: SessionDep,
+    user: CurrentActiveUser,
+) -> SeasonOptionsResponse:
+    """商品页季节筛选与表单的选项：字典 season 启用值 + 商品上出现过的值（8a-3，§8.3）。"""
+    return SeasonOptionsResponse(items=await list_season_options(session, user.tenant_id))
 
 
 @router.get(

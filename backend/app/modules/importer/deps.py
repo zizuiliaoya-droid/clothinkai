@@ -7,6 +7,7 @@ from typing import Annotated
 from fastapi import Depends
 
 from app.modules.auth.deps import SessionDep
+from app.modules.importer.conflicts import ImportConflictService
 from app.modules.importer.field_mapping_service import FieldMappingService
 from app.modules.importer.service import ImportService
 
@@ -19,13 +20,20 @@ def get_field_mapping_service(session: SessionDep) -> FieldMappingService:
     return FieldMappingService(session)
 
 
+def get_conflict_service(session: SessionDep) -> ImportConflictService:
+    return ImportConflictService(session)
+
+
 ImportServiceDep = Annotated[ImportService, Depends(get_import_service)]
 FieldMappingServiceDep = Annotated[FieldMappingService, Depends(get_field_mapping_service)]
+ImportConflictServiceDep = Annotated[ImportConflictService, Depends(get_conflict_service)]
 
 
 __all__ = [
     "FieldMappingServiceDep",
+    "ImportConflictServiceDep",
     "ImportServiceDep",
+    "get_conflict_service",
     "get_field_mapping_service",
     "get_import_service",
 ]

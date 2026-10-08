@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import builtins
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
@@ -26,16 +27,22 @@ from app.core.exceptions import (
     ResourceNotFoundError,
     ValidationError,
 )
+from app.modules.product.goods_codes import GoodsCodeExhaustedError, generate_goods_code
 from app.modules.product.goods_models import GoodsMain, GoodsStyleItem
 from app.modules.product.goods_repository import GoodsListFilters, GoodsRepository
 from app.modules.product.goods_schemas import (
+    GoodsImage,
     GoodsMainCreate,
     GoodsMainResponse,
     GoodsMainUpdate,
     GoodsStyleItemIn,
     GoodsStyleItemResponse,
 )
+from app.modules.product.images import resolve_style_image
 from app.modules.product.models import Brand, Style
+
+CODE_GENERATE_ATTEMPTS = 3
+"""系统生成编码时，插入撞唯一索引（并发新建）后重新生成的次数上限。"""
 
 
 class GoodsCodeConflictError(DuplicateResourceError):
@@ -52,6 +59,30 @@ class GoodsHasLinksError(AppException):
 
     code = "GOODS_HAS_LINKS"
     status_code = 409
+
+
+def goods_images(item_rows: Sequence[Mapping[str, Any]]) -> builtins.list[GoodsImage]:
+    """商品图由启用成员款式派生（8a-2，§7.2）。
+
+    ``item_rows`` 已按成员顺序（``sort_order, style_code``）排好（``items_by_goods_ids``）；
+    ``resolve_style_image`` 有结果的成员才放进来——缺图的成员不占位。
+    ``goods_main.main_image_key`` 已废弃，不读。
+    """
+    out: builtins.list[GoodsImage] = []
+    for row in item_rows:
+        if not row["is_active"] or row.get("style_code") is None:
+            continue
+        image = resolve_style_image(row.get("main_image_key"), row.get("external_image_url"))
+        if image is not None:
+            out.append(
+                GoodsImage(
+                    style_id=row["style_id"],
+                    style_code=row["style_code"],
+                    url=image.url,
+                    source=image.source,
+                )
+            )
+    return out
 
 
 class GoodsService:
@@ -90,17 +121,6 @@ class GoodsService:
                     details={"style_id": str(item.style_id)},
                 )
         return items
-
-    async def _validate_brand(self, brand_id: UUID | None) -> None:
-        if brand_id is None:
-            return
-        brand = await self._session.get(Brand, brand_id)
-        if brand is None or not brand.is_active:
-            raise ValidationError(
-                "brand_id 不存在或已停用",
-                code="INVALID_BRAND",
-                details={"brand_id": str(brand_id)},
-            )
 
     # ------------------------------------------------------------------ #
     # 成员写入
@@ -158,16 +178,15 @@ class GoodsService:
             goods_code=goods.goods_code,
             goods_title=goods.goods_title,
             short_name=goods.short_name,
-            category=goods.category,
             season=goods.season,
             brand_id=goods.brand_id,
             brand_name=brand_name,
-            main_image_key=goods.main_image_key,
             remark=goods.remark,
             is_suit=goods.is_suit,
             is_active=goods.is_active,
             created_at=goods.created_at,
             updated_at=goods.updated_at,
+            images=goods_images(item_rows),
             items=items,
             total_cost=sum(costs, Decimal("0")) if costs else None,
             cost_missing_count=len(active) - len(costs),
@@ -182,34 +201,13 @@ class GoodsService:
         self, payload: GoodsMainCreate, *, tenant_id: UUID, user_id: UUID
     ) -> GoodsMainResponse:
         items = await self._validate_items(payload.items)
-        await self._validate_brand(payload.brand_id)
-        if await self._repo.code_exists(payload.goods_code):
-            raise GoodsCodeConflictError(
-                f"商品编码已存在 ({payload.goods_code})",
-                details={"goods_code": payload.goods_code},
-            )
-        goods = GoodsMain(
-            tenant_id=tenant_id,
-            goods_code=payload.goods_code,
-            goods_title=payload.goods_title,
-            short_name=payload.short_name,
-            category=payload.category,
-            season=payload.season,
-            brand_id=payload.brand_id,
-            main_image_key=payload.main_image_key,
-            remark=payload.remark,
-        )
-        self._repo.add(goods)
-        try:
-            await self._session.flush()
-        except IntegrityError as exc:
-            await self._session.rollback()
-            if "uq_goods_main_code" in str(getattr(exc, "orig", exc)):
-                raise GoodsCodeConflictError(
-                    f"商品编码已存在 ({payload.goods_code})",
-                    details={"goods_code": payload.goods_code},
-                ) from exc
-            raise
+        notices: builtins.list[str] = []
+        if payload.goods_code is not None:
+            goods = await self._insert_with_code(payload, payload.goods_code, tenant_id=tenant_id)
+        else:
+            goods, notice = await self._insert_generated(payload, items, tenant_id=tenant_id)
+            if notice:
+                notices.append(notice)
         await self._write_items(goods, items)
         await self._session.flush()
         await self._audit.log(
@@ -226,7 +224,77 @@ class GoodsService:
             user_id=user_id,
         )
         await self._session.commit()
-        return await self._to_response(goods)
+        resp = await self._to_response(goods)
+        return resp.model_copy(update={"notices": notices}) if notices else resp
+
+    def _new_goods(self, payload: GoodsMainCreate, goods_code: str, tenant_id: UUID) -> GoodsMain:
+        return GoodsMain(
+            tenant_id=tenant_id,
+            goods_code=goods_code,
+            goods_title=payload.goods_title,
+            short_name=payload.short_name,
+            season=payload.season,
+            remark=payload.remark,
+        )
+
+    async def _insert_with_code(
+        self, payload: GoodsMainCreate, goods_code: str, *, tenant_id: UUID
+    ) -> GoodsMain:
+        """调用方指定了编码（脚本 / 测试兼容的旧路径）：被占用（含已软删）→ 409。"""
+        if await self._repo.code_exists(goods_code):
+            raise GoodsCodeConflictError(
+                f"商品编码已存在 ({goods_code})",
+                details={"goods_code": goods_code},
+            )
+        goods = self._new_goods(payload, goods_code, tenant_id)
+        self._repo.add(goods)
+        try:
+            await self._session.flush()
+        except IntegrityError as exc:
+            await self._session.rollback()
+            if "uq_goods_main_code" in str(getattr(exc, "orig", exc)):
+                raise GoodsCodeConflictError(
+                    f"商品编码已存在 ({goods_code})",
+                    details={"goods_code": goods_code},
+                ) from exc
+            raise
+        return goods
+
+    async def _insert_generated(
+        self,
+        payload: GoodsMainCreate,
+        items: builtins.list[GoodsStyleItemIn],
+        *,
+        tenant_id: UUID,
+    ) -> tuple[GoodsMain, str | None]:
+        """编码由系统生成（补充 3，§11.2）。
+
+        预检（``code_exists``）与插入之间可能被并发新建抢走同一个编码：插入放在保存点里，
+        撞 ``uq_goods_main_code`` 就回滚保存点、重新生成，最多 ``CODE_GENERATE_ATTEMPTS`` 次。
+        409 的提示不带编码（界面不显示编码，补充 2）。
+        """
+        member_codes: builtins.list[str] = []
+        for item in items:
+            # _validate_items 已校验存在且未删，这里从会话的身份映射里取
+            style = await self._session.get(Style, item.style_id)
+            if style is not None:
+                member_codes.append(style.style_code)
+        for _ in range(CODE_GENERATE_ATTEMPTS):
+            try:
+                code, notice = await generate_goods_code(self._repo, member_codes)
+            except GoodsCodeExhaustedError as exc:
+                raise GoodsCodeConflictError("没能为新商品生成可用的内部编码，请重试") from exc
+            goods = self._new_goods(payload, code, tenant_id)
+            try:
+                async with self._session.begin_nested():
+                    self._repo.add(goods)
+                    await self._session.flush()
+            except IntegrityError as exc:
+                if "uq_goods_main_code" in str(getattr(exc, "orig", exc)):
+                    continue  # 并发：刚被别人用了，重新生成
+                raise
+            return goods, notice
+        raise GoodsCodeConflictError("没能为新商品生成可用的内部编码，请重试")
 
     # ------------------------------------------------------------------ #
     # update
@@ -241,23 +309,18 @@ class GoodsService:
         before: dict[str, Any] = {
             "goods_title": goods.goods_title,
             "short_name": goods.short_name,
+            "season": goods.season,
             "is_suit": goods.is_suit,
             "is_active": goods.is_active,
         }
-        if payload.brand_id is not None:
-            await self._validate_brand(payload.brand_id)
-            goods.brand_id = payload.brand_id
+        # 品牌只读（8a-4，A12）：不再由商品接口改，只由商品资料导入与冲突裁决写入
         if payload.goods_title is not None:
             goods.goods_title = payload.goods_title
         # 简称可以清空：按「有没有传」判断，而不是「是不是 None」（见 GoodsMainUpdate）
         if "short_name" in payload.model_fields_set:
             goods.short_name = payload.short_name
-        if payload.category is not None:
-            goods.category = payload.category
         if payload.season is not None:
             goods.season = payload.season
-        if payload.main_image_key is not None:
-            goods.main_image_key = payload.main_image_key
         if payload.remark is not None:
             goods.remark = payload.remark
         if payload.is_active is not None:
@@ -274,6 +337,8 @@ class GoodsService:
             after={
                 "goods_title": goods.goods_title,
                 "short_name": goods.short_name,
+                # 运营也能改季节（8a-7），靠审计留痕（J48）
+                "season": goods.season,
                 "is_suit": goods.is_suit,
                 "is_active": goods.is_active,
             },
@@ -345,16 +410,15 @@ class GoodsService:
                     goods_code=r["goods_code"],
                     goods_title=r["goods_title"],
                     short_name=r["short_name"],
-                    category=r["category"],
                     season=r["season"],
                     brand_id=r["brand_id"],
                     brand_name=r["brand_name"],
-                    main_image_key=r["main_image_key"],
                     remark=r["remark"],
                     is_suit=r["is_suit"],
                     is_active=r["is_active"],
                     created_at=r["created_at"],
                     updated_at=r["updated_at"],
+                    images=goods_images(item_rows),
                     items=[
                         GoodsStyleItemResponse(
                             id=i["id"],

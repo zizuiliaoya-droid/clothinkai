@@ -30,14 +30,15 @@ class FieldRule:
 
 # entity → field → FieldRule（值迁移自 4 legacy 模块，行为兼容）
 FIELD_PERMISSION_REGISTRY: dict[str, dict[str, FieldRule]] = {
+    # 8a-7（补充二 Q4）：运营可看可改成本价、采购价
     "sku": {
         "cost_price": FieldRule(
-            frozenset({"admin", "merchandiser", "finance"}),
-            frozenset({"admin", "merchandiser", "finance"}),
+            frozenset({"admin", "merchandiser", "finance", "operations"}),
+            frozenset({"admin", "merchandiser", "finance", "operations"}),
         ),
         "purchase_price": FieldRule(
-            frozenset({"admin", "merchandiser", "finance"}),
-            frozenset({"admin", "merchandiser", "finance"}),
+            frozenset({"admin", "merchandiser", "finance", "operations"}),
+            frozenset({"admin", "merchandiser", "finance", "operations"}),
         ),
     },
     "blogger": {

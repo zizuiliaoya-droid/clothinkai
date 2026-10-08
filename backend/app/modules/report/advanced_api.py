@@ -14,6 +14,8 @@ from app.modules.auth.deps import (
     SessionDep,
     require_permission,
 )
+from app.modules.product.goods_schemas import SeasonOptionsResponse
+from app.modules.product.season_options import list_season_options
 from app.modules.promotion.urge_calculator import get_today
 from app.modules.report.advanced_schemas import (
     ProductionReport,
@@ -149,15 +151,14 @@ async def get_production(
     date_to: _ToQ = None,
     exclude_brushing: bool = True,
     season: Annotated[list[str] | None, Query(description="季节多选")] = None,
-    category: Annotated[list[str] | None, Query(description="类目多选")] = None,
 ) -> ProductionReport:
+    # 类目筛选已下线（8a-3，J12）：旧客户端带 category 被 FastAPI 忽略，结果与不带一致
     tr = resolve_time_range(preset, date_from, date_to)
     return await service.get_report(
         user.tenant_id,
         tr,
         exclude_brushing=exclude_brushing,
         seasons=season,
-        categories=category,
     )
 
 
@@ -259,6 +260,25 @@ async def refresh_summaries(
     # service 不 commit：5 张表要么一起生效要么一起回滚
     await session.commit()
     return {"ok": True, "date_from": str(lo), "date_to": str(hi), **counts}
+
+
+# ----------------------------- 季节选项 ----------------------------- #
+
+
+@router.get(
+    "/season-options",
+    response_model=SeasonOptionsResponse,
+    dependencies=[require_permission("report.production", "read")],
+)
+async def get_report_season_options(
+    user: CurrentActiveUser,
+    session: SessionDep,
+) -> SeasonOptionsResponse:
+    """投产页季节下拉（8a-3，§8.3，C-02）：字典 season 启用值 + 商品上出现过的值。
+
+    只要求投产报表读权限——主管没有 ``product:read``，原来调 ``/api/dict-items`` 拿到的是空下拉。
+    """
+    return SeasonOptionsResponse(items=await list_season_options(session, user.tenant_id))
 
 
 __all__ = ["router"]

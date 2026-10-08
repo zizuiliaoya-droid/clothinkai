@@ -16,7 +16,6 @@ import { LoginPage } from "@/pages/LoginPage";
 import { HomePage } from "@/pages/HomePage";
 import { ChangePasswordPage } from "@/pages/ChangePasswordPage";
 import { BrandListPage } from "@/pages/BrandListPage";
-import { StyleListPage } from "@/pages/StyleListPage";
 import { GoodsPage } from "@/pages/GoodsPage";
 import { BloggerListPage } from "@/pages/BloggerListPage";
 import { PromotionListPage } from "@/pages/PromotionListPage";
@@ -147,7 +146,8 @@ function AppRoutes() {
         }
       >
         <Route path="/" element={<HomePage />} />
-        <Route path="/styles" element={<StyleListPage />} />
+        {/* 款式维护并进商品 / 套装页（8a-1）；旧书签不 404 */}
+        <Route path="/styles" element={<Navigate to="/goods?tab=styles" replace />} />
         {/* 商品是报表归属主体。权限靠 API 的 product.goods，跟单可写、运营与设计只读 */}
         <Route path="/goods" element={<GoodsPage />} />
         <Route path="/brands" element={<BrandListPage />} />

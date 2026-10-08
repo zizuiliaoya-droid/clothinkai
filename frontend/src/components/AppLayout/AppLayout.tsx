@@ -13,7 +13,6 @@ import {
   NotificationOutlined,
   SafetyCertificateOutlined,
   SettingOutlined,
-  SkinOutlined,
   TagsOutlined,
   TeamOutlined,
   UserOutlined,
@@ -81,11 +80,6 @@ export function AppLayout() {
           key: "/goods",
           icon: <GiftOutlined />,
           label: <Link to="/goods">商品 / 套装</Link>,
-        },
-        {
-          key: "/styles",
-          icon: <SkinOutlined />,
-          label: <Link to="/styles">款式管理</Link>,
         },
         {
           key: "/brands",

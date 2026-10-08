@@ -3,7 +3,6 @@ import {
   Button,
   Card,
   Form,
-  Image,
   Input,
   InputNumber,
   Modal,
@@ -18,11 +17,12 @@ import {
 import { PlusOutlined, SearchOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnsType } from "antd/es/table";
+import { useNavigate } from "react-router-dom";
 import {
   createSku,
   deleteSku,
-  listBrands,
   listCostTable,
+  listGoodsBrandOptions,
   listDictItems,
   listStyles,
   updateSku,
@@ -33,8 +33,31 @@ import type {
   SkuCreate,
   SourcingType,
 } from "@/features/product/types";
+import {
+  getImportAccess,
+  getImportConflictSummary,
+  getImportMappingSpec,
+} from "@/features/import/api";
 import { extractErrorMessage } from "@/services/apiClient";
 import { ImportUploadButton } from "@/components/ImportUploadButton";
+import { StyleImageThumbnail } from "@/components/StyleImageThumbnail/StyleImageThumbnail";
+import { ImportResultModal } from "@/components/ImportResultModal/ImportResultModal";
+import { FieldMappingDrawer } from "@/pages/cost/FieldMappingDrawer";
+import { templateColumnsFromSpec } from "@/pages/cost/mappingColumns";
+
+const GOODS_SOURCE = "manual_style_sku";
+const IMPORT_COLUMNS_NOTE = "只读下列列，列名对上即可；其余列忽略，不用删列：";
+
+/** 卡片标题栏：宽屏标题在左、按钮在右；窄屏按钮换到下一行（antd 卡片标题默认不换行）。 */
+const CARD_HEAD_STYLE = {
+  display: "flex",
+  flexWrap: "wrap",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 8,
+  padding: "8px 0",
+  whiteSpace: "normal",
+} as const;
 
 const money = (v: string | null) => (v == null ? "—" : `¥${v}`);
 
@@ -114,12 +137,50 @@ export function CostTablePage() {
     queryFn: () => listCostTable(filters),
   });
 
+  // 商品资料导入按来源判权（管理员、跟单、运营）；加载中不显示按钮
+  const { data: importAccess } = useQuery({
+    queryKey: ["import-access"],
+    queryFn: getImportAccess,
+  });
+  const goodsAccess = importAccess?.find((a) => a.source === GOODS_SOURCE);
+  const canImportGoods = goodsAccess?.can_upload ?? false;
+  const canMapGoods = goodsAccess?.can_map ?? false;
+  const canViewGoodsImport = goodsAccess?.can_view ?? false;
+  const navigate = useNavigate();
+  const [resultBatchId, setResultBatchId] = useState<string | null>(null);
+  const [mappingOpen, setMappingOpen] = useState(false);
+
+  // 列说明由映射目录生成（有 can_upload 就有 can_view）；没取到时为空，组件就不显示「列说明」
+  const { data: mappingSpec } = useQuery({
+    queryKey: ["import-mapping-spec", GOODS_SOURCE],
+    queryFn: () => getImportMappingSpec(GOODS_SOURCE),
+    enabled: canImportGoods,
+  });
+  const templateColumns = useMemo(
+    () => templateColumnsFromSpec(mappingSpec),
+    [mappingSpec],
+  );
+
+  const { data: conflictSummary } = useQuery({
+    queryKey: ["import-conflicts", "summary", GOODS_SOURCE],
+    queryFn: () => getImportConflictSummary(GOODS_SOURCE),
+    enabled: canViewGoodsImport,
+  });
+  const pendingConflicts = conflictSummary?.pending ?? 0;
+
+  // /api/brands/ 只有管理员能读；品牌筛选改用商品读权限的 brand-options（按商品层品牌筛）
   const { data: brands } = useQuery({
-    queryKey: ["brands", "options"],
-    queryFn: () => listBrands({ page: 1, page_size: 100, is_active: true }),
+    queryKey: ["goods-brand-options"],
+    queryFn: listGoodsBrandOptions,
   });
   const brandOptions =
-    brands?.items.map((b) => ({ label: b.brand_name, value: b.id })) ?? [];
+    brands?.map((b) => ({ label: b.brand_name, value: b.id })) ?? [];
+
+  function closeResult() {
+    setResultBatchId(null);
+    void qc.invalidateQueries({ queryKey: ["cost-table"] });
+    void qc.invalidateQueries({ queryKey: ["import-conflicts"] });
+  }
 
   const { data: colors } = useQuery({
     queryKey: ["dict-items", "color"],
@@ -225,21 +286,12 @@ export function CostTablePage() {
   const columns: ColumnsType<CostTableRow> = [
     {
       title: "图片",
-      dataIndex: "image_key",
+      // 款式图（8a-2）：签名 URL 或外部链接；以前把私有桶的 R2 key 直接当 src，显示不出来（S8）
+      dataIndex: "image_url",
       width: 70,
-      render: (key: string | null) =>
-        key ? (
-          <Image width={40} height={40} src={key} fallback="" />
-        ) : (
-          <div
-            style={{
-              width: 40,
-              height: 40,
-              background: "#f0f0f0",
-              borderRadius: 4,
-            }}
-          />
-        ),
+      render: (src: string | null, row) => (
+        <StyleImageThumbnail src={src} alt={`${row.style_code} 款式主图`} size={40} emptyText />
+      ),
     },
     { title: "货号", dataIndex: "style_code", width: 120, fixed: "left" },
     { title: "商品编码", dataIndex: "sku_code", width: 120 },
@@ -310,26 +362,46 @@ export function CostTablePage() {
 
   return (
     <Card
+      // 标题与按钮放在同一个可换行的容器里：按钮放 extra 时不会换行，375 宽会撑出页面
       title={
-        <Typography.Title level={4} style={{ margin: 0 }}>
-          商品成本表
-        </Typography.Title>
-      }
-      extra={
-        <Space>
-          <ImportUploadButton
-            source="manual_style_sku"
-            label="导入商品成本表"
-            invalidateKeys={[["cost-table"], ["styles"], ["skus"]]}
-            templateColumns={[
-              "货号", "商品编码", "商品名称", "商品简称", "颜色及规格",
-              "颜色", "规格", "基本售价", "成本价", "采购价", "市场吊牌价", "品牌",
-            ]}
-          />
-          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-            新增商品
-          </Button>
-        </Space>
+        <div style={CARD_HEAD_STYLE}>
+          <Space size="middle" wrap>
+            <Typography.Title level={4} style={{ margin: 0 }}>
+              商品成本表
+            </Typography.Title>
+            {canViewGoodsImport && pendingConflicts > 0 && (
+              <Button
+                size="small"
+                style={{ color: "#c2410c", borderColor: "#fdba74" }}
+                onClick={() =>
+                  navigate(`/imports?tab=conflicts&source=${GOODS_SOURCE}`)
+                }
+              >
+                待处理冲突 {pendingConflicts}
+              </Button>
+            )}
+          </Space>
+          <Space wrap>
+            {canMapGoods && (
+              <Button onClick={() => setMappingOpen(true)} disabled={!mappingSpec}>
+                字段映射
+              </Button>
+            )}
+            {canImportGoods && (
+              <ImportUploadButton
+                source={GOODS_SOURCE}
+                label="导入商品成本表"
+                invalidateKeys={[["cost-table"], ["styles"], ["skus"]]}
+                templateColumns={templateColumns}
+                columnsNote={IMPORT_COLUMNS_NOTE}
+                onUploaded={setResultBatchId}
+              />
+            )}
+            <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+              新增商品
+            </Button>
+          </Space>
+        </div>
       }
     >
       <Space style={{ marginBottom: 16 }} wrap>
@@ -405,16 +477,13 @@ export function CostTablePage() {
                 value={`${editing.style_code} ${editing.style_name}`}
                 disabled
               />
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                款名、简称、品牌属于款式，请到「款式管理」修改。
-              </Typography.Text>
             </Form.Item>
           ) : (
             <Form.Item
               name="style_id"
               label="所属款式"
               rules={[{ required: true, message: "请选择款式" }]}
-              extra="按货号或款名搜索。若款式还不存在，请先到「款式管理」新建。"
+              extra="按货号或款名搜索。款式还不存在的话，到「商品 / 套装 → 款式」新建"
             >
               <Select
                 showSearch
@@ -453,7 +522,7 @@ export function CostTablePage() {
                   label: c.value,
                   value: c.value,
                 }))}
-                notFoundContent="暂无颜色，请先在款式管理的「管理字典」中添加"
+                notFoundContent="暂无颜色，请先在「商品 / 套装」的「管理字典」中添加"
               />
             </Form.Item>
             <Form.Item
@@ -468,7 +537,7 @@ export function CostTablePage() {
                   label: s.value,
                   value: s.value,
                 }))}
-                notFoundContent="暂无规格，请先在款式管理的「管理字典」中添加"
+                notFoundContent="暂无规格，请先在「商品 / 套装」的「管理字典」中添加"
               />
             </Form.Item>
           </Space>
@@ -543,6 +612,20 @@ export function CostTablePage() {
           </Space>
         </Form>
       </Modal>
+
+      <ImportResultModal
+        open={resultBatchId != null}
+        batchId={resultBatchId}
+        onClose={closeResult}
+      />
+      {canMapGoods && (
+        <FieldMappingDrawer
+          open={mappingOpen}
+          source={GOODS_SOURCE}
+          spec={mappingSpec}
+          onClose={() => setMappingOpen(false)}
+        />
+      )}
     </Card>
   );
 }

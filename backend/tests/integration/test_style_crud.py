@@ -20,9 +20,11 @@ from app.core.tenancy import tenant_id_ctx
 from app.modules.product.enums import Category
 from app.modules.product.exceptions import (
     StyleCodeConflictError,
+    StyleCodeImmutableError,
     StyleHasActiveSkuError,
     StyleNotFoundError,
 )
+from app.modules.product.models import Style
 from app.modules.product.repository import StyleListFilters
 from app.modules.product.schemas import StyleCreate, StyleUpdate
 from app.modules.product.service import StyleService
@@ -51,17 +53,51 @@ class TestCreateStyle:
                 StyleCreate(
                     style_code="W001",
                     style_name="波点花边连衣裙",
-                    short_name="波点花边",
-                    category=Category.DRESS,
                 ),
                 user,
             )
             assert response.style_code == "W001"
             assert response.style_name == "波点花边连衣裙"
-            assert response.short_name == "波点花边"
+            assert response.category is None
             assert response.design_status == "大货"
             assert response.is_active is True
             assert response.is_deleted is False
+        finally:
+            tenant_id_ctx.reset(token)
+
+    async def test_create_ignores_removed_fields(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
+    ) -> None:
+        """8a（J8）：旧客户端传简称 / 品牌 / 类目 / 季节不报错，也不写入。"""
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            brand = await product_factory.brand()
+            user = await factory.user(tenant_a, roles=[admin_role])
+            svc = StyleService(session)
+            payload = StyleCreate.model_validate(
+                {
+                    "style_code": "W002",
+                    "style_name": "旧客户端款",
+                    "short_name": "旧简称",
+                    "brand_id": str(brand.id),
+                    "category": Category.DRESS.value,
+                    "season": "春",
+                }
+            )
+            response = await svc.create_style(payload, user)
+            style = await session.get(Style, response.id)
+            assert style is not None
+            assert style.category is None
+            assert style.season is None
+            assert style.brand_id is None
+            assert style.short_name is None
+            assert response.category is None
+            assert response.short_name is None
         finally:
             tenant_id_ctx.reset(token)
 
@@ -83,7 +119,6 @@ class TestCreateStyle:
                     StyleCreate(
                         style_code="W001",
                         style_name="另一款",
-                        category=Category.DRESS,
                     ),
                     user,
                 )
@@ -137,6 +172,94 @@ class TestUpdateStyle:
                 user,
             )
             assert response.style_name == "保持"
+        finally:
+            tenant_id_ctx.reset(token)
+
+    async def test_update_style_code_rejected(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
+    ) -> None:
+        """8a FR-1.2：款号建档后不可改 → 422 STYLE_CODE_IMMUTABLE，其他字段也不落库。"""
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            style = await product_factory.style(style_code="IMM001", style_name="原名")
+            user = await factory.user(tenant_a, roles=[admin_role])
+            svc = StyleService(session)
+            with pytest.raises(StyleCodeImmutableError) as exc_info:
+                await svc.update_style(
+                    style.id,
+                    StyleUpdate(style_code="IMM002", style_name="改名"),
+                    user,
+                )
+            assert exc_info.value.code == "STYLE_CODE_IMMUTABLE"
+            assert exc_info.value.status_code == 422
+            assert exc_info.value.message == "款号建档后不可改"
+            await session.refresh(style)
+            assert style.style_code == "IMM001"
+            assert style.style_name == "原名"
+        finally:
+            tenant_id_ctx.reset(token)
+
+    async def test_update_same_style_code_ok(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
+    ) -> None:
+        """传与现值相同的款号照常保存（前端编辑弹窗会把只读款号一起提交）。"""
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            style = await product_factory.style(style_code="IMM003", style_name="原名")
+            user = await factory.user(tenant_a, roles=[admin_role])
+            svc = StyleService(session)
+            response = await svc.update_style(
+                style.id,
+                StyleUpdate(style_code="IMM003", style_name="新名"),
+                user,
+            )
+            assert response.style_code == "IMM003"
+            assert response.style_name == "新名"
+        finally:
+            tenant_id_ctx.reset(token)
+
+    async def test_update_ignores_removed_fields(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
+    ) -> None:
+        """8a（J8）：更新时传简称 / 品牌 / 类目 / 季节被忽略，存量值不动。"""
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            style = await product_factory.style(
+                style_code="IMM004", category="连衣裙", season="春", short_name="旧简称"
+            )
+            user = await factory.user(tenant_a, roles=[admin_role])
+            svc = StyleService(session)
+            payload = StyleUpdate.model_validate(
+                {
+                    "remark": "新备注",
+                    "short_name": "新简称",
+                    "brand_id": str(uuid4()),
+                    "category": "外套",
+                    "season": "秋",
+                }
+            )
+            response = await svc.update_style(style.id, payload, user)
+            assert response.remark == "新备注"
+            await session.refresh(style)
+            assert style.category == "连衣裙"
+            assert style.season == "春"
+            assert style.short_name == "旧简称"
+            assert style.brand_id is None
         finally:
             tenant_id_ctx.reset(token)
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
+from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
@@ -190,6 +191,23 @@ class TestAnomalyAlert:
             goods_line = next(ln for ln in sent[0][1].splitlines() if ln.startswith("> 商品："))
             assert "高退货简称" in goods_line
             assert style.style_name not in goods_line
+            # 补充 2：消息文本里没有商品编码（编码只进 log.detail 内部留档）
+            goods_code = (
+                await session.execute(
+                    select(GoodsMain.goods_code)
+                    .join(GoodsStyleItem, GoodsStyleItem.goods_main_id == GoodsMain.id)
+                    .where(GoodsStyleItem.style_id == style.id)
+                )
+            ).scalar_one()
+            assert goods_line == "> 商品：高退货简称"
+            assert goods_code not in sent[0][1]
+            assert f"> 含款号：{style.style_code}" in sent[0][1]
+            alert_log = (
+                await session.execute(
+                    select(WecomAlertLog).where(WecomAlertLog.tenant_id == tenant_a.id)
+                )
+            ).scalar_one()
+            assert alert_log.detail["goods_code"] == goods_code
 
             # 落 log 1 条
             cnt = (
@@ -267,3 +285,31 @@ class TestAnomalyAlert:
             assert n == 0
         finally:
             tenant_id_ctx.reset(tok)
+
+
+class TestAlertMessageNoGoodsCode:
+    """补充 2：预警消息不出现商品编码；「含款号」为空时写「—」，不再回落到编码。"""
+
+    @staticmethod
+    def _render(style_codes: list[str], *, is_suit: bool = False) -> str:
+        row = SimpleNamespace(
+            goods_code="SUIT-1074568657697",
+            goods_title="春日套装两件套全称",
+            goods_short_name="春日套装",
+            is_suit=is_suit,
+            style_codes=style_codes,
+        )
+        return AnomalyAlertService._render(
+            "return_rate_high", row, {"value": "0.5600", "threshold": "0.4000"}
+        )
+
+    async def test_no_style_codes_shows_dash(self) -> None:
+        text = self._render([], is_suit=True)
+        assert "> 商品：春日套装（套装）" in text.splitlines()
+        assert "> 含款号：—" in text.splitlines()
+        assert "SUIT-1074568657697" not in text
+
+    async def test_style_codes_listed(self) -> None:
+        text = self._render(["260415", "260419"], is_suit=True)
+        assert "> 含款号：260415、260419" in text.splitlines()
+        assert "SUIT-" not in text

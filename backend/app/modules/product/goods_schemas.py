@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -72,6 +73,15 @@ class GoodsStyleItemResponse(BaseModel):
     is_active: bool = True
 
 
+class GoodsImage(BaseModel):
+    """商品图的一张：来自某个成员款式（``resolve_style_image``）。"""
+
+    style_id: UUID
+    style_code: str
+    url: str
+    source: Literal["upload", "external"]
+
+
 # ---------------------------------------------------------------------------
 # 商品
 # ---------------------------------------------------------------------------
@@ -80,13 +90,15 @@ class GoodsStyleItemResponse(BaseModel):
 class GoodsMainCreate(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
-    goods_code: str = Field(..., min_length=1, max_length=64)
+    goods_code: str | None = Field(default=None, min_length=1, max_length=64)
+    """不传由系统生成（补充 3，``goods_codes.generate_goods_code``）；传了照旧用它（脚本 / 测试兼容，
+    被占用 409）。商品页已不再提供编码输入。"""
     goods_title: str = Field(..., min_length=1, max_length=512)
     short_name: str | None = Field(default=None, max_length=GOODS_SHORT_NAME_MAX_LEN)
-    category: str | None = Field(default=None, max_length=64)
+    # 类目已下线（8a-3，J12）：接口不再收 category（传了被忽略），goods_main.category 列保留
     season: str | None = Field(default=None, max_length=64)
-    brand_id: UUID | None = None
-    main_image_key: str | None = Field(default=None, max_length=512)
+    # 品牌只读（8a-4，A12）：只由商品资料导入写入，接口不再收 brand_id（传了被忽略）
+    # main_image_key 已废弃（8a-2，§7.2）：商品图由成员款式派生，传了被忽略
     remark: str | None = None
 
     items: list[GoodsStyleItemIn] = Field(default_factory=list)
@@ -106,10 +118,10 @@ class GoodsMainUpdate(BaseModel):
     其余可选字段是「传 None 等于没传」，简称不行：清空简称是正常操作，
     所以服务层按 ``model_fields_set`` 判断它有没有被传。
     """
-    category: str | None = Field(default=None, max_length=64)
+    # 类目已下线（8a-3，J12）：传了被忽略
     season: str | None = Field(default=None, max_length=64)
-    brand_id: UUID | None = None
-    main_image_key: str | None = Field(default=None, max_length=512)
+    # 品牌只读（8a-4，A12）：接口不再收 brand_id（传了被忽略）
+    # main_image_key 已废弃（8a-2，§7.2）：传了被忽略
     remark: str | None = None
     is_active: bool | None = None
 
@@ -129,16 +141,18 @@ class GoodsMainResponse(BaseModel):
     goods_code: str
     goods_title: str
     short_name: str | None = None
-    category: str | None = None
     season: str | None = None
     brand_id: UUID | None = None
     brand_name: str | None = None
-    main_image_key: str | None = None
     remark: str | None = None
     is_suit: bool = False
     is_active: bool = True
     created_at: datetime
     updated_at: datetime
+
+    images: list[GoodsImage] = Field(default_factory=list)
+    """商品图由启用成员款式派生（8a-2，§7.2）：按成员顺序，只放有图的成员——单品最多 1 张，
+    套装并排、缺图的成员不占位，都没有为 ``[]``。``goods_main.main_image_key`` 已废弃，不再读。"""
 
     items: list[GoodsStyleItemResponse] = Field(default_factory=list)
     total_cost: Decimal | None = None
@@ -148,6 +162,29 @@ class GoodsMainResponse(BaseModel):
     cost_missing_count: int = 0
     link_count: int = 0
     """挂在该商品上的平台链接数。为 0 说明商品还没上架到任何渠道。"""
+
+    notices: list[str] = Field(default_factory=list)
+    """给界面的提示（只在新建时有内容），如「该款已有商品「…」，已为新商品另行生成内部编码」。不含编码。"""
+
+
+class GoodsBrandOption(BaseModel):
+    id: UUID
+    brand_name: str
+
+
+class GoodsBrandOptionsResponse(BaseModel):
+    """``GET /api/goods/brand-options``：启用品牌（按名称），给成本表的品牌筛选用（J19）。"""
+
+    items: list[GoodsBrandOption]
+
+
+class SeasonOptionsResponse(BaseModel):
+    """季节选项（8a-3，§8.3）：字典 season 启用值在前，再接商品上出现过的值。
+
+    商品侧 ``GET /api/goods/season-options`` 与报表侧 ``GET /api/reports/season-options`` 共用。
+    """
+
+    items: list[str]
 
 
 class GoodsMainListResponse(BaseModel):
@@ -159,6 +196,9 @@ class GoodsMainListResponse(BaseModel):
 
 __all__ = [
     "GOODS_SHORT_NAME_MAX_LEN",
+    "GoodsBrandOption",
+    "GoodsBrandOptionsResponse",
+    "GoodsImage",
     "GoodsMainCreate",
     "GoodsMainListResponse",
     "GoodsMainResponse",
@@ -166,5 +206,6 @@ __all__ = [
     "GoodsOption",
     "GoodsStyleItemIn",
     "GoodsStyleItemResponse",
+    "SeasonOptionsResponse",
     "goods_display_name",
 ]

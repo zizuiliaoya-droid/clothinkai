@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Iterable
+from dataclasses import dataclass
 from typing import IO, Any
 
 from app.modules.importer.exceptions import ImportMappingInvalidError
@@ -57,11 +59,68 @@ def safe_filename(filename: str | None) -> str:
     return cleaned or "upload"
 
 
-def validate_mapping_config(columns: list[dict[str, Any]]) -> dict[str, Any]:
+@dataclass(frozen=True)
+class TargetSpec:
+    """映射目录里的一个目标字段（8a-4，设计 §4.7，J18）。
+
+    adapter 声明 ``mapping_targets: ClassVar[tuple[TargetSpec, ...]]`` 后：内置默认映射由目录生成
+    （``builtin_columns_from_targets``），保存自定义映射时按目录校验（``validate_mapping_config``
+    的 ``targets``）。
+    """
+
+    field: str
+    label: str
+    type: str  # 取 _ALLOWED_TYPES 之一，由系统定（忽略客户端传的）
+    default_col: str
+    aliases: tuple[str, ...] = ()
+    required: bool = False
+    # 「其一必填」：``组名:选项``。同组里至少有一个选项的全部字段都映射了，如颜色组的
+    # ``color_size:combined``（颜色及规格）与 ``color_size:split``（颜色 + 规格）
+    group: str | None = None
+    create_only: bool = False  # 仅新建时写入（补充二 Q2），比较时跳过
+    sensitive: tuple[str, str] | None = None  # 受字段权限保护（§4.6.1 遮挡失败明细用）
+
+
+def builtin_columns_from_targets(targets: Iterable[TargetSpec]) -> list[dict[str, Any]]:
+    """由目录生成内置默认映射（``source_col`` = ``default_col``，带别名；与旧 ``_DEFAULT_COLUMNS`` 同形）。"""
+    return [
+        {
+            "source_col": t.default_col,
+            "target_field": t.field,
+            "type": t.type,
+            "aliases": list(t.aliases),
+        }
+        for t in targets
+    ]
+
+
+def _check_against_targets(columns: list[dict[str, Any]], targets: tuple[TargetSpec, ...]) -> None:
+    """目录校验：必填已映射、「其一必填」组至少满足一个选项。"""
+    mapped = {c["target_field"] for c in columns}
+    for t in targets:
+        if t.required and t.field not in mapped:
+            raise ImportMappingInvalidError(f"必填字段「{t.label}」没有映射")
+    groups: dict[str, dict[str, list[TargetSpec]]] = {}
+    for t in targets:
+        if t.group:
+            name, _, option = t.group.partition(":")
+            groups.setdefault(name, {}).setdefault(option, []).append(t)
+    for options in groups.values():
+        if not any(all(t.field in mapped for t in members) for members in options.values()):
+            text = "，或".join(" + ".join(t.label for t in members) for members in options.values())
+            raise ImportMappingInvalidError(f"至少要映射一组：{text}")
+
+
+def validate_mapping_config(
+    columns: list[dict[str, Any]], *, targets: Iterable[TargetSpec] | None = None
+) -> dict[str, Any]:
     """校验 + 构造 field_mapping.mapping_config（BR-U06a-25）。
 
     校验：columns 非空；每列 source_col/target_field 非空；type ∈ 白名单；
-    date/datetime 的 transform 必填。
+    date/datetime 的 transform 必填；目标字段不重复（一个目标字段只读一列，不存别名）。
+
+    给了 ``targets``（adapter 的映射目录，8a-4）时再加：目标字段必须在目录里、``required`` 的
+    必须映射、``group`` 至少满足一种组合；``type`` / ``required`` 一律用目录里的值。
 
     Returns:
         ``{"columns": [...]}`` JSONB 结构。
@@ -72,6 +131,7 @@ def validate_mapping_config(columns: list[dict[str, Any]]) -> dict[str, Any]:
     if not columns:
         raise ImportMappingInvalidError("mapping columns 不能为空")
 
+    catalog = {t.field: t for t in targets} if targets is not None else None
     normalized: list[dict[str, Any]] = []
     seen_targets: set[str] = set()
     for i, col in enumerate(columns):
@@ -79,9 +139,16 @@ def validate_mapping_config(columns: list[dict[str, Any]]) -> dict[str, Any]:
         target_field = str(col.get("target_field", "")).strip()
         col_type = str(col.get("type", "str")).strip() or "str"
         transform = col.get("transform")
+        required = bool(col.get("required", False))
 
         if not source_col or not target_field:
             raise ImportMappingInvalidError(f"第 {i + 1} 列 source_col / target_field 不能为空")
+        if catalog is not None:
+            spec = catalog.get(target_field)
+            if spec is None:
+                raise ImportMappingInvalidError(f"不认识的目标字段 {target_field}")
+            col_type = spec.type
+            required = spec.required
         if col_type not in _ALLOWED_TYPES:
             raise ImportMappingInvalidError(
                 f"第 {i + 1} 列 type '{col_type}' 不在白名单 {sorted(_ALLOWED_TYPES)}"
@@ -98,16 +165,20 @@ def validate_mapping_config(columns: list[dict[str, Any]]) -> dict[str, Any]:
             {
                 "source_col": source_col,
                 "target_field": target_field,
-                "required": bool(col.get("required", False)),
+                "required": required,
                 "type": col_type,
                 "transform": transform,
             }
         )
 
+    if catalog is not None:
+        _check_against_targets(normalized, tuple(catalog.values()))
     return {"columns": normalized}
 
 
 __all__ = [
+    "TargetSpec",
+    "builtin_columns_from_targets",
     "compute_sha256",
     "csv_safe",
     "safe_filename",

@@ -107,7 +107,6 @@ class ReportExportService:
         *,
         exclude_brushing: bool = True,
         seasons: Sequence[str] | None = None,
-        categories: Sequence[str] | None = None,
         granularity: str = "day",
     ) -> StreamingResponse:
         if report_type not in _REPORT_TYPES:
@@ -121,7 +120,6 @@ class ReportExportService:
             time_range,
             exclude_brushing=exclude_brushing,
             seasons=seasons,
-            categories=categories,
             granularity=granularity,
         )
         wb = Workbook(write_only=True)
@@ -148,7 +146,6 @@ class ReportExportService:
         *,
         exclude_brushing: bool,
         seasons: Sequence[str] | None,
-        categories: Sequence[str] | None,
         granularity: str,
     ) -> tuple[list[str], list[list[Any]]]:
         if report_type == "production":
@@ -157,7 +154,6 @@ class ReportExportService:
                 time_range,
                 exclude_brushing=exclude_brushing,
                 seasons=seasons,
-                categories=categories,
             )
             extra_keys = sorted({key for row in report.items for key in row.extra})
             rows = [
