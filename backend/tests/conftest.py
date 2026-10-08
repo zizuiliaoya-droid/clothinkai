@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, ClassVar
 from uuid import UUID, uuid4
 
 import pytest
@@ -166,6 +166,18 @@ async def designer_role(session: AsyncSession) -> Any:
     return role
 
 
+def _reject_unknown(name: str, kw: dict[str, Any], known: frozenset[str]) -> None:
+    """工厂收到清单外的 kwarg 直接 TypeError。
+
+    工厂的 kwarg 清单是手写的；以前多传的 kwarg 被静默忽略，新列漏补进工厂时，
+    「两边都是 NULL」的断言会假通过（流程线设计 9.2）。给工厂加列时同步改它的
+    ``_KNOWN_KWARGS``。
+    """
+    unknown = sorted(set(kw) - known)
+    if unknown:
+        raise TypeError(f"{name} 不认识: {', '.join(unknown)}")
+
+
 def _make_user_record(tenant_id: UUID, **kwargs: Any) -> Any:
     from app.core.security.auth import hash_password
     from app.modules.auth.models import User
@@ -187,9 +199,26 @@ async def factory(session: AsyncSession) -> Any:
     """统一的测试数据工厂。"""
 
     class Factory:
+        # 改 _make_user_record 认的 kwarg 时同步改这里
+        _KNOWN_KWARGS: ClassVar[dict[str, frozenset[str]]] = {
+            "user": frozenset(
+                {
+                    "id",
+                    "username",
+                    "password_hash",
+                    "display_name",
+                    "email",
+                    "status",
+                    "password_must_change",
+                    "roles",
+                }
+            ),
+        }
+
         async def user(self, tenant: Any, **kwargs: Any) -> Any:
             from app.modules.auth.models import UserRole
 
+            _reject_unknown("factory.user", kwargs, self._KNOWN_KWARGS["user"])
             user = _make_user_record(tenant.id, **kwargs)
             session.add(user)
             await session.flush()
@@ -261,6 +290,44 @@ async def product_factory(session: AsyncSession, tenant_a: Any) -> Any:
     from app.modules.product.models import Brand, Sku, Style
 
     class ProductFactory:
+        # 各方法认的 kwarg；给方法加 kw.get 时同步改这里
+        _KNOWN_KWARGS: ClassVar[dict[str, frozenset[str]]] = {
+            "brand": frozenset({"brand_code", "brand_name", "is_active"}),
+            "style": frozenset(
+                {
+                    "style_code",
+                    "style_name",
+                    "short_name",
+                    "qianniu_product_id",
+                    "brand_id",
+                    "category",
+                    "season",
+                    "gender",
+                    "tags",
+                    "tag_color",
+                    "main_image_key",
+                    "remark",
+                    "owner_id",
+                    "design_status",
+                    "is_active",
+                    "is_deleted",
+                }
+            ),
+            "sku": frozenset(
+                {
+                    "sku_code",
+                    "color",
+                    "size",
+                    "cost_price",
+                    "purchase_price",
+                    "base_price",
+                    "sourcing_type",
+                    "is_active",
+                    "is_deleted",
+                }
+            ),
+        }
+
         def __init__(self, default_tenant: Any) -> None:
             self.default_tenant = default_tenant
 
@@ -269,6 +336,7 @@ async def product_factory(session: AsyncSession, tenant_a: Any) -> Any:
             await session.flush()
 
         async def brand(self, tenant: Any | None = None, **kw: Any) -> Brand:
+            _reject_unknown("product_factory.brand", kw, self._KNOWN_KWARGS["brand"])
             t = tenant or self.default_tenant
             tok = tenant_id_ctx.set(t.id)
             try:
@@ -285,6 +353,7 @@ async def product_factory(session: AsyncSession, tenant_a: Any) -> Any:
                 tenant_id_ctx.reset(tok)
 
         async def style(self, tenant: Any | None = None, **kw: Any) -> Style:
+            _reject_unknown("product_factory.style", kw, self._KNOWN_KWARGS["style"])
             t = tenant or self.default_tenant
             tok = tenant_id_ctx.set(t.id)
             try:
@@ -319,6 +388,7 @@ async def product_factory(session: AsyncSession, tenant_a: Any) -> Any:
             tenant: Any | None = None,
             **kw: Any,
         ) -> Sku:
+            _reject_unknown("product_factory.sku", kw, self._KNOWN_KWARGS["sku"])
             t = tenant or self.default_tenant
             tok = tenant_id_ctx.set(t.id)
             try:
@@ -375,12 +445,38 @@ async def blogger_factory(session: AsyncSession, tenant_a: Any) -> Any:
     from app.modules.blogger.models import Blogger
 
     class BloggerFactory:
+        # blogger() 认的 kwarg；加 kw.get 时同步改这里
+        _KNOWN_KWARGS: ClassVar[dict[str, frozenset[str]]] = {
+            "blogger": frozenset(
+                {
+                    "xiaohongshu_id",
+                    "nickname",
+                    "platform",
+                    "wechat",
+                    "phone",
+                    "follower_count",
+                    "blogger_type",
+                    "gender_target",
+                    "category_tags",
+                    "quality_tags",
+                    "quote",
+                    "cooperation_history",
+                    "remark",
+                    "is_suspected_fake",
+                    "audience_profile",
+                    "is_active",
+                    "is_deleted",
+                }
+            ),
+        }
+
         def __init__(self, default_tenant: Any) -> None:
             self.default_tenant = default_tenant
 
         async def blogger(self, tenant: Any | None = None, **kw: Any) -> Blogger:
             from decimal import Decimal
 
+            _reject_unknown("blogger_factory.blogger", kw, self._KNOWN_KWARGS["blogger"])
             t = tenant or self.default_tenant
             tok = tenant_id_ctx.set(t.id)
             try:
@@ -445,6 +541,47 @@ async def promotion_factory(session: AsyncSession, tenant_a: Any) -> Any:
     from app.modules.promotion.models import Promotion
 
     class PromotionFactory:
+        # promotion() 认的 kwarg（brand_comment 是开关，不是列）；加 kw.get 时同步改这里
+        _KNOWN_KWARGS: ClassVar[dict[str, frozenset[str]]] = {
+            "promotion": frozenset(
+                {
+                    "sku_id",
+                    "goods_main_id",
+                    "pr_id",
+                    "internal_code",
+                    "style_code_snapshot",
+                    "style_short_name_snapshot",
+                    "quote_amount",
+                    "cost_snapshot",
+                    "platform",
+                    "cooperation_date",
+                    "scheduled_publish_date",
+                    "actual_publish_date",
+                    "publish_url",
+                    "note_title",
+                    "remark",
+                    "publish_status",
+                    "recall_status",
+                    "settlement_status",
+                    "is_active",
+                    "like_count",
+                    "source_extra",
+                    "cooperation_mode",
+                    "return_shipping_fee",
+                    "return_waybill",
+                    "collect_count",
+                    "comment_count",
+                    "reviewed_by",
+                    "review_action",
+                    "review_reason",
+                    "review_reason_category",
+                    "resubmit_note",
+                    "resubmitted_at",
+                    "brand_comment",
+                }
+            ),
+        }
+
         def __init__(self, default_tenant: Any) -> None:
             self.default_tenant = default_tenant
 
@@ -457,6 +594,7 @@ async def promotion_factory(session: AsyncSession, tenant_a: Any) -> Any:
             tenant: Any | None = None,
             **kw: Any,
         ) -> Promotion:
+            _reject_unknown("promotion_factory.promotion", kw, self._KNOWN_KWARGS["promotion"])
             t = tenant or self.default_tenant
             tok = tenant_id_ctx.set(t.id)
             try:
@@ -584,10 +722,28 @@ async def attachment_factory(session: AsyncSession, tenant_a: Any) -> Any:
     from app.core.tenancy import tenant_id_ctx
 
     class AttachmentFactory:
+        # attachment() 认的 kwarg；加 kw.get 时同步改这里
+        _KNOWN_KWARGS: ClassVar[dict[str, frozenset[str]]] = {
+            "attachment": frozenset(
+                {
+                    "id",
+                    "bucket",
+                    "r2_key",
+                    "purpose",
+                    "filename",
+                    "mime_type",
+                    "size_bytes",
+                    "status",
+                    "created_by",
+                }
+            ),
+        }
+
         def __init__(self, default_tenant: Any) -> None:
             self.default_tenant = default_tenant
 
         async def attachment(self, tenant: Any | None = None, **kw: Any) -> Attachment:
+            _reject_unknown("attachment_factory.attachment", kw, self._KNOWN_KWARGS["attachment"])
             t = tenant or self.default_tenant
             tok = tenant_id_ctx.set(t.id)
             try:
@@ -627,6 +783,32 @@ async def settlement_factory(session: AsyncSession, tenant_a: Any) -> Any:
     from app.modules.finance.models import Settlement
 
     class SettlementFactory:
+        # settlement() 认的 kwarg；加 kw.get 时同步改这里
+        _KNOWN_KWARGS: ClassVar[dict[str, frozenset[str]]] = {
+            "settlement": frozenset(
+                {
+                    "promotion_id",
+                    "id",
+                    "pr_id",
+                    "settlement_no",
+                    "amount",
+                    "total_amount",
+                    "payment_amount",
+                    "payment_date",
+                    "payment_proof_attachment_id",
+                    "note_title",
+                    "remark",
+                    "settlement_status",
+                    "reviewed_by",
+                    "reviewed_at",
+                    "review_action",
+                    "review_reason",
+                    "paid_by",
+                    "request_event_id",
+                }
+            ),
+        }
+
         def __init__(self, default_tenant: Any) -> None:
             self.default_tenant = default_tenant
 
@@ -671,6 +853,7 @@ async def settlement_factory(session: AsyncSession, tenant_a: Any) -> Any:
             tenant: Any | None = None,
             **kw: Any,
         ) -> Settlement:
+            _reject_unknown("settlement_factory.settlement", kw, self._KNOWN_KWARGS["settlement"])
             t = tenant or self.default_tenant
             tok = tenant_id_ctx.set(t.id)
             try:
@@ -829,10 +1012,33 @@ async def import_batch_factory(session: AsyncSession, tenant_a: Any) -> Any:
     from app.modules.importer.models import ImportBatch
 
     class ImportBatchFactory:
+        # batch() 认的 kwarg；加 kw.get 时同步改这里
+        _KNOWN_KWARGS: ClassVar[dict[str, frozenset[str]]] = {
+            "batch": frozenset(
+                {
+                    "id",
+                    "source",
+                    "file_hash",
+                    "original_filename",
+                    "file_r2_key",
+                    "file_bucket",
+                    "mapping_version",
+                    "status",
+                    "total_rows",
+                    "imported",
+                    "failed",
+                    "retry_count",
+                    "error_summary",
+                    "created_by",
+                }
+            ),
+        }
+
         def __init__(self, default_tenant: Any) -> None:
             self.default_tenant = default_tenant
 
         async def batch(self, tenant: Any | None = None, **kw: Any) -> ImportBatch:
+            _reject_unknown("import_batch_factory.batch", kw, self._KNOWN_KWARGS["batch"])
             t = tenant or self.default_tenant
             tok = tenant_id_ctx.set(t.id)
             try:
