@@ -7,6 +7,8 @@ runner 在行循环之后、批次汇总之前调用（``StyleSkuImportAdapter.a
 - 参与的行 = 本次执行处理的所有行（不看行结果：内容一致跳过、冲突、失败但款式存在的行都算）；
   款式编码精确匹配未删除款式，找不到 / 只有已删除的 → 跳过并记原因
 - 每款按行号取第一个有 DISPIMG 引用的行；它的图无效就计「图片无效」，不往后找；其余行的图忽略
+- 每款每批最多一条结果：只重跑失败行时，本批次已有 set / kept / invalid 结果的款不再取图；
+  failed / skipped 的款把原取图行（取自 ``import_job.raw_data``）放回候选重新尝试，结果落回同一行、取代旧的
 - 只看 ``main_image_key``：只有外部链接的款式照样补。写 R2 前先查一次（已有 → 不写 R2），
   写库时 ``StyleMainImageStore.replace(only_if_empty=True)`` 加锁复判，判不过就补偿删除
 - 每款一个事务（``replace`` 自己提交）；结果写在取图那一行 ``import_job.notes["image"]``：
