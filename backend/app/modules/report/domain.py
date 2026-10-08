@@ -1,4 +1,4 @@
-"""U08 report 领域纯函数（TimeRange 解析 + level 着色）。"""
+"""U08 report 领域纯函数（TimeRange 解析 + 时间分桶 + level 着色）。"""
 
 from __future__ import annotations
 
@@ -46,6 +46,22 @@ def resolve_time_range(
     raise ReportInvalidTimePresetError()
 
 
+def bucket_start(value: date, granularity: str) -> date:
+    """日期所在桶的首日：day 原值、week ISO 周一、month 1 号、year 1 月 1 日。
+
+    店铺数据的周 / 月 / 年分桶（页面与导出共用）。其余粒度 → ValueError。
+    """
+    if granularity == "day":
+        return value
+    if granularity == "week":
+        return date.fromordinal(value.toordinal() - value.weekday())
+    if granularity == "month":
+        return value.replace(day=1)
+    if granularity == "year":
+        return value.replace(month=1, day=1)
+    raise ValueError(f"不支持的时间粒度: {granularity}")
+
+
 def level_publish_rate(rate: Decimal | None) -> str | None:
     """发布率着色：≥0.8 绿 / ≥0.5 黄 / 否则红（BR-U08-32）；None → None。"""
     if rate is None:
@@ -70,6 +86,7 @@ def level_overdue_rate(rate: Decimal | None) -> str | None:
 
 __all__ = [
     "VALID_PRESETS",
+    "bucket_start",
     "level_overdue_rate",
     "level_publish_rate",
     "resolve_time_range",

@@ -453,6 +453,8 @@ class NegotiationService:
                     style_id=r["style_id"],
                     style_code=str(r["style_code"]),
                     style_name=r.get("style_name"),
+                    display_short_name=r.get("display_short_name"),
+                    goods_title=r.get("goods_title"),
                     style_main_image_url=image_url,
                     cooperation_date=r["cooperation_date"],
                     cooperation_mode=r.get("cooperation_mode"),

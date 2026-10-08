@@ -16,6 +16,7 @@ import type { ColumnsType } from "antd/es/table";
 import { listPromotions, updateWarehouseWaybill } from "@/features/promotion/api";
 import type { Promotion } from "@/features/promotion/types";
 import { extractErrorMessage } from "@/services/apiClient";
+import { DisplayNameCell } from "@/components/DisplayNameCell/DisplayNameCell";
 
 type Bucket = "待打单" | "已打单" | "全部";
 
@@ -82,7 +83,16 @@ export function WarehousePage() {
   const columns: ColumnsType<Promotion> = [
     { title: "内部编码", dataIndex: "internal_code", width: 150 },
     { title: "货号", dataIndex: "style_code_snapshot", width: 110 },
-    { title: "品名", dataIndex: "style_short_name_snapshot", width: 130, render: (v) => v || "—" },
+    {
+      // 品名 = 商品简称，没填回落建单快照（7a-8，与推广列表同一规则）
+      title: "品名",
+      dataIndex: "display_short_name",
+      width: 130,
+      ellipsis: { showTitle: false },
+      render: (v: string | null, r: Promotion) => (
+        <DisplayNameCell name={v ?? r.style_short_name_snapshot} fullTitle={r.goods_title} />
+      ),
+    },
     { title: "颜色及规格", key: "cs", width: 120, render: (_, r) => se(r, "颜色及规格") || "—" },
     { title: "打单地址", key: "addr", width: 240, render: (_, r) => se(r, "打单地址") || "—" },
     {

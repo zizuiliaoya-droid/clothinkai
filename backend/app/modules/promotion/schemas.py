@@ -85,8 +85,10 @@ class PromotionBase(BaseModel):
     """
     note_title: str | None = Field(default=None, max_length=255)
     remark: str | None = None
-    # 人工源列扩展（颜色及规格/打单地址/发货单号/订单号/寄回单号/合作形式/收藏数/评论数/博主风格 等）
+    # 人工源列扩展（颜色及规格/打单地址/发货单号/订单号/合作形式/负责PR/博主风格 等）
     # 注意：「合作方式」已提成 typed 字段 cooperation_mode，不再从这里走。
+    # 寄回单号 / 点赞数 / 收藏数 / 评论数 已从「录入信息」删掉（7a-5，各有 typed 列），
+    # JSONB 里的旧值原样留档，不迁移。
     source_extra: dict = Field(default_factory=dict)
 
 
@@ -126,7 +128,12 @@ class PromotionUpdate(BaseModel):
     like_count: int | None = Field(default=None, ge=0)
     remark: str | None = None
     is_active: bool | None = None
-    source_extra: dict | None = None
+    source_extra: dict[str, str | None] | None = None
+    """按键合并（7a-5）：值为 null 或空串 = 删这个键；没出现的键不动。
+
+    不再整包覆盖：整包会删掉表单上没有的键，也会让弹窗开着期间仓库回填的发货单号
+    被旧快照冲掉。合并规则在 ``domain.merge_source_extra``。
+    """
 
 
 class PromotionPaymentQrUploadInitRequest(BaseModel):
@@ -158,6 +165,13 @@ class PromotionWarehouseWaybillRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+def _check_publish_url(v: str) -> str:
+    """发布链接必须是 http(s)；publish 与 resubmit 共用。"""
+    if not (v.startswith("http://") or v.startswith("https://")):
+        raise ValueError("publish_url 必须以 http:// 或 https:// 开头")
+    return v
+
+
 class PromotionPublishRequest(BaseModel):
     """publish 入参（BR-U04-20）。"""
 
@@ -165,13 +179,33 @@ class PromotionPublishRequest(BaseModel):
 
     publish_url: str = Field(min_length=1, max_length=512)
     actual_publish_date: date
+    # 「不能晚于今天」刻意不在这里校验（7a-7 / plan D4）：schema 先于状态机执行，
+    # 已发布的单再点发布会报日期错而不是状态错。放在 service 的
+    # _assert_not_future_publish_date，状态机之后判，按 Asia/Shanghai 取今天。
 
     @field_validator("publish_url")
     @classmethod
     def _validate_url(cls, v: str) -> str:
-        if not (v.startswith("http://") or v.startswith("https://")):
-            raise ValueError("publish_url 必须以 http:// 或 https:// 开头")
-        return v
+        return _check_publish_url(v)
+
+
+class PromotionResubmitRequest(BaseModel):
+    """驳回后重新提交入参（7a-4）。
+
+    只允许 已驳回 → 待核查。重提说明必填（全空白 = 没填）；发布链接与实际发布日期
+    可以一起改，不传就不动。日期「不晚于今天」同 publish，在 service 状态机之后判。
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    note: str = Field(min_length=1, max_length=2000)
+    publish_url: str | None = Field(default=None, min_length=1, max_length=512)
+    actual_publish_date: date | None = None
+
+    @field_validator("publish_url")
+    @classmethod
+    def _validate_url(cls, v: str | None) -> str | None:
+        return None if v is None else _check_publish_url(v)
 
 
 class PromotionCancelRequest(BaseModel):
@@ -213,6 +247,7 @@ class PromotionReviewRequest(BaseModel):
 
     action: ReviewAction
     review_reason: str | None = Field(default=None, max_length=2000)
+    """驳回说明，驳回时必填。审核通过时忽略：单据上保留的是最近一次驳回的说明（7a-4）。"""
     review_reason_category: RejectReasonCategory | None = None
     """驳回原因分类，驳回时必填（PRD 改动 5 三选一）。审核通过时忽略。"""
 
@@ -371,10 +406,24 @@ class PromotionResponse(BaseModel):
     # 快照字段
     style_code_snapshot: str
     style_short_name_snapshot: str
+    """建单时的款式简称快照，原样返回、不回填（导出与历史核对在用）。界面的品名看
+    ``display_short_name``。"""
+    display_short_name: str | None = None
+    """品名（7a-8）：归属商品的简称，没填（或全空白、没有归属商品）回落
+    ``style_short_name_snapshot``。规则只有 ``display_name.py`` 一处。"""
     style_main_image_url: str | None = None
     # 商品归属实时取，不做快照 —— 归属可改，快照会过期
     goods_code: str | None = None
+    """商品编码。接口保留（导出、对账要用），界面不再显示（业务方 10-06）。"""
     goods_is_suit: bool = False
+    goods_title: str | None = None
+    """归属商品全称。没有归属商品为 None。"""
+    goods_short_name: str | None = None
+    """归属商品简称，归一过（全空白 → None）。
+
+    给「归属商品」列用：显示 简称，没填回落 ``goods_title``（商品全称）——与品名不同，
+    品名回落的是建单快照。
+    """
     quote_amount: Decimal | None = None  # 敏感
     cost_snapshot: Decimal | None = None  # 敏感
 
@@ -431,8 +480,13 @@ class PromotionResponse(BaseModel):
     reviewed_by: UUID | None = None
     reviewed_at: datetime | None = None
     review_action: str | None = None
+    # review_reason / review_reason_category = 最近一次驳回的说明与分类：只在驳回时写，
+    # 重新提交、再审通过都不清（7a-4）
     review_reason: str | None = None
     review_reason_category: str | None = None
+    resubmit_note: str | None = None
+    """最近一次驳回后重新提交的说明（7a-4，只留最近一轮）。"""
+    resubmitted_at: datetime | None = None
 
     # 通用
     is_active: bool
@@ -511,6 +565,7 @@ __all__ = [
     "PromotionRecallResultRequest",
     "PromotionRecallStartRequest",
     "PromotionResponse",
+    "PromotionResubmitRequest",
     "PromotionReviewRequest",
     "PromotionUpdate",
     "PromotionUpdateLikeRequest",

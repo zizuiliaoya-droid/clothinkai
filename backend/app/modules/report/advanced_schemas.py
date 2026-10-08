@@ -75,7 +75,8 @@ class StoreDailyRow(BaseModel):
     ad_spend_total: Decimal | None = None
     zhitongche_spend: Decimal | None = None
     yinli_spend: Decimal | None = None
-    # 千牛日报按日汇总的其余指标（对齐 final.xlsx 店铺数据；SUM qianniu_daily.extra 数值列）
+    # 千牛日报的其余指标（对齐 final.xlsx 店铺数据）：extra 按 extra_metrics 规则聚合，
+    # 多行时算不出来的比率 / 均值为 None；按周 / 月 / 年时 date 是桶首日
     extra: dict = Field(default_factory=dict)
 
 
@@ -112,7 +113,7 @@ class ProductionRow(BaseModel):
     net_roi: Decimal | None = None
     unit_deal_cost: Decimal | None = None
     # 千牛/站内导入数据按商品汇总的其余指标（对齐 final.xlsx 投产报表 70 列；
-    # SUM qianniu_daily.extra + ad_daily.extra 的数值列，按 platform_product→商品归集）
+    # qianniu_daily.extra + ad_daily.extra 按 platform_product→商品归集，按 extra_metrics 规则聚合）
     extra: dict = Field(default_factory=dict)
 
 

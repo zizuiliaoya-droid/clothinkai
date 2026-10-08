@@ -10,6 +10,7 @@ import type {
   PromotionPublishRequest,
   PromotionRecallStartRequest,
   PromotionAmountLog,
+  PromotionResubmitRequest,
   PromotionReviewRequest,
   PromotionUpdate,
   Retrospective,
@@ -169,6 +170,18 @@ export async function reviewPromotion(
 ): Promise<Promotion> {
   const resp = await apiClient.post<Promotion>(
     `/api/promotions/${promotionId}/review`,
+    payload
+  );
+  return resp.data;
+}
+
+/** 驳回后重新提交（已驳回 → 待核查）。只带改了的链接 / 日期。 */
+export async function resubmitPromotion(
+  promotionId: string,
+  payload: PromotionResubmitRequest
+): Promise<Promotion> {
+  const resp = await apiClient.post<Promotion>(
+    `/api/promotions/${promotionId}/resubmit`,
     payload
   );
   return resp.data;

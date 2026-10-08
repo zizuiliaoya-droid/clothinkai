@@ -35,7 +35,12 @@ export interface UrgeTask {
   pr_name: string | null;
 
   style_code: string | null;
+  /** 建单时的款式简称快照。界面显示 display_short_name。 */
   style_name: string | null;
+  /** 品名（7a-8）：商品简称，没填回落快照。 */
+  display_short_name: string | null;
+  /** 归属商品全称（悬停提示）；没有归属商品为 null。 */
+  goods_title: string | null;
   scheduled_publish_date: string | null;
   publish_status: string | null;
 

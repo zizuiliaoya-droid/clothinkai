@@ -36,11 +36,11 @@ import type {
   NegotiationFilters,
   NegotiationStatus,
 } from "@/features/negotiation/types";
-import { listStyles } from "@/features/product/api";
-import { listBloggers } from "@/features/blogger/api";
 import { extractErrorMessage } from "@/services/apiClient";
 import { useAuthStore } from "@/stores/authStore";
 import { BloggerHoverCard } from "@/components/BloggerHoverCard/BloggerHoverCard";
+import { BloggerSelect } from "@/components/RemoteSelect/BloggerSelect";
+import { StyleSelect } from "@/components/RemoteSelect/StyleSelect";
 
 const PLATFORMS = ["小红书", "抖音", "快手", "B站"];
 const MODES: CooperationMode[] = ["寄拍", "送拍", "置换"];
@@ -96,7 +96,6 @@ export function NegotiationPage() {
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Negotiation | null>(null);
   const [form] = Form.useForm();
-  const [styleKeyword, setStyleKeyword] = useState("");
   const [rejectTarget, setRejectTarget] = useState<Negotiation | null>(null);
   const [rejectForm] = Form.useForm();
 
@@ -113,17 +112,6 @@ export function NegotiationPage() {
     queryKey: ["negotiation-status-counts"],
     queryFn: negotiationStatusCounts,
   });
-  const { data: bloggers } = useQuery({
-    queryKey: ["bloggers", "negotiation-options"],
-    queryFn: () => listBloggers({ page: 1, page_size: 100 }),
-  });
-  const { data: stylePicker, isFetching: stylesFetching } = useQuery({
-    queryKey: ["styles", "negotiation-picker", styleKeyword],
-    queryFn: () =>
-      listStyles({ page: 1, page_size: 20, keyword: styleKeyword || undefined }),
-    enabled: formOpen,
-  });
-
   function invalidate() {
     void qc.invalidateQueries({ queryKey: ["negotiations"] });
     void qc.invalidateQueries({ queryKey: ["negotiation-status-counts"] });
@@ -196,7 +184,6 @@ export function NegotiationPage() {
   function closeForm() {
     setFormOpen(false);
     setEditing(null);
-    setStyleKeyword("");
     form.resetFields();
   }
 
@@ -225,20 +212,18 @@ export function NegotiationPage() {
     setFormOpen(true);
   }
 
-  const styleOptions = useMemo(() => {
-    const fromSearch = (stylePicker?.items ?? []).map((s) => ({
-      label: `${s.style_code} ${s.style_name}`,
-      value: s.id,
-    }));
-    // 编辑时已选的款式可能不在搜索结果里，补进去否则 Select 只显示 UUID
-    if (editing && !fromSearch.some((o) => o.value === editing.style_id)) {
-      fromSearch.unshift({
-        label: `${editing.style_code ?? ""} ${editing.style_name ?? ""}`.trim(),
+  // 编辑时已选的博主 / 款式多半不在搜索结果的前 20 条里，交给下拉回显，否则只显示 UUID
+  const bloggerEcho = editing
+    ? { value: editing.blogger_id, label: editing.blogger_nickname || editing.blogger_id }
+    : null;
+  const styleEcho = editing
+    ? {
         value: editing.style_id,
-      });
-    }
-    return fromSearch;
-  }, [stylePicker, editing]);
+        label:
+          `${editing.style_code ?? ""} ${editing.style_name ?? ""}`.trim() ||
+          editing.style_id,
+      }
+    : null;
 
   const columns: ColumnsType<Negotiation> = [
     {
@@ -458,29 +443,14 @@ export function NegotiationPage() {
             label="博主"
             rules={[{ required: true, message: "请选择博主" }]}
           >
-            <Select
-              showSearch
-              optionFilterProp="label"
-              placeholder="选择博主"
-              options={(bloggers?.items ?? []).map((b) => ({
-                label: `${b.nickname} (${b.xiaohongshu_id})`,
-                value: b.id,
-              }))}
-            />
+            <BloggerSelect selected={bloggerEcho} />
           </Form.Item>
           <Form.Item
             name="style_id"
             label="款式"
             rules={[{ required: true, message: "请选择款式" }]}
           >
-            <Select
-              showSearch
-              filterOption={false}
-              placeholder="搜货号或款名"
-              loading={stylesFetching}
-              onSearch={setStyleKeyword}
-              options={styleOptions}
-            />
+            <StyleSelect selected={styleEcho} />
           </Form.Item>
           <Form.Item
             name="cooperation_mode"

@@ -50,6 +50,18 @@ class TestPromotionApiContract:
             )
         assert resp.status_code == 401
 
+    async def test_resubmit_requires_auth(self) -> None:
+        from uuid import uuid4
+
+        from app.main import app
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            resp = await ac.post(
+                f"/api/promotions/{uuid4()}/resubmit",
+                json={"note": "重提"},
+            )
+        assert resp.status_code == 401
+
     async def test_openapi_exposes_promotion_endpoints(self) -> None:
         from app.main import app
 
@@ -66,3 +78,4 @@ class TestPromotionApiContract:
         assert "/api/promotions/{promotion_id}/recall/success" in paths
         assert "/api/promotions/{promotion_id}/recall/failure" in paths
         assert "/api/promotions/{promotion_id}/review" in paths
+        assert "/api/promotions/{promotion_id}/resubmit" in paths

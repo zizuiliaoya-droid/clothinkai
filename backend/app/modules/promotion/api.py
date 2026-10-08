@@ -46,6 +46,7 @@ from app.modules.promotion.schemas import (
     PromotionRecallResultRequest,
     PromotionRecallStartRequest,
     PromotionResponse,
+    PromotionResubmitRequest,
     PromotionReturnWaybillRequest,
     PromotionReviewRequest,
     PromotionUpdate,
@@ -358,10 +359,32 @@ async def review_promotion(
     - 送拍：直接到待财务付款
     - 置换：直接到已付款，不发 SettlementRequested（没有钱要付，不建结款单）
 
-    驳回要同时给 review_reason 与 review_reason_category（三选一）。
+    驳回要同时给 review_reason 与 review_reason_category（三选一）；通过时不改这两列
+    （保留最近一次驳回，重提后通过仍看得到上一轮驳回原因，7a-4）。
     禁止自审（reviewer != pr_id）。
     """
     return await service.review(promotion_id, payload, user)
+
+
+@router.post(
+    "/promotions/{promotion_id}/resubmit",
+    response_model=PromotionResponse,
+    dependencies=[require_permission("promotion", "write")],
+)
+async def resubmit_promotion(
+    promotion_id: UUID,
+    payload: PromotionResubmitRequest,
+    user: CurrentActiveUser,
+    service: PromotionServiceDep,
+) -> PromotionResponse:
+    """7a-4 驳回后重新提交：已驳回 → 待核查，等主管再审.
+
+    - 只允许从「已驳回」出发（其余状态 422 ILLEGAL_STATE_TRANSITION），且要求已发布
+    - 重提说明 note 必填（≤ 2000 字）；可同时改发布链接 / 实际发布日期，不传不动
+    - 实际发布日期不能晚于今天（422 PUBLISH_DATE_IN_FUTURE）
+    - 上一轮驳回原因保留，不清
+    """
+    return await service.resubmit(promotion_id, payload, user)
 
 
 @router.post(

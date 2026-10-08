@@ -150,6 +150,11 @@ class BloggerCooperationItem(BaseModel):
     style_id: UUID
     style_code: str
     style_name: str | None = None
+    """建单时的款式简称快照（接口兼容保留）。界面显示 ``display_short_name``。"""
+    display_short_name: str | None = None
+    """品名：归属商品的简称，没填回落快照（7a-8，规则见 ``promotion/display_name.py``）。"""
+    goods_title: str | None = None
+    """归属商品全称（悬停提示用）。没有归属商品为 None。"""
     style_main_image_url: str | None = None
     cooperation_date: date
     cooperation_mode: str | None = None

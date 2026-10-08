@@ -51,5 +51,17 @@ GOODS_PERMISSIONS: list[tuple[str, str, str]] = [
     ("product.goods", "write", "创建 / 编辑 / 删除商品与套装成员"),
 ]
 
+# 7a-1 款式下拉（款式列表 / 款式下的商品 / 款式下的颜色尺码）—— PR 建推广、谈款、录入信息要用。
+# 只授给 pr / pr_manager 这一条窄 scope，刻意不给 PR product.*:read：那会连带放开成本表
+# /api/skus/、字典 /api/dict-items、商品 / 套装等整个 product 域。
+# action 叫 read 没问题：has() 的前缀通配让持 product.*:read（设计、运营）与
+# product.*:*（跟单）的角色照旧能读这三个接口，本来就该读，没人因此丢权限。
+SCOPE_STYLE = "product.style"
+SCOPE_STYLE_READ = "product.style:read"
+
+STYLE_PERMISSIONS: list[tuple[str, str, str]] = [
+    ("product.style", "read", "查看款式列表与款式下的商品 / 颜色尺码（下拉用）"),
+]
+
 # U17 的 product.bundle:* 已随 bundle_product / bundle_item 一起删除（migration 045）。
 # 套装现在是 goods_main.is_suit，权限走上面的 product.goods。

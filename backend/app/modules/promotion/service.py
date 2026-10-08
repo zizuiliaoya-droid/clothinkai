@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import builtins
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
@@ -48,11 +48,16 @@ from app.modules.auth.repository import PermissionRepository, RoleRepository
 from app.modules.blogger.repository import BloggerRepository
 from app.modules.product.models import Sku
 from app.modules.product.repository import SkuRepository, StyleRepository
+from app.modules.promotion.display_name import (
+    normalize_goods_short_name,
+    promotion_display_short_name,
+)
 from app.modules.promotion.domain import (
     build_promotion_audit_changes,
     compute_amount_changes,
     compute_promotion_changes,
     format_internal_code,
+    merge_source_extra,
 )
 from app.modules.promotion.enums import (
     AMOUNT_LOG_FIELDS,
@@ -79,6 +84,7 @@ from app.modules.promotion.exceptions import (
     InvalidStyleReferenceError,
     MetricsScreenshotRequiredError,
     PromotionNotFoundError,
+    PublishDateInFutureError,
     PublishUrlRequiredError,
     RejectReasonCategoryRequiredError,
     RetroContentMissingError,
@@ -120,6 +126,7 @@ from app.modules.promotion.schemas import (
     PromotionPublishRequest,
     PromotionRecallStartRequest,
     PromotionResponse,
+    PromotionResubmitRequest,
     PromotionReturnWaybillRequest,
     PromotionReviewRequest,
     PromotionUpdate,
@@ -150,6 +157,22 @@ log = logging.getLogger(__name__)
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+def _assert_not_future_publish_date(actual: date | None) -> None:
+    """实际发布日期不能晚于今天（7a-7，publish 与 resubmit 共用）。
+
+    「今天」按 Asia/Shanghai（get_today），不用 date.today()——容器是 UTC，
+    北京时间 0~8 点会把当天误判成明天。调用方要放在状态机判定之后（plan D4）。
+    """
+    if actual is None:
+        return
+    today = get_today()
+    if actual > today:
+        raise PublishDateInFutureError(
+            f"实际发布日期不能晚于今天（{today.isoformat()}）",
+            details={"actual_publish_date": actual.isoformat(), "today": today.isoformat()},
+        )
 
 
 class PromotionService:
@@ -349,6 +372,13 @@ class PromotionService:
         payload: PromotionUpdate,
         user: User,
     ) -> PromotionResponse:
+        """部分更新（PATCH）。
+
+        ``source_extra`` 按键合并（7a-5，``domain.merge_source_extra``）：补丁里值为 null
+        或空白 = 删这个键，没出现的键不动。合并基于这次请求刚读出的行，所以「录入信息」
+        弹窗开着期间仓库回填的发货单号不会被 PR 的旧快照冲掉；毫秒级的并发与其他字段
+        一样不加锁。
+        """
         promotion = await self._repo.get_by_id(promotion_id)
         if promotion is None:
             raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
@@ -418,6 +448,12 @@ class PromotionService:
         # 这里不能再 setattr —— 否则会把枚举对象写回去，也会绕过那段拦截。
         for field in changes:
             if field == "cooperation_mode":
+                continue
+            if field == "source_extra":
+                # 按键合并，不整包 setattr —— 整包会删掉表单上没有的键（7a-5）
+                promotion.source_extra = merge_source_extra(
+                    promotion.source_extra, payload.source_extra or {}
+                )
                 continue
             new_value = getattr(payload, field)
             setattr(promotion, field, new_value)
@@ -729,6 +765,9 @@ class PromotionService:
                 style_main_image_preloaded=True,
                 goods_code=row.goods_code,
                 goods_is_suit=row.goods_is_suit,
+                display_short_name=row.display_short_name,
+                goods_title=row.goods_title,
+                goods_short_name=row.goods_short_name,
                 goods_preloaded=True,
             )
             for row in rows
@@ -758,6 +797,7 @@ class PromotionService:
             to_state=PublishStatus.PUBLISHED.value,
             action="publish",
         )
+        _assert_not_future_publish_date(payload.actual_publish_date)
 
         # PRD 改动 5：品牌词评论截图在提交发布审核时必传。
         # 后端拦，不只靠前端 —— 和寄拍寄回单号同一个处理方式。
@@ -1050,6 +1090,7 @@ class PromotionService:
 
         approve 时同事务发 SettlementRequested 事件（FB1：required_handler）。
         失败时 audit 脱敏 + 兜底（FB5）。
+        review_reason / review_reason_category 只在 reject 时写，approve 不清（7a-4）。
         """
         promotion = await self._repo.get_by_id(promotion_id)
         if promotion is None:
@@ -1073,6 +1114,7 @@ class PromotionService:
             )
 
         is_barter = promotion.cooperation_mode == CooperationMode.BARTER.value
+        reject_category: str | None = None
         if payload.action == ReviewAction.APPROVE:
             # 寄拍硬门槛：没有博主寄回衣服单号不许往财务走。
             # PRD 原文「不上传单号财务看不到单据，禁止结款」，且明确要求后端校验。
@@ -1101,6 +1143,7 @@ class PromotionService:
                 raise RejectReasonCategoryRequiredError(
                     "驳回时必须选择原因分类（延迟发文 / 流量差补发 / 衣服未寄回）"
                 )
+            reject_category = payload.review_reason_category.value
             to_state = SettlementStatus.REJECTED.value
             action_name = "reject"
 
@@ -1111,23 +1154,24 @@ class PromotionService:
         )
 
         now = _utcnow()
+        extra_fields: dict[str, Any] = {
+            "reviewed_by": user.id,
+            "reviewed_at": now,
+            "review_action": payload.action.value,
+        }
+        if payload.action == ReviewAction.REJECT:
+            # 驳回说明与分类只在驳回时写，通过时不动：这两列表示「最近一次驳回」。
+            # 驳回 → 重新提交（7a-4）→ 通过之后，结款环节仍要看得到上一轮为什么驳；
+            # 从没驳回过的单这两列本来就是 NULL，通过时不受影响
+            extra_fields["review_reason"] = payload.review_reason
+            extra_fields["review_reason_category"] = reject_category
         updated = await self._repo.update_state(
             promotion_id=promotion_id,
             tenant_id=user.tenant_id,
             from_state_field="settlement_status",
             from_state_value=SettlementStatus.PENDING_REVIEW.value,
             to_state_value=to_state,
-            extra_fields={
-                "reviewed_by": user.id,
-                "reviewed_at": now,
-                "review_action": payload.action.value,
-                "review_reason": payload.review_reason,
-                "review_reason_category": (
-                    payload.review_reason_category.value
-                    if payload.review_reason_category is not None
-                    else None
-                ),
-            },
+            extra_fields=extra_fields,
         )
         if updated is None:
             raise StateTransitionConflictError(
@@ -1149,11 +1193,7 @@ class PromotionService:
                 "settlement_status": to_state,
                 "review_action": payload.action.value,
                 "cooperation_mode": promotion.cooperation_mode,
-                "review_reason_category": (
-                    payload.review_reason_category.value
-                    if payload.review_reason_category is not None
-                    else None
-                ),
+                "review_reason_category": reject_category,
             },
             user_id=user.id,
         )
@@ -1186,6 +1226,90 @@ class PromotionService:
                     pass
                 await self._log_event_dispatch_failure(event, exc, user, blocking=True)
                 raise
+
+        await self._session.commit()
+        return await self._to_response(updated, user)
+
+    async def resubmit(
+        self,
+        promotion_id: UUID,
+        payload: PromotionResubmitRequest,
+        user: User,
+    ) -> PromotionResponse:
+        """7a-4 驳回后重新提交：已驳回 → 待核查。
+
+        - 只允许从「已驳回」出发，且 publish_status 必须是「已发布」（否则进了待核查也批不了，
+          与 review approve 的跨状态机校验同理）
+        - 状态机先判，再判日期（plan D4）
+        - 可同改发布链接 / 实际发布日期：不传不动；传了且与现值不同才写入、才进 audit
+        - 上一轮 reviewed_* / review_action / review_reason / review_reason_category **不清**，
+          主管再审时能看到上次为什么驳（再审通过也不清驳回原因，见 ``review``）；
+          resubmit_note / resubmitted_at 每轮覆盖
+        """
+        promotion = await self._repo.get_by_id(promotion_id)
+        if promotion is None:
+            raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
+
+        SettlementStatusMachine.assert_can_transition(
+            from_state=promotion.settlement_status,
+            to_state=SettlementStatus.PENDING_REVIEW.value,
+            action="resubmit",
+        )
+        if promotion.publish_status != PublishStatus.PUBLISHED.value:
+            raise StateTransitionConflictError(
+                "仅「已发布」状态的推广可重新提交审核",
+                details={"publish_status": promotion.publish_status},
+            )
+        _assert_not_future_publish_date(payload.actual_publish_date)
+
+        before: dict[str, Any] = {"settlement_status": SettlementStatus.REJECTED.value}
+        after: dict[str, Any] = {"settlement_status": SettlementStatus.PENDING_REVIEW.value}
+        extra: dict[str, Any] = {"resubmit_note": payload.note, "resubmitted_at": _utcnow()}
+        if payload.publish_url is not None and payload.publish_url != promotion.publish_url:
+            extra["publish_url"] = payload.publish_url
+            before["publish_url"] = promotion.publish_url
+            after["publish_url"] = payload.publish_url
+        if (
+            payload.actual_publish_date is not None
+            and payload.actual_publish_date != promotion.actual_publish_date
+        ):
+            extra["actual_publish_date"] = payload.actual_publish_date
+            before["actual_publish_date"] = (
+                promotion.actual_publish_date.isoformat()
+                if promotion.actual_publish_date is not None
+                else None
+            )
+            after["actual_publish_date"] = payload.actual_publish_date.isoformat()
+        after["has_note"] = True
+
+        updated = await self._repo.update_state(
+            promotion_id=promotion_id,
+            tenant_id=user.tenant_id,
+            from_state_field="settlement_status",
+            from_state_value=SettlementStatus.REJECTED.value,
+            to_state_value=SettlementStatus.PENDING_REVIEW.value,
+            extra_fields=extra,
+        )
+        if updated is None:
+            raise StateTransitionConflictError(
+                "结款状态已变更，请刷新后重试",
+                details={"promotion_id": str(promotion_id)},
+            )
+
+        promotion_state_transitions_total.labels(
+            from_state=SettlementStatus.REJECTED.value,
+            to_state=SettlementStatus.PENDING_REVIEW.value,
+            status_field="settlement",
+        ).inc()
+
+        await self._audit.log(
+            action="promotion.resubmit",
+            resource="promotion",
+            resource_id=promotion_id,
+            before=before,
+            after=after,
+            user_id=user.id,
+        )
 
         await self._session.commit()
         return await self._to_response(updated, user)
@@ -1847,6 +1971,9 @@ class PromotionService:
         style_main_image_preloaded: bool = False,
         goods_code: str | None = None,
         goods_is_suit: bool | None = None,
+        display_short_name: str | None = None,
+        goods_title: str | None = None,
+        goods_short_name: str | None = None,
         goods_preloaded: bool = False,
     ) -> PromotionResponse:
         """组装响应：字段权限过滤 + 衍生字段计算.
@@ -1856,6 +1983,9 @@ class PromotionService:
             dual_platform_override: 同上。
             style_main_image_key: 列表查询预加载的款式主图 key。
             style_main_image_preloaded: 为 True 时不再查询 Style，避免列表 N+1。
+            display_short_name / goods_title / goods_short_name: 列表 SQL 已算好的品名与
+                归属商品名（``goods_preloaded`` 为 True 时用）；单条响应在这里按
+                ``display_name.py`` 的同一规则现算。
             today: 列表查询时由 service 层 get_today() 透传，单条响应时缺省现算。
         """
         ctx = await build_field_perm_context(user.id, self._roles, self._perms)
@@ -1903,18 +2033,33 @@ class PromotionService:
         # 商品归属实时取（不做快照，因为归属可改）。列表查询已 JOIN 出来，避免 N+1。
         resolved_goods_code = goods_code
         resolved_goods_is_suit = bool(goods_is_suit)
-        if not goods_preloaded and promotion.goods_main_id is not None:
-            goods_row = (
-                await self._session.execute(
-                    sa_text("SELECT goods_code, is_suit FROM goods_main WHERE id = :gid"),
-                    {"gid": promotion.goods_main_id},
-                )
-            ).one_or_none()
-            if goods_row is not None:
-                resolved_goods_code, resolved_goods_is_suit = (
-                    goods_row[0],
-                    bool(goods_row[1]),
-                )
+        resolved_goods_title = goods_title
+        resolved_goods_short_name = goods_short_name
+        resolved_display_short_name = display_short_name
+        if not goods_preloaded:
+            # 品名规则与列表 SQL 同一份（display_name.py）：商品简称，没填回落快照
+            raw_short_name: str | None = None
+            if promotion.goods_main_id is not None:
+                goods_row = (
+                    await self._session.execute(
+                        sa_text(
+                            "SELECT goods_code, is_suit, short_name, goods_title "
+                            "FROM goods_main WHERE id = :gid"
+                        ),
+                        {"gid": promotion.goods_main_id},
+                    )
+                ).one_or_none()
+                if goods_row is not None:
+                    resolved_goods_code, resolved_goods_is_suit = (
+                        goods_row[0],
+                        bool(goods_row[1]),
+                    )
+                    raw_short_name, resolved_goods_title = goods_row[2], goods_row[3]
+            resolved_goods_short_name = normalize_goods_short_name(raw_short_name)
+            resolved_display_short_name = promotion_display_short_name(
+                goods_short_name=raw_short_name,
+                style_short_name_snapshot=promotion.style_short_name_snapshot,
+            )
         style_main_image_url: str | None = None
         if resolved_style_image_key:
             try:
@@ -1986,9 +2131,12 @@ class PromotionService:
             pr_id=promotion.pr_id,
             style_code_snapshot=promotion.style_code_snapshot,
             style_short_name_snapshot=promotion.style_short_name_snapshot,
+            display_short_name=resolved_display_short_name,
             style_main_image_url=style_main_image_url,
             goods_code=resolved_goods_code,
             goods_is_suit=resolved_goods_is_suit,
+            goods_title=resolved_goods_title,
+            goods_short_name=resolved_goods_short_name,
             quote_amount=(promotion.quote_amount if can_see_quote else None),
             cost_snapshot=(promotion.cost_snapshot if can_see_cost else None),
             cooperation_mode=promotion.cooperation_mode,
@@ -2026,6 +2174,8 @@ class PromotionService:
             review_action=promotion.review_action,
             review_reason=promotion.review_reason,
             review_reason_category=promotion.review_reason_category,
+            resubmit_note=promotion.resubmit_note,
+            resubmitted_at=promotion.resubmitted_at,
             is_active=promotion.is_active,
             created_at=promotion.created_at,
             updated_at=promotion.updated_at,

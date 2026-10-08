@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
 import {
+  Alert,
   Button,
   Card,
   DatePicker,
@@ -30,6 +30,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnsType } from "antd/es/table";
 import dayjs from "dayjs";
+import type { Dayjs } from "dayjs";
 import {
   cancelPromotion,
   confirmRetrospective,
@@ -42,6 +43,7 @@ import {
   recallSuccessPromotion,
   recordMetrics,
   removePaymentQr,
+  resubmitPromotion,
   reviewPromotion,
   setReturnWaybill,
   startRecallPromotion,
@@ -49,49 +51,54 @@ import {
   updatePromotion,
   uploadPaymentQrFile,
 } from "@/features/promotion/api";
+import { buildSourceExtraPatch } from "@/features/promotion/sourceExtra";
 import type {
   Promotion,
   PromotionCreate,
   PromotionListFilters,
+  PromotionResubmitRequest,
   RejectReasonCategory,
   RetroStatus,
 } from "@/features/promotion/types";
 import {
-  goodsOptionLabel,
-  listStyles,
+  goodsDisplayName,
   listSkusByStyle,
   listGoodsForStyle,
   type GoodsOption,
 } from "@/features/product/api";
-import { listBloggers } from "@/features/blogger/api";
-import { urgePromotion } from "@/features/urge/api";
+import { goodsNameLabel } from "@/features/promotion/goodsLabel";
 import { extractErrorMessage } from "@/services/apiClient";
 import { useAuthStore } from "@/stores/authStore";
 import { ImportUploadButton } from "@/components/ImportUploadButton";
 import { StyleImageThumbnail } from "@/components/StyleImageThumbnail/StyleImageThumbnail";
+import { DisplayNameCell } from "@/components/DisplayNameCell/DisplayNameCell";
+import { BloggerSelect } from "@/components/RemoteSelect/BloggerSelect";
+import { StyleSelect } from "@/components/RemoteSelect/StyleSelect";
+import { UrgeModal } from "@/components/UrgeModal/UrgeModal";
 
 const PLATFORMS = ["小红书", "抖音", "快手", "B站"];
 const PUBLISH_STATUS = ["未发布", "已发布", "已取消", "异常", "已删除"];
 
+/** 实际发布日期不能晚于今天（7a-7）。后端按北京时间再判一次，这里只是不让选。 */
+const disableFutureDate = (d: Dayjs) => d.isAfter(dayjs(), "day");
+
 // 站外推广人工源列（对齐 final.xlsx），从 source_extra 读取
 type SourceField = {
   name: string;
-  type: "text" | "number" | "select";
+  type: "text" | "select";
   options?: string[];
 };
+// 寄回单号 / 点赞数 / 收藏数 / 评论数 已删（7a-5）：各有 typed 字段（寄回单号走「填寄回单号」，
+// 三个数走「录 7 天数据」），这里再填只进 JSONB、哪儿都不认。JSONB 里的旧值原样留档。
 const SOURCE_FIELDS: SourceField[] = [
   { name: "颜色及规格", type: "text" },
   { name: "打单地址", type: "text" },
   { name: "发货单号", type: "text" },
   { name: "订单号", type: "text" },
-  { name: "寄回单号", type: "text" },
   // 「合作方式」已提成 typed 字段 cooperation_mode，不再走 source_extra —— 它决定成本
   // 口径与审核后的流转出口，必须是后端能校验的字段。
   { name: "合作形式", type: "select", options: ["线下", "拍单"] },
   { name: "负责PR", type: "text" },
-  { name: "点赞数", type: "number" },
-  { name: "收藏数", type: "number" },
-  { name: "评论数", type: "number" },
 ];
 const SOURCE_FIELD_NAMES = SOURCE_FIELDS.map((f) => f.name);
 
@@ -232,6 +239,10 @@ export function PromotionListPage() {
   const [publishForm] = Form.useForm();
   const [extraOpen, setExtraOpen] = useState(false);
   const [extraTarget, setExtraTarget] = useState<Promotion | null>(null);
+  // 打开弹窗那一刻的表单初值。保存时只交相对它改过的键（7a-5）。
+  // 不能从 extraTarget 现算：上传收款码会 setExtraTarget(新数据)，拿新数据比旧表单，
+  // 别人刚写进去的键会被当成「这边清空了」。
+  const [extraInitial, setExtraInitial] = useState<Record<string, unknown>>({});
   const [extraForm] = Form.useForm();
   const [paymentQrFile, setPaymentQrFile] = useState<File | null>(null);
   const [paymentQrUploading, setPaymentQrUploading] = useState(false);
@@ -246,10 +257,12 @@ export function PromotionListPage() {
   const [cancelForm] = Form.useForm();
   const [rejectTarget, setRejectTarget] = useState<Promotion | null>(null);
   const [rejectForm] = Form.useForm();
+  const [resubmitTarget, setResubmitTarget] = useState<Promotion | null>(null);
+  const [resubmitForm] = Form.useForm();
+  const [resubmitBrandFile, setResubmitBrandFile] = useState<File | null>(null);
   const [waybillTarget, setWaybillTarget] = useState<Promotion | null>(null);
   const [waybillForm] = Form.useForm();
   const [urgeTarget, setUrgeTarget] = useState<Promotion | null>(null);
-  const [urgeForm] = Form.useForm();
   const [metricsTarget, setMetricsTarget] = useState<Promotion | null>(null);
   const [metricsForm] = Form.useForm();
   const [metricsFile, setMetricsFile] = useState<File | null>(null);
@@ -272,10 +285,6 @@ export function PromotionListPage() {
     queryKey: ["promotions", filters],
     queryFn: () => listPromotions(filters),
   });
-  const { data: styles } = useQuery({
-    queryKey: ["styles", "options"],
-    queryFn: () => listStyles({ page: 1, page_size: 100 }),
-  });
   const { data: formGoods } = useQuery({
     queryKey: ["goods", "by-style", formStyleId],
     enabled: !!formStyleId,
@@ -286,23 +295,9 @@ export function PromotionListPage() {
     enabled: !!goodsTarget,
     queryFn: () => listGoodsForStyle(goodsTarget!.style_id),
   });
-  const { data: bloggers } = useQuery({
-    queryKey: ["bloggers", "options"],
-    queryFn: () => listBloggers({ page: 1, page_size: 100 }),
-  });
-
-  const styleOptions =
-    styles?.items.map((s) => ({
-      label: `${s.style_code} ${s.style_name}`,
-      value: s.id,
-    })) ?? [];
-  const bloggerOptions =
-    bloggers?.items.map((b) => ({
-      label: `${b.nickname} (${b.xiaohongshu_id})`,
-      value: b.id,
-    })) ?? [];
+  // 只显示商品名 + 套装标记，不显示商品编码（业务方 10-06）
   const goodsOptions = (formGoods ?? []).map((g: GoodsOption) => ({
-    label: goodsOptionLabel(g),
+    label: goodsNameLabel(g),
     value: g.goods_main_id,
   }));
   // 款式只归属一个商品时不必打扰用户，直接用它
@@ -366,8 +361,13 @@ export function PromotionListPage() {
   }
 
   const updateExtraMutation = useMutation({
-    mutationFn: ({ id, source_extra }: { id: string; source_extra: Record<string, unknown> }) =>
-      updatePromotion(id, { source_extra }),
+    mutationFn: ({
+      id,
+      source_extra,
+    }: {
+      id: string;
+      source_extra: Record<string, string | null>;
+    }) => updatePromotion(id, { source_extra }),
     onSuccess: () => {
       message.success("信息已保存");
       setExtraOpen(false);
@@ -396,14 +396,21 @@ export function PromotionListPage() {
     goodsForm.setFieldsValue({ goods_main_id: record.goods_main_id ?? undefined });
   }
 
+  function closeExtra() {
+    setExtraOpen(false);
+    setExtraTarget(null);
+    setPaymentQrFile(null);
+    extraForm.resetFields();
+  }
+
   function openExtra(record: Promotion) {
     setExtraTarget(record);
     setPaymentQrFile(null);
     const se = (record.source_extra ?? {}) as Record<string, unknown>;
+    const initial = Object.fromEntries(SOURCE_FIELD_NAMES.map((f) => [f, se[f] ?? ""]));
+    setExtraInitial(initial);
     extraForm.resetFields();
-    extraForm.setFieldsValue(
-      Object.fromEntries(SOURCE_FIELD_NAMES.map((f) => [f, se[f] ?? ""]))
-    );
+    extraForm.setFieldsValue(initial);
     setExtraOpen(true);
     // §11：按货号(款式)加载该款 SKU 的「颜色 + 尺码」组合作为下拉选项
     setColorSizeOptions([]);
@@ -520,6 +527,44 @@ export function PromotionListPage() {
     onError: (err) => message.error(extractErrorMessage(err)),
   });
 
+  /** 驳回后重新提交（7a-4）。有新截图先传图，再推进状态。 */
+  const resubmitMutation = useMutation({
+    mutationFn: async ({
+      id,
+      payload,
+      brandFile,
+    }: {
+      id: string;
+      payload: PromotionResubmitRequest;
+      brandFile?: File;
+    }) => {
+      if (brandFile) {
+        await uploadBrandComment(id, brandFile);
+      }
+      return resubmitPromotion(id, payload);
+    },
+    onSuccess: () => {
+      message.success("已重新提交，等主管审核");
+      setResubmitTarget(null);
+      setResubmitBrandFile(null);
+      resubmitForm.resetFields();
+      void qc.invalidateQueries({ queryKey: ["promotions"] });
+    },
+    onError: (err) => message.error(extractErrorMessage(err)),
+  });
+
+  function openResubmit(record: Promotion) {
+    setResubmitTarget(record);
+    setResubmitBrandFile(null);
+    resubmitForm.resetFields();
+    resubmitForm.setFieldsValue({
+      publish_url: record.publish_url ?? undefined,
+      actual_publish_date: record.actual_publish_date
+        ? dayjs(record.actual_publish_date)
+        : undefined,
+    });
+  }
+
   const waybillMutation = useMutation({
     mutationFn: ({ id, waybill }: { id: string; waybill: string }) =>
       setReturnWaybill(id, waybill),
@@ -591,19 +636,6 @@ export function PromotionListPage() {
     onError: (err) => message.error(extractErrorMessage(err)),
   });
 
-  const urgeMutation = useMutation({
-    mutationFn: ({ id, note }: { id: string; note?: string }) =>
-      urgePromotion(id, note),
-    onSuccess: (d) => {
-      message.success(`已催发，这是第 ${d.urge_count} 次`);
-      setUrgeTarget(null);
-      urgeForm.resetFields();
-      void qc.invalidateQueries({ queryKey: ["urge-tasks"] });
-      void qc.invalidateQueries({ queryKey: ["urge-dashboard"] });
-    },
-    onError: (err) => message.error(extractErrorMessage(err)),
-  });
-
   const recallMutation = useMutation({
     mutationFn: ({
       id,
@@ -661,20 +693,33 @@ export function PromotionListPage() {
       ),
     },
     { title: "货号", dataIndex: "style_code_snapshot", width: 110, fixed: "left" },
-    { title: "品名", dataIndex: "style_short_name_snapshot", width: 130, render: (v) => v || "—" },
     {
+      // 品名 = 商品简称，没填回落建单快照（7a-8，后端 display_name.py 一处定规则）
+      title: "品名",
+      dataIndex: "display_short_name",
+      width: 130,
+      ellipsis: { showTitle: false },
+      render: (v: string | null, row: Promotion) => (
+        <DisplayNameCell name={v ?? row.style_short_name_snapshot} fullTitle={row.goods_title} />
+      ),
+    },
+    {
+      // 只显示商品名（简称，没填回落全称）+ 套装标记，不显示商品编码（业务方 10-06）。
+      // 编码仍能在上面的搜索框里搜到
       title: "归属商品",
-      dataIndex: "goods_code",
+      dataIndex: "goods_short_name",
       width: 150,
-      render: (code: string | null, row: Promotion) =>
-        code ? (
-          <Space size={4}>
-            <span>{code}</span>
+      render: (_: string | null, row: Promotion) => {
+        const name = goodsDisplayName(row.goods_title, row.goods_short_name);
+        return name ? (
+          <Space size={4} wrap>
+            <DisplayNameCell name={name} fullTitle={row.goods_title} />
             {row.goods_is_suit && <Tag color="purple">套装</Tag>}
           </Space>
         ) : (
           "—"
-        ),
+        );
+      },
     },
     {
       title: "合作模式",
@@ -733,15 +778,34 @@ export function PromotionListPage() {
     {
       title: "结算状态",
       dataIndex: "settlement_status",
-      width: 110,
+      // 放得下「上轮驳回：流量差补发」这个 Tag（7a-4）
+      width: 150,
       render: (v: string, row) => (
-        <Space size={4}>
+        <Space size={4} wrap>
           <Tag color={settlementColor[v]}>{v}</Tag>
-          {row.review_reason_category && (
-            <Tooltip title={row.review_reason ?? undefined}>
-              <Tag color="volcano">{row.review_reason_category}</Tag>
-            </Tooltip>
-          )}
+          {row.review_reason_category &&
+            (v === "已驳回" ? (
+              <Tooltip title={row.review_reason ?? undefined}>
+                <Tag color="volcano">{row.review_reason_category}</Tag>
+              </Tooltip>
+            ) : (
+              // 重提后（或再审通过后）上一轮驳回原因仍保留，标成「上轮」免得误读成现在被驳回
+              <Tooltip
+                title={
+                  <div>
+                    {row.review_reason && <div>驳回说明：{row.review_reason}</div>}
+                    {row.resubmit_note && <div>重提说明：{row.resubmit_note}</div>}
+                    {row.resubmitted_at && (
+                      <div>
+                        重提时间：{dayjs(row.resubmitted_at).format("YYYY-MM-DD HH:mm")}
+                      </div>
+                    )}
+                  </div>
+                }
+              >
+                <Tag>上轮驳回：{row.review_reason_category}</Tag>
+              </Tooltip>
+            ))}
         </Space>
       ),
     },
@@ -847,14 +911,11 @@ export function PromotionListPage() {
             : []),
           {
             // 催发任务在这里发起最顺手：PR 本来就在这页看哪单还没发出来。
-            // 带截图的催发要到催发任务页做，这里是快捷的「再催一次」
+            // 与催发任务页共用 UrgeModal，可以直接附聊天截图（7a-3）
             key: "urge",
             label: "催发",
             disabled: !["未发布", "异常"].includes(record.publish_status),
-            onClick: () => {
-              setUrgeTarget(record);
-              urgeForm.resetFields();
-            },
+            onClick: () => setUrgeTarget(record),
           },
           {
             key: "recall",
@@ -884,6 +945,16 @@ export function PromotionListPage() {
               setRejectTarget(record);
               rejectForm.resetFields();
             },
+          },
+          {
+            // 驳回后 PR 改完重新交给主管（已驳回 → 待核查）。后端还要求「已发布」
+            // （否则进了待核查也批不了），这里对齐，免得点了得到 409
+            key: "resubmit",
+            label: "重新提交",
+            disabled:
+              record.settlement_status !== "已驳回" ||
+              record.publish_status !== "已发布",
+            onClick: () => openResubmit(record),
           },
           // 复盘三步（PRD 改动 4）。每一步的 disabled 条件都对着后端的状态机门槛，
           // 点了不会白跑一次 422
@@ -962,9 +1033,9 @@ export function PromotionListPage() {
     >
       <Space style={{ marginBottom: 16 }} wrap>
         <Input.Search
-          placeholder="搜索内部编码 / 货号"
+          placeholder="搜索内部编码 / 货号 / 商品简称 / 商品编码"
           allowClear
-          style={{ width: 220 }}
+          style={{ width: 300 }}
           onSearch={(v) =>
             setFilters((f) => ({ ...f, keyword: v || undefined, page: 1 }))
           }
@@ -1024,15 +1095,7 @@ export function PromotionListPage() {
             label="款式"
             rules={[{ required: true, message: "请选择款式" }]}
           >
-            <Select
-              showSearch
-              placeholder="选择款式"
-              options={styleOptions}
-              filterOption={(i, o) =>
-                (o?.label ?? "").toString().includes(i)
-              }
-              onChange={(v: string) => setFormStyleId(v)}
-            />
+            <StyleSelect onChange={(v) => setFormStyleId(v ?? null)} />
           </Form.Item>
           {goodsChoiceNeeded && (
             <Form.Item
@@ -1049,14 +1112,7 @@ export function PromotionListPage() {
             label="博主"
             rules={[{ required: true, message: "请选择博主" }]}
           >
-            <Select
-              showSearch
-              placeholder="选择博主"
-              options={bloggerOptions}
-              filterOption={(i, o) =>
-                (o?.label ?? "").toString().includes(i)
-              }
-            />
+            <BloggerSelect />
           </Form.Item>
           <Form.Item
             name="cooperation_mode"
@@ -1116,7 +1172,9 @@ export function PromotionListPage() {
       <Modal
         title={
           goodsTarget
-            ? `改归属商品 · ${goodsTarget.style_code_snapshot} ${goodsTarget.style_short_name_snapshot}`
+            ? `改归属商品 · ${goodsTarget.style_code_snapshot} ${
+                goodsTarget.display_short_name ?? goodsTarget.style_short_name_snapshot
+              }`
             : "改归属商品"
         }
         open={!!goodsTarget}
@@ -1147,7 +1205,7 @@ export function PromotionListPage() {
             <Select
               placeholder="选择归属商品"
               options={(targetGoods ?? []).map((g: GoodsOption) => ({
-                label: goodsOptionLabel(g),
+                label: goodsNameLabel(g),
                 value: g.goods_main_id,
               }))}
             />
@@ -1241,6 +1299,113 @@ export function PromotionListPage() {
       </Modal>
 
       <Modal
+        title={resubmitTarget ? `重新提交 · ${resubmitTarget.internal_code}` : "重新提交"}
+        open={!!resubmitTarget}
+        onCancel={() => {
+          setResubmitTarget(null);
+          setResubmitBrandFile(null);
+        }}
+        onOk={() => resubmitForm.submit()}
+        confirmLoading={resubmitMutation.isPending}
+        okText="重新提交"
+        destroyOnHidden
+        width={560}
+      >
+        {resubmitTarget && (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginTop: 16 }}
+            message={`上一轮驳回：${resubmitTarget.review_reason_category ?? "未分类"}`}
+            description={resubmitTarget.review_reason || "（没有填写驳回说明）"}
+          />
+        )}
+        <Form
+          form={resubmitForm}
+          layout="vertical"
+          style={{ marginTop: 16 }}
+          onFinish={(v: {
+            note: string;
+            publish_url?: string;
+            actual_publish_date?: Dayjs | null;
+          }) => {
+            if (!resubmitTarget) return;
+            // 只带改了的链接 / 日期：不传后端就不动，留空也不会清掉原值
+            const payload: PromotionResubmitRequest = { note: v.note.trim() };
+            const url = (v.publish_url ?? "").trim();
+            if (url && url !== (resubmitTarget.publish_url ?? "")) {
+              payload.publish_url = url;
+            }
+            const publishDate = v.actual_publish_date
+              ? v.actual_publish_date.format("YYYY-MM-DD")
+              : null;
+            if (publishDate && publishDate !== resubmitTarget.actual_publish_date) {
+              payload.actual_publish_date = publishDate;
+            }
+            resubmitMutation.mutate({
+              id: resubmitTarget.id,
+              payload,
+              brandFile: resubmitBrandFile ?? undefined,
+            });
+          }}
+        >
+          <Form.Item
+            name="note"
+            label="重提说明"
+            rules={[
+              {
+                required: true,
+                whitespace: true,
+                message: "请写明改了什么，主管再审时会看到",
+              },
+            ]}
+          >
+            <Input.TextArea
+              rows={3}
+              maxLength={2000}
+              showCount
+              placeholder="如：已让博主补发，链接已更新"
+            />
+          </Form.Item>
+          <Form.Item
+            name="publish_url"
+            label="发布链接"
+            rules={[{ type: "url", message: "请输入合法 URL" }]}
+            extra="预填当前链接，改了才会提交"
+          >
+            <Input placeholder="https://www.xiaohongshu.com/..." />
+          </Form.Item>
+          <Form.Item
+            name="actual_publish_date"
+            label="实际发布日期"
+            extra="预填当前日期，改了才会提交；不能晚于今天"
+          >
+            <DatePicker
+              style={{ width: "100%" }}
+              disabledDate={disableFutureDate}
+              allowClear={false}
+            />
+          </Form.Item>
+          <Form.Item
+            label="品牌词评论截图（可选）"
+            extra="驳回跟截图有关时重新选一张，会覆盖旧图；不选就沿用旧图"
+          >
+            <Upload
+              accept="image/png,image/jpeg,image/webp"
+              maxCount={1}
+              beforeUpload={(file) => {
+                setResubmitBrandFile(file as unknown as File);
+                return false;
+              }}
+              onRemove={() => setResubmitBrandFile(null)}
+            >
+              <Button icon={<UploadOutlined />}>重新上传</Button>
+            </Upload>
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
         title={
           waybillTarget
             ? `博主寄回衣服单号 · ${waybillTarget.internal_code}`
@@ -1278,35 +1443,12 @@ export function PromotionListPage() {
         </Form>
       </Modal>
 
-      <Modal
-        title={urgeTarget ? `催发 · ${urgeTarget.internal_code}` : "催发"}
+      <UrgeModal
         open={!!urgeTarget}
-        onCancel={() => setUrgeTarget(null)}
-        onOk={() => urgeForm.submit()}
-        confirmLoading={urgeMutation.isPending}
-        destroyOnHidden
-      >
-        <Form
-          form={urgeForm}
-          layout="vertical"
-          style={{ marginTop: 16 }}
-          onFinish={(v: { note?: string }) => {
-            if (!urgeTarget) return;
-            urgeMutation.mutate({ id: urgeTarget.id, note: v.note });
-          }}
-        >
-          <Typography.Paragraph type="secondary">
-            记一次催发。第一次催会自动建催发任务，之后累加次数。要附聊天截图请到
-            <Link to="/urge-tasks">催发任务</Link> 页操作。
-          </Typography.Paragraph>
-          <Form.Item name="note" label="备注">
-            <Input.TextArea
-              rows={3}
-              placeholder="怎么催的、博主怎么回的（可选，会写进催发时间线）"
-            />
-          </Form.Item>
-        </Form>
-      </Modal>
+        promotionId={urgeTarget?.id ?? null}
+        title={urgeTarget ? `催发 · ${urgeTarget.internal_code}` : "催发"}
+        onClose={() => setUrgeTarget(null)}
+      />
 
       <Modal
         title={
@@ -1626,7 +1768,7 @@ export function PromotionListPage() {
             label="实际发布日期"
             rules={[{ required: true, message: "请选择发布日期" }]}
           >
-            <DatePicker style={{ width: "100%" }} />
+            <DatePicker style={{ width: "100%" }} disabledDate={disableFutureDate} />
           </Form.Item>
           <Form.Item
             label="品牌词评论截图"
@@ -1659,12 +1801,7 @@ export function PromotionListPage() {
       <Modal
         title="录入推广信息（地址/订单号等）"
         open={extraOpen}
-        onCancel={() => {
-          setExtraOpen(false);
-          setExtraTarget(null);
-          setPaymentQrFile(null);
-          extraForm.resetFields();
-        }}
+        onCancel={closeExtra}
         onOk={() => extraForm.submit()}
         confirmLoading={updateExtraMutation.isPending}
         destroyOnHidden
@@ -1676,19 +1813,15 @@ export function PromotionListPage() {
           style={{ marginTop: 16 }}
           onFinish={(values: Record<string, unknown>) => {
             if (!extraTarget) return;
-            // 仅提交非空字段，空值不覆盖
-            const source_extra: Record<string, unknown> = {
-              ...((extraTarget.source_extra ?? {}) as Record<string, unknown>),
-            };
-            for (const f of SOURCE_FIELD_NAMES) {
-              const v = values[f];
-              if (v === undefined || v === null || String(v).trim() === "") {
-                delete source_extra[f];
-              } else {
-                source_extra[f] = String(v).trim();
-              }
+            // 只交相对打开弹窗时改过的键；清空的给 null（后端删键），没碰的不带 ——
+            // 后端按键合并，表单外的键和仓库刚回填的发货单号都不会被冲掉（7a-5）
+            const patch = buildSourceExtraPatch(extraInitial, values, SOURCE_FIELD_NAMES);
+            if (Object.keys(patch).length === 0) {
+              message.info("没有改动");
+              closeExtra();
+              return;
             }
-            updateExtraMutation.mutate({ id: extraTarget.id, source_extra });
+            updateExtraMutation.mutate({ id: extraTarget.id, source_extra: patch });
           }}
         >
           {canManagePaymentQr && (
@@ -1796,8 +1929,6 @@ export function PromotionListPage() {
                   placeholder={`请选择${f.name}`}
                   options={(f.options ?? []).map((o) => ({ label: o, value: o }))}
                 />
-              ) : f.type === "number" ? (
-                <Input type="number" placeholder={`请输入${f.name}`} allowClear />
               ) : (
                 <Input placeholder={`请输入${f.name}`} allowClear />
               )}

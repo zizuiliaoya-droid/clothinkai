@@ -82,6 +82,11 @@ class UrgeTaskResponse(BaseModel):
 
     style_code: str | None = None
     style_name: str | None = None
+    """建单时的款式简称快照（接口兼容保留）。界面显示 ``display_short_name``。"""
+    display_short_name: str | None = None
+    """品名：归属商品的简称，没填回落快照（7a-8，规则见 ``promotion/display_name.py``）。"""
+    goods_title: str | None = None
+    """归属商品全称（悬停提示用）。没有归属商品为 None。"""
     scheduled_publish_date: date | None = None
     publish_status: str | None = None
     """推广单当前的发布状态。任务关闭后仍保留，方便核对关闭原因对不对。"""

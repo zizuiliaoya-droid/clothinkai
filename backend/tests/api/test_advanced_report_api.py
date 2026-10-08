@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import date
+from types import SimpleNamespace
+from uuid import uuid4
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -49,6 +53,41 @@ class TestAdvancedReportApiContract:
         assert "/api/reports/store-daily" in paths
         assert "/api/reports/store-daily/{day}" in paths
         assert "/api/reports/production" in paths
+
+    async def test_store_daily_granularity_is_optional(self) -> None:
+        """周 / 月 / 年改由后端分桶（7a-6）：参数可选、默认按日（旧前端不传，行为不变）。"""
+        from app.main import app
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            resp = await ac.get("/api/openapi.json")
+        operation = resp.json()["paths"]["/api/reports/store-daily"]["get"]
+        params = {p["name"]: p for p in operation["parameters"]}
+        assert params["granularity"].get("required", False) is False
+        assert params["granularity"]["schema"]["default"] == "day"
+        assert params["granularity"]["schema"]["pattern"] == "^(day|week|month|year)$"
+
+    async def test_store_daily_forwards_granularity(self) -> None:
+        from app.modules.report import advanced_api
+
+        calls: list[tuple[object, ...]] = []
+
+        class FakeStoreDailyService:
+            async def get_dashboard(self, *args: object, **kwargs: object) -> list[object]:
+                calls.append((*args, kwargs))
+                return []
+
+        tenant_id = uuid4()
+        await advanced_api.get_store_daily(
+            user=SimpleNamespace(tenant_id=tenant_id),  # type: ignore[arg-type]
+            service=FakeStoreDailyService(),  # type: ignore[arg-type]
+            preset="custom",
+            date_from=date(2026, 6, 1),
+            date_to=date(2026, 6, 30),
+            granularity="week",
+        )
+        assert calls == [
+            (tenant_id, (date(2026, 6, 1), date(2026, 6, 30)), {"granularity": "week"})
+        ]
 
     async def test_summary_refresh_requires_auth(self) -> None:
         from app.main import app

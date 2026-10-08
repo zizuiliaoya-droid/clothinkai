@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from datetime import date, timedelta
-from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 from uuid import UUID
 
@@ -20,26 +20,9 @@ from app.modules.report.advanced_schemas import (
     ProductionTrend,
     ProductionTrendPoint,
 )
+from app.modules.report.extra_metrics import aggregate_extra
 from app.modules.report.summary_read import SummaryReadRepository, record_source
 from app.services.metric import style_roi
-
-# 投产报表 extra 汇总跳过的非指标列（ID/文本/日期类）
-_EXTRA_SKIP = {
-    "统计日期",
-    "日期",
-    "商品ID",
-    "主商品ID",
-    "主体ID",
-    "主体类型",
-    "主体名称",
-    "货号",
-    "商品名称",
-    "商品简称",
-    "商品类型",
-    "商品状态",
-    "商品标签",
-}
-
 
 _CENT = Decimal("0.01")
 
@@ -210,29 +193,24 @@ class ProductionService:
 
     async def _aggregate_extra(
         self, tenant_id: UUID, date_from: date, date_to: date
-    ) -> dict[str, dict[str, Any]]:
-        """按商品 SUM 千牛/站内 extra 的数值列（对齐 final.xlsx 投产报表 70 列）。"""
+    ) -> dict[str, dict[str, str | None]]:
+        """按商品聚合千牛 / 站内 extra（对齐 final.xlsx 投产报表 70 列）。
+
+        规则在 ``extra_metrics``：计数与金额相加，比率 / 均值 / 评分不相加（常用比率按
+        分子分母重算）。累计列只在查询区间是同一天时相加（一个商品挂多条链接，同一天的
+        累计值可以加）；区间跨天就不加，与店铺数据按日 / 按周的规则一致。
+        """
         rows = await self._repo.fetch_extra_by_goods(
             tenant_id=tenant_id, date_from=date_from, date_to=date_to
         )
-        agg: dict[str, dict[str, Decimal]] = defaultdict(lambda: defaultdict(Decimal))
+        by_goods: dict[str, list[Any]] = defaultdict(list)
         for r in rows:
             gid = r["goods_id"]
-            extra = r["extra"]
-            if gid is None or not isinstance(extra, dict):
+            if gid is None:
                 continue
-            key = str(gid)
-            for k, v in extra.items():
-                if k in _EXTRA_SKIP or v is None or v == "":
-                    continue
-                try:
-                    num = Decimal(str(v).replace(",", "").replace("%", "").strip())
-                except (InvalidOperation, ValueError):
-                    continue
-                agg[key][k] += num
-        return {
-            gid: {k: format(val, "f") for k, val in fields.items()} for gid, fields in agg.items()
-        }
+            by_goods[str(gid)].append(r["extra"])
+        same_day = date_from == date_to
+        return {gid: aggregate_extra(extras, same_day=same_day) for gid, extras in by_goods.items()}
 
     @staticmethod
     def _to_row(r: Mapping[str, Any], exclude_brushing: bool) -> ProductionRow:

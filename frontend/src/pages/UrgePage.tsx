@@ -35,7 +35,6 @@ import {
   listUrgeTasks,
   updateUrgeConfig,
   urgeBatch,
-  urgePromotion,
 } from "@/features/urge/api";
 import type {
   UrgeConfig,
@@ -43,10 +42,12 @@ import type {
   UrgeTaskFilters,
   UrgeTaskStatus,
 } from "@/features/urge/types";
-import { listStyles } from "@/features/product/api";
 import { extractErrorMessage } from "@/services/apiClient";
 import { useAuthStore } from "@/stores/authStore";
 import { BloggerHoverCard } from "@/components/BloggerHoverCard/BloggerHoverCard";
+import { DisplayNameCell } from "@/components/DisplayNameCell/DisplayNameCell";
+import { StyleSelect } from "@/components/RemoteSelect/StyleSelect";
+import { UrgeModal } from "@/components/UrgeModal/UrgeModal";
 
 const statusColor: Record<UrgeTaskStatus, string> = {
   进行中: "processing",
@@ -81,6 +82,8 @@ export function UrgePage() {
     page_size: 20,
   });
   const [detailId, setDetailId] = useState<string | null>(null);
+  // 催发弹窗（与推广页共用 UrgeModal，可附截图）
+  const [urgeTarget, setUrgeTarget] = useState<UrgeTask | null>(null);
   const [configOpen, setConfigOpen] = useState(false);
   const [batchOpen, setBatchOpen] = useState(false);
   const [configForm] = Form.useForm<UrgeConfig>();
@@ -105,22 +108,6 @@ export function UrgePage() {
     queryKey: ["urge-task", detailId],
     queryFn: () => getUrgeTask(detailId as string),
     enabled: !!detailId,
-  });
-
-  const { data: styleOptions } = useQuery({
-    queryKey: ["styles", "urge-batch"],
-    queryFn: () => listStyles({ page: 1, page_size: 200 }),
-    enabled: batchOpen,
-  });
-
-  const urgeMutation = useMutation({
-    mutationFn: (task: UrgeTask) => urgePromotion(task.promotion_id),
-    onSuccess: (d) => {
-      message.success(`已催发，这是第 ${d.urge_count} 次`);
-      invalidate();
-      void qc.invalidateQueries({ queryKey: ["urge-task", d.id] });
-    },
-    onError: (err) => message.error(extractErrorMessage(err)),
   });
 
   const closeMutation = useMutation({
@@ -219,16 +206,20 @@ export function UrgePage() {
       title: "款式",
       dataIndex: "style_code",
       width: 150,
-      render: (v: string | null, r) => (
-        <span>
-          <div>{v || "—"}</div>
-          {r.style_name && (
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {r.style_name}
-            </Typography.Text>
-          )}
-        </span>
-      ),
+      render: (v: string | null, r) => {
+        // 第二行是品名：商品简称，没填回落建单快照（7a-8）
+        const name = r.display_short_name ?? r.style_name;
+        return (
+          <span>
+            <div>{v || "—"}</div>
+            {name && (
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                <DisplayNameCell name={name} fullTitle={r.goods_title} />
+              </Typography.Text>
+            )}
+          </span>
+        );
+      },
     },
     { title: "PR", dataIndex: "pr_name", width: 100, render: (v) => v || "—" },
     {
@@ -293,8 +284,7 @@ export function UrgePage() {
             type="link"
             size="small"
             disabled={r.status !== "进行中"}
-            loading={urgeMutation.isPending}
-            onClick={() => urgeMutation.mutate(r)}
+            onClick={() => setUrgeTarget(r)}
           >
             催发
           </Button>
@@ -469,7 +459,16 @@ export function UrgePage() {
               </Typography.Text>
               <Typography.Text type="secondary">
                 {detail.style_code}
-                {detail.style_name ? ` ${detail.style_name}` : ""} ·{" "}
+                {(detail.display_short_name ?? detail.style_name) && (
+                  <>
+                    {" "}
+                    <DisplayNameCell
+                      name={detail.display_short_name ?? detail.style_name}
+                      fullTitle={detail.goods_title}
+                    />
+                  </>
+                )}{" "}
+                ·{" "}
                 {detail.scheduled_publish_date
                   ? `预定 ${detail.scheduled_publish_date}`
                   : "未排期"}
@@ -523,6 +522,17 @@ export function UrgePage() {
           </Space>
         )}
       </Drawer>
+
+      <UrgeModal
+        open={!!urgeTarget}
+        promotionId={urgeTarget?.promotion_id ?? null}
+        title={
+          urgeTarget
+            ? `催发 · ${urgeTarget.promotion_internal_code ?? "—"} · ${urgeTarget.blogger_nickname ?? "—"}`
+            : "催发"
+        }
+        onClose={() => setUrgeTarget(null)}
+      />
 
       <Modal
         title="催发设置"
@@ -613,15 +623,7 @@ export function UrgePage() {
             label="款式"
             rules={[{ required: true, message: "请选择款式" }]}
           >
-            <Select
-              showSearch
-              placeholder="搜索款号 / 款名"
-              optionFilterProp="label"
-              options={(styleOptions?.items ?? []).map((s) => ({
-                label: `${s.style_code} ${s.style_name ?? ""}`.trim(),
-                value: s.id,
-              }))}
-            />
+            <StyleSelect placeholder="搜索款号 / 款名" />
           </Form.Item>
           <Form.Item name="note" label="备注">
             <Input.TextArea rows={2} placeholder="这轮催发的说明（可选）" />

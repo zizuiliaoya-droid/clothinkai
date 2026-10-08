@@ -83,6 +83,9 @@ URGE_CONFIG_WRITE = "urge_config:write"
 # promotion.review:approve 同一个处境。
 RETRO_WRITE = "promotion.retro:write"
 RETRO_CONFIRM = "promotion.retro:confirm"
+# 7a-1 款式下拉（款式列表 / 款式下的商品 / 颜色尺码）。PR 只给这一条窄 scope，
+# 不给 product.*:read（会连带成本表、字典等整个 product 域）。
+PRODUCT_STYLE_READ = "product.style:read"
 
 
 # ---------------------------------------------------------------------------
@@ -148,6 +151,7 @@ DEFAULT_ROLES: tuple[RoleSpec, ...] = (
             # 谈款：PR 能建、能改草稿、能提交，但没有审核权
             NEGOTIATION_READ,
             NEGOTIATION_WRITE,
+            PRODUCT_STYLE_READ,
             "report.publish_progress:read",
             IMPORTER_BATCH_READ,
             IMPORTER_BATCH_WRITE,
@@ -168,6 +172,7 @@ DEFAULT_ROLES: tuple[RoleSpec, ...] = (
             NEGOTIATION_READ,
             NEGOTIATION_WRITE,
             NEGOTIATION_REVIEW,
+            PRODUCT_STYLE_READ,
             # 催发任务本身由 promotion.*:* 覆盖；阈值配置是独立域，要显式给
             URGE_CONFIG_READ,
             URGE_CONFIG_WRITE,

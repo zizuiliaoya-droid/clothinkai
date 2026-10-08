@@ -3,6 +3,8 @@
 按 business-logic-model.md 9 个 UC 实现 13+ 个端点。
 全部端点：
 - 应用 ``require_permission("product:read|write|delete")`` / ``brand:*``
+- 例外：款式下拉用的 3 个读接口（款式列表、款式下的商品、款式下的 SKU）挂
+  ``product.style:read``，让 PR / 主管能选款式而不拿到整个 product 域（7a-1）
 - 通过 deps 注入 service
 - 抛出业务异常 → 全局 error handler 自动映射到 JSON 响应
 
@@ -37,6 +39,7 @@ from app.modules.product.deps import (
     StyleServiceDep,
 )
 from app.modules.product.goods_schemas import GoodsOption
+from app.modules.product.permissions import SCOPE_STYLE
 from app.modules.product.repository import StyleListFilters
 from app.modules.product.schemas import (
     CostTablePage,
@@ -103,7 +106,7 @@ async def match_styles(
 @router.get(
     "/styles/",
     response_model=StylePage,
-    dependencies=[require_permission("product", "read")],
+    dependencies=[require_permission(SCOPE_STYLE, "read")],
 )
 async def list_styles(
     user: CurrentActiveUser,
@@ -142,7 +145,7 @@ async def list_styles(
 @router.get(
     "/styles/{style_id}/goods",
     response_model=list[GoodsOption],
-    dependencies=[require_permission("product", "read")],
+    dependencies=[require_permission(SCOPE_STYLE, "read")],
 )
 async def list_goods_for_style(
     user: CurrentActiveUser,
@@ -347,7 +350,7 @@ async def create_sku(
 @router.get(
     "/skus/by-style/{style_id}",
     response_model=list[SkuResponse],
-    dependencies=[require_permission("product", "read")],
+    dependencies=[require_permission(SCOPE_STYLE, "read")],
 )
 async def list_skus_by_style(
     style_id: UUID,

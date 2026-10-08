@@ -213,7 +213,9 @@ class Promotion(TenantScopedModel):
 
     note_title: Mapped[str | None] = mapped_column(String(255), nullable=True)
     remark: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # 人工源列扩展（对齐 final.xlsx：颜色及规格/打单地址/发货单号/订单号/寄回单号/合作方式/合作形式/收藏数/评论数/博主风格 等）
+    # 人工源列扩展（对齐 final.xlsx：颜色及规格/打单地址/发货单号/订单号/合作形式/负责PR/博主风格 等）。
+    # 寄回单号 / 点赞数 / 收藏数 / 评论数 已从「录入信息」删掉（7a-5，各有 typed 列），
+    # JSONB 里的旧值原样留档、不迁移；PATCH 按键合并（domain.merge_source_extra）。
     source_extra: Mapped[dict] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )
@@ -241,7 +243,18 @@ class Promotion(TenantScopedModel):
     review_action: Mapped[str | None] = mapped_column(String(16), nullable=True)
     review_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     review_reason_category: Mapped[str | None] = mapped_column(String(16), nullable=True)
-    """驳回原因分类：延迟发文 / 流量差补发 / 衣服未寄回（PRD 改动 5，驳回时必填）。"""
+    """驳回原因分类：延迟发文 / 流量差补发 / 衣服未寄回（PRD 改动 5，驳回时必填）。
+
+    与 review_reason 一起只在驳回时写，重提、再审通过都不清：表示最近一次驳回（7a-4）。
+    """
+    resubmit_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """驳回后 PR 重新提交时写的说明（7a-4，重提必填）。
+
+    首版只留最近一轮，每次重提覆盖；完整历史随 7d-1 的时间线做。
+    重提与再审通过都不清 review_reason / review_reason_category，上一轮驳回原因一直可见。
+    """
+    resubmitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    """最近一次重新提交的时间（7a-4，与 resubmit_note 同轮覆盖）。"""
 
     # --- 通用 ---
     is_active: Mapped[bool] = mapped_column(nullable=False, server_default=text("true"))

@@ -77,6 +77,8 @@ class TestListProjection:
                       return_shipping_fee = 12.50,
                       return_waybill = 'SF123456',
                       review_reason_category = '延迟发文',
+                      resubmit_note = '重提说明',
+                      resubmitted_at = NOW(),
                       like_count = 999,
                       collect_count = 88,
                       comment_count = 7,

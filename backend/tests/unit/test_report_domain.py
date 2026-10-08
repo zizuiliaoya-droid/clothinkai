@@ -1,4 +1,4 @@
-"""U08 report.domain 单元测试（TimeRange 解析 + level 着色）。"""
+"""U08 report.domain 单元测试（TimeRange 解析 + 时间分桶 + level 着色）。"""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import pytest
 
 from app.modules.promotion.urge_calculator import get_today
 from app.modules.report.domain import (
+    bucket_start,
     level_overdue_rate,
     level_publish_rate,
     resolve_time_range,
@@ -69,6 +70,26 @@ def test_custom_span_too_large():
 def test_invalid_preset():
     with pytest.raises(ReportInvalidTimePresetError):
         resolve_time_range("yesterday")
+
+
+@pytest.mark.parametrize(
+    ("value", "granularity", "expected"),
+    [
+        (date(2026, 3, 1), "day", date(2026, 3, 1)),
+        # 03-01 是周日：所在 ISO 周从 02-23（周一）开始，跨了月
+        (date(2026, 3, 1), "week", date(2026, 2, 23)),
+        (date(2026, 3, 31), "week", date(2026, 3, 30)),
+        (date(2026, 3, 31), "month", date(2026, 3, 1)),
+        (date(2026, 3, 31), "year", date(2026, 1, 1)),
+    ],
+)
+def test_bucket_start(value: date, granularity: str, expected: date) -> None:
+    assert bucket_start(value, granularity) == expected
+
+
+def test_bucket_start_rejects_unknown_granularity():
+    with pytest.raises(ValueError, match="hour"):
+        bucket_start(date(2026, 3, 1), "hour")
 
 
 def test_level_publish_rate():

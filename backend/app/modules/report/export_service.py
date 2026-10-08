@@ -95,22 +95,6 @@ def _numeric_extra(v: Any) -> Any:
         return v
 
 
-def _bucket_date(value: date, granularity: str) -> date:
-    if granularity == "week":
-        return date.fromordinal(value.toordinal() - value.weekday())
-    if granularity == "month":
-        return value.replace(day=1)
-    if granularity == "year":
-        return value.replace(month=1, day=1)
-    return value
-
-
-def _sum_optional(current: Decimal | None, value: Decimal | None) -> Decimal | None:
-    if value is None:
-        return current
-    return (current or Decimal("0")) + value
-
-
 class ReportExportService:
     def __init__(self, session: AsyncSession) -> None:
         self._s = session
@@ -201,69 +185,25 @@ class ReportExportService:
             return [*_PRODUCTION_HEADERS, *extra_keys], rows
 
         if report_type == "store-daily":
-            source_rows = await StoreDailyService(self._s).get_dashboard(tenant_id, time_range)
+            # 周 / 月 / 年的分桶与 extra 聚合都在 service 里：导出与页面是同一份结果，
+            # 这里只逐行写出（extra 算不出来的是 None → 空单元格）
+            source_rows = await StoreDailyService(self._s).get_dashboard(
+                tenant_id, time_range, granularity=granularity
+            )
             extra_keys = sorted({key for row in source_rows for key in row.extra})
-            if granularity == "day":
-                rows = [
-                    [
-                        row.date,
-                        row.visitors,
-                        row.pay_amount,
-                        row.pay_orders,
-                        row.ad_spend_total,
-                        row.zhitongche_spend,
-                        row.yinli_spend,
-                        *[_numeric_extra(row.extra.get(key)) for key in extra_keys],
-                    ]
-                    for row in source_rows
+            rows = [
+                [
+                    row.date,
+                    row.visitors,
+                    row.pay_amount,
+                    row.pay_orders,
+                    row.ad_spend_total,
+                    row.zhitongche_spend,
+                    row.yinli_spend,
+                    *[_numeric_extra(row.extra.get(key)) for key in extra_keys],
                 ]
-                return [*_STORE_HEADERS, *extra_keys], rows
-
-            grouped: dict[date, dict[str, Any]] = {}
-            for row in source_rows:
-                key = _bucket_date(row.date, granularity)
-                values = grouped.setdefault(
-                    key,
-                    {
-                        "visitors": 0,
-                        "pay_amount": Decimal("0"),
-                        "pay_orders": 0,
-                        "ad_spend_total": None,
-                        "zhitongche_spend": None,
-                        "yinli_spend": None,
-                        "extra": {},
-                    },
-                )
-                values["visitors"] += row.visitors
-                values["pay_amount"] += row.pay_amount
-                values["pay_orders"] += row.pay_orders
-                for field in (
-                    "ad_spend_total",
-                    "zhitongche_spend",
-                    "yinli_spend",
-                ):
-                    values[field] = _sum_optional(values[field], getattr(row, field))
-                for extra_key, raw_value in row.extra.items():
-                    numeric = _numeric_extra(raw_value)
-                    if isinstance(numeric, Decimal):
-                        values["extra"][extra_key] = (
-                            values["extra"].get(extra_key, Decimal("0")) + numeric
-                        )
-            rows = []
-            for key in sorted(grouped):
-                values = grouped[key]
-                rows.append(
-                    [
-                        key,
-                        values["visitors"],
-                        values["pay_amount"],
-                        values["pay_orders"],
-                        values["ad_spend_total"],
-                        values["zhitongche_spend"],
-                        values["yinli_spend"],
-                        *[values["extra"].get(extra_key) for extra_key in extra_keys],
-                    ]
-                )
+                for row in source_rows
+            ]
             return [*_STORE_HEADERS, *extra_keys], rows
 
         month = f"{time_range[0]:%Y-%m}"

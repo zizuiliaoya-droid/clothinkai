@@ -56,11 +56,19 @@ export interface Promotion {
   pr_id: string | null;
   // 快照
   style_code_snapshot: string;
+  /** 建单时的款式简称快照。界面的品名用 display_short_name。 */
   style_short_name_snapshot: string;
+  /** 品名（7a-8）：商品简称，没填回落 style_short_name_snapshot。规则在后端一处。 */
+  display_short_name: string | null;
   style_main_image_url: string | null;
   // 商品归属（实时取，不做快照 —— 归属可改）
+  /** 商品编码。界面不显示（业务方 10-06），只留给搜索 / 导出。 */
   goods_code: string | null;
   goods_is_suit: boolean;
+  /** 归属商品全称；没有归属商品为 null。 */
+  goods_title: string | null;
+  /** 归属商品简称（全空白归一成 null）。「归属商品」列显示它，没填回落 goods_title。 */
+  goods_short_name: string | null;
   quote_amount: string | null; // Decimal as string；敏感
   cost_snapshot: string | null; // 敏感
   /** 寄拍 / 送拍 / 置换。历史导入数据为 null，可补一次。单据生成后不可改。 */
@@ -111,6 +119,9 @@ export interface Promotion {
   review_reason: string | null;
   /** 驳回原因分类：延迟发文 / 流量差补发 / 衣服未寄回。 */
   review_reason_category: string | null;
+  /** 最近一次驳回后重新提交的说明（只留最近一轮）。 */
+  resubmit_note: string | null;
+  resubmitted_at: string | null;
   // 通用
   is_active: boolean;
   created_at: string;
@@ -171,7 +182,11 @@ export interface PromotionUpdate {
   like_count?: number | null;
   remark?: string | null;
   is_active?: boolean;
-  source_extra?: Record<string, unknown>;
+  /**
+   * 按键合并（7a-5）：值为 null 或空串 = 删这个键，没出现的键不动。
+   * 只交改过的键，见 `buildSourceExtraPatch`。
+   */
+  source_extra?: Record<string, string | null>;
 }
 
 export interface PromotionPublishRequest {
@@ -196,6 +211,13 @@ export interface PromotionReviewRequest {
   review_reason?: string | null;
   /** 驳回时必填，三选一。审核通过时忽略。 */
   review_reason_category?: RejectReasonCategory | null;
+}
+
+/** 驳回后重新提交。note 必填；链接 / 日期不传就不改。 */
+export interface PromotionResubmitRequest {
+  note: string;
+  publish_url?: string;
+  actual_publish_date?: string;
 }
 
 /** 金额变更来源。「模式兜底」= 被按合作模式的硬规则改写了，不是人改的。 */
