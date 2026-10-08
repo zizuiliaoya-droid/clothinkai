@@ -1,6 +1,7 @@
 // 商品在下拉里的显示文字（补充 2：界面不显示商品编码）。
 //
-// 共用的 goodsOptionLabel（编码 + 名称）不改——W1 的推广页还在用（设计 J16）；本分支的页面用这里的 helper。
+// 原来共用的 goodsOptionLabel（编码 + 名称）在 7a、8a 都改完后已没有调用方，rebase 到 7a 后删掉；
+// 推广页用 features/promotion/goodsLabel 的 goodsNameLabel（同样不含编码）。
 
 import { goodsDisplayName, type GoodsOption } from "./api";
 

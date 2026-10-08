@@ -171,12 +171,6 @@ export function goodsDisplayName(
   return shortName || goodsTitle || "";
 }
 
-/** 商品下拉的选项文字：编码 + 显示名 + 套装标记。 */
-export function goodsOptionLabel(g: GoodsOption): string {
-  const name = goodsDisplayName(g.goods_title, g.goods_short_name);
-  return `${g.goods_code} ${name}${g.is_suit ? "（套装）" : ""}`;
-}
-
 /** 款式归属的商品，非套装优先。返回多条说明该款既单卖又进套装，需要人工指定归属。 */
 export async function listGoodsForStyle(styleId: string): Promise<GoodsOption[]> {
   const resp = await apiClient.get<GoodsOption[]>(
