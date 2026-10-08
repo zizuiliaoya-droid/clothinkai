@@ -224,7 +224,7 @@ DEFAULT_ROLES: tuple[RoleSpec, ...] = (
             BLOGGER_READ,
             PRODUCT_READ,
             # 8a-7：与跟单相同的商品权限（商品 / 套装 / 款式 / SKU / 字典 / 商品资料导入）；
-            # PRODUCT_READ 保留（057 之前的库里已有这一行，迁移只加不删）
+            # PRODUCT_READ 保留（058 之前的库里已有这一行，迁移只加不删）
             PRODUCT_ALL,
             IMPORTER_READ,
             WECOM_MESSAGE_READ,

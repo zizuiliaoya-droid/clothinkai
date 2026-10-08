@@ -22,8 +22,13 @@ downgrade 撤回授权时只删运营那一条 ``product.*:*`` 的 ``role_permis
 ``user_permission_override``（外键 ``RESTRICT``，不先删会让 downgrade 中止；迁移用
 BYPASSRLS 角色连库，FORCE RLS 挡不住这条 DELETE）。
 
-Revision ID: 057_8a_goods_master_data
-Revises: 056_goods_short_name
+## 编号
+8a 开发时编号 057、接 056；rebase 到 7a 之后改号为 058，接在 ``057_7a_quick_fixes`` 之后
+（两条线都接 056 会双 head，backend 启动跑 ``upgrade head`` 会失败）。设计文档与评审记录里的
+「057」指的就是本迁移，日志前缀随之改为 ``[058]``。
+
+Revision ID: 058_8a_goods_master_data
+Revises: 057_7a_quick_fixes
 Create Date: 2026-10-07
 """
 
@@ -39,8 +44,8 @@ from sqlalchemy.engine import Connection
 
 from app.core.security.rls import disable_rls_sql, enable_rls_sql
 
-revision: str = "057_8a_goods_master_data"
-down_revision: str | Sequence[str] | None = "056_goods_short_name"
+revision: str = "058_8a_goods_master_data"
+down_revision: str | Sequence[str] | None = "057_7a_quick_fixes"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -58,7 +63,7 @@ _BATCH_COUNT_COLUMNS = ("filled", "skipped", "conflicted", "warning_count", "fil
 
 
 def _log(msg: str) -> None:
-    print(f"[057] {msg}")
+    print(f"[058] {msg}")
 
 
 # ---------------------------------------------------------------------------
@@ -98,7 +103,7 @@ def _drop_import_job_status_check(bind: Connection) -> None:
     )
     if len(names) != 1:
         raise RuntimeError(
-            f"[057] import_job 上含 status 的 CHECK 应恰好一条，实际 {len(names)} 条："
+            f"[058] import_job 上含 status 的 CHECK 应恰好一条，实际 {len(names)} 条："
             f"{', '.join(names) or '（无）'}；不猜着删，迁移中止"
         )
     # op.f：按库里的实际名删，不再套命名约定

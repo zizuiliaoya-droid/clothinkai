@@ -1,5 +1,6 @@
-"""迁移 057_8a_goods_master_data 在 head 状态下的库结构与数据（往返另见 ciwork roundtrip.sh）。
+"""迁移 058_8a_goods_master_data 在 head 状态下的库结构与数据（往返另见 ciwork roundtrip.sh）。
 
+原编号 057，rebase 到 7a 之后改号为 058（接在 057_7a_quick_fixes 之后）。
 本文件先放 8a-7 的权限部分（AC 59）；后续 8a 各项（类目可空、导入表、外部图片链接）往这里加。
 """
 
@@ -17,7 +18,7 @@ from app.modules.auth.default_roles import DEFAULT_ROLES
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-class TestMigration057Permissions:
+class TestMigration058Permissions:
     async def test_operations_has_exactly_one_product_all(self, session: AsyncSession) -> None:
         n = (
             await session.execute(
@@ -76,7 +77,7 @@ _BATCH_COUNTS = ("filled", "skipped", "conflicted", "warning_count", "filled_obj
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-class TestMigration057ImportTables:
+class TestMigration058ImportTables:
     """8a-6：导入表（约束按定义查，不按名字——落库名取决于命名约定）。"""
 
     async def _checks(self, session: AsyncSession, table: str) -> list[str]:
@@ -202,8 +203,8 @@ class TestMigration057ImportTables:
         assert not any("(object_id)" in d or "(superseded_by)" in d for d in fks)
 
 
-_MIGRATION_057 = (
-    Path(__file__).resolve().parents[2] / "alembic" / "versions" / "057_8a_goods_master_data.py"
+_MIGRATION_058 = (
+    Path(__file__).resolve().parents[2] / "alembic" / "versions" / "058_8a_goods_master_data.py"
 )
 
 
@@ -228,14 +229,14 @@ def _code_strings_and_names(source: str) -> list[str]:
     return out
 
 
-class TestMigration057KeepsSummaryCoverage:
+class TestMigration058KeepsSummaryCoverage:
     """AC 21：本分支没有清 report_summary_coverage 的迁移（汇总表不存类目，§3.4、§8.2）。
 
     文档字符串里写明了「不清 ``report_summary_coverage``」，所以只查代码里的字符串常量与标识符。
     """
 
     def test_no_summary_coverage_in_code(self) -> None:
-        pieces = _code_strings_and_names(_MIGRATION_057.read_text(encoding="utf-8"))
+        pieces = _code_strings_and_names(_MIGRATION_058.read_text(encoding="utf-8"))
         assert pieces, "没解析到任何代码"
         assert any("ALTER TABLE" in p or "INSERT" in p for p in pieces), "场景有效性：SQL 没被扫到"
         hits = [p for p in pieces if "summary_coverage" in p.lower()]

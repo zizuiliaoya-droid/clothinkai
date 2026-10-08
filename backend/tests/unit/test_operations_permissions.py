@@ -22,7 +22,7 @@ from app.core.security.field_permissions import (
 from app.core.security.permissions import EffectivePermissions
 from app.modules.auth.default_roles import DEFAULT_ROLES
 
-# 057 之前 default_roles.py 里运营的 permissions（写死，作为基线）
+# 058 之前 default_roles.py 里运营的 permissions（写死，作为基线）
 _OPS_BASELINE_DEFAULT: tuple[str, ...] = (
     "report.*:read",
     "promotion.*:read",
