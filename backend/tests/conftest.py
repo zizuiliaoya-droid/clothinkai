@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from typing import Any, ClassVar
 from uuid import UUID, uuid4
 
@@ -1066,3 +1067,59 @@ async def import_batch_factory(session: AsyncSession, tenant_a: Any) -> Any:
                 tenant_id_ctx.reset(tok)
 
     return ImportBatchFactory(tenant_a)
+
+
+# ---------------------------------------------------------------------------
+# 流程线（设计 9.2）：七个真实角色账号
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class FlowUsers:
+    """``flow_users`` 的返回值：同一租户下七个账号（pr2 = 另一个 PR）。"""
+
+    tenant: Any
+    pr: Any
+    pr2: Any
+    pr_manager: Any
+    admin: Any
+    finance: Any
+    operations: Any
+    warehouse: Any
+
+
+@pytest_asyncio.fixture
+async def flow_users(session: AsyncSession, tenant_a: Any, factory: Any) -> FlowUsers:
+    """pr / pr2 / pr_manager / admin / finance / operations / warehouse 七个账号。
+
+    角色一律取迁移 seed 的真实角色（按 code 读 role 表），缺了直接失败、不现造：
+    现造的角色没有 role_permission，权限是空的，测出来的东西不算数。
+    """
+    from sqlalchemy import select
+
+    from app.modules.auth.models import Role
+    from app.modules.auth.service import AuthService
+
+    codes = ("pr", "pr_manager", "admin", "finance", "operations", "warehouse")
+    rows = (await session.execute(select(Role).where(Role.code.in_(codes)))).scalars().all()
+    roles = {r.code: r for r in rows}
+    missing = sorted(set(codes) - set(roles))
+    if missing:
+        pytest.fail(f"迁移 seed 缺角色: {', '.join(missing)}")
+
+    users = FlowUsers(
+        tenant=tenant_a,
+        pr=await factory.user(tenant_a, roles=[roles["pr"]]),
+        pr2=await factory.user(tenant_a, roles=[roles["pr"]]),
+        pr_manager=await factory.user(tenant_a, roles=[roles["pr_manager"]]),
+        admin=await factory.user(tenant_a, roles=[roles["admin"]]),
+        finance=await factory.user(tenant_a, roles=[roles["finance"]]),
+        operations=await factory.user(tenant_a, roles=[roles["operations"]]),
+        warehouse=await factory.user(tenant_a, roles=[roles["warehouse"]]),
+    )
+    # 证明拿到的是真实 PR 角色：持 promotion.*:*，不持 *
+    pr_perms = await AuthService(session).load_effective_permissions(users.pr.id)
+    assert (
+        "promotion.*:*" in pr_perms.scopes and "*" not in pr_perms.scopes
+    ), "flow_users.pr 不是真实 PR 角色"
+    return users
