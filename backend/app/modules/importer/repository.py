@@ -10,13 +10,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, select, update
+from sqlalchemy import String, func, literal_column, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.importer.models import FieldMapping, ImportBatch, ImportJob
@@ -201,6 +201,26 @@ class ImportJobRepository:
             .offset((page - 1) * page_size)
         )
         return (await self._session.execute(stmt)).scalars().all(), total
+
+    async def image_summary_by_batch(self, batch_ids: Iterable[UUID]) -> dict[UUID, dict[str, int]]:
+        """一页批次各自的内嵌图补主图结果计数（``notes.image.status`` → 款数，一条 GROUP BY）。
+
+        没有 ``notes.image`` 的批次不在结果里。
+        """
+        ids = list(batch_ids)
+        if not ids:
+            return {}
+        # 字面量路径：写成绑定参数时 SELECT 与 GROUP BY 各一个参数，PG 认不出是同一表达式
+        image_status = literal_column("import_job.notes -> 'image' ->> 'status'", String)
+        stmt = (
+            select(ImportJob.batch_id, image_status, func.count())
+            .where(ImportJob.batch_id.in_(ids), image_status.is_not(None))
+            .group_by(ImportJob.batch_id, image_status)
+        )
+        out: dict[UUID, dict[str, int]] = {}
+        for batch_id, status, n in (await self._session.execute(stmt)).all():
+            out.setdefault(batch_id, {})[str(status)] = int(n)
+        return out
 
     async def count_by_status(self, batch_id: UUID, status: str) -> int:
         stmt = select(func.count()).where(

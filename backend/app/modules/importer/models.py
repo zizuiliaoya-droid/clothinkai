@@ -144,7 +144,8 @@ class ImportJob(TenantScopedModel):
     target_resource_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True)
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
     # 行提示与补空明细：{"warnings": [str], "filled": [{object_type, object_label, fields}]}；
-    # 只有字段名、没有值（不含受保护字段的值），两样都没有就是 NULL（设计 §4.2）
+    # 只有字段名、没有值（不含受保护字段的值），两样都没有就是 NULL（设计 §4.2）；
+    # 商品资料导入读内嵌图后，取图那一行另有 "image": {status, style_code, reason}
     # none_as_null：Python None 落 SQL NULL（不是 JSON null），/notes 按 IS NOT NULL 取行
     notes: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB(none_as_null=True),  # type: ignore[no-untyped-call]

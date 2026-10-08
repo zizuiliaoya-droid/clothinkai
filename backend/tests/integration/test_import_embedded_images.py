@@ -13,17 +13,24 @@ import io
 import os
 import re
 import zipfile
+from collections import Counter
+from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass, field
 from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
+from httpx import ASGITransport, AsyncClient
 from openpyxl import Workbook
 from sqlalchemy import text
 from sqlalchemy.exc import DataError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import app.tasks.import_tasks as tasks
+from app.core.db import get_session
+from app.core.security.permissions import EffectivePermissions
+from app.modules.auth.deps import get_current_perms, get_current_user_active
+from app.modules.auth.models import User
 from app.modules.importer.adapters import style_sku_images
 from app.modules.importer.adapters.style_sku import StyleSkuImportAdapter
 from app.modules.importer.embedded_images import IMAGE_NOT_FOUND_REASON, MISSING_REASON
@@ -775,3 +782,155 @@ class TestInvalidAndFailures:
         assert (b.status, b.total_rows, b.imported) == ("completed", 1, 1)
         assert await env.style_id("A") is not None
         assert await env.images(batch_id) == {1: None}
+
+
+# ---------------------------------------------------------------------------
+# 接口：批次详情 / 列表 / 重试的 image_summary，notes 的 image
+# ---------------------------------------------------------------------------
+
+_STYLE_IMPORT = frozenset({"product.import:write"})  # 跟单 / 运营看商品资料批次靠它
+
+
+@dataclass
+class _Api:
+    client: AsyncClient
+    scopes: frozenset[str] = _STYLE_IMPORT
+
+
+@pytest.fixture
+def _tenant_ctx(env: _Env) -> Iterator[None]:
+    """同步 fixture 设租户上下文（async fixture 的 setup / teardown 不在同一个 Context）。"""
+    from app.core.tenancy import tenant_id_ctx
+
+    token = tenant_id_ctx.set(env.tenant_id)
+    try:
+        yield
+    finally:
+        tenant_id_ctx.reset(token)
+
+
+@pytest.fixture
+async def api(env: _Env, _tenant_ctx: None, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[_Api]:
+    """以 env 的导入人身份调接口（会话用 env 的 Maker，读得到 runner 提交的数据）。"""
+    from app.main import app
+
+    async with env.Maker() as s:
+        user = await s.get(User, env.user_id)
+
+    async def _session() -> AsyncIterator[AsyncSession]:
+        async with env.Maker() as s:
+            yield s
+
+    monkeypatch.setattr(tasks.run_import_batch, "apply_async", lambda *a, **kw: None)
+    holder: list[_Api] = []
+    app.dependency_overrides[get_session] = _session
+    app.dependency_overrides[get_current_user_active] = lambda: user
+    app.dependency_overrides[get_current_perms] = lambda: EffectivePermissions(
+        user_id=str(env.user_id), scopes=holder[0].scopes
+    )
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            holder.append(_Api(client=c))
+            yield holder[0]
+    finally:
+        # app 是模块级单例，不清理会污染后面的用例
+        for dep in (get_session, get_current_user_active, get_current_perms):
+            app.dependency_overrides.pop(dep, None)
+        await env._exec(
+            "DELETE FROM audit_log WHERE resource_id = ANY(CAST(:r AS text[]))",
+            r=[str(b) for b in env.batch_ids],
+        )
+
+
+def _summary(**counts: int) -> dict[str, int]:
+    return {"set": 0, "kept": 0, "invalid": 0, "skipped": 0, "failed": 0, **counts}
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+class TestImageSummaryApi:
+    async def test_detail_list_and_notes(self, env: _Env, api: _Api) -> None:
+        """详情 / 列表的 image_summary 与 notes 的 image 一致；没读过内嵌图的批次为 null。"""
+        await env.style("B", key=f"{env.tenant_id}/styles/x/main/old_main.png")
+        raw = wps_xlsx(
+            [
+                env.row("A", 图片=Pic("ID_A")),
+                env.row("A", "A2", 图片=Pic("ID_A2")),  # 同款第二张，忽略
+                env.row("B", 图片=Pic("ID_B")),  # 已有主图
+                env.row("C", 图片=Pic("ID_C")),  # 魔数不符
+                env.row("D", 图片=Pic("ID_D")),
+                env.row("E", 图片=Pic("ID_E"), 商品名称=None),  # 失败且款式不存在
+            ],
+            {
+                "ID_A": ("image1.png", png()),
+                "ID_A2": ("image2.png", png()),
+                "ID_B": ("image3.png", png()),
+                "ID_C": ("image4.png", jpg()),
+                "ID_D": ("image5.webp", webp()),
+                "ID_E": ("image6.png", png()),
+            },
+        )
+        batch_id, _ = await env.run(raw)
+        plain_id, _ = await env.run(wps_xlsx([env.row("G")], {}))
+        expected = _summary(set=2, kept=1, invalid=1, skipped=1)
+
+        resp = await api.client.get(f"/api/imports/batches/{batch_id}")
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["image_summary"] == expected
+        resp = await api.client.get(f"/api/imports/batches/{plain_id}")
+        assert resp.json()["image_summary"] is None
+
+        resp = await api.client.get(
+            "/api/imports/batches", params={"source": SOURCE, "page_size": 100}
+        )
+        assert resp.status_code == 200, resp.text
+        by_id = {item["id"]: item for item in resp.json()["items"]}
+        assert by_id[str(batch_id)]["image_summary"] == expected
+        assert by_id[str(plain_id)]["image_summary"] is None
+
+        resp = await api.client.get(
+            f"/api/imports/batches/{batch_id}/notes", params={"page_size": 100}
+        )
+        assert resp.status_code == 200, resp.text
+        items = resp.json()["items"]
+        assert all("image" in item for item in items)
+        images = {i["row_number"]: i["image"] for i in items if i["image"] is not None}
+        assert images == {
+            1: {"status": "set", "style_code": env.sc("A"), "reason": None},
+            3: {"status": "kept", "style_code": env.sc("B"), "reason": None},
+            4: {
+                "status": "invalid",
+                "style_code": env.sc("C"),
+                "reason": BATCH_REJECT_REASONS["signature"],
+            },
+            5: {"status": "set", "style_code": env.sc("D"), "reason": None},
+            6: {"status": "skipped", "style_code": env.sc("E"), "reason": "未找到款式"},
+        }
+        assert _summary(**Counter(i["status"] for i in images.values())) == expected
+
+    async def test_retry_response_carries_summary(self, env: _Env, api: _Api) -> None:
+        """重试接口返回的批次同样带 image_summary（上一次执行的结果）。"""
+        raw = wps_xlsx(
+            [env.row("A", 图片=Pic("ID_A"), 成本价="abc"), env.row("B")],  # 行 1 失败、款 A 已建
+            {"ID_A": ("image1.png", png())},
+        )
+        await env.style("A")
+        batch_id, result = await env.run(raw)
+        assert result["status"] == "partial"
+        resp = await api.client.post(f"/api/imports/batches/{batch_id}/retry")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["status"] == "processing"
+        assert body["image_summary"] == _summary(set=1)
+
+    async def test_invisible_source_still_404(self, env: _Env, api: _Api) -> None:
+        """看不到商品资料来源的人：详情 / notes / 重试仍是 404。"""
+        batch_id, _ = await env.run(
+            wps_xlsx([env.row("A", 图片=Pic("ID_A"))], {"ID_A": ("image1.png", png())})
+        )
+        api.scopes = frozenset({"report.sales:read"})
+        assert (await api.client.get(f"/api/imports/batches/{batch_id}")).status_code == 404
+        resp = await api.client.get(f"/api/imports/batches/{batch_id}/notes")
+        assert resp.status_code == 404
+        resp = await api.client.post(f"/api/imports/batches/{batch_id}/retry")
+        assert resp.status_code == 404

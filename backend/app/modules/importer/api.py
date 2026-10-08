@@ -61,11 +61,13 @@ from app.modules.importer.schemas import (
     ImportBatchPage,
     ImportBatchResponse,
     ImportConflictPage,
+    ImportImageSummary,
     ImportJobNotesPage,
     ImportSourceAccessResponse,
     ImportUploadResponse,
     MappingSpecResponse,
 )
+from app.modules.importer.service import ImportService
 
 router = APIRouter(prefix="/api/imports", tags=["importer"])
 
@@ -147,19 +149,30 @@ async def list_batches(
     items, total = await service.list_batches(
         filters=filters, page=page, page_size=page_size, user=user, perms=perms
     )
-    pending = await service.pending_conflicts(b.id for b in items)
+    ids = [b.id for b in items]
+    pending = await service.pending_conflicts(ids)
+    images = await service.image_summaries(ids)
     return ImportBatchPage(
-        items=[_batch_response(b, pending.get(b.id, 0)) for b in items],
+        items=[_batch_response(b, pending.get(b.id, 0), images.get(b.id)) for b in items],
         total=total,
         page=page,
         page_size=page_size,
     )
 
 
-def _batch_response(batch: ImportBatch, pending_conflicts: int) -> ImportBatchResponse:
+def _batch_response(
+    batch: ImportBatch, pending_conflicts: int, image_summary: ImportImageSummary | None
+) -> ImportBatchResponse:
     resp = ImportBatchResponse.model_validate(batch)
     resp.pending_conflicts = pending_conflicts
+    resp.image_summary = image_summary
     return resp
+
+
+async def _single_batch_response(service: ImportService, batch: ImportBatch) -> ImportBatchResponse:
+    pending = await service.pending_conflicts([batch.id])
+    images = await service.image_summaries([batch.id])
+    return _batch_response(batch, pending.get(batch.id, 0), images.get(batch.id))
 
 
 @router.get("/batches/{batch_id}", response_model=ImportBatchResponse)
@@ -170,8 +183,7 @@ async def get_batch(
     service: ImportServiceDep,
 ) -> ImportBatchResponse:
     batch = await service.get_batch(batch_id, user, perms)
-    pending = await service.pending_conflicts([batch.id])
-    return _batch_response(batch, pending.get(batch.id, 0))
+    return await _single_batch_response(service, batch)
 
 
 @router.get("/batches/{batch_id}/notes", response_model=ImportJobNotesPage)
@@ -206,8 +218,7 @@ async def retry_batch(
     409：retry_count 已达上限（exhausted）或批次正在处理中（busy）。
     """
     batch = await service.retry(batch_id, user, perms)
-    pending = await service.pending_conflicts([batch.id])
-    return _batch_response(batch, pending.get(batch.id, 0))
+    return await _single_batch_response(service, batch)
 
 
 @router.get("/batches/{batch_id}/errors/download")
