@@ -4,7 +4,7 @@ import { UploadOutlined } from "@ant-design/icons";
 import type { UploadProps } from "antd";
 import { useQueryClient } from "@tanstack/react-query";
 import { uploadImportFile } from "@/features/import/api";
-import { extractErrorMessage } from "@/services/apiClient";
+import { importUploadErrorMessage } from "@/features/import/uploadError";
 
 interface Props {
   /** 后端 importer adapter source（如 manual_style_sku / qianniu / wanxiangtai）。 */
@@ -19,6 +19,8 @@ interface Props {
   columnsNote?: string;
   /** 上传成功后回调（可选），参数为新建的批次 id。 */
   onUploaded?: (batchId: string) => void;
+  /** 文件超过大小上限时接在报错后的提示（可选，如商品资料的「请分批导出」）。 */
+  tooLargeHint?: string;
   size?: "small" | "middle" | "large";
 }
 
@@ -36,6 +38,7 @@ export function ImportUploadButton({
   templateColumns,
   columnsNote = DEFAULT_COLUMNS_NOTE,
   onUploaded,
+  tooLargeHint,
   size = "middle",
 }: Props) {
   const qc = useQueryClient();
@@ -57,7 +60,7 @@ export function ImportUploadButton({
         refresh();
         onUploaded?.(resp.batch_id);
       } catch (err) {
-        message.error(extractErrorMessage(err));
+        message.error(importUploadErrorMessage(err, tooLargeHint));
       } finally {
         setUploading(false);
       }

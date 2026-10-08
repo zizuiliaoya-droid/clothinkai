@@ -395,6 +395,7 @@ export function CostTablePage() {
                 templateColumns={templateColumns}
                 columnsNote={IMPORT_COLUMNS_NOTE}
                 onUploaded={setResultBatchId}
+                tooLargeHint="含内嵌图片的聚水潭导出请分批导出"
               />
             )}
             <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
