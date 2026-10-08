@@ -121,7 +121,7 @@ TOY_ALLOWED: dict[str, frozenset[str]] = {
     "待推送": frozenset({"ship_push", "cancel", "comment"}),
     "待财务付款": frozenset({"comment"}),
     "结款驳回": frozenset({"settlement_resubmit", "comment"}),
-    "已发布": frozenset({"recall_start", "review", "freight_submit", "metrics", "comment"}),
+    "已发布": frozenset({"recall_start", "urge", "review", "freight_submit", "metrics", "comment"}),
 }
 
 
@@ -161,7 +161,12 @@ def toy_doc(stage: str, **kw: Any) -> ToyDoc:
 W = Scope("promotion", "write")
 R = Scope("promotion", "read")
 PAY = Scope("finance.settlement", "pay")
+NEG_REVIEW = Scope("negotiation.review", "approve")
 _OWNED = Cell(edit=(W, Owner()), read=(R,), reason="由负责 PR 操作")
+# 「本人，或持审核权的人（主管、临时代理人；管理员靠 *）」：设计 N8 / N9、11-20 这类按角色列取「或」的格子
+_OWNED_OR_REVIEWER = Cell(
+    edit=(W, AnyOf(Owner(), NEG_REVIEW)), read=(R,), reason="由负责 PR 或主管操作"
+)
 
 TOY_MATRIX = Matrix(
     kind="promotion",
@@ -186,6 +191,7 @@ TOY_MATRIX = Matrix(
             "action",
             {"待推送": Cell(grey=(R,), hint="还没发货，直接取消即可"), "已发布": _OWNED},
         ),
+        Row("urge", "action", {"已发布": _OWNED_OR_REVIEWER}),
         Row(
             "review",
             "action",
@@ -266,6 +272,7 @@ TOY_EXPECTED_COMPACT: dict[tuple[str, str, str], str] = {
     ("已发布", "action", "cancel"): _ALL_OWNED,
     ("待推送", "action", "recall_start"): "灰灰灰灰隐灰灰",
     ("已发布", "action", "recall_start"): _ALL_OWNED,
+    ("已发布", "action", "urge"): "改读改改隐读读",
     ("已发布", "action", "review"): "读改改读隐读读",
     ("待财务付款·待付款", "action", "settlement_resubmit"): _ALL_OWNED,
     ("待财务付款·待财务付款", "action", "settlement_resubmit"): _ALL_OWNED,
@@ -372,10 +379,10 @@ def test_real_matrices_have_no_dead_rows() -> None:
 
 
 def test_dead_row_is_reported(monkeypatch: pytest.MonkeyPatch) -> None:
-    dead = Row("urge", "action", {"已发布": Cell(edit=None, read=None)})
+    dead = Row("urge_complete", "action", {"已发布": Cell(edit=None, read=None)})
     m = replace(TOY_MATRIX, rows=(*TOY_MATRIX.rows, dead))
     monkeypatch.setitem(MATRICES, "promotion", m)
-    assert dead_rows(render_grid(m, TOY_DOCS, PERSONAS)) == ["action:urge"]
+    assert dead_rows(render_grid(m, TOY_DOCS, PERSONAS)) == ["action:urge_complete"]
     monkeypatch.setitem(MATRICES, "promotion", TOY_MATRIX)
     assert dead_rows(render_grid(TOY_MATRIX, TOY_DOCS, PERSONAS)) == []
 
@@ -470,6 +477,18 @@ def test_star_and_nostar(toy: Matrix) -> None:
     assert _ui("admin", "待推送").fields["quote_amount"] == mx.UiField("edit")
     # 管理员不是本人：Owner 照样挡
     assert _ui("admin", "待推送").actions["ship_push"].state == "disabled"
+
+
+def test_owner_or_reviewer(toy: Matrix) -> None:
+    """「本人 或 审核权」：本人、主管、管理员（靠 *）改；别的 PR 读、原因是规则项的。"""
+    assert _ui("pr", "已发布").actions["urge"] == mx.UiAction("enabled")
+    assert _ui("pr_manager", "已发布").actions["urge"] == mx.UiAction("enabled")
+    assert _ui("admin", "已发布").actions["urge"] == mx.UiAction("enabled")
+    assert _ui("pr2", "已发布").actions["urge"] == mx.UiAction("disabled", reason=Owner().reason)
+    # 先挂的是能力项（缺推广写）→ 格的 reason
+    assert _ui("operations", "已发布").actions["urge"] == mx.UiAction(
+        "disabled", reason="由负责 PR 或主管操作"
+    )
 
 
 def test_temporary_delegate_gets_edit(toy: Matrix) -> None:
@@ -609,14 +628,27 @@ def test_matrix_validation(kw: dict[str, Any], needle: str) -> None:
         Matrix(**base)
 
 
-def test_any_of_only_combines_capabilities() -> None:
+def test_any_of() -> None:
     with pytest.raises(TypeError):
-        AnyOf(Scope("promotion", "write"), Owner())  # type: ignore[arg-type]
+        AnyOf(Scope("promotion", "write"), "promotion:write")  # type: ignore[arg-type]
     with pytest.raises(ValueError):
         AnyOf()
     who = PERSONAS["finance"]
     assert AnyOf(W, PAY).ok(who, TOY_DOCS["已发布"])
     assert not AnyOf(W, R).ok(who, TOY_DOCS["已发布"])
+    # 规则项也能组合：任一满足即过
+    assert AnyOf(Owner(), NEG_REVIEW).ok(PERSONAS["pr"], TOY_DOCS["已发布"])
+    assert AnyOf(Owner(), NEG_REVIEW).ok(PERSONAS["pr_manager"], TOY_DOCS["已发布"])
+    assert not AnyOf(Owner(), NEG_REVIEW).ok(PERSONAS["pr2"], TOY_DOCS["已发布"])
+    # 归类：第一个规则项（嵌套也算）；一个规则项都没有 = 自己（缺权限）
+    either = AnyOf(NEG_REVIEW, Owner())
+    assert either.blame == Owner()
+    nested = AnyOf(NEG_REVIEW, AnyOf(R, NoStar()), Owner())
+    assert nested.blame == NoStar()
+    caps = AnyOf(W, R)
+    assert caps.blame is caps
+    outer = AnyOf(NEG_REVIEW, caps)
+    assert outer.blame is outer
 
 
 def test_stage_in_predicate() -> None:
@@ -659,6 +691,31 @@ def test_require_rule_before_gate(toy: Matrix) -> None:
         require(PERSONAS["admin"], doc, "review")
     assert _code(exc) == "FLOW_ACTION_FORBIDDEN"
     assert exc.value.details["rule"] == "star_first_level"
+
+
+def test_require_owner_or_reviewer(toy: Matrix) -> None:
+    """「或」整体失败按第一个规则项报（7.2：其他人 → 403 not_owner），reason 与悬停文案同一份。"""
+    doc = TOY_DOCS["已发布"]
+    for who in ("pr", "pr_manager", "admin"):
+        require(PERSONAS[who], doc, "urge")
+    with pytest.raises(AppException) as exc:
+        require(PERSONAS["pr2"], doc, "urge")
+    assert _code(exc) == "FLOW_ACTION_FORBIDDEN"
+    assert exc.value.details == {"rule": "not_owner", "reason": Owner().reason}
+    assert ui_for(PERSONAS["pr2"], doc).actions["urge"].reason == exc.value.details["reason"]
+
+
+def test_require_any_of_capabilities_is_permission_denied(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """「或」里全是能力项、全不满足 → 缺权限，不是规则 403。"""
+    row = Row("urge", "action", {"已发布": Cell(edit=(AnyOf(PAY, NEG_REVIEW),), read=(R,))})
+    m = replace(TOY_MATRIX, rows=(*(r for r in TOY_MATRIX.rows if r.key != "urge"), row))
+    monkeypatch.setitem(MATRICES, "promotion", m)
+    with pytest.raises(AppException) as exc:
+        require(PERSONAS["pr"], TOY_DOCS["已发布"], "urge")
+    assert _code(exc) == "PERMISSION_DENIED"
+    require(PERSONAS["finance"], TOY_DOCS["已发布"], "urge")
 
 
 def test_require_capability_failure_is_permission_denied(toy: Matrix) -> None:
@@ -727,8 +784,9 @@ def test_ensure_patch_allowed(toy: Matrix) -> None:
             {"quote_amount", "payment_qr_attachment_id", "note_title"},
         )
     assert exc.value.code == "FIELD_PERMISSION_DENIED"
-    assert exc.value.details["fields"] == ["payment_qr_attachment_id", "quote_amount"]
-    assert exc.value.details["field"] == "payment_qr_attachment_id"
+    # 顺序按 patch_groups 的登记顺序（不是字母序），field = 第一个
+    assert exc.value.details["fields"] == ["quote_amount", "payment_qr_attachment_id"]
+    assert exc.value.details["field"] == "quote_amount"
     assert exc.value.details["entity"] == "promotion"
     with pytest.raises(FieldPermissionDenied) as exc:
         ensure_patch_allowed(PERSONAS["pr"], TOY_DOCS["待推送"], ["payment_qr_attachment_id"])

@@ -8,8 +8,10 @@
   用 ``when=(SettlementIn(...),)`` 这类谓词收窄，取第一个命中的格；都不命中 = 隐
 - ``Cell`` 依次判 ``edit`` → 改、``read`` → 读、``grey`` → 灰，都不成立 → 隐。每级是一组判断的「且」；
   ``None`` = 这一级没人，空元组 = 所有人
-- 判断分两类：能力项（``Scope``、``FieldWrite``、``AnyOf``，不满足 = 缺权限）与规则项（``Owner``、``NotPrOwner``、``NoStar``，
-  不满足 = ``FLOW_ACTION_FORBIDDEN``，带 ``rule`` 与 ``reason``）
+- 判断分两类：能力项（``Scope``、``FieldWrite``，不满足 = 缺权限）与规则项（``Owner``、``NotPrOwner``、``NoStar``，
+  不满足 = ``FLOW_ACTION_FORBIDDEN``，带 ``rule`` 与 ``reason``）。``AnyOf`` 是「或」，两类都能组合：
+  设计按角色列写的格子（「PR 本人改 / 主管改 / 管理员改」）写成 ``AnyOf(Owner(), Scope("promotion.review", "approve"))``；
+  全部不满足时按第一个规则项归类（没有规则项 = 缺权限）
 - 多角色逐格取最宽：``perms`` 本来就是各角色权限的并集，判断对并集做，自然落在能达到的最高一级。
   持 ``*`` 的 ``has()`` 恒真，等同管理员；``NoStar()`` 让他在那一格落到下一级（通常是「读」）
 
@@ -183,7 +185,9 @@ class FlowDocBase:
     - ``stage``：``cells`` 的键（推广单 = 3.8 的阶段名；谈款 / 结款单 / R33 = 状态值）
     - ``state``：状态机里的当前状态，非法转移时作 ``from_state`` 返回
     - ``column``：``ui.column``（推广单 = 5.3 的 A ~ H）
-    - ``owner_id``：「本人」（推广单 = 负责 PR；谈款 = 发起人）；``negotiator_id``：谈款人（``NotPrOwner`` 用）
+    - ``owner_id``：「本人」（推广单 = 负责 PR；谈款 = 发起人）；``negotiator_id``：谈款人（``NotPrOwner`` 用）。
+      service 组快照时 ``negotiator_id`` 必须填：没有谈款的推广单（导入、主管补录）回落到 ``pr_id``——
+      留空会让 ``NotPrOwner`` 恒真、自审规则静默放行
     """
 
     kind: ClassVar[str]
@@ -237,27 +241,44 @@ class FieldWrite(Capability):
         return can_write_field(self.entity, self.field, actor.field_ctx)
 
 
-class AnyOf(Capability):
-    """几个能力项满足一个即可。只组合能力项：规则项的失败原因要能说清是哪一条。"""
+class AnyOf(Check):
+    """几项满足一个即可（「或」），能力项、规则项都能组合，可以嵌套。
 
-    def __init__(self, *items: Capability) -> None:
+    全部不满足时由 ``blame`` 归类：第一个规则项（嵌套的 ``AnyOf`` 按它自己的 ``blame``）决定
+    ``rule`` / ``reason``——ui 的「读」原因和 ``require`` 的 403 用同一份；一个规则项都没有 = 缺权限。
+    """
+
+    def __init__(self, *items: Check) -> None:
         if not items:
             raise ValueError("AnyOf 至少要有一项")
         for item in items:
-            if not isinstance(item, Capability):
-                raise TypeError(f"AnyOf 只能组合能力项，收到 {item!r}")
+            if not isinstance(item, Check):
+                raise TypeError(f"AnyOf 只能组合判断项，收到 {item!r}")
         self.items = items
 
     def ok(self, actor: FlowActor, doc: FlowDocBase) -> bool:
         return any(item.ok(actor, doc) for item in self.items)
 
+    @property
+    def blame(self) -> Check:
+        """整体不满足时归咎的那一项：第一个规则项；没有规则项就是自己（按能力项处理）。"""
+        for item in self.items:
+            culprit = _blame(item)
+            if isinstance(culprit, Rule):
+                return culprit
+        return self
+
     def __repr__(self) -> str:
         return f"AnyOf{self.items!r}"
 
 
+def _blame(check: Check) -> Check:
+    return check.blame if isinstance(check, AnyOf) else check
+
+
 @dataclass(frozen=True)
 class Owner(Rule):
-    """本人（``doc.owner_id``）。"""
+    """本人（``doc.owner_id``）。持 ``*`` 也不放行；「本人或主管 / 管理员」写成 ``AnyOf(Owner(), Scope(...))``。"""
 
     reason: str = "只有负责人本人可以操作"
     rule: ClassVar[str] = "not_owner"
@@ -469,8 +490,9 @@ def _passes(checks: tuple[Check, ...] | None, actor: FlowActor, doc: FlowDocBase
 
 
 def _evaluate(cell: Cell, actor: FlowActor, doc: FlowDocBase) -> tuple[Level, Check | None]:
-    """返回 (这一格的级别, edit 里第一个不满足的判断)。"""
+    """返回 (这一格的级别, edit 里第一个不满足的判断；是 ``AnyOf`` 时换成它归咎的那一项)。"""
     failed = _first_failing(cell.edit, actor, doc) if cell.edit is not None else None
+    failed = _blame(failed) if failed is not None else None
     if cell.edit is not None and failed is None:
         return Level.EDIT, None
     if _passes(cell.read, actor, doc):
@@ -687,8 +709,14 @@ def writable_fields(actor: FlowActor, doc: FlowDocBase) -> WritableFields:
 
 
 def ensure_patch_allowed(actor: FlowActor, doc: FlowDocBase, fields_set: Iterable[str]) -> None:
-    """过渡规则（5.4）：传入的字段里已入矩阵、但此刻写不了的，一次全列出来 403；没入矩阵的放行。"""
+    """过渡规则（5.4）：传入的字段里已入矩阵、但此刻写不了的，一次全列出来 403；没入矩阵的放行。
+
+    顺序按 ``patch_groups`` 的登记顺序（与博主 / SKU 按声明顺序一致），``field`` = 其中第一个。
+    """
     wf = writable_fields(actor, doc)
-    denied = sorted((set(fields_set) & wf.managed) - wf.allowed)
+    requested = set(fields_set)
+    denied = [
+        f for f in matrix_for(doc.kind).patch_groups if f in requested and f not in wf.allowed
+    ]
     if denied:
         raise FieldPermissionDenied(fields=denied, entity=doc.kind)
