@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 import os
+import struct
 import zipfile
 
 import pytest
@@ -438,3 +439,50 @@ def test_unsupported_type_invalid(name: str) -> None:
         media={f"xl/media/{name}": b"GIF89a" + os.urandom(16)},
     )
     assert load_cell_images(raw).get("ID_A") == ImageInvalid(BATCH_REJECT_REASONS["type"])
+
+
+# ---------------------------------------------------------------------------
+# 压缩数据损坏：只影响那一个条目
+# ---------------------------------------------------------------------------
+
+
+def damage_member(raw: bytes, name: str, method: int = zipfile.ZIP_DEFLATED) -> bytes:
+    """把 ``name`` 按 ``method`` 重新压缩，再把它的压缩数据段改成 0xFF（LZMA 保留 9 字节头）。"""
+    out = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(raw)) as zin, zipfile.ZipFile(out, "w") as zout:
+        for info in zin.infolist():
+            compress = method if info.filename == name else zipfile.ZIP_DEFLATED
+            zout.writestr(info.filename, zin.read(info), compress_type=compress)
+    data = bytearray(out.getvalue())
+    info = zipfile.ZipFile(io.BytesIO(bytes(data))).getinfo(name)
+    offset = info.header_offset
+    name_len, extra_len = struct.unpack("<HH", data[offset + 26 : offset + 30])
+    start = offset + 30 + name_len + extra_len
+    keep = 9 if method == zipfile.ZIP_LZMA else 0
+    data[start + keep : start + info.compress_size] = b"\xff" * (info.compress_size - keep)
+    return bytes(data)
+
+
+@pytest.mark.parametrize(
+    "method",
+    [zipfile.ZIP_DEFLATED, zipfile.ZIP_LZMA, zipfile.ZIP_BZIP2, zipfile.ZIP_STORED],
+    ids=["deflate", "lzma", "bzip2", "stored"],
+)
+def test_damaged_image_entry_invalid_others_ok(method: int) -> None:
+    """单张图的压缩数据坏了（zlib.error / LZMAError / OSError / CRC 错）→ 只这张无效，别的照常。"""
+    raw, media = simple_package()
+    index = load_cell_images(damage_member(raw, "xl/media/image1.png", method))
+    assert index.get("ID_AAA1") == ImageInvalid(ei.IMAGE_UNREADABLE_REASON)
+    assert index.get("ID_BBB2") == ImageBlob("image/png", media["xl/media/image2.png"])
+
+
+@pytest.mark.parametrize(
+    "method", [zipfile.ZIP_DEFLATED, zipfile.ZIP_LZMA], ids=["deflate", "lzma"]
+)
+@pytest.mark.parametrize("part", [ei.CELLIMAGES_PATH, ei.CELLIMAGES_RELS_PATH])
+def test_damaged_index_entry_invalid(part: str, method: int) -> None:
+    """cellimages / rels 的压缩数据坏了 → 整份索引「内嵌图片数据无法读取」，不抛异常。"""
+    raw, _ = simple_package()
+    index = load_cell_images(damage_member(raw, part, method))
+    assert index.missing_reason == INDEX_INVALID_REASON
+    assert index.get("ID_AAA1") == ImageInvalid(INDEX_INVALID_REASON)

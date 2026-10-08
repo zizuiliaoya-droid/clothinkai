@@ -12,6 +12,7 @@ from __future__ import annotations
 import io
 import os
 import re
+import struct
 import zipfile
 from collections import Counter
 from collections.abc import AsyncIterator, Iterator
@@ -33,7 +34,11 @@ from app.modules.auth.deps import get_current_perms, get_current_user_active
 from app.modules.auth.models import User
 from app.modules.importer.adapters import style_sku_images
 from app.modules.importer.adapters.style_sku import StyleSkuImportAdapter
-from app.modules.importer.embedded_images import IMAGE_NOT_FOUND_REASON, MISSING_REASON
+from app.modules.importer.embedded_images import (
+    IMAGE_NOT_FOUND_REASON,
+    IMAGE_UNREADABLE_REASON,
+    MISSING_REASON,
+)
 from app.modules.importer.registry import ImportAdapterRegistry
 from app.modules.product.style_image_service import BATCH_REJECT_REASONS, StyleMainImageStore
 from app.tasks.import_tasks import _run_import_batch
@@ -190,6 +195,18 @@ def wps_xlsx(
             for name, data in images.values():
                 dst.writestr(f"xl/media/{name}", data)
     return out.getvalue()
+
+
+def _damage_member(raw: bytes, name: str) -> bytes:
+    """把 zip 里 ``name`` 的 deflate 数据段改成 0xFF（解压时 zlib.error）。"""
+    data = bytearray(raw)
+    info = zipfile.ZipFile(io.BytesIO(raw)).getinfo(name)
+    assert info.compress_type == zipfile.ZIP_DEFLATED
+    offset = info.header_offset
+    name_len, extra_len = struct.unpack("<HH", data[offset + 26 : offset + 30])
+    start = offset + 30 + name_len + extra_len
+    data[start : start + info.compress_size] = b"\xff" * info.compress_size
+    return bytes(data)
 
 
 # ---------------------------------------------------------------------------
@@ -715,6 +732,30 @@ class TestInvalidAndFailures:
         assert env.s3.puts == {}
         for tag in "ABCDE":
             assert await env.key_of(tag) is None
+
+    async def test_damaged_image_entry_only_that_style(self, env: _Env) -> None:
+        """某张图的 deflate 数据坏了 → 只那一款「图片无效」，后面的款照常补、计数正确。"""
+        raw = wps_xlsx(
+            [
+                env.row("A", 图片=Pic("ID_A")),
+                env.row("B", 图片=Pic("ID_B")),
+                env.row("C", 图片=Pic("ID_C")),
+            ],
+            {
+                "ID_A": ("image1.png", png()),
+                "ID_B": ("image2.png", png()),
+                "ID_C": ("image3.png", png()),
+            },
+        )
+        batch_id, result = await env.run(_damage_member(raw, "xl/media/image2.png"))
+        assert result == {"status": "completed", "imported": 3, "failed": 0}
+        assert await env.images(batch_id) == {
+            1: _set(env.sc("A")),
+            2: {"status": "invalid", "style_code": env.sc("B"), "reason": IMAGE_UNREADABLE_REASON},
+            3: _set(env.sc("C")),
+        }
+        assert await env.key_of("B") is None
+        assert len(env.s3.puts) == 2
 
     async def test_no_cellimages_part(self, env: _Env) -> None:
         """有 DISPIMG 但文件里没有 cellimages（Excel 另存过之类）→ 计「图片无效」带原因。"""

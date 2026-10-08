@@ -14,9 +14,11 @@
 from __future__ import annotations
 
 import io
+import lzma
 import posixpath
 import re
 import zipfile
+import zlib
 from dataclasses import dataclass
 from xml.etree import ElementTree
 
@@ -51,9 +53,12 @@ _DISPIMG_RE = re.compile(
     re.IGNORECASE,
 )
 _FORBIDDEN_XML_RE = re.compile(r"<!\s*(?:DOCTYPE|ENTITY)", re.IGNORECASE)
-# 读取时可能抛出的异常：坏压缩流、加密条目、不支持的压缩方式等
+# 读取时可能抛出的异常：坏压缩流、加密条目、不支持的压缩方式等。deflate / LZMA 数据坏了抛的
+# zlib.error / LZMAError 直接继承 Exception，要单列（bzip2 坏抛 OSError，CRC 不符抛 BadZipFile）
 _READ_ERRORS = (
     zipfile.BadZipFile,
+    zlib.error,
+    lzma.LZMAError,
     RuntimeError,
     OSError,
     EOFError,
