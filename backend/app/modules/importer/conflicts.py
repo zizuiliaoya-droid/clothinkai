@@ -83,6 +83,8 @@ _STATUS_LABELS = {
 }
 _OBJECT_TYPE_LABELS = {"style": "款式", "sku": "SKU", "goods": "商品", "blogger": "博主"}
 _KIND_LABELS = {"fields": "字段差异", "key": "键冲突"}
+# 商品冲突在待处理期间单品变成了套装：「用文件覆盖」时转失效的备注与提示（评审 LOW 1）
+_GOODS_BECAME_SUIT = "商品已变为套装，不再由导入写入"
 
 
 def clip_label(text: str, limit: int = LABEL_MAX) -> str:
@@ -770,6 +772,16 @@ class ImportConflictService:
             await self._session.flush()
             log.info("import_conflict_gone", extra={"conflict_id": str(c.id)})
             return ConflictResolveResult(id=c.id, outcome="gone", status=c.status)
+        if c.object_type == "goods" and obj.is_suit:
+            # 冲突待处理期间单品被加成员变成了套装：导入不改套装（§13.1），照「对象已删除」转失效
+            c.status = "invalid"
+            c.resolved_at = _now()
+            c.resolution_note = _GOODS_BECAME_SUIT
+            await self._session.flush()
+            log.info("import_conflict_goods_suit", extra={"conflict_id": str(c.id)})
+            return ConflictResolveResult(
+                id=c.id, outcome="gone", status=c.status, message=_GOODS_BECAME_SUIT
+            )
 
         specs = spec_map(applier)
         names = [str(f.get("field")) for f in c.fields]

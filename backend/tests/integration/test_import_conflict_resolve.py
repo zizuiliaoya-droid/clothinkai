@@ -34,6 +34,8 @@ from app.modules.importer.exceptions import (
 from app.modules.importer.models import ImportConflict
 from app.modules.importer.schemas import ConflictResolveRequest
 from app.modules.product.goods_models import GoodsMain, GoodsStyleItem
+from app.modules.product.goods_schemas import GoodsMainUpdate, GoodsStyleItemIn
+from app.modules.product.goods_service import GoodsService
 from app.modules.product.models import Sku, Style
 
 BLOGGER = "manual_blogger"
@@ -733,6 +735,57 @@ class TestResolveStyleSku:
             str(b2.id),
             "新品牌",
         )
+
+    async def test_goods_turned_suit_overwrite_rejected(
+        self, world: _World, product_factory: Any
+    ) -> None:
+        """评审 LOW 1：单品冲突待处理期间被加成员变成套装 → 覆盖被拒、套装字段不变（§13.1）。
+
+        照「对象已删除」：冲突转失效（不记处理人）、备注写明原因，没有经裁决写入的 goods.update 审计。
+        """
+        user, perms = await world.user("merchandiser")
+        b1 = await product_factory.brand(brand_name="旧品牌")
+        b2 = await product_factory.brand(brand_name="新品牌")
+        style = await product_factory.style()
+        other = await product_factory.style()
+        goods = await _goods(world, style, short_name="旧简称", season="春", brand_id=b1.id)
+        c = await world.conflict(
+            goods.id,
+            [
+                _pf("short_name", "商品简称", "旧简称", "新简称"),
+                _pf("brand_id", "品牌", str(b1.id), str(b2.id), displays=("旧品牌", "新品牌")),
+                _pf("season", "季节", "春", "夏"),
+            ],
+            source=STYLE_SKU,
+            object_type="goods",
+        )
+        # 冲突还没处理，有人在商品页给这个单品加了一个成员款式 → 变成套装
+        await GoodsService(world.session).update(
+            goods.id,
+            GoodsMainUpdate(
+                items=[GoodsStyleItemIn(style_id=style.id), GoodsStyleItemIn(style_id=other.id)]
+            ),
+            user_id=user.id,
+        )
+        assert (await world.reload(GoodsMain, goods.id)).is_suit is True  # 场景有效性
+
+        expected = {"short_name": "旧简称", "brand_id": str(b1.id), "season": "春"}
+        resp = await world.svc.resolve(_req("overwrite", (c.id, expected)), user, perms)
+        assert [(r.outcome, r.status) for r in resp.results] == [("gone", "invalid")]
+        assert resp.results[0].message == "商品已变为套装，不再由导入写入"
+        g = await world.reload(GoodsMain, goods.id)
+        assert (g.is_suit, g.short_name, g.brand_id, g.season) == (True, "旧简称", b1.id, "春")
+        c = await world.reload(ImportConflict, c.id)
+        assert (c.status, c.resolved_by, c.resolution_note) == (
+            "invalid",
+            None,
+            "商品已变为套装，不再由导入写入",
+        )
+        assert c.resolved_at is not None
+        # 只有商品页改成员那一条审计，没有经冲突裁决写入的
+        audits = await world.audits("goods.update", goods.id)
+        assert len(audits) == 1
+        assert "via" not in (audits[0].after or {})
 
     async def test_overwrite_cost_price_purchase_sourcing(
         self, world: _World, product_factory: Any
