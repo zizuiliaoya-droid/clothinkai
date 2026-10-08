@@ -49,6 +49,12 @@ _LOAD_STYLES = text(
     "SELECT id, style_code, is_deleted, main_image_key FROM style "
     "WHERE tenant_id = CAST(:tid AS uuid) AND style_code = ANY(CAST(:codes AS text[]))"
 )
+_LOAD_PRIOR = text(
+    "SELECT row_number, raw_data, notes -> 'image' FROM import_job "
+    "WHERE batch_id = CAST(:bid AS uuid) AND notes -> 'image' IS NOT NULL"
+)
+# 这些结果是定论：重跑时不再取图（与「第一张无效不往后找」一致）；failed / skipped 照常重新尝试
+_FINAL_STATUSES = frozenset({"set", "kept", "invalid"})
 _WRITE_NOTE = text(
     "UPDATE import_job SET notes = COALESCE(notes, '{}'::jsonb) "
     "|| jsonb_build_object('image', CAST(:img AS jsonb)) "
@@ -99,6 +105,25 @@ def pick_first_images(
             continue
         picks[str(code)] = ImagePick(row_number, image_id)
     return picks
+
+
+async def _load_prior(
+    run: BatchRunContext,
+) -> tuple[set[str], list[tuple[int, dict[str, Any]]]]:
+    """本批次之前执行留下的每款结果（重跑改写行时 runner 保留 ``notes.image``）。
+
+    返回（已有定论的款式编码，结果是 failed / skipped 的取图行 ``(行号, 原始行)``）。首跑时都为空。
+    """
+    async with run.bypass_session() as s:
+        rows = (await s.execute(_LOAD_PRIOR, {"bid": str(run.batch_id)})).all()
+    final: set[str] = set()
+    retry_rows: list[tuple[int, dict[str, Any]]] = []
+    for row_number, raw_data, image in rows:
+        if image.get("status") in _FINAL_STATUSES:
+            final.add(str(image.get("style_code")))
+        else:
+            retry_rows.append((int(row_number), dict(raw_data or {})))
+    return final, retry_rows
 
 
 async def _load_styles(run: BatchRunContext, codes: list[str]) -> dict[str, _StyleRef | None]:
@@ -163,8 +188,18 @@ async def apply_embedded_main_images(
 
     没有任何 DISPIMG 引用 → 什么都不做（不取文件）。中途出错时已得出的结果照样写回，再把异常
     抛给 runner（runner 只记日志）。
+
+    重跑（只重跑失败行 / 整文件重跑）时每款在本批次最多一条结果：之前已是 set / kept / invalid 的款
+    不再取图；之前是 failed / skipped 的，把当时的取图行放回候选一起按行号取，结果落回那一行、取代旧的。
     """
-    picks = pick_first_images(adapter, run.rows, run.mapping)
+    final, retry_rows = await _load_prior(run)
+    in_run = {row_number for row_number, _ in run.rows}
+    candidates = [*run.rows, *(r for r in retry_rows if r[0] not in in_run)]
+    picks = {
+        code: pick
+        for code, pick in pick_first_images(adapter, candidates, run.mapping).items()
+        if code not in final
+    }
     if not picks:
         return []
     results: list[ImageResult] = []

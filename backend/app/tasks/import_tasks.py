@@ -23,7 +23,8 @@ from uuid import UUID
 import sentry_sdk
 from celery import Task
 from celery.signals import worker_process_init
-from sqlalchemy import Table, func, select, text, update
+from sqlalchemy import Table, func, literal_column, select, text, update
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.exc import IntegrityError, StatementError
 
 from app.core.attachment import BucketKind
@@ -463,6 +464,16 @@ def _job_notes(outcome: RowOutcome) -> dict[str, Any] | None:
     }
 
 
+# 重试改写行时保留原来的 notes.image（商品资料导入每款的主图结果）：图片段要靠它知道这一款这批之前的
+# 结果（已有定论的不再取图、失败 / 跳过的在原行重新取），否则重跑的行会把它冲掉
+_KEEP_IMAGE_NOTE = literal_column(
+    "CASE WHEN import_job.notes -> 'image' IS NULL THEN excluded.notes "
+    "ELSE COALESCE(excluded.notes, '{}'::jsonb) "
+    "|| jsonb_build_object('image', import_job.notes -> 'image') END",
+    JSONB,
+)
+
+
 async def _upsert_job(
     session: Any,
     *,
@@ -501,7 +512,7 @@ async def _upsert_job(
             "raw_data": stmt.excluded.raw_data,
             "error_detail": stmt.excluded.error_detail,
             "target_resource_id": stmt.excluded.target_resource_id,
-            "notes": stmt.excluded.notes,
+            "notes": _KEEP_IMAGE_NOTE,
             "attempt_count": ImportJob.attempt_count + 1,
             "updated_at": func.now(),
         },

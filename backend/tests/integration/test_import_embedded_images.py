@@ -685,6 +685,141 @@ class TestWhichRows:
         assert env.s3.puts == {}
 
 
+def _fail_rows(monkeypatch: pytest.MonkeyPatch, rows: set[int]) -> set[int]:
+    """让 ``rows`` 里的行写库失败（行失败、款式不建）；清空返回的集合即恢复。"""
+    real = tasks._upsert_job
+
+    async def flaky(session: Any, **kw: Any) -> None:
+        if kw["row_number"] in rows and kw["status"] != "failed":
+            raise DataError("INSERT INTO import_job ...", {}, Exception("boom"))
+        await real(session, **kw)
+
+    monkeypatch.setattr(tasks, "_upsert_job", flaky)
+    return rows
+
+
+async def _rerun_failed(env: _Env, batch_id: UUID) -> dict[str, Any]:
+    await env._exec("UPDATE import_batch SET status = 'processing' WHERE id = :b", b=batch_id)
+    return await _run_import_batch(batch_id, only_failed=True)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+class TestRerunSameStyle:
+    """只重跑失败行时同一款跨首跑行与重跑行：每款最多一条结果；已有定论的不再取图。"""
+
+    async def test_set_then_rerun_other_row_not_counted_again(
+        self, env: _Env, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """首跑第 1 行补了主图、第 2 行（同款另一张图）失败 → 重跑第 2 行：不再取图、不记第二条。"""
+        failing = _fail_rows(monkeypatch, {2})
+        first = png()
+        raw = wps_xlsx(
+            [env.row("A", "A1", 图片=Pic("ID_A1")), env.row("A", "A2", 图片=Pic("ID_A2"))],
+            {"ID_A1": ("image1.png", first), "ID_A2": ("image2.png", png(90))},
+        )
+        batch_id, result = await env.run(raw)
+        assert result["status"] == "partial"
+        assert await env.images(batch_id) == {1: _set(env.sc("A")), 2: None}
+        key = await env.key_of("A")
+
+        failing.clear()
+        assert (await _rerun_failed(env, batch_id))["status"] == "completed"
+        assert await env.images(batch_id) == {1: _set(env.sc("A")), 2: None}
+        assert await env.key_of("A") == key
+        assert env.s3.puts == {key: first}
+
+    async def test_rerun_of_pick_row_keeps_its_result(
+        self, env: _Env, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """取图那一行本身失败（款式已存在，首跑照样补了图）→ 重跑它：结果仍是「补了」，不变成「已有主图」。"""
+        await env.style("A")
+        failing = _fail_rows(monkeypatch, {1})
+        raw = wps_xlsx(
+            [env.row("A", 图片=Pic("ID_A")), env.row("B", 图片=Pic("ID_B"))],
+            {"ID_A": ("image1.png", png()), "ID_B": ("image2.png", png())},
+        )
+        batch_id, result = await env.run(raw)
+        assert result["status"] == "partial"
+        expected = {1: _set(env.sc("A")), 2: _set(env.sc("B"))}
+        assert await env.images(batch_id) == expected
+
+        failing.clear()
+        assert (await _rerun_failed(env, batch_id))["status"] == "completed"
+        assert await env.images(batch_id) == expected
+        assert len(env.s3.puts) == 2
+
+    async def test_invalid_then_rerun_other_row_stays_invalid(
+        self, env: _Env, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """首跑第一张图无效 → 重跑同款另一行（图有效）：仍是「图片无效」，不往后找、不补。"""
+        failing = _fail_rows(monkeypatch, {2})
+        raw = wps_xlsx(
+            [env.row("A", "A1", 图片=Pic("ID_A1")), env.row("A", "A2", 图片=Pic("ID_A2"))],
+            {"ID_A1": ("image1.png", jpg()), "ID_A2": ("image2.png", png())},
+        )
+        batch_id, _ = await env.run(raw)
+        invalid = {
+            "status": "invalid",
+            "style_code": env.sc("A"),
+            "reason": BATCH_REJECT_REASONS["signature"],
+        }
+        assert await env.images(batch_id) == {1: invalid, 2: None}
+
+        failing.clear()
+        assert (await _rerun_failed(env, batch_id))["status"] == "completed"
+        assert await env.images(batch_id) == {1: invalid, 2: None}
+        assert await env.key_of("A") is None
+        assert env.s3.puts == {}
+
+    async def test_failed_then_rerun_retries_first_image_once(
+        self, env: _Env, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """首跑写 R2 失败（第 1 行）、第 2 行失败 → 重跑第 2 行：重新尝试第 1 行那张图，结果取代旧的，只算一次。"""
+        failing = _fail_rows(monkeypatch, {2})
+        env.s3.fail_put = True
+        first = png()
+        raw = wps_xlsx(
+            [env.row("A", "A1", 图片=Pic("ID_A1")), env.row("A", "A2", 图片=Pic("ID_A2"))],
+            {"ID_A1": ("image1.png", first), "ID_A2": ("image2.png", png(90))},
+        )
+        batch_id, _ = await env.run(raw)
+        assert await env.images(batch_id) == {
+            1: {"status": "failed", "style_code": env.sc("A"), "reason": "存储失败"},
+            2: None,
+        }
+
+        failing.clear()
+        env.s3.fail_put = False
+        assert (await _rerun_failed(env, batch_id))["status"] == "completed"
+        assert await env.images(batch_id) == {1: _set(env.sc("A")), 2: None}
+        key = await env.key_of("A")
+        assert env.s3.puts == {key: first}
+        [audit] = await env.audits(await env.style_id("A"))
+        assert audit.after["row_number"] == 1
+
+    async def test_skipped_then_rerun_retries_once(
+        self, env: _Env, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """首跑款式还不存在（两行都失败）→ 计「未找到款式」一条；重跑两行：补第 1 行的图，仍只一条。"""
+        failing = _fail_rows(monkeypatch, {1, 2})
+        first = png()
+        raw = wps_xlsx(
+            [env.row("A", "A1", 图片=Pic("ID_A1")), env.row("A", "A2", 图片=Pic("ID_A2"))],
+            {"ID_A1": ("image1.png", first), "ID_A2": ("image2.png", png(90))},
+        )
+        batch_id, _ = await env.run(raw)
+        assert await env.images(batch_id) == {
+            1: {"status": "skipped", "style_code": env.sc("A"), "reason": "未找到款式"},
+            2: None,
+        }
+
+        failing.clear()
+        assert (await _rerun_failed(env, batch_id))["status"] == "completed"
+        assert await env.images(batch_id) == {1: _set(env.sc("A")), 2: None}
+        assert env.s3.puts == {await env.key_of("A"): first}
+
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 class TestInvalidAndFailures:
