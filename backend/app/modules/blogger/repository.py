@@ -182,7 +182,7 @@ class BloggerRepository:
         tenant_id: UUID,
         values: dict[str, Any],
     ) -> tuple[Blogger, bool]:
-        """``ON CONFLICT (tenant_id, xiaohongshu_id) WHERE is_deleted=false DO UPDATE``。
+        """``ON CONFLICT (tenant_id, platform, xiaohongshu_id) WHERE is_deleted=false DO UPDATE``。
 
         Returns:
             ``(blogger, is_inserted)`` —— is_inserted=True 表示 INSERT 路径。
@@ -191,7 +191,8 @@ class BloggerRepository:
 
         约束：
         - ``values`` 必须包含 ``xiaohongshu_id, nickname``
-        - 不更新 ``id / tenant_id / created_at / xiaohongshu_id / is_deleted``
+        - 不更新 ``id / tenant_id / created_at / platform / xiaohongshu_id / is_deleted``
+          （平台不给时按列默认「小红书」）
         """
         update_fields = {
             k: v
@@ -201,6 +202,7 @@ class BloggerRepository:
                 "id",
                 "tenant_id",
                 "created_at",
+                "platform",
                 "xiaohongshu_id",
                 "is_deleted",
             }
@@ -213,8 +215,8 @@ class BloggerRepository:
         # 复用同名变量会让 mypy 报不兼容赋值。
         insert_stmt = pg_insert(Blogger).values(**full_values)
         stmt = insert_stmt.on_conflict_do_update(
-            index_elements=[Blogger.tenant_id, Blogger.xiaohongshu_id],
-            # 谓词必须与 partial UNIQUE 索引 uq_blogger_xiaohongshu_id 完全匹配
+            index_elements=[Blogger.tenant_id, Blogger.platform, Blogger.xiaohongshu_id],
+            # 谓词必须与 partial UNIQUE 索引 uq_blogger_platform_account 完全匹配
             # （migration 用 ``is_deleted = false``）；``.is_(False)`` 生成 ``IS false``
             # 会导致 PostgreSQL "no unique constraint matching ON CONFLICT" 报错。
             index_where=sa.text("is_deleted = false"),

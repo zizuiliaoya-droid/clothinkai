@@ -698,7 +698,7 @@ _CONCURRENT_UNIQUE = (
     "uq_style_code",
     "uq_sku_code",
     "uq_goods_main_code",
-    "uq_blogger_xiaohongshu_id",
+    "uq_blogger_platform_account",
     "uq_import_conflict_pending",
 )
 
