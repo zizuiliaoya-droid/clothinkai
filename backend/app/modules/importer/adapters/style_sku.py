@@ -35,6 +35,7 @@ from app.modules.importer.adapters.style_sku_goods import (
     decide_goods_target,
     load_goods_context,
 )
+from app.modules.importer.adapters.style_sku_images import apply_embedded_main_images
 from app.modules.importer.compare import (
     MONEY_REASON,
     FieldSpec,
@@ -79,6 +80,7 @@ from app.modules.product.models import Brand, Sku, Style
 from app.modules.product.repository import SkuRepository, StyleRepository
 
 if TYPE_CHECKING:
+    from app.modules.importer.adapter import BatchRunContext
     from app.modules.importer.models import FieldMapping
 
 log = logging.getLogger(__name__)
@@ -406,6 +408,12 @@ class StyleSkuImportAdapter:
             warnings=row.warnings,
             filled=row.filled,
         )
+
+    # ----------------------- 行之后：内嵌图补主图（8a 补充）----------------------- #
+
+    async def after_rows(self, run: BatchRunContext) -> None:
+        """读 WPS 单元格内嵌图，给还没有主图的款式补主图（见 ``style_sku_images``）。"""
+        await apply_embedded_main_images(self, run)
 
 
 class _Row:
