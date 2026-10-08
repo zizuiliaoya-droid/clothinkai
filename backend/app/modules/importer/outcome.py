@@ -5,7 +5,8 @@
 - ``ImportRowContext``：runner 传给 ``upsert_with_context`` 的上下文；``batch_seen`` 必填，
   同一次批次执行的所有行共用一个，免得漏传后静默退化成逐行
 - ``BatchSeen`` / ``screen_batch_seen``：同一次批次执行里，同一对象的同一比较字段以第一个给了值、
-  且已提交的行为准；后面的行给了不同的值 → 按「文件没给值」处理并提示
+  且已提交的行为准；后面的行给了不同的值 → 按「文件没给值」处理并提示。``first_notice`` 给
+  整批只提示一次的提示用（同样等行提交才生效）
 """
 
 from __future__ import annotations
@@ -82,11 +83,24 @@ SeenKey = tuple[str, UUID, str]  # (对象类型, 对象 id, 字段名)
 
 @dataclass
 class BatchSeen:
-    """一次批次执行里，每个（对象, 字段）第一个给了值、且已提交的行。"""
+    """一次批次执行里，每个（对象, 字段）第一个给了值、且已提交的行；以及整批只提示一次的提示。"""
 
     committed: dict[SeenKey, tuple[int, JsonValue]] = field(default_factory=dict)
     # 本行登记的，行事务提交后 commit_row() 才生效
     staged: dict[SeenKey, tuple[int, JsonValue]] = field(default_factory=dict)
+    # 整批只提示一次的提示（如「图片」列是内嵌图片）：同样等本行提交才算提示过
+    notified: set[str] = field(default_factory=set)
+    staged_notices: set[str] = field(default_factory=set)
+
+    def first_notice(self, key: str) -> bool:
+        """这次执行里还没有已提交的行（也不是本行）给过这条提示 → True，并暂存登记。
+
+        登记这条提示的行失败了，后面第一个提交的行照样带上它（提示不会丢）。
+        """
+        if key in self.notified or key in self.staged_notices:
+            return False
+        self.staged_notices.add(key)
+        return True
 
     def first_differing_row(self, key: SeenKey, row_number: int, value: JsonValue) -> int | None:
         """value 是 normalize 之后的非空值。
@@ -103,9 +117,12 @@ class BatchSeen:
     def commit_row(self) -> None:
         self.committed.update(self.staged)
         self.staged.clear()
+        self.notified |= self.staged_notices
+        self.staged_notices.clear()
 
     def discard_row(self) -> None:
         self.staged.clear()
+        self.staged_notices.clear()
 
 
 def screen_batch_seen(

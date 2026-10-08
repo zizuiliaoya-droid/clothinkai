@@ -14,6 +14,7 @@
 - 第 0 步：款式要新建而 SKU 编码已属于别的款式 → 不建款式、不建单品商品，只对 SKU 记键冲突
 - 套装永远不会被导入修改；任何已有商品编码都不会被修改（§5.3）
 - 占位符（``-``、``--``、``—``、``——``）与空格子一样当没给值；金额去千分位与空白
+- 「图片」不是 http(s) 链接（WPS 内嵌图片的 DISPIMG 公式文字、``#NAME?`` 等）当没给链接，整批只提示一次
 """
 
 from __future__ import annotations
@@ -146,6 +147,26 @@ def _to_decimal(raw: Any) -> Decimal | str | None:
         return str(raw)
 
 
+# 「图片」不是 http(s) 链接时整批只提示一次（BatchSeen.first_notice 的键）。聚水潭导出的「图片」多是
+# 单元格内嵌图片：runner 用 data_only 读到的是 WPS 缓存的 DISPIMG 公式文字；用 Excel 另存过的是
+# #NAME?（Excel 不认 DISPIMG）；Excel 365「放在单元格中」的图片是 #VALUE!
+_IMAGE_NOTICE = "image_not_link"
+_EMBEDDED_IMAGE_VALUES = frozenset({"#NAME?", "#VALUE!"})
+
+
+def _image_warnings(raw: str, seen: BatchSeen) -> list[str]:
+    """「图片」不合法（值已丢弃）时的提示：是 http(s) 链接但超长 / 含空白 / 没有主机 → 逐行提示；
+    不是 http(s) 链接 → 当没给链接，整批只提示一次（文案按第一次遇到的值）。"""
+    text = raw.strip()
+    if text.lower().startswith(("http://", "https://")):
+        return ["图片链接不是 http/https 地址或超过 1024 字符，未保存"]
+    if not seen.first_notice(_IMAGE_NOTICE):
+        return []
+    if "DISPIMG(" in text.upper() or text in _EMBEDDED_IMAGE_VALUES:
+        return ["图片列是表格内嵌图片，系统暂不读取，请用「批量上传主图」"]
+    return ["图片列有不是 http/https 链接的值，未保存（整批只提示一次）"]
+
+
 def _style_label(style: Style) -> str:
     return f"{style.style_code} {style.style_name}"
 
@@ -240,12 +261,12 @@ class StyleSkuImportAdapter:
     # ----------------------- 选填项（§5.4）----------------------- #
 
     async def sanitize_optional(
-        self, parsed: dict[str, Any], *, session: AsyncSession, tenant_id: UUID
+        self, parsed: dict[str, Any], *, session: AsyncSession, ctx: ImportRowContext
     ) -> tuple[dict[str, Any], list[str], Brand | None]:
         """简称 / 季节 / 品牌 / 图片：不合法丢弃并提示（行不失败）；品牌按启用品牌匹配。
 
         返回（处理后的 parsed、提示、匹配到的品牌）。被丢弃的项算「文件没给值」，不参与比较。
-        提示文案不含受保护字段的值。
+        「图片」不是 http(s) 链接（多是单元格内嵌图片）的整批只提示一次。提示文案不含受保护字段的值。
         """
         out = dict(parsed)
         warnings: list[str] = []
@@ -262,14 +283,14 @@ class StyleSkuImportAdapter:
             url = normalize_external_image_url(raw_url)
             out["external_image_url"] = url
             if url is None:
-                warnings.append("图片链接不是 http/https 地址或超过 1024 字符，未保存")
+                warnings += _image_warnings(raw_url, ctx.batch_seen)
         brand: Brand | None = None
         brand_text = out.get("brand_code")
         if brand_text:
             if len(brand_text) > _BRAND_MAX_LEN:
                 warnings.append(f"品牌超过 {_BRAND_MAX_LEN} 字，未写入")
             else:
-                brand = await self._match_brand(session, tenant_id, brand_text)
+                brand = await self._match_brand(session, ctx.tenant_id, brand_text)
                 if brand is None:
                     warnings.append(f"品牌「{brand_text}」不在品牌字典里，未写入")
         return out, warnings, brand
@@ -337,9 +358,7 @@ class StyleSkuImportAdapter:
         键冲突与「商品名称仅新建时写入」在三种策略下都一样（J55）。不自行 commit。
         """
         rule = rule_for(ctx.source)
-        parsed, warnings, brand = await self.sanitize_optional(
-            parsed, session=session, tenant_id=ctx.tenant_id
-        )
+        parsed, warnings, brand = await self.sanitize_optional(parsed, session=session, ctx=ctx)
         row = _Row(self, session, ctx, rule, parsed, brand, warnings)
 
         # 0) 先按两个键查（不加锁，只用来判断）

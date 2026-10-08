@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import io
 import json
+import re
+import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -54,6 +56,51 @@ def _xlsx(header: list[str], rows: list[dict[str, Any]]) -> bytes:
         ws.append([row.get(h) for h in header])
     buf = io.BytesIO()
     wb.save(buf)
+    return buf.getvalue()
+
+
+# 业务方实际用的聚水潭商品资料导出（2026-10-06，WPS 生成，15 列；交付20261007 里的「商品资料_…xlsx」）
+JST_15 = [
+    "图片", "款式编码", "商品编码", "商品名称", "商品简称", "颜色及规格", "颜色", "规格",
+    "成本价", "采购价", "基本售价", "市场|吊牌价", "国标码", "品牌", "季节",
+]  # fmt: skip
+
+# 「图片」格是单元格内嵌图片：WPS 存成公式 + 缓存的公式文字（图在 xl/cellimages.xml）；
+# 用 Excel 另存后缓存值变成 #NAME?（Excel 不认 DISPIMG）。runner 用 data_only=True 读的是缓存值
+EMBEDDED = "<内嵌图片>"
+_WPS_IMAGE_CELL = (
+    '<c r="{ref}" t="str"><f>_xlfn.DISPIMG(&quot;{id}&quot;,1)</f>'
+    "<v>=DISPIMG(&quot;{id}&quot;,1)</v></c>"
+)
+_EXCEL_IMAGE_CELL = '<c r="{ref}" t="e"><f>_xlfn.DISPIMG(&quot;{id}&quot;,1)</f><v>#NAME?</v></c>'
+_SHEET_XML = "xl/worksheets/sheet1.xml"
+_EMBEDDED_HINT = "图片列是表格内嵌图片，系统暂不读取，请用「批量上传主图」"
+_TITLE_A = "LENNEA 23/AW 原创秋冬女长袖通勤宽松宽松高腰学生设计条纹衬衫"
+_TITLE_B = "LENNEA 23/AW 原创秋冬无领女正肩修身短款小香风学院夹克外套"
+
+
+def _embedded_image_xlsx(header: list[str], rows: list[dict[str, Any]], cell: str) -> bytes:
+    """「图片」为 EMBEDDED 的格写成内嵌图片的原样 XML（cell = _WPS_IMAGE_CELL / _EXCEL_IMAGE_CELL）。
+
+    openpyxl 写公式不写缓存值，data_only 读回是空格子、测不到真实情况：先写占位文字再换 XML。
+    """
+    marked = [
+        {**row, "图片": f"__IMG{n}__"} if row.get("图片") == EMBEDDED else row
+        for n, row in enumerate(rows)
+    ]
+    src = zipfile.ZipFile(io.BytesIO(_xlsx(header, marked)))
+    sheet, count = re.subn(
+        r'<c r="([A-Z]+[0-9]+)" t="inlineStr"><is><t>__IMG[0-9]+__</t></is></c>',
+        lambda m: cell.format(ref=m.group(1), id=f"ID_{uuid4().hex.upper()}"),
+        src.read(_SHEET_XML).decode(),
+    )
+    assert count == sum(
+        row.get("图片") == EMBEDDED for row in rows
+    ), "占位没换成（openpyxl 输出变了）"
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as dst:
+        for item in src.infolist():
+            dst.writestr(item, sheet if item.filename == _SHEET_XML else src.read(item.filename))
     return buf.getvalue()
 
 
@@ -220,11 +267,18 @@ class _Env:
         *,
         header: list[str] | None = None,
         mapping_version: int | None = None,
+        image_cell: str | None = None,
     ) -> tuple[UUID, dict[str, Any]]:
+        """image_cell 给了就把「图片」为 EMBEDDED 的格写成内嵌图片（见 _embedded_image_xlsx）。"""
         batch_id = uuid4()
         self.batch_ids.append(batch_id)
         key = f"imports/{self.tenant_id}/{batch_id}/goods.xlsx"
-        self.files[key] = _xlsx(header or JST_42, rows)
+        header = header or JST_42
+        self.files[key] = (
+            _xlsx(header, rows)
+            if image_cell is None
+            else _embedded_image_xlsx(header, rows, image_cell)
+        )
         await self._exec(
             "INSERT INTO import_batch (id, tenant_id, source, file_hash, original_filename, "
             "file_r2_key, file_bucket, status, total_rows, imported, failed, retry_count, "
@@ -1069,29 +1123,37 @@ class TestStepZero:
 @pytest.mark.asyncio
 class TestOptionalAndValidation:
     async def test_optional_items_dropped_with_warnings(self, env: _Env) -> None:
-        """§5.4：简称 > 32、季节 > 64、图片 javascript: / ftp:// / 超 1024 → 丢弃并提示，行不失败。"""
+        """§5.4：简称 > 32、季节 > 64、图片不合法 → 丢弃并提示，行不失败。
+
+        图片不是 http(s) 链接（javascript: / ftp://）当没给链接、整批只提示一次；是 http(s) 链接但
+        超 1024 或含空白的照旧逐行提示。
+        """
         header = [*JST_42, "季节"]
         batch_id, result = await env.run(
             [
                 env.row("Q1", "Q1", 商品简称="长" * 33, 季节="季" * 65, 图片="javascript:alert(1)"),
                 env.row("Q2", "Q2", 图片="ftp://img.example.invalid/a.jpg"),
                 env.row("Q3", "Q3", 图片="https://img.example.invalid/" + "a" * 1100),
+                env.row("Q4", "Q4", 图片="https://img.example.invalid/a b.jpg"),
             ],
             header=header,
         )
         assert result["status"] == "completed"
         jobs = await env.jobs(batch_id)
-        image_warning = "图片链接不是 http/https 地址或超过 1024 字符，未保存"
-        assert _warnings(jobs[0]) == [
-            "商品简称超过 32 字，未写入",
-            "季节超过 64 字，未写入",
-            image_warning,
+        bad_link = "图片链接不是 http/https 地址或超过 1024 字符，未保存"
+        assert [_warnings(j) for j in jobs] == [
+            [
+                "商品简称超过 32 字，未写入",
+                "季节超过 64 字，未写入",
+                "图片列有不是 http/https 链接的值，未保存（整批只提示一次）",
+            ],
+            [],
+            [bad_link],
+            [bad_link],
         ]
-        assert _warnings(jobs[1]) == [image_warning]
-        assert _warnings(jobs[2]) == [image_warning]
         goods = await env.goods_row(env.sc("Q1"))
         assert (goods.short_name, goods.season) == (None, None)
-        for tag in ("Q1", "Q2", "Q3"):
+        for tag in ("Q1", "Q2", "Q3", "Q4"):
             assert (await env.style_row(tag)).external_image_url is None
 
     async def test_price_over_limit_or_malformed_fails_row(self, env: _Env) -> None:
@@ -1110,3 +1172,167 @@ class TestOptionalAndValidation:
         assert "100000000" not in jobs[0].error_detail
         assert jobs[1].error_detail.endswith("基本售价必须为非负数字且小于 1 亿")
         assert await env.style_row("PA") is None
+
+
+def _jst15_rows(env: _Env) -> list[dict[str, Any]]:
+    """业务方导出的两行原样（款号、SKU 编码换成本次的编码，品牌名带后缀）：价格是数字格，
+    采购价 / 吊牌价是空格子，「图片」是内嵌图片。"""
+    common = {
+        "图片": EMBEDDED,
+        "规格": "L",
+        "采购价": None,
+        "市场|吊牌价": None,
+        "国标码": "170/92A（L）",
+        "品牌": f"LENNEALAB{env.suffix}",
+        "季节": "2026秋",
+    }
+    return [
+        {
+            **common,
+            "款式编码": env.sc("A"),
+            "商品编码": env.kc("A-L"),
+            "商品名称": _TITLE_A,
+            "商品简称": "条纹衬衫",
+            "颜色及规格": "蓝色;L",
+            "颜色": "蓝色",
+            "成本价": 42,
+            "基本售价": 138,
+        },
+        {
+            **common,
+            "款式编码": env.sc("B"),
+            "商品编码": env.kc("B-L"),
+            "商品名称": _TITLE_B,
+            "商品简称": "藏青色小香风",
+            "颜色及规格": "外套（藏青色 薄款）;L",
+            "颜色": "外套（藏青色 薄款）",
+            "成本价": 85,
+            "基本售价": 258,
+        },
+    ]
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+class TestJstFifteenColumnExport:
+    """业务方实际用的 15 列导出（WPS，「图片」是单元格内嵌图片）走真实 runner。"""
+
+    @pytest.mark.parametrize(
+        "image_cell", [_WPS_IMAGE_CELL, _EXCEL_IMAGE_CELL], ids=["wps", "excel_name_error"]
+    )
+    async def test_new_styles(self, env: _Env, image_cell: str) -> None:
+        """款式不存在：建款式 / SKU / 单品商品。内嵌图片当没给链接（不存、行不失败、不冲突），
+        整批只提示一次；季节原样写到商品；采购价 / 吊牌价为空 = 没给值。"""
+        brand_id = await env.brand("L", f"LENNEALAB{env.suffix}")
+        batch_id, result = await env.run(_jst15_rows(env), header=JST_15, image_cell=image_cell)
+        assert result == {"status": "completed", "imported": 2, "failed": 0}
+        jobs = await env.jobs(batch_id)
+        assert [j.status for j in jobs] == ["success", "success"]
+        assert [_warnings(j) for j in jobs] == [[_EMBEDDED_HINT], []]
+        b = await env.batch(batch_id)
+        assert (b.total_rows, b.imported, b.conflicted, b.failed, b.warning_count) == (
+            2,
+            2,
+            0,
+            0,
+            1,
+        )
+        expected = [
+            ("A", _TITLE_A, "条纹衬衫", "蓝色", "42.00", "138.00"),
+            ("B", _TITLE_B, "藏青色小香风", "外套（藏青色 薄款）", "85.00", "258.00"),
+        ]
+        for tag, title, short, color, cost, price in expected:
+            style = await env.style_row(tag)
+            assert (style.style_name, style.external_image_url) == (title, None)
+            sku = await env.sku_row(f"{tag}-L")
+            assert (sku.style_id, sku.color, sku.size, sku.sourcing_type) == (
+                style.id,
+                color,
+                "L",
+                "自产",
+            )
+            assert (sku.base_price, sku.cost_price, sku.purchase_price, sku.tag_price) == (
+                Decimal(price),
+                Decimal(cost),
+                None,
+                None,
+            )
+            goods = await env.goods_row(env.sc(tag))
+            assert (goods.goods_title, goods.short_name, goods.season, goods.brand_id) == (
+                title,
+                short,
+                "2026秋",
+                brand_id,
+            )
+            assert [i.style_id for i in await env.goods_items(goods.id)] == [style.id]
+        assert await env.all("SELECT id FROM import_conflict WHERE batch_id = :b", b=batch_id) == []
+
+    async def test_existing_styles(self, env: _Env) -> None:
+        """款式已存在、没有 SKU：A 有简称为空的单品商品 → 补简称 / 品牌 / 季节，全称与款名不变；
+        B 没有商品 → 新建单品（全称 = 商品名称），B 已存的外部链接不变、不记冲突。"""
+        brand_id = await env.brand("L", f"LENNEALAB{env.suffix}")
+        sa = await env.style("A", name="系统款名 A")
+        sb = await env.style("B", name="系统款名 B", url="https://img.example.invalid/b.jpg")
+        ga = await env.goods(env.sc("A"), [sa], title="系统全称 A")
+        batch_id, result = await env.run(
+            _jst15_rows(env), header=JST_15, image_cell=_WPS_IMAGE_CELL
+        )
+        assert result["status"] == "completed"
+        jobs = await env.jobs(batch_id)
+        assert [j.status for j in jobs] == ["success", "success"]  # 都新建了 SKU
+        assert [_warnings(j) for j in jobs] == [[_EMBEDDED_HINT], []]
+        assert jobs[0].notes["filled"] == [
+            {
+                "object_type": "goods",
+                "object_label": "系统全称 A",
+                "fields": ["short_name", "brand_id", "season"],
+            }
+        ]
+        b = await env.batch(batch_id)
+        assert (b.imported, b.conflicted, b.warning_count, b.filled_objects) == (2, 0, 1, 1)
+
+        goods_a = await env.goods_row(env.sc("A"))
+        assert (goods_a.goods_title, goods_a.short_name, goods_a.season, goods_a.brand_id) == (
+            "系统全称 A",
+            "条纹衬衫",
+            "2026秋",
+            brand_id,
+        )
+        goods_b = await env.goods_row(env.sc("B"))
+        assert (goods_b.goods_title, goods_b.short_name, goods_b.season, goods_b.brand_id) == (
+            _TITLE_B,
+            "藏青色小香风",
+            "2026秋",
+            brand_id,
+        )
+        style_a = await env.style_row("A")
+        style_b = await env.style_row("B")
+        assert (style_a.style_name, style_a.external_image_url) == ("系统款名 A", None)
+        assert (style_b.style_name, style_b.external_image_url) == (
+            "系统款名 B",
+            "https://img.example.invalid/b.jpg",
+        )
+        for object_id in (sa, sb, ga, goods_b.id):
+            assert await env.conflicts(object_id) == []
+
+    async def test_hint_kept_when_first_row_fails(
+        self, env: _Env, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """带着这条提示的第 1 行写入失败 → 提示落到下一个提交的行上，不会丢。"""
+        await env.brand("L", f"LENNEALAB{env.suffix}")
+        real: Callable[..., Any] = tasks._upsert_job
+
+        async def flaky(session: Any, **kw: Any) -> None:
+            if kw["row_number"] == 1 and kw["status"] != "failed":
+                raise DataError("INSERT INTO import_job ...", {}, Exception("boom"))
+            await real(session, **kw)
+
+        monkeypatch.setattr(tasks, "_upsert_job", flaky)
+        batch_id, result = await env.run(
+            _jst15_rows(env), header=JST_15, image_cell=_WPS_IMAGE_CELL
+        )
+        assert result["status"] == "partial"
+        jobs = await env.jobs(batch_id)
+        assert [j.status for j in jobs] == ["failed", "success"]
+        assert _warnings(jobs[1]) == [_EMBEDDED_HINT]
+        assert (await env.batch(batch_id)).warning_count == 1

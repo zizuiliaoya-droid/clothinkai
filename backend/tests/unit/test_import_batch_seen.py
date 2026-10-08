@@ -90,6 +90,27 @@ class TestFirstDifferingRow:
 
 
 @pytest.mark.unit
+class TestFirstNotice:
+    def test_once_per_batch_after_commit(self) -> None:
+        seen = BatchSeen()
+        assert seen.first_notice("image") is True
+        assert seen.first_notice("image") is False  # 同一行再问一次
+        seen.commit_row()
+        assert seen.notified == {"image"}
+        assert seen.staged_notices == set()
+        assert seen.first_notice("image") is False
+        assert seen.first_notice("other") is True
+
+    def test_discarded_row_does_not_count(self) -> None:
+        """登记提示的行失败了：后面第一个提交的行照样带上这条提示。"""
+        seen = BatchSeen()
+        assert seen.first_notice("image") is True
+        seen.discard_row()
+        assert seen.notified == set()
+        assert seen.first_notice("image") is True
+
+
+@pytest.mark.unit
 class TestScreenBatchSeen:
     def test_inconsistent_field_removed_with_warning(self) -> None:
         seen = BatchSeen()

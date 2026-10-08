@@ -1,13 +1,18 @@
-"""U06b StyleSkuImportAdapter 单元测试（parse_row + validate，纯函数无 DB）。"""
+"""U06b StyleSkuImportAdapter 单元测试（parse_row + validate + 图片列提示，无 DB）。"""
 
 from __future__ import annotations
 
 from decimal import Decimal
+from typing import Any
+from uuid import uuid4
+
+import pytest
 
 from app.modules.importer.adapters.style_sku import (
     StyleSkuImportAdapter,
     _to_decimal,
 )
+from app.modules.importer.outcome import BatchSeen, ImportRowContext
 
 
 def _adapter() -> StyleSkuImportAdapter:
@@ -126,6 +131,126 @@ def test_builtin_columns_from_catalog():
 def test_parse_row_strips_whitespace():
     parsed = _adapter().parse_row({"款式编码": "  ST001  "}, None)
     assert parsed["style_code"] == "ST001"
+
+
+def test_parse_row_jst_15_column_export():
+    """业务方实际用的 15 列导出（WPS）：runner 读出的一行原样。采购价 / 吊牌价是空格子 = 没给值，
+    国标码不读，「图片」是内嵌图片的公式文字（由 sanitize_optional 当没给链接）。"""
+    image = '=DISPIMG("ID_760E0C523F17496689390AEF9B0CB3E5",1)'
+    title = "LENNEA 23/AW 原创秋冬女长袖通勤宽松宽松高腰学生设计条纹衬衫"
+    row = {
+        "图片": image,
+        "款式编码": "2023008",
+        "商品编码": "2023008-L",
+        "商品名称": title,
+        "商品简称": "条纹衬衫",
+        "颜色及规格": "蓝色;L",
+        "颜色": "蓝色",
+        "规格": "L",
+        "成本价": "42",
+        "采购价": "",
+        "基本售价": "138",
+        "市场|吊牌价": "",
+        "国标码": "170/92A（L）",
+        "品牌": "LENNEALAB",
+        "季节": "2026秋",
+    }
+    parsed = _adapter().parse_row(row, None)
+    assert parsed == {
+        "style_code": "2023008",
+        "sku_code": "2023008-L",
+        "style_name": title,
+        "color_size": "蓝色;L",
+        "color": "蓝色",
+        "size": "L",
+        "base_price": Decimal("138"),
+        "cost_price": Decimal("42"),
+        "purchase_price": None,
+        "tag_price": None,
+        "sourcing_type": None,
+        "goods_short_name": "条纹衬衫",
+        "brand_code": "LENNEALAB",
+        "season": "2026秋",
+        "external_image_url": image,
+    }
+    assert _adapter().validate(parsed) == []
+
+
+# ---------------------------------------------------------------------------
+# sanitize_optional：图片列（没给品牌时不碰数据库）
+# ---------------------------------------------------------------------------
+
+_EMBEDDED = "图片列是表格内嵌图片，系统暂不读取，请用「批量上传主图」"
+_NOT_LINK = "图片列有不是 http/https 链接的值，未保存（整批只提示一次）"
+_BAD_LINK = "图片链接不是 http/https 地址或超过 1024 字符，未保存"
+
+
+async def _sanitize_image(seen: BatchSeen, row: int, raw: str) -> tuple[Any, list[str]]:
+    ctx = ImportRowContext(
+        tenant_id=uuid4(),
+        source="manual_style_sku",
+        batch_id=uuid4(),
+        row_number=row,
+        actor_id=None,
+        batch_seen=seen,
+    )
+    out, warnings, _ = await _adapter().sanitize_optional(
+        {"external_image_url": raw},
+        session=None,  # type: ignore[arg-type]
+        ctx=ctx,
+    )
+    return out["external_image_url"], warnings
+
+
+@pytest.mark.parametrize(
+    ("raw", "hint"),
+    [
+        ('=DISPIMG("ID_760E0C523F17496689390AEF9B0CB3E5",1)', _EMBEDDED),  # WPS 缓存值
+        ('=_xlfn.DISPIMG("ID_760E0C523F17496689390AEF9B0CB3E5",1)', _EMBEDDED),  # 公式本身
+        ("#NAME?", _EMBEDDED),  # 用 Excel 另存过（Excel 不认 DISPIMG）
+        ("#VALUE!", _EMBEDDED),  # Excel 365「放在单元格中」的图片
+        ("ftp://img.example.invalid/a.jpg", _NOT_LINK),
+        ("javascript:alert(1)", _NOT_LINK),
+        ("见附件", _NOT_LINK),
+    ],
+)
+async def test_image_not_link_hinted_once_per_batch(raw: str, hint: str) -> None:
+    """不是 http(s) 链接：当没给链接（不存），整批只提示一次。"""
+    seen = BatchSeen()
+    assert await _sanitize_image(seen, 1, raw) == (None, [hint])
+    seen.commit_row()
+    assert await _sanitize_image(seen, 2, raw) == (None, [])
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "https://img.example.invalid/" + "a" * 1100,
+        "https://img.example.invalid/a b.jpg",
+        "HTTP://",
+    ],
+)
+async def test_bad_http_link_hinted_every_row(raw: str) -> None:
+    """是 http(s) 链接但超长、含空白、没有主机：不存，逐行提示（§5.4 现状）。"""
+    seen = BatchSeen()
+    for row in (1, 2):
+        assert await _sanitize_image(seen, row, raw) == (None, [_BAD_LINK])
+        seen.commit_row()
+
+
+async def test_image_not_link_kinds_share_one_hint() -> None:
+    """内嵌图片与别的非链接值共用一条提示：整批最多一条（文案按第一次遇到的值）。"""
+    seen = BatchSeen()
+    assert await _sanitize_image(seen, 1, "#NAME?") == (None, [_EMBEDDED])
+    seen.commit_row()
+    assert await _sanitize_image(seen, 2, "ftp://img.example.invalid/a.jpg") == (None, [])
+
+
+async def test_valid_link_kept_without_hint() -> None:
+    assert await _sanitize_image(BatchSeen(), 1, " https://img.example.invalid/a.jpg ") == (
+        "https://img.example.invalid/a.jpg",
+        [],
+    )
 
 
 class _FakeMapping:
