@@ -25,6 +25,7 @@ PLATFORM_LIKE_COEFFICIENT: dict[str, Decimal] = {
     "抖音": Decimal("0.1"),  # 抖音点赞 ÷ 10
     "快手": Decimal("0.1"),
     "B站": Decimal("1.0"),
+    "得物": Decimal("1.0"),
 }
 """平台点赞折算系数（EP05-S10）。"""
 

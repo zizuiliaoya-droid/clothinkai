@@ -25,7 +25,7 @@ export type ReviewAction = "approve" | "reject";
 /** 复盘状态（PRD 改动 4）。已结款 → 录 7 天数据 → 待复盘 → 待确认 → 已完成。 */
 export type RetroStatus = "未开始" | "待复盘" | "待确认" | "已完成";
 
-export type Platform = "小红书" | "抖音" | "快手" | "B站";
+export type { Platform } from "@/features/common/platforms";
 
 export type UrgeStatus =
   | "已取消"

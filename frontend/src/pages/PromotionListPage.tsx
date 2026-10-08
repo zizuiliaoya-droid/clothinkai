@@ -75,8 +75,8 @@ import { DisplayNameCell } from "@/components/DisplayNameCell/DisplayNameCell";
 import { BloggerSelect } from "@/components/RemoteSelect/BloggerSelect";
 import { StyleSelect } from "@/components/RemoteSelect/StyleSelect";
 import { UrgeModal } from "@/components/UrgeModal/UrgeModal";
+import { PLATFORMS } from "@/features/common/platforms";
 
-const PLATFORMS = ["小红书", "抖音", "快手", "B站"];
 const PUBLISH_STATUS = ["未发布", "已发布", "已取消", "异常", "已删除"];
 
 /** 实际发布日期不能晚于今天（7a-7）。后端按北京时间再判一次，这里只是不让选。 */
