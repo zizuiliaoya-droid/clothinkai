@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID
 
 from pydantic import (
@@ -566,6 +566,10 @@ class PromotionResponse(BaseModel):
 
     # 重复警告（仅 create / detail 视图填入）
     duplicate_warnings: list[PromotionDuplicateWarning] = Field(default_factory=list)
+
+    # 流程线矩阵（7.1）：列表行 = column + actions + edits，详情 / 各动作的返回 = column + actions + fields。
+    # 形状由 flow.matrix.UiState.to_dict 定，键名常量见 flow/matrix.py
+    ui: dict[str, Any] | None = None
 
 
 class PromotionPage(BaseModel):

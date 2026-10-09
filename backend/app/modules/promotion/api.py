@@ -19,7 +19,7 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, File, Form, Query, UploadFile, status
+from fastapi import APIRouter, Body, File, Form, Query, UploadFile, status
 from fastapi.responses import Response
 
 from app.modules.auth.deps import (
@@ -33,6 +33,7 @@ from app.modules.promotion.enums import (
     SettlementStatus,
 )
 from app.modules.promotion.schemas import (
+    GoodsItemIn,
     PromotionAmountLogResponse,
     PromotionCancelRequest,
     PromotionCreate,
@@ -161,6 +162,21 @@ async def update_promotion(
 ) -> PromotionResponse:
     """编辑推广（PATCH 语义；状态字段不在此改）."""
     return await service.update_promotion(promotion_id, payload, user)
+
+
+@router.put(
+    "/promotions/{promotion_id}/items",
+    response_model=PromotionResponse,
+    dependencies=[require_permission("promotion", "write")],
+)
+async def replace_promotion_items(
+    promotion_id: UUID,
+    items: Annotated[list[GoodsItemIn], Body(max_length=10)],
+    user: CurrentActiveUser,
+    service: PromotionServiceDep,
+) -> PromotionResponse:
+    """整组替换颜色尺码明细（流程线 7.3）；能不能改由矩阵 ``goods_items`` 定，不是「改」→ 403。"""
+    return await service.replace_items(promotion_id, items, user)
 
 
 @router.post(

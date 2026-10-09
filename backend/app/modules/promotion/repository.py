@@ -27,6 +27,7 @@ from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.metrics import promotion_sequence_lock_duration_seconds
+from app.modules.negotiation.models import Negotiation
 from app.modules.product.goods_models import GoodsMain, GoodsStyleItem
 from app.modules.product.models import Sku, Style
 from app.modules.promotion.display_name import (
@@ -193,6 +194,19 @@ class PromotionRepository:
             )
             for row in result.mappings().all()
         }
+
+    async def negotiator_ids(self, promotion_ids: Sequence[UUID]) -> dict[UUID, UUID]:
+        """推广单 → 谈款的 PR（矩阵快照的 ``negotiator_id``）。没有谈款的单不在结果里；
+        一张推广单正常只有一张谈款，万一多张取最新那张。"""
+        if not promotion_ids:
+            return {}
+        stmt = (
+            select(Negotiation.promotion_id, Negotiation.pr_id)
+            .where(Negotiation.promotion_id.in_(list(promotion_ids)))
+            .distinct(Negotiation.promotion_id)
+            .order_by(Negotiation.promotion_id, Negotiation.created_at.desc(), Negotiation.id)
+        )
+        return {row[0]: row[1] for row in (await self._session.execute(stmt)).all() if row[0]}
 
     async def get_by_internal_code(self, internal_code: str) -> Promotion | None:
         stmt = (
@@ -883,6 +897,65 @@ class PromotionItemRepository:
         )
         members = list((await self._session.execute(stmt)).scalars().all())
         return members or [style_id]
+
+    async def members_by_goods(self, goods_main_ids: Sequence[UUID]) -> dict[UUID, list[UUID]]:
+        """``members_of`` 的整页批量版：只回有启用成员的套装；不在结果里的按 ``[style_id]``。"""
+        if not goods_main_ids:
+            return {}
+        stmt = (
+            select(GoodsStyleItem.goods_main_id, GoodsStyleItem.style_id)
+            .join(GoodsMain, GoodsMain.id == GoodsStyleItem.goods_main_id)
+            .where(
+                GoodsStyleItem.goods_main_id.in_(list(goods_main_ids)),
+                GoodsStyleItem.is_active.is_(True),
+                GoodsMain.is_suit.is_(True),
+            )
+            .order_by(
+                GoodsStyleItem.goods_main_id, GoodsStyleItem.sort_order, GoodsStyleItem.style_id
+            )
+        )
+        grouped: dict[UUID, list[UUID]] = {}
+        for goods_id, style_id in (await self._session.execute(stmt)).all():
+            grouped.setdefault(goods_id, []).append(style_id)
+        return grouped
+
+    async def set_style_sku(
+        self, *, tenant_id: UUID, promotion_id: UUID, style_id: UUID, sku_id: UUID | None
+    ) -> None:
+        """改一个款式那一行的 SKU（PATCH ``sku_id`` 同步主款式那行）：有就改、没有就追加到最后；
+        ``sku_id`` 为 None 删掉那一行（明细的 sku 不可空）。不提交。"""
+        if sku_id is None:
+            await self._session.execute(
+                delete(PromotionItem).where(
+                    PromotionItem.promotion_id == promotion_id, PromotionItem.style_id == style_id
+                )
+            )
+            return
+        updated = await self._session.execute(
+            update(PromotionItem)
+            .where(PromotionItem.promotion_id == promotion_id, PromotionItem.style_id == style_id)
+            .values(sku_id=sku_id)
+            .returning(PromotionItem.id)
+        )
+        if updated.first() is not None:
+            return
+        next_order = (
+            await self._session.execute(
+                select(func.coalesce(func.max(PromotionItem.sort_order) + 1, 0)).where(
+                    PromotionItem.promotion_id == promotion_id
+                )
+            )
+        ).scalar_one()
+        self._session.add(
+            PromotionItem(
+                tenant_id=tenant_id,
+                promotion_id=promotion_id,
+                style_id=style_id,
+                sku_id=sku_id,
+                sort_order=next_order,
+            )
+        )
+        await self._session.flush()
 
     async def skus_by_ids(self, sku_ids: Sequence[UUID]) -> dict[UUID, Sku]:
         """按 id 批量取 SKU（含已删的，由调用方判 ``is_deleted``）。"""

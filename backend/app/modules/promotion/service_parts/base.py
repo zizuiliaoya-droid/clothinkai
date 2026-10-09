@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import builtins
 import logging
+from collections.abc import Mapping
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any, TypeVar
@@ -26,6 +27,8 @@ from app.core.tenancy import bypass_rls_ctx, request_id_ctx
 from app.modules.auth.models import Tenant, User
 from app.modules.auth.repository import PermissionRepository, RoleRepository
 from app.modules.blogger.repository import BloggerRepository
+from app.modules.flow.actor import load_flow_actor
+from app.modules.flow.matrix import FlowActor, View, ui_for
 from app.modules.product.models import Sku
 from app.modules.product.repository import SkuRepository, StyleRepository
 from app.modules.promotion.display_name import (
@@ -45,6 +48,11 @@ from app.modules.promotion.exceptions import (
     InvalidSkuReferenceError,
     PublishDateInFutureError,
     SourceExtraKeyRetiredError,
+)
+from app.modules.promotion.flow_doc import (
+    PromotionDoc,
+    build_promotion_doc,
+    goods_items_complete,
 )
 from app.modules.promotion.legacy_settings import HIT_THRESHOLD_LIKE_COUNT
 from app.modules.promotion.metrics_calculator import (
@@ -75,6 +83,7 @@ from app.modules.promotion.schemas import (
     PromotionResponse,
     PromotionUpdate,
 )
+from app.modules.promotion.stage_calculator import compute_stage
 from app.modules.promotion.urge_calculator import (
     UrgeThresholds,
     calculate_urge_status,
@@ -412,6 +421,69 @@ class PromotionServiceBase:
             )
         return responses
 
+    # ============================================================
+    # 流程线矩阵（5.4）：当前用户、派生阶段、单据快照
+    # ============================================================
+
+    async def _flow_actor(self, user: User) -> FlowActor:
+        return await load_flow_actor(user.id, self._roles, self._perms)
+
+    async def _compute_stage(
+        self,
+        promotion: Promotion,
+        *,
+        today: date | None = None,
+        thresholds: UrgeThresholds | None = None,
+    ) -> str:
+        """Python 版派生阶段（3.8；列表用 CTE 里的 SQL 版，两份由对拍测试守）。"""
+        if thresholds is None:
+            thresholds = await UrgeService(self._session).get_urge_thresholds(promotion.tenant_id)
+        return compute_stage(
+            publish_status=promotion.publish_status,
+            recall_status=promotion.recall_status,
+            settlement_status=promotion.settlement_status,
+            ship_status=promotion.ship_status,
+            is_active=promotion.is_active,
+            scheduled_publish_date=promotion.scheduled_publish_date,
+            today=today or get_today(),
+            thresholds=thresholds,
+        )
+
+    async def _promotion_doc(
+        self,
+        promotion: Promotion,
+        *,
+        stage: str | None = None,
+        items: builtins.list[PromotionItemView] | None = None,
+        negotiators: Mapping[UUID, UUID] | None = None,
+        members_by_goods: Mapping[UUID, builtins.list[UUID]] | None = None,
+    ) -> PromotionDoc:
+        """组矩阵快照。没透传的（阶段、明细、谈款人、套装成员）按这一张单现查。"""
+        if stage is None:
+            stage = await self._compute_stage(promotion)
+        if items is None:
+            items = (await self._items_repo.list_by_promotions([promotion.id])).get(
+                promotion.id, []
+            )
+        if negotiators is None:
+            negotiators = await self._repo.negotiator_ids([promotion.id])
+        if members_by_goods is None:
+            members = await self._items_repo.members_of(
+                goods_main_id=promotion.goods_main_id, style_id=promotion.style_id
+            )
+        else:
+            members = (
+                members_by_goods.get(promotion.goods_main_id)
+                if promotion.goods_main_id is not None
+                else None
+            ) or [promotion.style_id]
+        return build_promotion_doc(
+            promotion,
+            stage=stage,
+            negotiator_id=negotiators.get(promotion.id),
+            items_complete=goods_items_complete((i.style_id for i in items), members),
+        )
+
     async def _to_response(
         self,
         promotion: Promotion,
@@ -430,8 +502,13 @@ class PromotionServiceBase:
         goods_short_name: str | None = None,
         goods_preloaded: bool = False,
         items: builtins.list[PromotionItemView] | None = None,
+        actor: FlowActor | None = None,
+        view: View = "detail",
+        stage: str | None = None,
+        negotiators: Mapping[UUID, UUID] | None = None,
+        members_by_goods: Mapping[UUID, builtins.list[UUID]] | None = None,
     ) -> PromotionResponse:
-        """组装响应：字段权限过滤 + 衍生字段计算.
+        """组装响应：字段权限过滤 + 衍生字段计算 + 矩阵 ``ui``.
 
         Args:
             urge_status_override: 列表查询时由 SQL CTE 计算后透传，避免重复计算。
@@ -443,8 +520,14 @@ class PromotionServiceBase:
                 ``display_name.py`` 的同一规则现算。
             today: 列表查询时由 service 层 get_today() 透传，单条响应时缺省现算。
             items: 列表一页批量查好的商品明细（没有明细传 ``[]``）；None 时单条现查。
+            actor: 当前用户的矩阵视角（列表整页共用一个）；None 时现查。字段权限上下文也取它的。
+            view: ``ui`` 的形状，列表 ``list``（actions + edits），其余 ``detail``（actions + fields）。
+            stage: 列表 CTE 算好的派生阶段；None 时按 ``stage_calculator.compute_stage`` 现算。
+            negotiators / members_by_goods: 列表整页一次查好的谈款人与套装成员；None 时单条现查。
         """
-        ctx = await build_field_perm_context(user.id, self._roles, self._perms)
+        if actor is None:
+            actor = await self._flow_actor(user)
+        ctx = actor.field_ctx
         can_see_quote = can_read_field("promotion", "quote_amount", ctx)
         can_see_cost = can_read_field("promotion", "cost_snapshot", ctx)
         # 收件三项逐项过字段规则（个人授予 / 撤销可以只动其中一项）
@@ -536,13 +619,12 @@ class PromotionServiceBase:
         # 衍生字段计算
         if today is None:
             today = get_today()
+        thresholds: UrgeThresholds | None = None
         if urge_status_override is not None:
             urge_status = urge_status_override
         else:
             # 单条响应（详情、各状态推进）才走到这里；列表由 SQL 算好透传进来
-            thresholds: UrgeThresholds = await UrgeService(self._session).get_urge_thresholds(
-                promotion.tenant_id
-            )
+            thresholds = await UrgeService(self._session).get_urge_thresholds(promotion.tenant_id)
             urge_status = calculate_urge_status(
                 publish_status=promotion.publish_status,
                 scheduled_publish_date=promotion.scheduled_publish_date,
@@ -590,6 +672,18 @@ class PromotionServiceBase:
         source_extra = dict(getattr(promotion, "source_extra", {}) or {})
         legacy_spec = source_extra.get("颜色及规格")
         legacy_color_spec = None if items or legacy_spec is None else str(legacy_spec)
+
+        # 矩阵 ui（7.1）：列表的阶段、谈款人、套装成员整页一次查好透传，单条现算
+        if stage is None:
+            stage = await self._compute_stage(promotion, today=today, thresholds=thresholds)
+        doc = await self._promotion_doc(
+            promotion,
+            stage=stage,
+            items=items,
+            negotiators=negotiators,
+            members_by_goods=members_by_goods,
+        )
+        ui = ui_for(actor, doc).to_dict(view=view)
 
         return PromotionResponse(
             id=promotion.id,
@@ -664,6 +758,7 @@ class PromotionServiceBase:
             payment_qr_signed_url=payment_qr_url,
             settlement_payment_proof_signed_url=settlement_proof_url,
             duplicate_warnings=[],
+            ui=ui,
         )
 
     async def _log_event_dispatch_failure(

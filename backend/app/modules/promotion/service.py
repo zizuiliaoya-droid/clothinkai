@@ -28,6 +28,7 @@ from app.core.metrics import (
     promotion_search_results_count,
 )
 from app.modules.auth.models import User
+from app.modules.flow.matrix import Level, cell_level, ensure_patch_allowed
 from app.modules.product.models import Sku
 from app.modules.promotion.domain import (
     build_promotion_audit_changes,
@@ -42,6 +43,7 @@ from app.modules.promotion.enums import (
 )
 from app.modules.promotion.exceptions import (
     CooperationModeImmutableError,
+    FieldPermissionDenied,
     InvalidBloggerReferenceError,
     InvalidGoodsReferenceError,
     InvalidSkuReferenceError,
@@ -50,6 +52,7 @@ from app.modules.promotion.exceptions import (
     PublishUrlRequiredError,
     StateTransitionConflictError,
 )
+from app.modules.promotion.flow_matrix import PROMOTION_MATRIX
 from app.modules.promotion.legacy_settings import HIT_THRESHOLD_LIKE_COUNT
 from app.modules.promotion.models import (
     Promotion,
@@ -58,6 +61,7 @@ from app.modules.promotion.repository import (
     PromotionListFilters as RepoPromotionListFilters,
 )
 from app.modules.promotion.schemas import (
+    GoodsItemIn,
     PromotionCreate,
     PromotionDuplicateWarning,
     PromotionPage,
@@ -316,8 +320,13 @@ class PromotionService(
         promotion = await self._repo.get_by_id(promotion_id)
         if promotion is None:
             raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
-        # 顺序（流程线 7.1）：404 → 退役键 422 → 字段写权限 → 其余校验
+        # 顺序（流程线 7.1）：404 → 退役键 422 → 已入矩阵的字段（越权全列 403）→ 字段写权限 → 其余校验
         self._reject_retired_source_extra_keys(payload)
+        managed = PROMOTION_MATRIX.patch_groups.keys() & payload.model_fields_set
+        if managed:
+            ensure_patch_allowed(
+                await self._flow_actor(user), await self._promotion_doc(promotion), managed
+            )
 
         # 金额时间线的「更新前」快照必须在这里取 —— 下面补合作模式那一步就会改成本，
         # 等到算 changes 时拿到的已经是中间值了。
@@ -402,6 +411,15 @@ class PromotionService(
 
         await self._session.flush()
 
+        # sku_id 是主款式那一行的颜色尺码（5.4）：同步明细，有就改、没有就插
+        if "sku_id" in changes:
+            await self._items_repo.set_style_sku(
+                tenant_id=promotion.tenant_id,
+                promotion_id=promotion.id,
+                style_id=promotion.style_id,
+                sku_id=promotion.sku_id,
+            )
+
         # 金额时间线：只记净变更（PRD 第 10 节第 14 条）。
         # audit 那边继续只记 *_changed 标记 —— 理由见 domain.PROMOTION_SENSITIVE_VALUE_FIELDS。
         self._log_amount_changes(
@@ -434,6 +452,49 @@ class PromotionService(
             )
         await self._session.commit()
         return await self._to_response(promotion, user)
+
+    async def replace_items(
+        self, promotion_id: UUID, items: list[GoodsItemIn], user: User
+    ) -> PromotionResponse:
+        """``PUT /{id}/items``：整组替换颜色尺码明细，不换商品（流程线 7.3）。
+
+        顺序：404 → 矩阵 ``goods_items`` 不是「改」→ 403 ``FIELD_PERMISSION_DENIED``（fields=["goods_items"]）
+        → 明细校验（款式集合 = 归属商品的成员、每行有 sku 且属于该款）422。同步 ``promotion.sku_id`` = 主款式那行。
+        """
+        promotion = await self._repo.get_by_id(promotion_id)
+        if promotion is None:
+            raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
+        actor = await self._flow_actor(user)
+        doc = await self._promotion_doc(promotion)
+        if cell_level(actor, doc, "field", "goods_items") is not Level.EDIT:
+            raise FieldPermissionDenied(fields=["goods_items"], entity="promotion")
+
+        rows = await self._validate_goods_items(
+            goods_main_id=promotion.goods_main_id, style_id=promotion.style_id, items=items
+        )
+        before = [
+            [str(v.style_id), str(v.sku_id)]
+            for v in (await self._items_repo.list_by_promotions([promotion.id])).get(
+                promotion.id, []
+            )
+        ]
+        await self._items_repo.replace(
+            tenant_id=promotion.tenant_id, promotion_id=promotion.id, rows=rows
+        )
+        main_sku_id = next((sku for style, sku in rows if style == promotion.style_id), None)
+        if main_sku_id is not None:
+            promotion.sku_id = main_sku_id
+        await self._session.flush()
+        await self._audit.log(
+            action="promotion.items.replace",
+            resource="promotion",
+            resource_id=promotion.id,
+            before={"items": before},
+            after={"items": [[str(style), str(sku)] for style, sku in rows]},
+            user_id=user.id,
+        )
+        await self._session.commit()
+        return await self._to_response(promotion, user, actor=actor)
 
     async def update_warehouse_waybill(
         self, promotion_id: UUID, payload: PromotionWarehouseWaybillRequest, user: User
@@ -520,7 +581,14 @@ class PromotionService(
             promotion_ids=[row.promotion.id for row in rows],
         )
         # 商品明细整页一次查（流程线 7.3）
-        page_items = await self._items_repo.list_by_promotions([row.promotion.id for row in rows])
+        page_ids = [row.promotion.id for row in rows]
+        page_items = await self._items_repo.list_by_promotions(page_ids)
+        # 矩阵 ui 只用本页数据算（7.1）：当前用户、谈款人、套装成员各一次
+        actor = await self._flow_actor(user)
+        negotiators = await self._repo.negotiator_ids(page_ids)
+        members_by_goods = await self._items_repo.members_by_goods(
+            list({r.promotion.goods_main_id for r in rows if r.promotion.goods_main_id is not None})
+        )
 
         # 用 CTE 计算结果填充响应（避免重复计算 urge_status / dual_platform）
         items = [
@@ -540,6 +608,11 @@ class PromotionService(
                 goods_short_name=row.goods_short_name,
                 goods_preloaded=True,
                 items=page_items.get(row.promotion.id, []),
+                actor=actor,
+                view="list",
+                stage=row.stage,
+                negotiators=negotiators,
+                members_by_goods=members_by_goods,
             )
             for row in rows
         ]

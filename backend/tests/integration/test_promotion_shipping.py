@@ -843,3 +843,469 @@ class TestSkuReferences:
         )
         refs = await SkuService(session).check_references(suit.pants_sku.id)
         assert refs == {"promotion_count": 1, "order_count": 0}
+
+
+# ---------------------------------------------------------------------------
+# 矩阵接上响应：ui（列表 actions + edits，详情 actions + fields；设计 7.1）
+# ---------------------------------------------------------------------------
+
+_ALL_GATES = [
+    {"key": "receiver_name", "label": "收件人"},
+    {"key": "receiver_phone", "label": "收件电话"},
+    {"key": "receiver_address", "label": "收件地址"},
+    {"key": "goods_items", "label": "颜色尺码"},
+]
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+class TestFlowUi:
+    async def test_detail_ui_ship_push_by_role(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        promo = await _promotion(
+            flow_users, product_factory, blogger_factory, promotion_factory, ship_status="待发货"
+        )
+        svc = PromotionService(session)
+        pr = (await svc.get_promotion(promo.id, flow_users.pr)).ui
+        assert pr == {
+            "column": "A",
+            "actions": {"ship_push": {"state": "disabled", "reason": "需管理员或 PR 主管确认"}},
+            "fields": {
+                "goods_items": {"state": "read"},
+                "receiver": {"state": "edit"},
+                "shipping": {"state": "grey", "hint": "推送后由仓库回填"},
+            },
+        }
+        # 主管：可点，缺项全是弹窗里能补的
+        manager = (await svc.get_promotion(promo.id, flow_users.pr_manager)).ui
+        assert manager is not None
+        assert manager["actions"] == {"ship_push": {"state": "enabled", "missing": _ALL_GATES}}
+        # 运营只读、财务什么都没有
+        ops = (await svc.get_promotion(promo.id, flow_users.operations)).ui
+        assert ops is not None
+        assert ops["actions"] == {}
+        assert ops["fields"] == {
+            "goods_items": {"state": "read"},
+            "shipping": {"state": "grey", "hint": "推送后由仓库回填"},
+        }
+        assert (await svc.get_promotion(promo.id, flow_users.finance)).ui == {
+            "column": "A",
+            "actions": {},
+            "fields": {},
+        }
+
+    async def test_missing_follows_receiver_and_suit_members(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        suit: _Suit,
+    ) -> None:
+        """缺电话（格式不对）+ 套装少一个成员 → missing 恰两项；补齐后没有 missing。"""
+        blogger = await blogger_factory.blogger()
+        partial = await promotion_factory.promotion(
+            style=suit.top,
+            blogger=blogger,
+            pr=flow_users.pr,
+            goods_main_id=suit.goods.id,
+            ship_status="待发货",
+            receiver_name="张三",
+            receiver_phone="12345",
+            receiver_address="杭州",
+            items=[(suit.top, suit.top_sku)],
+        )
+        full = await promotion_factory.promotion(
+            style=suit.top,
+            blogger=blogger,
+            pr=flow_users.pr,
+            goods_main_id=suit.goods.id,
+            ship_status="待发货",
+            **_RECEIVER,
+            items=[(suit.pants, suit.pants_sku), (suit.top, suit.top_sku)],
+        )
+        svc = PromotionService(session)
+        got = (await svc.get_promotion(partial.id, flow_users.pr_manager)).ui
+        assert got is not None
+        assert got["actions"]["ship_push"] == {
+            "state": "enabled",
+            "missing": [
+                {"key": "receiver_phone", "label": "收件电话"},
+                {"key": "goods_items", "label": "颜色尺码"},
+            ],
+        }
+        # 列表与详情同一份结论（列表的成员整页一次查）
+        page = await svc.list_promotions(
+            filters=PromotionListFilters(), page=1, page_size=100, user=flow_users.pr_manager
+        )
+        rows = {p.id: p.ui for p in page.items}
+        assert rows[partial.id] is not None and rows[full.id] is not None
+        assert rows[partial.id]["actions"] == got["actions"]
+        assert rows[full.id]["actions"] == {"ship_push": {"state": "enabled"}}
+
+    async def test_list_ui_has_edits_not_fields(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        history = await _promotion(flow_users, product_factory, blogger_factory, promotion_factory)
+        shipped = await _promotion(
+            flow_users, product_factory, blogger_factory, promotion_factory, ship_status="已发货"
+        )
+        page = await PromotionService(session).list_promotions(
+            filters=PromotionListFilters(), page=1, page_size=100, user=flow_users.pr
+        )
+        rows = {p.id: p.ui for p in page.items}
+        # 历史单（发货为空）按 A 列：PR 能改收件；已发货的 C 列只读
+        assert rows[history.id] == {"column": "C", "actions": {}, "edits": ["receiver"]}
+        assert rows[shipped.id] == {"column": "C", "actions": {}, "edits": []}
+        manager = await PromotionService(session).list_promotions(
+            filters=PromotionListFilters(), page=1, page_size=100, user=flow_users.pr_manager
+        )
+        row = next(p for p in manager.items if p.id == history.id)
+        assert row.ui == {
+            "column": "C",
+            "actions": {"ship_include": {"state": "enabled"}},
+            "edits": ["goods_items", "receiver"],
+        }
+
+    async def test_negotiator_from_negotiation_else_pr(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        """快照的谈款人：有谈款取谈款的 PR，没有回落负责 PR（L1，整页一次查）。"""
+        from app.modules.negotiation.models import Negotiation
+        from app.modules.promotion.repository import PromotionRepository
+
+        style = await product_factory.style()
+        blogger = await blogger_factory.blogger()
+        negotiated = await promotion_factory.promotion(
+            style=style, blogger=blogger, pr=flow_users.pr
+        )
+        imported = await promotion_factory.promotion(style=style, blogger=blogger, pr=flow_users.pr)
+        session.add(
+            Negotiation(
+                tenant_id=flow_users.tenant.id,
+                blogger_id=blogger.id,
+                style_id=style.id,
+                pr_id=flow_users.pr2.id,
+                promotion_id=negotiated.id,
+                cooperation_mode="送拍",
+                status="审核通过",
+            )
+        )
+        await session.flush()
+        got = await PromotionRepository(session).negotiator_ids([negotiated.id, imported.id])
+        assert got == {negotiated.id: flow_users.pr2.id}
+
+
+# ---------------------------------------------------------------------------
+# PATCH：已入矩阵的字段（收件三项 → receiver，sku_id → goods_items）按当前格判（5.4 过渡规则）
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+class TestPatchByMatrix:
+    async def test_pr_patch_managed_fields_denied_with_all_fields(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        style = await product_factory.style()
+        sku = await product_factory.sku(style)
+        blogger = await blogger_factory.blogger()
+        history = await promotion_factory.promotion(style=style, blogger=blogger, pr=flow_users.pr)
+        shipped = await promotion_factory.promotion(
+            style=style, blogger=blogger, pr=flow_users.pr, ship_status="已发货"
+        )
+        svc = PromotionService(session)
+        # 历史单：PR 颜色尺码「读」
+        with pytest.raises(FieldPermissionDenied) as exc_info:
+            await svc.update_promotion(history.id, PromotionUpdate(sku_id=sku.id), flow_users.pr)
+        assert exc_info.value.code == "FIELD_PERMISSION_DENIED"
+        assert exc_info.value.fields == ("sku_id",)
+        # 已发货：收件与颜色尺码都只读，一次全列出来（按 patch_groups 登记顺序）
+        with pytest.raises(FieldPermissionDenied) as exc_info:
+            await svc.update_promotion(
+                shipped.id,
+                PromotionUpdate(sku_id=sku.id, receiver_name="甲", note_title="标题"),
+                flow_users.pr,
+            )
+        assert exc_info.value.details["fields"] == ["receiver_name", "sku_id"]
+        # 没入矩阵的字段照旧可写
+        resp = await svc.update_promotion(
+            shipped.id, PromotionUpdate(note_title="新标题"), flow_users.pr
+        )
+        assert resp.note_title == "新标题"
+        # 管理员已发货后照样能改
+        await svc.update_promotion(
+            shipped.id, PromotionUpdate(receiver_name="乙", sku_id=sku.id), flow_users.admin
+        )
+        assert (await _db_receiver(session, shipped.id))["receiver_name"] == "乙"
+
+    async def test_retired_key_checked_before_matrix(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        promo = await _promotion(
+            flow_users, product_factory, blogger_factory, promotion_factory, ship_status="已发货"
+        )
+        sku = await product_factory.sku(await product_factory.style())
+        with pytest.raises(SourceExtraKeyRetiredError):
+            await PromotionService(session).update_promotion(
+                promo.id,
+                PromotionUpdate(source_extra={"打单地址": "x"}, sku_id=sku.id),
+                flow_users.pr,
+            )
+
+    async def test_patch_sku_syncs_main_item_row(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        product_factory: Any,
+        suit: _Suit,
+    ) -> None:
+        """PATCH sku_id 同步明细里主款式那一行：有就改、没有就插。"""
+        blogger = await blogger_factory.blogger()
+        new_top_sku = await product_factory.sku(suit.top, color="灰色", size="S")
+        with_items = await promotion_factory.promotion(
+            style=suit.top,
+            blogger=blogger,
+            pr=flow_users.pr,
+            goods_main_id=suit.goods.id,
+            ship_status="待发货",
+            sku_id=suit.top_sku.id,
+            items=[(suit.pants, suit.pants_sku), (suit.top, suit.top_sku)],
+        )
+        without_items = await promotion_factory.promotion(
+            style=suit.top,
+            blogger=blogger,
+            pr=flow_users.pr,
+            goods_main_id=suit.goods.id,
+            ship_status="待发货",
+        )
+        svc = PromotionService(session)
+        await svc.update_promotion(
+            with_items.id, PromotionUpdate(sku_id=new_top_sku.id), flow_users.pr_manager
+        )
+        assert await _db_items(session, with_items.id) == [
+            (suit.pants.id, suit.pants_sku.id, 0),
+            (suit.top.id, new_top_sku.id, 1),
+        ]
+        resp = await svc.update_promotion(
+            without_items.id, PromotionUpdate(sku_id=new_top_sku.id), flow_users.pr_manager
+        )
+        assert await _db_items(session, without_items.id) == [(suit.top.id, new_top_sku.id, 0)]
+        assert [(i.style_id, i.sku_id) for i in resp.items] == [(suit.top.id, new_top_sku.id)]
+
+
+# ---------------------------------------------------------------------------
+# PUT /{id}/items：整组替换颜色尺码明细（7.3；矩阵 goods_items 不是「改」→ 403）
+# ---------------------------------------------------------------------------
+
+
+def _items(*pairs: tuple[Any, Any]) -> list[GoodsItemIn]:
+    return [GoodsItemIn(style_id=style.id, sku_id=sku.id if sku else None) for style, sku in pairs]
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+class TestReplaceItems:
+    async def _suit_promotion(
+        self, promotion_factory: Any, blogger_factory: Any, flow_users: Any, suit: _Suit, **kw: Any
+    ) -> Any:
+        blogger = await blogger_factory.blogger()
+        return await promotion_factory.promotion(
+            style=suit.top, blogger=blogger, pr=flow_users.pr, goods_main_id=suit.goods.id, **kw
+        )
+
+    async def test_manager_replaces_and_syncs_sku(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        suit: _Suit,
+    ) -> None:
+        promo = await self._suit_promotion(
+            promotion_factory, blogger_factory, flow_users, suit, ship_status="待发货"
+        )
+        resp = await PromotionService(session).replace_items(
+            promo.id,
+            _items((suit.pants, suit.pants_sku), (suit.top, suit.top_sku)),
+            flow_users.pr_manager,
+        )
+        assert await _db_items(session, promo.id) == [
+            (suit.pants.id, suit.pants_sku.id, 0),
+            (suit.top.id, suit.top_sku.id, 1),
+        ]
+        sku_id = (
+            await session.execute(
+                sa_text("SELECT sku_id FROM promotion WHERE id = :pid"), {"pid": promo.id}
+            )
+        ).scalar_one()
+        assert sku_id == suit.top_sku.id
+        assert resp.sku_id == suit.top_sku.id
+        assert [(i.style_id, i.color, i.size) for i in resp.items] == [
+            (suit.pants.id, "白色", "L"),
+            (suit.top.id, "黑色", "M"),
+        ]
+        # 明细齐了，推送不再缺颜色尺码
+        assert resp.ui is not None
+        assert {"key": "goods_items", "label": "颜色尺码"} not in resp.ui["actions"]["ship_push"][
+            "missing"
+        ]
+
+    @pytest.mark.parametrize(
+        ("ship_status", "who", "allowed"),
+        [
+            ("待发货", "pr", False),  # A 列 PR 读
+            (None, "pr", False),  # 历史单按 A 列
+            (None, "pr_manager", True),
+            ("待打单", "pr_manager", False),  # 推送后只有管理员
+            ("待打单", "admin", True),
+            ("已发货", "admin", True),
+        ],
+    )
+    async def test_matrix_decides(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        suit: _Suit,
+        ship_status: str | None,
+        who: str,
+        allowed: bool,
+    ) -> None:
+        promo = await self._suit_promotion(
+            promotion_factory, blogger_factory, flow_users, suit, ship_status=ship_status
+        )
+        call = PromotionService(session).replace_items(
+            promo.id,
+            _items((suit.top, suit.top_sku), (suit.pants, suit.pants_sku)),
+            getattr(flow_users, who),
+        )
+        if allowed:
+            await call
+            assert len(await _db_items(session, promo.id)) == 2
+            return
+        with pytest.raises(FieldPermissionDenied) as exc_info:
+            await call
+        assert exc_info.value.code == "FIELD_PERMISSION_DENIED"
+        assert exc_info.value.fields == ("goods_items",)
+        assert await _db_items(session, promo.id) == []
+
+    async def test_order_404_then_403_then_422(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        suit: _Suit,
+    ) -> None:
+        promo = await self._suit_promotion(
+            promotion_factory, blogger_factory, flow_users, suit, ship_status="待发货"
+        )
+        svc = PromotionService(session)
+        bad = _items((suit.top, suit.top_sku))  # 少一个成员
+        with pytest.raises(PromotionNotFoundError):
+            await svc.replace_items(uuid4(), bad, flow_users.pr_manager)
+        with pytest.raises(FieldPermissionDenied):
+            await svc.replace_items(promo.id, bad, flow_users.pr)
+        with pytest.raises(ValidationError) as exc_info:
+            await svc.replace_items(promo.id, bad, flow_users.pr_manager)
+        assert exc_info.value.details == {
+            "missing_style_ids": [str(suit.pants.id)],
+            "extra_style_ids": [],
+        }
+        with pytest.raises(ValidationError) as exc_info:
+            await svc.replace_items(
+                promo.id,
+                _items((suit.top, suit.top_sku), (suit.pants, None)),
+                flow_users.pr_manager,
+            )
+        assert exc_info.value.details == {"missing_sku_style_ids": [str(suit.pants.id)]}
+        with pytest.raises(InvalidSkuReferenceError):
+            await svc.replace_items(
+                promo.id,
+                _items((suit.top, suit.pants_sku), (suit.pants, suit.pants_sku)),
+                flow_users.pr_manager,
+            )
+        assert await _db_items(session, promo.id) == []
+
+    async def test_route(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        suit: _Suit,
+    ) -> None:
+        """真实路由：``promotion:write`` 在路由层（运营 403 PERMISSION_DENIED），矩阵在 service。"""
+        promo = await self._suit_promotion(
+            promotion_factory, blogger_factory, flow_users, suit, ship_status="待发货"
+        )
+        body = [
+            {"style_id": str(suit.top.id), "sku_id": str(suit.top_sku.id)},
+            {"style_id": str(suit.pants.id), "sku_id": str(suit.pants_sku.id)},
+        ]
+        path = f"/api/promotions/{promo.id}/items"
+        ops = await _call(session, flow_users.operations, "PUT", path, body)
+        assert (ops.status_code, ops.json()["code"]) == (403, "PERMISSION_DENIED")
+        pr = await _call(session, flow_users.pr, "PUT", path, body)
+        assert pr.status_code == 403
+        assert pr.json()["code"] == "FIELD_PERMISSION_DENIED"
+        assert pr.json()["details"]["fields"] == ["goods_items"]
+        ok = await _call(session, flow_users.pr_manager, "PUT", path, body)
+        assert ok.status_code == 200, ok.text
+        assert [i["style_id"] for i in ok.json()["items"]] == [str(suit.top.id), str(suit.pants.id)]
+        assert ok.json()["ui"]["actions"]["ship_push"]["state"] == "enabled"
+        too_many = await _call(session, flow_users.pr_manager, "PUT", path, body * 6)
+        assert too_many.status_code == 422
+
+
+async def _call(session: AsyncSession, user: Any, method: str, path: str, json: Any) -> Any:
+    """真实路由（含 schema 校验）+ 用户的有效权限（照 test_blogger_account_edit._call）。"""
+    from collections.abc import AsyncIterator
+
+    from httpx import ASGITransport, AsyncClient
+
+    from app.core.db import get_session
+    from app.main import app
+    from app.modules.auth.deps import get_current_perms, get_current_user_active
+    from app.modules.auth.service import AuthService
+
+    async def _session_override() -> AsyncIterator[AsyncSession]:
+        yield session
+
+    perms = await AuthService(session).load_effective_permissions(user.id)
+    try:
+        app.dependency_overrides[get_session] = _session_override
+        app.dependency_overrides[get_current_user_active] = lambda: user
+        app.dependency_overrides[get_current_perms] = lambda: perms
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            return await c.request(method, path, json=json)
+    finally:
+        for dep in (get_session, get_current_user_active, get_current_perms):
+            app.dependency_overrides.pop(dep, None)

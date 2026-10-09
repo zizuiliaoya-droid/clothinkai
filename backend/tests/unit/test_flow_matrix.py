@@ -1,8 +1,9 @@
-"""流程线矩阵骨架（流程线设计 5.4、7.1；9.3 G 块「矩阵逐格」「字段写权限」的框架层）。
+"""流程线矩阵（流程线设计 5.4、7.1；9.3 G 块「矩阵逐格」「字段写权限」）。
 
-PR-1 真实矩阵为空，三个出口用本文件里的玩具矩阵 + 玩具单据验证（借推广单的键）：
+框架层用本文件里的玩具矩阵 + 玩具单据验证（借推广单的键）：
 精确状态先判、灰格、隐、in_dialog、取最宽、``*`` 与 ``NoStar``、子状态谓词、防死键、``require`` 顺序、PATCH 字段。
-错误一律比 ``exc.code``，不只比异常类型。
+真实矩阵（PR-2 起：推广单收件 / 颜色尺码 / 发货信息与发货动作、仓库回填）逐格比冻结期望表，
+再测 ★ 缺项与 ``require`` 一致、状态机、``writable_fields``。错误一律比 ``exc.code``，不只比异常类型。
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ from app.modules.flow.matrix import (
     PAGE_ACTION_KEYS,
     AnyOf,
     Cell,
+    FieldRead,
     FieldWrite,
     FlowActor,
     FlowDocBase,
@@ -44,13 +46,17 @@ from app.modules.flow.matrix import (
     Row,
     Scope,
     SettlementIn,
+    ShipIn,
     StageIn,
+    Star,
     cell_level,
+    ensure_gates,
     ensure_patch_allowed,
     require,
     ui_for,
     writable_fields,
 )
+from app.modules.promotion.stage_calculator import PROMOTION_STAGES
 from tests.unit.fixtures.flow_matrix_expected import DOCS, EXPECTED
 
 # ---------------------------------------------------------------------------
@@ -362,21 +368,38 @@ def test_expected_table_covers_registered_matrices() -> None:
     assert set(DOCS) == set(MATRICES)
 
 
+def test_real_matrices_registered() -> None:
+    """PR-2：推广单与仓库行两张表（import ``promotion.flow_doc`` 即登记）。"""
+    assert set(MATRICES) == {"promotion", "warehouse"}
+    for kind in MATRICES:
+        assert MATRICES[kind].stages == PROMOTION_STAGES, kind
+
+
 def test_real_matrices_match_expected() -> None:
-    if not MATRICES:
-        pytest.skip(
-            "PR-1 真实矩阵为空（设计 10.1：PR-2 起每个 PR 把碰到的行加进 MATRICES 与期望表）"
-        )
     for kind, matrix in MATRICES.items():
         grid = render_grid(matrix, DOCS[kind], PERSONAS)
-        assert grid == EXPECTED[kind], kind
+        assert grid.keys() == EXPECTED[kind].keys(), kind
+        diff = {k: (grid[k], EXPECTED[kind][k]) for k in grid if grid[k] != EXPECTED[kind][k]}
+        assert diff == {}, kind
+    # 场景有效性：四种取值都出现过，每个 persona 至少有一格不是「隐」
+    promotion_grid = render_grid(MATRICES["promotion"], DOCS["promotion"], PERSONAS)
+    assert set(promotion_grid.values()) == {"改", "读", "灰", "隐"}
+    for name in PERSONAS:
+        assert any(v != "隐" for (_l, p, _k, _r), v in promotion_grid.items() if p == name), name
 
 
 def test_real_matrices_have_no_dead_rows() -> None:
-    if not MATRICES:
-        pytest.skip("PR-1 真实矩阵为空，没有行可查死键")
     for kind, matrix in MATRICES.items():
         assert dead_rows(render_grid(matrix, DOCS[kind], PERSONAS)) == [], kind
+        # 每个已登记的动作行至少有一格「改」（不然按钮永远点不了）
+        grid = render_grid(matrix, DOCS[kind], PERSONAS)
+        for row in matrix.rows:
+            if row.kind == "action":
+                assert any(
+                    v == "改"
+                    for (_l, _p, k, key), v in grid.items()
+                    if (k, key) == ("action", row.key)
+                ), row.key
 
 
 def test_dead_row_is_reported(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -818,3 +841,249 @@ def test_flow_error_shapes() -> None:
     assert e2.message == "缺：收件电话、品牌词评论截图"
     with pytest.raises(ValueError):
         FlowGateMissingError([])
+
+
+# ---------------------------------------------------------------------------
+# require(gates=False) + ensure_gates：★ 在条件 UPDATE 之后、补完弹窗内容再判（推送 S3）
+# ---------------------------------------------------------------------------
+
+
+def test_require_without_gates_then_ensure_gates(toy: Matrix) -> None:
+    doc = replace(TOY_DOCS["待推送"], color_size=None)
+    # 不判 ★：缺项也放行；状态机与规则照判
+    require(PERSONAS["pr"], doc, "ship_push", gates=False)
+    with pytest.raises(AppException) as exc:
+        require(PERSONAS["pr2"], doc, "ship_push", gates=False)
+    assert _code(exc) == "FLOW_ACTION_FORBIDDEN"
+    with pytest.raises(AppException) as exc:
+        require(PERSONAS["pr"], TOY_DOCS["已发布"], "ship_push", gates=False)
+    assert _code(exc) == "ILLEGAL_STATE_TRANSITION"
+    # 后半段：缺项与 require / ui 同一份
+    with pytest.raises(AppException) as exc:
+        ensure_gates(PERSONAS["pr"], doc, "ship_push")
+    assert _code(exc) == "FLOW_GATE_MISSING"
+    assert exc.value.details["missing"] == [{"key": "color_size", "label": "颜色尺码"}]
+    ensure_gates(PERSONAS["pr"], TOY_DOCS["待推送"], "ship_push")
+    # 这一阶段没有格 → 缺权限；未登记的动作键是写错了
+    with pytest.raises(AppException) as exc:
+        ensure_gates(PERSONAS["pr"], TOY_DOCS["已发布"], "ship_push")
+    assert _code(exc) == "PERMISSION_DENIED"
+    with pytest.raises(ValueError):
+        ensure_gates(PERSONAS["pr"], doc, "ship_pushh")
+
+
+# ---------------------------------------------------------------------------
+# 真实矩阵：推广单（PR-2 的发货三行与三个字段行）、仓库行
+# ---------------------------------------------------------------------------
+
+P_DOCS = DOCS["promotion"]
+W_DOCS = DOCS["warehouse"]
+_ALL_GATES = [
+    {"key": "receiver_name", "label": "收件人"},
+    {"key": "receiver_phone", "label": "收件电话"},
+    {"key": "receiver_address", "label": "收件地址"},
+    {"key": "goods_items", "label": "颜色尺码"},
+]
+
+
+def _real_ui(who: str | FlowActor, doc: FlowDocBase) -> mx.UiState:
+    return ui_for(PERSONAS[who] if isinstance(who, str) else who, doc)
+
+
+def test_ship_push_ui_by_role() -> None:
+    """推送仓库：PR 读 +「需管理员或 PR 主管确认」；主管 / 管理员 enabled；其余不出现。"""
+    doc = P_DOCS["待推送仓库"]
+    assert _real_ui("pr", doc).actions["ship_push"] == mx.UiAction(
+        "disabled", reason="需管理员或 PR 主管确认"
+    )
+    for who in ("pr_manager", "admin"):
+        assert _real_ui(who, doc).actions["ship_push"] == mx.UiAction("enabled"), who
+    for who in ("finance", "operations", "warehouse"):
+        assert "ship_push" not in _real_ui(who, doc).actions, who
+    with pytest.raises(AppException) as exc:
+        require(PERSONAS["pr"], doc, "ship_push")
+    assert _code(exc) == "PERMISSION_DENIED"
+
+
+def test_ship_push_gates_match_require() -> None:
+    """缺电话（格式不对也算）+ 套装少一个成员 → missing 恰两项；都在弹窗里补，按钮仍 enabled。"""
+    doc = replace(P_DOCS["待推送仓库"], receiver_phone="12345", items_complete=False)
+    ui = _real_ui("pr_manager", doc).actions["ship_push"]
+    assert ui.state == "enabled"
+    expected = [
+        {"key": "receiver_phone", "label": "收件电话"},
+        {"key": "goods_items", "label": "颜色尺码"},
+    ]
+    assert ui.to_dict()["missing"] == expected
+    with pytest.raises(AppException) as exc:
+        require(PERSONAS["pr_manager"], doc, "ship_push")
+    assert _code(exc) == "FLOW_GATE_MISSING"
+    assert exc.value.details["missing"] == expected
+    # 三项全空 + 没明细：四项按矩阵顺序
+    empty = replace(
+        P_DOCS["待推送仓库"],
+        receiver_name=None,
+        receiver_phone=None,
+        receiver_address=None,
+        items_complete=False,
+    )
+    with pytest.raises(AppException) as exc:
+        require(PERSONAS["admin"], empty, "ship_push")
+    assert exc.value.details["missing"] == _ALL_GATES
+    assert _real_ui("admin", empty).actions["ship_push"].to_dict()["missing"] == _ALL_GATES
+    # 齐了就过；座机也算合格
+    require(
+        PERSONAS["pr_manager"],
+        replace(P_DOCS["待推送仓库"], receiver_phone="05718888888"),
+        "ship_push",
+    )
+
+
+def test_ship_state_machine() -> None:
+    """再推 / 已发布 / 召回中 / 停用 → 422（不是缺项）；撤回只在待打单；纳入只对发货为空的历史单。"""
+    pm = PERSONAS["pr_manager"]
+    a = P_DOCS["待推送仓库"]
+    for bad in (
+        replace(a, ship_status="待打单"),
+        replace(a, publish_status="异常"),
+        replace(a, recall_status="召回失败"),
+        replace(a, is_active=False),
+    ):
+        with pytest.raises(AppException) as exc:
+            require(pm, replace(bad, receiver_phone=None), "ship_push")
+        assert _code(exc) == "ILLEGAL_STATE_TRANSITION"
+        assert "ship_push" not in _real_ui(pm, bad).actions
+    # 已推送的单（B 列）再推：状态机先判
+    with pytest.raises(AppException) as exc:
+        require(pm, P_DOCS["待仓库发货"], "ship_push")
+    assert _code(exc) == "ILLEGAL_STATE_TRANSITION"
+
+    b = P_DOCS["待仓库发货"]
+    assert _real_ui("pr", b).actions["ship_withdraw"] == mx.UiAction(
+        "disabled", reason="需管理员或 PR 主管确认"
+    )
+    assert _real_ui(pm, b).actions["ship_withdraw"] == mx.UiAction("enabled")
+    require(pm, b, "ship_withdraw")
+
+    history = P_DOCS["催发·历史单"]
+    assert _real_ui(pm, history).actions == {"ship_include": mx.UiAction("enabled")}
+    assert _real_ui("pr", history).actions == {}
+    require(PERSONAS["admin"], history, "ship_include")
+    # 已发货的 C 列单、已发布的历史单都不能纳入
+    for doc in (P_DOCS["催发"], P_DOCS["待主管审核·历史单"]):
+        assert "ship_include" not in _real_ui(pm, doc).actions
+        with pytest.raises(AppException) as exc:
+            require(pm, doc, "ship_include")
+        assert _code(exc) == "ILLEGAL_STATE_TRANSITION"
+
+
+def test_operations_has_no_actions() -> None:
+    """运营全链路只读：ui.actions 为空对象（7.3）。"""
+    for label, doc in P_DOCS.items():
+        assert _real_ui("operations", doc).to_dict(view="list")["actions"] == {}, label
+
+
+def test_real_ui_shape() -> None:
+    a = _real_ui("pr_manager", P_DOCS["待推送仓库"])
+    assert a.to_dict(view="list") == {
+        "column": "A",
+        "actions": {"ship_push": {"state": "enabled"}},
+        "edits": ["goods_items", "receiver"],
+    }
+    assert a.to_dict(view="detail")["fields"] == {
+        "goods_items": {"state": "edit"},
+        "receiver": {"state": "edit"},
+        "shipping": {"state": "grey", "hint": "推送后由仓库回填"},
+    }
+    # 财务在 C 列什么都看不到；E 列只读颜色尺码
+    assert _real_ui("finance", P_DOCS["催发"]).to_dict(view="detail") == {
+        "column": "C",
+        "actions": {},
+        "fields": {},
+    }
+    assert _real_ui("finance", P_DOCS["待财务付款"]).to_dict(view="detail")["fields"] == {
+        "goods_items": {"state": "read"}
+    }
+
+
+def test_receiver_follows_field_rules() -> None:
+    """字段规则先于矩阵：三项都撤销读 → 分组不出现；只撤一项 → 分组照旧。"""
+    pr = PERSONAS["pr"]
+    doc = P_DOCS["待推送仓库"]
+
+    def _with_revokes(*scopes: str) -> FlowActor:
+        return replace(pr, field_ctx=replace(pr.field_ctx, revokes=frozenset(scopes)))
+
+    reads = [
+        f"field.promotion.{f}:read" for f in ("receiver_name", "receiver_phone", "receiver_address")
+    ]
+    writes = [s.replace(":read", ":write") for s in reads]
+    assert "receiver" not in _real_ui(_with_revokes(*reads), doc).fields
+    assert _real_ui(_with_revokes(reads[1]), doc).fields["receiver"] == mx.UiField("edit")
+    # 三项都撤销写 → 读；撤一项写 → 仍是改（逐项写权限由 service 判）
+    assert _real_ui(_with_revokes(*writes), doc).fields["receiver"] == mx.UiField("read")
+    assert _real_ui(_with_revokes(writes[0]), doc).fields["receiver"] == mx.UiField("edit")
+    # 运营默认「隐」；个人授予了读（临时代理人）→ 读，与响应里那一项可见一致（5.1：字段 = 字段规则 + 阶段条件）
+    ops = PERSONAS["operations"]
+    assert "receiver" not in _real_ui(ops, doc).fields
+    granted = replace(ops, field_ctx=replace(ops.field_ctx, grants=frozenset({reads[2]})))
+    assert _real_ui(granted, doc).fields["receiver"] == mx.UiField("read")
+
+
+def test_real_writable_fields() -> None:
+    receiver = {"receiver_name", "receiver_phone", "receiver_address"}
+    managed = receiver | {"sku_id"}
+    wf = writable_fields(PERSONAS["pr"], P_DOCS["催发"])
+    assert wf.managed == managed
+    # 已发货的 C 列：PR 两组都只读；历史单按 A 列，PR 能改收件、颜色尺码仍读
+    assert wf.allowed == frozenset()
+    assert writable_fields(PERSONAS["pr"], P_DOCS["催发·历史单"]).allowed == receiver
+    assert writable_fields(PERSONAS["pr_manager"], P_DOCS["待推送仓库"]).allowed == managed
+    assert writable_fields(PERSONAS["pr_manager"], P_DOCS["待仓库发货"]).allowed == receiver
+    for label, doc in P_DOCS.items():
+        assert writable_fields(PERSONAS["admin"], doc).allowed == managed, label
+        assert writable_fields(PERSONAS["operations"], doc).allowed == frozenset(), label
+
+    with pytest.raises(FieldPermissionDenied) as exc:
+        ensure_patch_allowed(
+            PERSONAS["pr"], P_DOCS["催发"], {"sku_id", "note_title", "receiver_phone"}
+        )
+    assert exc.value.details["fields"] == ["receiver_phone", "sku_id"]
+    # 没入矩阵的字段照旧放行
+    ensure_patch_allowed(PERSONAS["pr"], P_DOCS["催发"], {"note_title", "goods_main_id"})
+
+
+def test_warehouse_ship_fill() -> None:
+    for label in ("待仓库发货", "催发", "待复盘", "召回中"):
+        doc = W_DOCS[label]
+        assert _real_ui("warehouse", doc).to_dict(view="list") == {
+            "column": doc.column,
+            "actions": {"ship_fill": {"state": "enabled"}},
+            "edits": [],
+        }, label
+        assert "ship_fill" not in _real_ui("pr_manager", doc).actions
+    done = W_DOCS["已完结 · 召回"]
+    assert "ship_fill" not in _real_ui("warehouse", done).actions
+    assert _real_ui("admin", done).actions["ship_fill"] == mx.UiAction("enabled")
+    # 状态机：只认待打单 / 已发货
+    with pytest.raises(AppException) as exc:
+        require(PERSONAS["warehouse"], replace(W_DOCS["催发"], ship_status=None), "ship_fill")
+    assert _code(exc) == "ILLEGAL_STATE_TRANSITION"
+    require(PERSONAS["warehouse"], W_DOCS["待仓库发货"], "ship_fill")
+    with pytest.raises(AppException) as exc:
+        require(PERSONAS["pr"], W_DOCS["待仓库发货"], "ship_fill")
+    assert _code(exc) == "PERMISSION_DENIED"
+
+
+def test_new_capabilities() -> None:
+    doc = P_DOCS["催发"]
+    assert Star().ok(PERSONAS["admin"], doc)
+    assert not Star().ok(PERSONAS["pr_manager"], doc)
+    assert FieldRead("promotion", "receiver_phone").ok(PERSONAS["warehouse"], doc)
+    assert not FieldRead("promotion", "receiver_phone").ok(PERSONAS["finance"], doc)
+    assert ShipIn(None).matches(P_DOCS["催发·历史单"])
+    assert not ShipIn(None).matches(doc)
+    assert ShipIn("已发货", "待打单").matches(doc)
+    # ShipIn 用在没有 ship_status 的单据上是写错了
+    with pytest.raises(AttributeError):
+        ShipIn(None).matches(TOY_DOCS["待推送"])

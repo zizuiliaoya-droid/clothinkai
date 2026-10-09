@@ -15,6 +15,7 @@ core 注册表，并叠加字段级自定义 override（撤销 > 授予 > 角色
 
 from __future__ import annotations
 
+from collections.abc import Set
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
@@ -151,6 +152,16 @@ async def build_field_perm_context(
     """
     role_codes = frozenset(await role_repo.list_codes_for_user(user_id))
     role_scopes, grants, revokes = await perm_repo.list_scopes_for_user(user_id)
+    return field_perm_context_from(role_codes, role_scopes, grants, revokes)
+
+
+def field_perm_context_from(
+    role_codes: frozenset[str],
+    role_scopes: Set[str],
+    grants: Set[str],
+    revokes: Set[str],
+) -> FieldPermissionContext:
+    """已经查好角色码与 scope 时直接构造（流程线矩阵的当前用户与这里同一份规则）。"""
     is_superuser = ("*" in (role_scopes | grants)) and ("*" not in revokes)
     field_grants = frozenset(s for s in grants if s.startswith("field."))
     field_revokes = frozenset(s for s in revokes if s.startswith("field."))
@@ -168,6 +179,7 @@ __all__ = [
     "FieldRule",
     "build_field_perm_context",
     "can_read_field",
+    "field_perm_context_from",
     "can_write_field",
     "field_filter",
 ]
