@@ -34,6 +34,7 @@ from app.modules.promotion.display_name import (
 )
 from app.modules.promotion.exceptions import SequenceOverflowError
 from app.modules.promotion.models import BloggerRetrospective, Promotion
+from app.modules.promotion.stage_calculator import stage_sql_expr
 from app.modules.promotion.urge_calculator import URGE_STATUS_SQL_EXPR
 
 # list_with_cte 把 raw row 重组成 ORM 实例时要往构造器里喂哪些列。
@@ -94,6 +95,8 @@ class PromotionListRow:
     display_short_name: str | None = None
     goods_title: str | None = None
     goods_short_name: str | None = None
+    # 流程线 3.8 当前阶段（stage_calculator.stage_sql_expr）；PR-10 之前不进响应
+    stage: str | None = None
 
 
 @dataclass(frozen=True)
@@ -615,7 +618,7 @@ class PromotionRepository:
         urge_threshold_days: int,
         important_threshold_days: int,
     ) -> tuple[list[PromotionListRow], int]:
-        """列表查询，CTE 注入 ``urge_status`` / ``dual_platform`` 计算列。
+        """列表查询，CTE 注入 ``urge_status`` / ``dual_platform`` / ``stage`` 计算列。
 
         关键点（FB8）：
         - ``today`` 由 service 层 ``get_today()`` 注入；SQL 不用 ``CURRENT_DATE``
@@ -650,8 +653,13 @@ class PromotionRepository:
             LEFT JOIN goods_main g
               ON g.id = p.goods_main_id AND g.tenant_id = p.tenant_id
             WHERE p.tenant_id = :tenant_id
+        ),
+        -- 阶段放在只有推广单列的这一层算：style 也有 is_active，放进上面的 JOIN 会歧义
+        staged AS (
+            SELECT base.*, {stage_sql_expr()} AS stage
+            FROM base
         )
-        SELECT * FROM base WHERE 1=1
+        SELECT * FROM staged WHERE 1=1
         """
         params: dict[str, Any] = {
             "tenant_id": tenant_id,
@@ -766,6 +774,7 @@ class PromotionRepository:
                     display_short_name=row["display_short_name"],
                     goods_title=row["goods_title"],
                     goods_short_name=row["goods_short_name"],
+                    stage=row["stage"],
                 )
             )
         return rows, total
