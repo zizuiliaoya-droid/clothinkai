@@ -503,6 +503,7 @@ class PromotionRepository:
         from_state_value: str | None,
         to_state_value: str,
         extra_fields: dict[str, Any] | None = None,
+        also_where: dict[str, str] | None = None,
     ) -> Promotion | None:
         """乐观并发 UPDATE WHERE old_state RETURNING（FB7 强化）。
 
@@ -511,6 +512,7 @@ class PromotionRepository:
         - ``tenant_id = :tenant_id``（多租户防护，与 RLS 双保险）
         - ``is_active = true``（软删除防护）
         - ``<state_field> = :from_state_value``（旧状态防护）
+        - ``also_where`` 里其他状态机的 ``字段 = 值``（如发货推送要求仍未发布、未召回，防并发取消）
 
         Returns:
             ``Promotion`` 实例（推进成功）；
@@ -524,19 +526,24 @@ class PromotionRepository:
             extra_fields: 状态推进时一并写入的字段（如 publish 时的 publish_url、
                 actual_publish_date；review 时的 reviewed_by、reviewed_at 等）。
         """
-        if from_state_field not in {
+        state_fields = {
             "publish_status",
             "recall_status",
             "settlement_status",
             "retro_status",  # PRD V1.4 改动 4，第 4 个并行状态机
             "ship_status",  # 流程线 3.3 发货 3 态（NULL = 历史单）
-        }:
+        }
+        if from_state_field not in state_fields:
             raise ValueError(f"unsupported state field: {from_state_field}")
+        also = dict(also_where or {})
+        if not set(also) <= state_fields:
+            raise ValueError(f"unsupported state field: {sorted(set(also) - state_fields)}")
 
         state_col = getattr(Promotion, from_state_field)
         state_cond = (
             state_col.is_(None) if from_state_value is None else state_col == from_state_value
         )
+        also_conds = [getattr(Promotion, field) == value for field, value in also.items()]
         values: dict[str, Any] = dict(extra_fields or {})
         values[from_state_field] = to_state_value
         values["updated_at"] = func.now()
@@ -548,6 +555,7 @@ class PromotionRepository:
                 Promotion.tenant_id == tenant_id,
                 Promotion.is_active.is_(True),
                 state_cond,
+                *also_conds,
             )
             .values(**values)
             .returning(Promotion)

@@ -18,7 +18,7 @@ from app.core.security.field_permissions import can_read_field
 from app.modules.auth.models import User
 from app.modules.flow.matrix import FlowActor, ensure_gates, require, ui_for
 from app.modules.promotion.display_name import normalize_goods_short_name
-from app.modules.promotion.enums import ShipCourier, ShipStatus
+from app.modules.promotion.enums import PublishStatus, RecallStatus, ShipCourier, ShipStatus
 from app.modules.promotion.exceptions import (
     ExportTooManyRowsError,
     PromotionNotFoundError,
@@ -49,6 +49,12 @@ from app.modules.promotion.shipment_export import (
 from app.modules.promotion.urge_calculator import get_today
 from app.modules.urge.service import UrgeService
 
+# 纳入 / 推送时库里还得是这样（状态机先判过一次，条件 UPDATE 再判一次挡并发取消 / 召回）
+_OPEN = {
+    "publish_status": PublishStatus.UNPUBLISHED.value,
+    "recall_status": RecallStatus.NOT_RECALLED.value,
+}
+
 
 def _item_short_name(view: PromotionItemView) -> str:
     return normalize_goods_short_name(view.style_short_name) or view.style_name
@@ -75,8 +81,13 @@ class PromotionShippingMixin(PromotionServiceBase):
         from_state: str | None,
         to_state: str,
         extra_fields: dict[str, Any] | None = None,
+        require_open: bool = False,
     ) -> Promotion:
-        """``ship_status`` 的条件 UPDATE；0 行（别人刚处理过 / 已停用）→ 409。"""
+        """``ship_status`` 的条件 UPDATE；0 行（别人刚处理过 / 已停用）→ 409。
+
+        ``require_open``：纳入 / 推送还要求库里仍是未发布、未召回（启用由 ``update_state`` 固定判），
+        与并发的取消 / 召回撞上时 0 行 → 409，已取消的单不会进待发货 / 待打单（评审 L2）。
+        """
         updated = await self._repo.update_state(
             promotion_id=promotion.id,
             tenant_id=user.tenant_id,
@@ -84,6 +95,7 @@ class PromotionShippingMixin(PromotionServiceBase):
             from_state_value=from_state,
             to_state_value=to_state,
             extra_fields=extra_fields,
+            also_where=_OPEN if require_open else None,
         )
         if updated is None:
             raise StateTransitionConflictError(
@@ -99,7 +111,7 @@ class PromotionShippingMixin(PromotionServiceBase):
         require(actor, await self._promotion_doc(promotion), "ship_include")
 
         updated = await self._ship_transition(
-            promotion, user, from_state=None, to_state=ShipStatus.PENDING.value
+            promotion, user, from_state=None, to_state=ShipStatus.PENDING.value, require_open=True
         )
         await self._audit.log(
             action="promotion.ship.include",
@@ -145,6 +157,7 @@ class PromotionShippingMixin(PromotionServiceBase):
                 from_state=ShipStatus.PENDING.value,
                 to_state=ShipStatus.PRINTING.value,
                 extra_fields={"ship_pushed_at": _utcnow(), "ship_pushed_by": user.id},
+                require_open=True,
             )
             if rows is not None:
                 await self._items_repo.replace(

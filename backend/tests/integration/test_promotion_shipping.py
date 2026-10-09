@@ -1618,6 +1618,66 @@ class TestShipInclude:
 
 
 @pytest.mark.usefixtures("tenant_ctx")
+class TestShipRaceWithCancel:
+    """评审 L2：读完单、条件 UPDATE 之前别人刚取消 / 召回 → 纳入 / 推送 409，发货状态不动。
+
+    用「读完单就在库里改状态」模拟并发：手上那份还是读到时的样子（状态机、规则都过），
+    只有条件 UPDATE 能挡住。推送的单备齐收件与明细，修复前会一路推送成功。
+    """
+
+    @pytest.mark.parametrize("change", ["publish_status = '已取消'", "recall_status = '召回中'"])
+    @pytest.mark.parametrize(
+        ("action", "ship_status"), [("ship_include", None), ("ship_push", "待发货")]
+    )
+    async def test_changed_after_read_is_409(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        monkeypatch: pytest.MonkeyPatch,
+        change: str,
+        action: str,
+        ship_status: str | None,
+    ) -> None:
+        style = await product_factory.style()
+        sku = await product_factory.sku(style)
+        blogger = await blogger_factory.blogger()
+        promo = await promotion_factory.promotion(
+            style=style,
+            blogger=blogger,
+            pr=flow_users.pr,
+            sku_id=sku.id,
+            ship_status=ship_status,
+            **_RECEIVER,
+            items=[(style, sku)],
+        )
+        await session.commit()
+        pid, manager = promo.id, flow_users.pr_manager
+        read = PromotionService._get_or_404
+
+        async def read_then_changed(self: PromotionService, promotion_id: UUID) -> Any:
+            promotion = await read(self, promotion_id)
+            res = await session.execute(
+                sa_text(f"UPDATE promotion SET {change} WHERE id = :pid"), {"pid": pid}
+            )
+            assert res.rowcount == 1  # type: ignore[attr-defined]
+            return promotion
+
+        monkeypatch.setattr(PromotionService, "_get_or_404", read_then_changed)
+        svc = PromotionService(session)
+        with pytest.raises(StateTransitionConflictError) as exc_info:
+            if action == "ship_include":
+                await svc.ship_include(pid, manager)
+            else:
+                await svc.ship_push(pid, PromotionShipPushRequest(), manager)
+        assert exc_info.value.status_code == 409
+        db = await _db_ship(session, pid)
+        assert (db["ship_status"], db["ship_pushed_at"]) == (ship_status, None)
+
+
+@pytest.mark.usefixtures("tenant_ctx")
 class TestShipPush:
     async def test_push_writes_marks_and_moves_to_b(
         self,
