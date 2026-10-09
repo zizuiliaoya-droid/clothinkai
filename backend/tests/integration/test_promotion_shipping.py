@@ -819,6 +819,119 @@ class TestReadItems:
 
 
 # ---------------------------------------------------------------------------
+# goods_members：明细应有的成员款式（口径同 members_of），给推送 / 改颜色尺码弹窗出空行（S13 偏差）
+# ---------------------------------------------------------------------------
+
+
+def _members(resp: Any) -> list[tuple[UUID, str, str]]:
+    return [(m.style_id, m.display_short_name, m.goods_title) for m in resp.goods_members]
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+class TestGoodsMembers:
+    async def test_suit_without_items_lists_active_members(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        flow_users: Any,
+        blogger_factory: Any,
+        product_factory: Any,
+        promotion_factory: Any,
+        suit: _Suit,
+    ) -> None:
+        # 停用成员不出现
+        retired = await product_factory.style(short_name="停用成员")
+        session.add(
+            GoodsStyleItem(
+                tenant_id=tenant_a.id,
+                goods_main_id=suit.goods.id,
+                style_id=retired.id,
+                sort_order=2,
+                is_active=False,
+            )
+        )
+        await session.flush()
+        promo = await promotion_factory.promotion(
+            style=suit.top,
+            blogger=await blogger_factory.blogger(),
+            pr=flow_users.pr_manager,
+            goods_main_id=suit.goods.id,
+        )
+        resp = await PromotionService(session).get_promotion(promo.id, flow_users.pr_manager)
+        assert resp.items == []
+        # 简称没填回落款式名；goods_title = 款式全称
+        assert _members(resp) == [
+            (suit.top.id, "上衣", "条纹上衣全称"),
+            (suit.pants.id, "阔腿裤", "阔腿裤"),
+        ]
+
+    async def test_single_and_no_goods_return_self(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        flow_users: Any,
+        blogger_factory: Any,
+        product_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        blogger = await blogger_factory.blogger()
+        style = await product_factory.style(short_name="  ", style_name="飞狐短裙")
+        single = await _goods(session, tenant_a, style, is_suit=False)
+        svc = PromotionService(session)
+        for goods_main_id in (single.id, None):
+            promo = await promotion_factory.promotion(
+                style=style, blogger=blogger, pr=flow_users.pr, goods_main_id=goods_main_id
+            )
+            resp = await svc.get_promotion(promo.id, flow_users.pr)
+            assert _members(resp) == [(style.id, "飞狐短裙", "飞狐短裙")]
+
+    async def test_list_queries_do_not_grow_with_rows(
+        self,
+        session: AsyncSession,
+        engine: Any,
+        flow_users: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        suit: _Suit,
+    ) -> None:
+        blogger = await blogger_factory.blogger()
+        svc = PromotionService(session)
+
+        async def _make() -> Any:
+            return await promotion_factory.promotion(
+                style=suit.top, blogger=blogger, pr=flow_users.pr, goods_main_id=suit.goods.id
+            )
+
+        async def _list_count() -> tuple[int, Any]:
+            statements: list[str] = []
+
+            def _capture(_conn: Any, _cursor: Any, statement: str, *_args: Any) -> None:
+                statements.append(statement)
+
+            event.listen(engine.sync_engine, "before_cursor_execute", _capture)
+            try:
+                page = await svc.list_promotions(
+                    filters=PromotionListFilters(), page=1, page_size=100, user=flow_users.pr
+                )
+            finally:
+                event.remove(engine.sync_engine, "before_cursor_execute", _capture)
+            return len(statements), page
+
+        first = await _make()
+        one_row, _ = await _list_count()
+        for _ in range(4):
+            await _make()
+        five_rows, page = await _list_count()
+        assert page.total == 5
+        assert five_rows == one_row
+        row = next(p for p in page.items if p.id == first.id)
+        assert _members(row) == [
+            (suit.top.id, "上衣", "条纹上衣全称"),
+            (suit.pants.id, "阔腿裤", "阔腿裤"),
+        ]
+
+
+# ---------------------------------------------------------------------------
 # SKU 删除前的引用计数：promotion.sku_id 与 promotion_item.sku_id 按推广单去重（7.8）
 # ---------------------------------------------------------------------------
 

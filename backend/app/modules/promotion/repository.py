@@ -1078,6 +1078,15 @@ class PromotionItemRepository:
             grouped.setdefault(goods_id, []).append(style_id)
         return grouped
 
+    async def style_names(self, style_ids: Sequence[UUID]) -> dict[UUID, tuple[str, str | None]]:
+        """款式 → ``(style_name, short_name)``，给 ``goods_members`` 出名字；一次查（列表整页共用）。"""
+        if not style_ids:
+            return {}
+        stmt = select(Style.id, Style.style_name, Style.short_name).where(
+            Style.id.in_(list(style_ids))
+        )
+        return {row[0]: (row[1], row[2]) for row in (await self._session.execute(stmt)).all()}
+
     async def set_style_sku(
         self, *, tenant_id: UUID, promotion_id: UUID, style_id: UUID, sku_id: UUID | None
     ) -> None:

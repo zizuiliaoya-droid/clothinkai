@@ -473,6 +473,19 @@ class PromotionItemResponse(BaseModel):
     """该行款式主图的签名 URL；没有图或签名失败为 null。"""
 
 
+class GoodsMemberResponse(BaseModel):
+    """明细应有的一个成员款式（口径同 ``PromotionItemRepository.members_of``）。
+
+    推送 / 改颜色尺码弹窗按它给每个成员出一行；不带任何编码（规-1）。
+    """
+
+    style_id: UUID
+    display_short_name: str
+    """款式简称，没填（或全空白）回落款式名。"""
+    goods_title: str
+    """款式全称（悬停显示）。"""
+
+
 class PromotionResponse(BaseModel):
     """推广响应。
 
@@ -608,6 +621,8 @@ class PromotionResponse(BaseModel):
     # 商品明细（流程线 M1）：列表一页一次批量查；没有明细的旧单回落 source_extra['颜色及规格'] 原文
     items: list[PromotionItemResponse] = Field(default_factory=list)
     legacy_color_spec: str | None = None
+    # 明细应有的成员款式：套装 = 启用成员按 sort_order；单品或没有归属 = [style_id]
+    goods_members: list[GoodsMemberResponse] = Field(default_factory=list)
 
     # 结款附件（仅 PR/PR主管/管理员可见；warehouse 始终为 null）
     payment_qr_attachment_id: UUID | None = None

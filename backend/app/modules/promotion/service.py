@@ -590,6 +590,11 @@ class PromotionService(
         members_by_goods = await self._items_repo.members_by_goods(
             list({r.promotion.goods_main_id for r in rows if r.promotion.goods_main_id is not None})
         )
+        # goods_members 的款式名：本页全部成员款式一次查
+        member_style_ids: set[UUID] = set()
+        for r in rows:
+            member_style_ids.update(await self._members_of(r.promotion, members_by_goods))
+        style_names = await self._items_repo.style_names(list(member_style_ids))
         user_names = await self._repo.user_names(
             [r.promotion.ship_pushed_by for r in rows if r.promotion.ship_pushed_by is not None]
         )
@@ -618,6 +623,7 @@ class PromotionService(
                 negotiators=negotiators,
                 members_by_goods=members_by_goods,
                 user_names=user_names,
+                style_names=style_names,
             )
             for row in rows
         ]

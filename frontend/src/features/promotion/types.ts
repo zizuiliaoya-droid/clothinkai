@@ -48,6 +48,15 @@ export interface PromotionItem {
   style_main_image_url: string | null;
 }
 
+/** 明细应有的一个成员款式：套装 = 启用成员（按顺序），单品或没有归属 = 自身。弹窗按它每个成员出一行。 */
+export interface GoodsMember {
+  style_id: string;
+  /** 款式简称，没填回落款式名。 */
+  display_short_name: string;
+  /** 款式全称（悬停显示）。 */
+  goods_title: string;
+}
+
 /** 写入明细的一行：推广单入口每行都要有 sku_id，款式集合 = 归属商品的启用成员（后端校验）。 */
 export interface GoodsItemIn {
   style_id: string;
@@ -179,6 +188,8 @@ export interface Promotion {
   items: PromotionItem[];
   /** 没有明细的旧单：「录入信息」里的颜色及规格原文；有明细时为 null。 */
   legacy_color_spec: string | null;
+  /** 明细应有的成员款式（没有明细时弹窗靠它出空行）。 */
+  goods_members: GoodsMember[];
   /** 流程线矩阵（7.1）：列表行 = actions + edits，详情 / 动作返回 = actions + fields。 */
   ui: UiState | null;
 }

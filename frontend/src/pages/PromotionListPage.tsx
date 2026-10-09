@@ -5,6 +5,7 @@ import {
   Drawer,
   Dropdown,
   Input,
+  Modal,
   Select,
   Space,
   Table,
@@ -13,12 +14,14 @@ import {
   Typography,
   message,
   theme,
+  type MenuProps,
 } from "antd";
 import { DownOutlined, PlusOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnsType } from "antd/es/table";
 import dayjs from "dayjs";
-import { listPromotions, reviewPromotion } from "@/features/promotion/api";
+import { listPromotions, reviewPromotion, shipInclude } from "@/features/promotion/api";
+import { buildMenuItems } from "@/features/flow/flowMenu";
 import type {
   Promotion,
   PromotionListFilters,
@@ -46,6 +49,14 @@ import { RetroConfirmModal } from "@/features/promotion/components/RetroConfirmM
 import { RetroModal } from "@/features/promotion/components/RetroModal";
 import { ReturnWaybillModal } from "@/features/promotion/components/ReturnWaybillModal";
 import { SourceExtraModal } from "@/features/promotion/components/SourceExtraModal";
+import { ItemsModal } from "@/features/promotion/components/ItemsModal";
+import { ReceiverModal } from "@/features/promotion/components/ReceiverModal";
+import {
+  ShipPushModal,
+  type ShipPushTarget,
+} from "@/features/promotion/components/ShipPushModal";
+import { ShipWithdrawModal } from "@/features/promotion/components/ShipWithdrawModal";
+import { useFlowFeedback } from "@/features/promotion/components/useFlowFeedback";
 import { extractErrorMessage } from "@/services/apiClient";
 import { useAuthStore } from "@/stores/authStore";
 import { ImportUploadButton } from "@/components/ImportUploadButton";
@@ -126,6 +137,12 @@ export function PromotionListPage() {
   );
   const [amountLogTarget, setAmountLogTarget] = useState<Promotion | null>(null);
   const [recallTarget, setRecallTarget] = useState<Promotion | null>(null);
+  // 发货（流程线 8.4）：按行 ui 出菜单项，弹窗在 features/promotion/components/
+  const [shipPushTarget, setShipPushTarget] = useState<ShipPushTarget | null>(null);
+  const [shipWithdrawTarget, setShipWithdrawTarget] = useState<Promotion | null>(null);
+  const [receiverTarget, setReceiverTarget] = useState<Promotion | null>(null);
+  const [itemsTarget, setItemsTarget] = useState<Promotion | null>(null);
+  const flowFeedback = useFlowFeedback();
 
   const { data, isLoading } = useQuery({
     queryKey: ["promotions", filters],
@@ -145,6 +162,56 @@ export function PromotionListPage() {
     },
     onError: (err) => message.error(extractErrorMessage(err)),
   });
+
+  /** 纳入发货：历史单 → 待发货（之后才出「确认推送仓库」）。 */
+  const shipIncludeMutation = useMutation({
+    mutationFn: (id: string) => shipInclude(id),
+    onSuccess: () => {
+      message.success("已纳入发货，进入待推送仓库");
+      flowFeedback.refresh();
+    },
+    onError: (err) => flowFeedback.handleError(err),
+  });
+
+  /** 发货 5 项：顺序与禁用原因由 buildMenuItems 按 row.ui 定；没有的项不出现。 */
+  function shipMenuItems(record: Promotion): NonNullable<MenuProps["items"]> {
+    const built = buildMenuItems("promotion", record.ui, {
+      actions: {
+        ship_push: {
+          label: "确认推送仓库",
+          onClick: (action) => setShipPushTarget({ row: record, action }),
+        },
+        ship_withdraw: {
+          label: "撤回推送",
+          danger: true,
+          onClick: () => setShipWithdrawTarget(record),
+        },
+        ship_include: {
+          label: "纳入发货",
+          onClick: () =>
+            Modal.confirm({
+              title: `纳入发货 · ${record.internal_code}`,
+              content: "纳入后这张单进入「待推送仓库」，由管理员或 PR 主管确认推送。",
+              okText: "纳入发货",
+              cancelText: "取消",
+              onOk: () => shipIncludeMutation.mutateAsync(record.id).catch(() => undefined),
+            }),
+        },
+      },
+      edits: {
+        receiver: { label: "改收件信息", onClick: () => setReceiverTarget(record) },
+        goods_items: { label: "改颜色尺码", onClick: () => setItemsTarget(record) },
+      },
+    });
+    // FlowMenuItem 是 interface（没有 antd MenuItemType 的 data-* 索引签名），逐项转成字面量
+    return built.map(({ key, label, disabled, danger, onClick }) => ({
+      key,
+      label,
+      disabled,
+      danger,
+      onClick,
+    }));
+  }
 
   const columns: ColumnsType<Promotion> = [
     { title: "内部编码", dataIndex: "internal_code", width: 150, fixed: "left" },
@@ -380,7 +447,8 @@ export function PromotionListPage() {
       width: 110,
       fixed: "right",
       render: (_, record) => {
-        const items = [
+        const flowItems = shipMenuItems(record);
+        const legacyItems = [
           {
             key: "extra",
             label: "录入信息",
@@ -487,6 +555,9 @@ export function PromotionListPage() {
             onClick: () => setAmountLogTarget(record),
           },
         ];
+        const items: MenuProps["items"] = flowItems.length
+          ? [...flowItems, { type: "divider" as const }, ...legacyItems]
+          : legacyItems;
         return (
           <Dropdown menu={{ items }} trigger={["click"]}>
             <Button type="link" size="small">
@@ -631,6 +702,17 @@ export function PromotionListPage() {
         onClose={() => setExtraTarget(null)}
         canManagePaymentQr={canManagePaymentQr}
       />
+
+      <ShipPushModal target={shipPushTarget} onClose={() => setShipPushTarget(null)} />
+
+      <ShipWithdrawModal
+        target={shipWithdrawTarget}
+        onClose={() => setShipWithdrawTarget(null)}
+      />
+
+      <ReceiverModal target={receiverTarget} onClose={() => setReceiverTarget(null)} />
+
+      <ItemsModal target={itemsTarget} onClose={() => setItemsTarget(null)} />
     </Card>
   );
 }

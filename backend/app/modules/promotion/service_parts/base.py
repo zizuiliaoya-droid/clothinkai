@@ -77,6 +77,7 @@ from app.modules.promotion.repository import (
 )
 from app.modules.promotion.schemas import (
     GoodsItemIn,
+    GoodsMemberResponse,
     PromotionAmountLogResponse,
     PromotionCreate,
     PromotionItemResponse,
@@ -422,6 +423,44 @@ class PromotionServiceBase:
             )
         return responses
 
+    async def _members_of(
+        self,
+        promotion: Promotion,
+        members_by_goods: Mapping[UUID, builtins.list[UUID]] | None,
+    ) -> builtins.list[UUID]:
+        """明细应有的成员款式：``members_by_goods`` 是列表整页一次查好的（只含有启用成员的套装），
+        None 时按这一张单现查；口径都是 ``members_of``。"""
+        if members_by_goods is None:
+            return await self._items_repo.members_of(
+                goods_main_id=promotion.goods_main_id, style_id=promotion.style_id
+            )
+        return (
+            members_by_goods.get(promotion.goods_main_id)
+            if promotion.goods_main_id is not None
+            else None
+        ) or [promotion.style_id]
+
+    def _goods_member_responses(
+        self,
+        promotion: Promotion,
+        members: builtins.list[UUID],
+        style_names: Mapping[UUID, tuple[str, str | None]],
+    ) -> builtins.list[GoodsMemberResponse]:
+        """成员款式 → 响应（品名规则同 ``_item_responses``；查不到款式回落建单快照的简称）。"""
+        responses: builtins.list[GoodsMemberResponse] = []
+        for style_id in members:
+            name, short_name = style_names.get(
+                style_id, (promotion.style_short_name_snapshot, None)
+            )
+            responses.append(
+                GoodsMemberResponse(
+                    style_id=style_id,
+                    display_short_name=normalize_goods_short_name(short_name) or name,
+                    goods_title=name,
+                )
+            )
+        return responses
+
     # ============================================================
     # 流程线矩阵（5.4）：当前用户、派生阶段、单据快照
     # ============================================================
@@ -458,8 +497,12 @@ class PromotionServiceBase:
         items: builtins.list[PromotionItemView] | None = None,
         negotiators: Mapping[UUID, UUID] | None = None,
         members_by_goods: Mapping[UUID, builtins.list[UUID]] | None = None,
+        members: builtins.list[UUID] | None = None,
     ) -> PromotionDoc:
-        """组矩阵快照。没透传的（阶段、明细、谈款人、套装成员）按这一张单现查。"""
+        """组矩阵快照。没透传的（阶段、明细、谈款人、套装成员）按这一张单现查。
+
+        ``members`` 是这张单已算好的成员款式（优先于 ``members_by_goods``）。
+        """
         if stage is None:
             stage = await self._compute_stage(promotion)
         if items is None:
@@ -468,16 +511,8 @@ class PromotionServiceBase:
             )
         if negotiators is None:
             negotiators = await self._repo.negotiator_ids([promotion.id])
-        if members_by_goods is None:
-            members = await self._items_repo.members_of(
-                goods_main_id=promotion.goods_main_id, style_id=promotion.style_id
-            )
-        else:
-            members = (
-                members_by_goods.get(promotion.goods_main_id)
-                if promotion.goods_main_id is not None
-                else None
-            ) or [promotion.style_id]
+        if members is None:
+            members = await self._members_of(promotion, members_by_goods)
         return build_promotion_doc(
             promotion,
             stage=stage,
@@ -509,6 +544,7 @@ class PromotionServiceBase:
         negotiators: Mapping[UUID, UUID] | None = None,
         members_by_goods: Mapping[UUID, builtins.list[UUID]] | None = None,
         user_names: Mapping[UUID, str] | None = None,
+        style_names: Mapping[UUID, tuple[str, str | None]] | None = None,
     ) -> PromotionResponse:
         """组装响应：字段权限过滤 + 衍生字段计算 + 矩阵 ``ui``.
 
@@ -527,6 +563,7 @@ class PromotionServiceBase:
             stage: 列表 CTE 算好的派生阶段；None 时按 ``stage_calculator.compute_stage`` 现算。
             negotiators / members_by_goods: 列表整页一次查好的谈款人与套装成员；None 时单条现查。
             user_names: 列表整页一次查好的推送人名字；None 时单条现查。
+            style_names: 列表整页一次查好的成员款式名（``goods_members`` 用）；None 时单条现查。
         """
         if actor is None:
             actor = await self._flow_actor(user)
@@ -679,12 +716,16 @@ class PromotionServiceBase:
         # 矩阵 ui（7.1）：列表的阶段、谈款人、套装成员整页一次查好透传，单条现算
         if stage is None:
             stage = await self._compute_stage(promotion, today=today, thresholds=thresholds)
+        members = await self._members_of(promotion, members_by_goods)
+        if style_names is None:
+            style_names = await self._items_repo.style_names(members)
+        goods_members = self._goods_member_responses(promotion, members, style_names)
         doc = await self._promotion_doc(
             promotion,
             stage=stage,
             items=items,
             negotiators=negotiators,
-            members_by_goods=members_by_goods,
+            members=members,
         )
         ui = ui_for(actor, doc).to_dict(view=view)
 
@@ -769,6 +810,7 @@ class PromotionServiceBase:
             shipped_at=promotion.shipped_at,
             items=self._item_responses(items),
             legacy_color_spec=legacy_color_spec,
+            goods_members=goods_members,
             payment_qr_attachment_id=visible_payment_qr_id,
             payment_qr_signed_url=payment_qr_url,
             settlement_payment_proof_signed_url=settlement_proof_url,
