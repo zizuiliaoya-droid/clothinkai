@@ -1828,6 +1828,160 @@ class TestCancelLinkage:
             assert promo.id not in {p.id for p in page.items}, value
 
 
+# ---------------------------------------------------------------------------
+# S10 改归属商品（11-53）：推送前（待发货 / 历史单）换商品同事务删明细；推送后只改归属
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+class TestChangeGoods:
+    async def _single_promotion(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        flow_users: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        suit: _Suit,
+        ship_status: str | None,
+    ) -> tuple[Any, GoodsMain]:
+        """上衣归在单品商品下、明细一行；套装（上衣 + 裤子）是要换过去的商品。"""
+        single = await _goods(session, tenant_a, suit.top, is_suit=False)
+        blogger = await blogger_factory.blogger()
+        promo = await promotion_factory.promotion(
+            style=suit.top,
+            blogger=blogger,
+            pr=flow_users.pr,
+            goods_main_id=single.id,
+            sku_id=suit.top_sku.id,
+            ship_status=ship_status,
+            **_RECEIVER,
+            items=[(suit.top, suit.top_sku)],
+        )
+        return promo, single
+
+    @pytest.mark.parametrize("ship_status", ["待发货", None])
+    async def test_before_push_clears_items(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        flow_users: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        suit: _Suit,
+        ship_status: str | None,
+    ) -> None:
+        promo, _ = await self._single_promotion(
+            session, tenant_a, flow_users, blogger_factory, promotion_factory, suit, ship_status
+        )
+        resp = await PromotionService(session).update_promotion(
+            promo.id, PromotionUpdate(goods_main_id=suit.goods.id), flow_users.pr_manager
+        )
+        assert await _db_items(session, promo.id) == []
+        assert resp.items == []
+        assert resp.goods_main_id == suit.goods.id
+        if ship_status is None:
+            return
+        # 待推送：推送按新商品要求补选颜色尺码
+        assert resp.ui is not None
+        assert resp.ui["actions"]["ship_push"]["missing"] == [
+            {"key": "goods_items", "label": "颜色尺码"}
+        ]
+        await session.commit()
+        pid, manager = promo.id, flow_users.pr_manager
+        with pytest.raises(FlowGateMissingError) as exc_info:
+            await PromotionService(session).ship_push(pid, PromotionShipPushRequest(), manager)
+        assert exc_info.value.details["missing"] == [{"key": "goods_items", "label": "颜色尺码"}]
+        assert (await _db_ship(session, pid))["ship_status"] == "待发货"
+
+    @pytest.mark.parametrize("ship_status", ["待打单", "已发货"])
+    async def test_after_push_keeps_items(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        flow_users: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        suit: _Suit,
+        ship_status: str,
+    ) -> None:
+        """推送后只改报表归属，明细记的是实际发出的货、不动（A6）。"""
+        promo, _ = await self._single_promotion(
+            session, tenant_a, flow_users, blogger_factory, promotion_factory, suit, ship_status
+        )
+        resp = await PromotionService(session).update_promotion(
+            promo.id, PromotionUpdate(goods_main_id=suit.goods.id), flow_users.pr_manager
+        )
+        assert resp.goods_main_id == suit.goods.id
+        assert await _db_items(session, promo.id) == [(suit.top.id, suit.top_sku.id, 0)]
+        assert [(i.style_id, i.sku_id) for i in resp.items] == [(suit.top.id, suit.top_sku.id)]
+
+    async def test_same_goods_keeps_items(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        flow_users: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        suit: _Suit,
+    ) -> None:
+        """没真换（传的还是原商品）→ 明细不动。"""
+        promo, single = await self._single_promotion(
+            session, tenant_a, flow_users, blogger_factory, promotion_factory, suit, "待发货"
+        )
+        await PromotionService(session).update_promotion(
+            promo.id,
+            PromotionUpdate(goods_main_id=single.id, remark="只改备注"),
+            flow_users.pr_manager,
+        )
+        assert await _db_items(session, promo.id) == [(suit.top.id, suit.top_sku.id, 0)]
+
+    async def test_pr_still_can_change_goods(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        flow_users: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        suit: _Suit,
+    ) -> None:
+        """PR 改归属的写权限到 PR-5 才收（偏差 §2-6）；本 PR 只断言明细按 11-53 处理。"""
+        promo, _ = await self._single_promotion(
+            session, tenant_a, flow_users, blogger_factory, promotion_factory, suit, "待发货"
+        )
+        resp = await PromotionService(session).update_promotion(
+            promo.id, PromotionUpdate(goods_main_id=suit.goods.id), flow_users.pr
+        )
+        assert resp.goods_main_id == suit.goods.id
+        assert await _db_items(session, promo.id) == []
+
+    async def test_goods_and_sku_together_keeps_main_row(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        flow_users: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        suit: _Suit,
+        product_factory: Any,
+    ) -> None:
+        """同一 PATCH 换商品又改 sku_id：先删旧明细，再按 sku_id 写回主款式那一行，其余成员推送时补。"""
+        promo, _ = await self._single_promotion(
+            session, tenant_a, flow_users, blogger_factory, promotion_factory, suit, "待发货"
+        )
+        red = await product_factory.sku(suit.top, color="红色", size="S")
+        resp = await PromotionService(session).update_promotion(
+            promo.id,
+            PromotionUpdate(goods_main_id=suit.goods.id, sku_id=red.id),
+            flow_users.pr_manager,
+        )
+        assert await _db_items(session, promo.id) == [(suit.top.id, red.id, 0)]
+        assert resp.ui is not None
+        assert resp.ui["actions"]["ship_push"]["missing"] == [
+            {"key": "goods_items", "label": "颜色尺码"}
+        ]
+
+
 @pytest.mark.usefixtures("tenant_ctx")
 class TestCreateNeedShipping:
     async def test_route_default_null_and_checked_pending(

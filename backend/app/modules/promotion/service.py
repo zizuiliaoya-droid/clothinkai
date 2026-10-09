@@ -421,6 +421,17 @@ class PromotionService(
 
         await self._session.flush()
 
+        # 改归属商品（11-53）：推送前（待发货 / 历史单）换了商品，旧明细按旧成员选的，
+        # 同事务删掉、推送时按新商品补选；推送后明细是实际发出的货，只改归属不动明细。
+        # 先删再同步 sku_id：同一请求带了 sku_id 时主款式那一行按新值写回。
+        if "goods_main_id" in changes and promotion.ship_status in (
+            None,
+            ShipStatus.PENDING.value,
+        ):
+            await self._items_repo.replace(
+                tenant_id=promotion.tenant_id, promotion_id=promotion.id, rows=[]
+            )
+
         # sku_id 是主款式那一行的颜色尺码（5.4）：同步明细，有就改、没有就插
         if "sku_id" in changes:
             await self._items_repo.set_style_sku(
