@@ -188,7 +188,11 @@ class BloggerService:
             setattr(blogger, field, new_value)
 
         # U11 BR-U11-01: follower_count 变更时自动重算 blogger_type（8b：只对分级平台）
-        if "follower_count" in changes and blogger.platform in TYPE_GRADED_PLATFORMS:
+        # 只改平台：新平台分级且有粉丝数就重算；不分级（抖音）或没有粉丝数就保留原值
+        if blogger.platform in TYPE_GRADED_PLATFORMS and (
+            "follower_count" in changes
+            or ("platform" in changes and blogger.follower_count is not None)
+        ):
             blogger.blogger_type = self._tags.compute_blogger_type(blogger.follower_count)
 
         await self._session.flush()

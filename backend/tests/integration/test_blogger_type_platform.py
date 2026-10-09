@@ -76,6 +76,42 @@ class TestTypeGradingPerPlatform:
         assert r_dy.blogger_type == "素人"
         assert r_xhs.blogger_type == "KOL"
 
+    async def test_platform_change_regrades_by_new_platform(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        blogger_factory: Any,
+    ) -> None:
+        # fix F2（评审 L4）：只改平台、不改粉丝数时，新平台分级就按粉丝数重算，不分级就保留原值
+        dy = await blogger_factory.blogger(
+            platform="抖音", follower_count=500_000, blogger_type="素人"
+        )
+        xhs = await blogger_factory.blogger(follower_count=500_000, blogger_type="KOL")
+        user = await factory.user(tenant_a, roles=[admin_role])
+        svc = BloggerService(session)
+        to_xhs = await svc.update_blogger(dy.id, BloggerUpdate(platform=Platform.XIAOHONGSHU), user)
+        to_dy = await svc.update_blogger(xhs.id, BloggerUpdate(platform=Platform.DOUYIN), user)
+        assert (to_xhs.platform, to_xhs.blogger_type) == ("小红书", "KOL")
+        assert (to_dy.platform, to_dy.blogger_type) == ("抖音", "KOL")
+
+    async def test_platform_change_to_graded_without_followers_keeps_type(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        blogger_factory: Any,
+    ) -> None:
+        # 与新建一致：没有粉丝数就没得分级，保留手填的类型（不清空）
+        dy = await blogger_factory.blogger(platform="抖音", blogger_type="素人")
+        user = await factory.user(tenant_a, roles=[admin_role])
+        resp = await BloggerService(session).update_blogger(
+            dy.id, BloggerUpdate(platform=Platform.XIAOHONGSHU), user
+        )
+        assert (resp.platform, resp.blogger_type) == ("小红书", "素人")
+
     async def test_recompute_single_douyin_untouched(
         self, session: AsyncSession, blogger_factory: Any
     ) -> None:
