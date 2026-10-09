@@ -21,19 +21,20 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import bindparam, exists, func, select, text, update
+from sqlalchemy import bindparam, delete, exists, func, select, text, union_all, update
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.metrics import promotion_sequence_lock_duration_seconds
-from app.modules.product.goods_models import GoodsStyleItem
+from app.modules.product.goods_models import GoodsMain, GoodsStyleItem
+from app.modules.product.models import Sku, Style
 from app.modules.promotion.display_name import (
     PROMOTION_DISPLAY_SHORT_NAME_SQL,
     display_short_name_sql,
 )
 from app.modules.promotion.exceptions import SequenceOverflowError
-from app.modules.promotion.models import BloggerRetrospective, Promotion
+from app.modules.promotion.models import BloggerRetrospective, Promotion, PromotionItem
 from app.modules.promotion.stage_calculator import stage_sql_expr
 from app.modules.promotion.urge_calculator import URGE_STATUS_SQL_EXPR
 
@@ -120,8 +121,18 @@ class PromotionRepository:
     # ----------------------- get / count ----------------------- #
 
     async def count_by_sku(self, sku_id: UUID) -> int:
-        """统计 SKU 的全部历史推广引用；租户隔离由 RLS 保证。"""
-        stmt = select(func.count()).select_from(Promotion).where(Promotion.sku_id == sku_id)
+        """统计引用这个 SKU 的推广单数；租户隔离由 RLS 保证。
+
+        ``promotion.sku_id`` 与商品明细 ``promotion_item.sku_id`` 两处都算，按推广单去重
+        （同一张单两处都引用只算 1，流程线 7.8）。
+        """
+        refs = union_all(
+            select(Promotion.id.label("promotion_id")).where(Promotion.sku_id == sku_id),
+            select(PromotionItem.promotion_id.label("promotion_id")).where(
+                PromotionItem.sku_id == sku_id
+            ),
+        ).subquery()
+        stmt = select(func.count(func.distinct(refs.c.promotion_id)))
         return int((await self._session.execute(stmt)).scalar_one())
 
     async def count_by_blogger(self, blogger_id: UUID) -> int:
@@ -780,8 +791,111 @@ class PromotionRepository:
         return rows, total
 
 
+# ---------------------------------------------------------------------------
+# 商品明细（promotion_item，流程线 M1）
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PromotionItemView:
+    """明细一行 + 款式 / SKU 上要显示的列（颜色尺码实时读 SKU）。"""
+
+    promotion_id: UUID
+    style_id: UUID
+    sku_id: UUID
+    color: str
+    size: str
+    style_name: str
+    style_short_name: str | None
+    style_main_image_key: str | None
+
+
+class PromotionItemRepository:
+    """推广单商品明细的读写。成员与 SKU 归属的校验在 service（不写业务规则）。"""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def list_by_promotions(
+        self, promotion_ids: Sequence[UUID]
+    ) -> dict[UUID, list[PromotionItemView]]:
+        """一次查出这些推广单的全部明细（列表一页一条查询），按 ``sort_order`` 排。"""
+        if not promotion_ids:
+            return {}
+        stmt = (
+            select(
+                PromotionItem.promotion_id,
+                PromotionItem.style_id,
+                PromotionItem.sku_id,
+                Sku.color,
+                Sku.size,
+                Style.style_name,
+                Style.short_name,
+                Style.main_image_key,
+            )
+            .join(Sku, Sku.id == PromotionItem.sku_id)
+            .join(Style, Style.id == PromotionItem.style_id)
+            .where(PromotionItem.promotion_id.in_(list(promotion_ids)))
+            .order_by(PromotionItem.promotion_id, PromotionItem.sort_order, PromotionItem.id)
+        )
+        grouped: dict[UUID, list[PromotionItemView]] = {}
+        for row in (await self._session.execute(stmt)).all():
+            grouped.setdefault(row[0], []).append(PromotionItemView(*row))
+        return grouped
+
+    async def replace(
+        self,
+        *,
+        tenant_id: UUID,
+        promotion_id: UUID,
+        rows: Sequence[tuple[UUID, UUID]],
+    ) -> None:
+        """整组替换：删掉这张单的旧明细，按 ``rows`` 的顺序插入（``sort_order`` 从 0）。不提交。"""
+        await self._session.execute(
+            delete(PromotionItem).where(PromotionItem.promotion_id == promotion_id)
+        )
+        for order, (style_id, sku_id) in enumerate(rows):
+            self._session.add(
+                PromotionItem(
+                    tenant_id=tenant_id,
+                    promotion_id=promotion_id,
+                    style_id=style_id,
+                    sku_id=sku_id,
+                    sort_order=order,
+                )
+            )
+        await self._session.flush()
+
+    async def members_of(self, *, goods_main_id: UUID | None, style_id: UUID) -> list[UUID]:
+        """明细应有的款式集合：套装 = ``goods_style_item`` 里启用的成员（按 ``sort_order``）；
+        没有归属商品、单品（或套装没有启用成员）= ``[style_id]``。"""
+        if goods_main_id is None:
+            return [style_id]
+        stmt = (
+            select(GoodsStyleItem.style_id)
+            .join(GoodsMain, GoodsMain.id == GoodsStyleItem.goods_main_id)
+            .where(
+                GoodsStyleItem.goods_main_id == goods_main_id,
+                GoodsStyleItem.is_active.is_(True),
+                GoodsMain.is_suit.is_(True),
+            )
+            .order_by(GoodsStyleItem.sort_order, GoodsStyleItem.style_id)
+        )
+        members = list((await self._session.execute(stmt)).scalars().all())
+        return members or [style_id]
+
+    async def skus_by_ids(self, sku_ids: Sequence[UUID]) -> dict[UUID, Sku]:
+        """按 id 批量取 SKU（含已删的，由调用方判 ``is_deleted``）。"""
+        if not sku_ids:
+            return {}
+        stmt = select(Sku).where(Sku.id.in_(list(sku_ids)))
+        return {sku.id: sku for sku in (await self._session.execute(stmt)).scalars().all()}
+
+
 __all__ = [
     "PromotionAttachmentRefs",
+    "PromotionItemRepository",
+    "PromotionItemView",
     "PromotionListFilters",
     "PromotionListRow",
     "PromotionRepository",

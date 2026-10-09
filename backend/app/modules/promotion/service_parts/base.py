@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.attachment import attachment_service
 from app.core.audit import AuditService
 from app.core.db import AsyncSessionBypass
+from app.core.exceptions import ValidationError
 from app.core.security.field_permissions import (
     build_field_perm_context,
     can_read_field,
@@ -41,6 +42,7 @@ from app.modules.promotion.enums import (
 )
 from app.modules.promotion.exceptions import (
     FieldPermissionDenied,
+    InvalidSkuReferenceError,
     PublishDateInFutureError,
     SourceExtraKeyRetiredError,
 )
@@ -61,11 +63,15 @@ from app.modules.promotion.receiver import (
 )
 from app.modules.promotion.repository import (
     PromotionAttachmentRefs,
+    PromotionItemRepository,
+    PromotionItemView,
     PromotionRepository,
 )
 from app.modules.promotion.schemas import (
+    GoodsItemIn,
     PromotionAmountLogResponse,
     PromotionCreate,
+    PromotionItemResponse,
     PromotionResponse,
     PromotionUpdate,
 )
@@ -109,6 +115,7 @@ class PromotionServiceBase:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
         self._repo = PromotionRepository(session)
+        self._items_repo = PromotionItemRepository(session)
         self._style_repo = StyleRepository(session)
         self._sku_repo = SkuRepository(session)
         self._blogger_repo = BloggerRepository(session)
@@ -321,6 +328,90 @@ class PromotionServiceBase:
                 normalized[field] = (value.strip() or None) if value is not None else None
         return payload.model_copy(update=normalized)
 
+    async def _validate_goods_items(
+        self,
+        *,
+        goods_main_id: UUID | None,
+        style_id: UUID,
+        items: builtins.list[GoodsItemIn],
+    ) -> builtins.list[tuple[UUID, UUID]]:
+        """推广单商品明细入参校验（``POST /``；之后 ``PUT /{id}/items`` 与推送补选共用）。
+
+        顺序：同一款式出现两次 → 款式集合 ≠ 归属商品的成员（多出 / 缺少都列出来）→ 有行没选 sku
+        （都是 422 ``VALIDATION_ERROR``）→ sku 不存在、已删或不属于该行款式（422 ``INVALID_SKU_REFERENCE``）。
+        返回按传入顺序的 ``(style_id, sku_id)``，给 ``PromotionItemRepository.replace``。
+        """
+        given = [item.style_id for item in items]
+        duplicates = [s for s in dict.fromkeys(given) if given.count(s) > 1]
+        if duplicates:
+            raise ValidationError(
+                "同一款式只能有一行颜色尺码",
+                details={"duplicate_style_ids": [str(s) for s in duplicates]},
+            )
+        members = await self._items_repo.members_of(goods_main_id=goods_main_id, style_id=style_id)
+        missing = [s for s in members if s not in given]
+        extra = [s for s in given if s not in members]
+        if missing or extra:
+            raise ValidationError(
+                "颜色尺码明细要与商品的成员款式一一对应",
+                details={
+                    "missing_style_ids": [str(s) for s in missing],
+                    "extra_style_ids": [str(s) for s in extra],
+                },
+            )
+        rows: builtins.list[tuple[UUID, UUID]] = []
+        no_sku: builtins.list[UUID] = []
+        for item in items:
+            if item.sku_id is None:
+                no_sku.append(item.style_id)
+            else:
+                rows.append((item.style_id, item.sku_id))
+        if no_sku:
+            raise ValidationError(
+                "每个款式都要选颜色尺码",
+                details={"missing_sku_style_ids": [str(s) for s in no_sku]},
+            )
+        skus = await self._items_repo.skus_by_ids([sku_id for _, sku_id in rows])
+        for row_style_id, sku_id in rows:
+            sku = skus.get(sku_id)
+            if sku is None or sku.is_deleted or sku.style_id != row_style_id:
+                raise InvalidSkuReferenceError(
+                    f"SKU {sku_id} 不存在、已删除或不属于款式 {row_style_id}",
+                    details={"style_id": str(row_style_id), "sku_id": str(sku_id)},
+                )
+        return rows
+
+    def _item_responses(
+        self, views: builtins.list[PromotionItemView]
+    ) -> builtins.list[PromotionItemResponse]:
+        """明细行 → 响应。品名 = 款式简称（去首尾空格后为空回落款式名）；主图签名失败回 null。"""
+        responses: builtins.list[PromotionItemResponse] = []
+        for view in views:
+            image_url: str | None = None
+            if view.style_main_image_key:
+                try:
+                    image_url = self._attachment_service.get_signed_url(
+                        "private", view.style_main_image_key, expires_in=3600
+                    )
+                except Exception:
+                    log.warning(
+                        "promotion_item_style_image_url_failed",
+                        extra={"style_id": str(view.style_id)},
+                    )
+            responses.append(
+                PromotionItemResponse(
+                    style_id=view.style_id,
+                    display_short_name=normalize_goods_short_name(view.style_short_name)
+                    or view.style_name,
+                    goods_title=view.style_name,
+                    sku_id=view.sku_id,
+                    color=view.color,
+                    size=view.size,
+                    style_main_image_url=image_url,
+                )
+            )
+        return responses
+
     async def _to_response(
         self,
         promotion: Promotion,
@@ -338,6 +429,7 @@ class PromotionServiceBase:
         goods_title: str | None = None,
         goods_short_name: str | None = None,
         goods_preloaded: bool = False,
+        items: builtins.list[PromotionItemView] | None = None,
     ) -> PromotionResponse:
         """组装响应：字段权限过滤 + 衍生字段计算.
 
@@ -350,6 +442,7 @@ class PromotionServiceBase:
                 归属商品名（``goods_preloaded`` 为 True 时用）；单条响应在这里按
                 ``display_name.py`` 的同一规则现算。
             today: 列表查询时由 service 层 get_today() 透传，单条响应时缺省现算。
+            items: 列表一页批量查好的商品明细（没有明细传 ``[]``）；None 时单条现查。
         """
         ctx = await build_field_perm_context(user.id, self._roles, self._perms)
         can_see_quote = can_read_field("promotion", "quote_amount", ctx)
@@ -489,6 +582,15 @@ class PromotionServiceBase:
             )
             retro_content = retro.content if retro is not None else None
 
+        # 商品明细；没有明细的旧单回落「录入信息」里的颜色及规格原文（2.2：旧单留档）
+        if items is None:
+            items = (await self._items_repo.list_by_promotions([promotion.id])).get(
+                promotion.id, []
+            )
+        source_extra = dict(getattr(promotion, "source_extra", {}) or {})
+        legacy_spec = source_extra.get("颜色及规格")
+        legacy_color_spec = None if items or legacy_spec is None else str(legacy_spec)
+
         return PromotionResponse(
             id=promotion.id,
             internal_code=promotion.internal_code,
@@ -554,8 +656,10 @@ class PromotionServiceBase:
             # 分子是三项金额之和，单赞成本 × 点赞数就能反推出来 —— 与 total_promo_cost 同样
             # 要两个读权限都有
             cpl=cpl if (can_see_quote and can_see_cost) else None,
-            source_extra=dict(getattr(promotion, "source_extra", {}) or {}),
+            source_extra=source_extra,
             **receiver,
+            items=self._item_responses(items),
+            legacy_color_spec=legacy_color_spec,
             payment_qr_attachment_id=visible_payment_qr_id,
             payment_qr_signed_url=payment_qr_url,
             settlement_payment_proof_signed_url=settlement_proof_url,

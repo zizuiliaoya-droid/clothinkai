@@ -100,6 +100,17 @@ _ReceiverPhoneField = Annotated[str | None, Field(max_length=32)]
 _ReceiverAddressField = Annotated[str | None, Field(max_length=255)]
 
 
+class GoodsItemIn(BaseModel):
+    """商品明细一行（颜色尺码），谈款与推广单共用（流程线 7.3）。
+
+    ``sku_id`` 谈款草稿可空；推广单的入口（``POST /``、``PUT /{id}/items``、推送）要求每行都有，
+    且 sku 属于该行款式、未删除。款式集合 = 归属商品的启用成员，都在 service 校验。
+    """
+
+    style_id: UUID
+    sku_id: UUID | None = None
+
+
 class PromotionCreate(PromotionBase):
     """创建入参。"""
 
@@ -113,6 +124,10 @@ class PromotionCreate(PromotionBase):
     receiver_name: _ReceiverNameField = None
     receiver_phone: _ReceiverPhoneField = None
     receiver_address: _ReceiverAddressField = None
+
+    items: list[GoodsItemIn] | None = Field(default=None, max_length=10)
+    """商品明细（颜色尺码）。不传 = 先不选、推送时补；传了就每行都要有 sku，款式集合 = 归属商品的启用成员
+    （单品 1 行、套装每个成员 1 行），``promotion.sku_id`` 取主款式那一行。"""
 
 
 class PromotionUpdate(BaseModel):
@@ -401,6 +416,21 @@ class PromotionDuplicateWarning(BaseModel):
     cooperation_date: date
 
 
+class PromotionItemResponse(BaseModel):
+    """推广单商品明细一行（流程线 7.3）。颜色尺码实时读 SKU，不做快照。"""
+
+    style_id: UUID
+    display_short_name: str
+    """款式简称，没填（或全空白）回落款式名。"""
+    goods_title: str
+    """款式全称（悬停显示）。"""
+    sku_id: UUID
+    color: str
+    size: str
+    style_main_image_url: str | None = None
+    """该行款式主图的签名 URL；没有图或签名失败为 null。"""
+
+
 class PromotionResponse(BaseModel):
     """推广响应。
 
@@ -524,6 +554,10 @@ class PromotionResponse(BaseModel):
     receiver_name: str | None = None
     receiver_phone: str | None = None
     receiver_address: str | None = None
+
+    # 商品明细（流程线 M1）：列表一页一次批量查；没有明细的旧单回落 source_extra['颜色及规格'] 原文
+    items: list[PromotionItemResponse] = Field(default_factory=list)
+    legacy_color_spec: str | None = None
 
     # 结款附件（仅 PR/PR主管/管理员可见；warehouse 始终为 null）
     payment_qr_attachment_id: UUID | None = None

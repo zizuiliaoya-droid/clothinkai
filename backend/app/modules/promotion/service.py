@@ -148,6 +148,23 @@ class PromotionService(
         else:
             goods_main_id = await self._repo.resolve_owner_goods_id(payload.style_id)
 
+        # 商品明细（传了才校验）：款式集合按上面定下的归属商品算；promotion.sku_id 取主款式那一行
+        item_rows: list[tuple[UUID, UUID]] | None = None
+        sku_id = payload.sku_id
+        if payload.items is not None:
+            item_rows = await self._validate_goods_items(
+                goods_main_id=goods_main_id, style_id=payload.style_id, items=payload.items
+            )
+            main_sku_id = next(s for st, s in item_rows if st == payload.style_id)
+            if sku_id is not None and sku_id != main_sku_id:
+                raise InvalidSkuReferenceError(
+                    f"SKU {sku_id} 与明细里主款式选的 SKU 不一致",
+                    details={"sku_id": str(sku_id), "item_sku_id": str(main_sku_id)},
+                )
+            if sku is None:
+                sku = await self._sku_repo.get_by_id(main_sku_id)
+            sku_id = main_sku_id
+
         blogger = await self._blogger_repo.get_by_id(payload.blogger_id)
         if blogger is None:
             raise InvalidBloggerReferenceError(f"博主 {payload.blogger_id} 不存在或已删除")
@@ -201,7 +218,7 @@ class PromotionService(
         # 6. 创建实体
         promotion = Promotion(
             style_id=payload.style_id,
-            sku_id=payload.sku_id,
+            sku_id=sku_id,
             goods_main_id=goods_main_id,
             blogger_id=payload.blogger_id,
             pr_id=user.id,
@@ -228,6 +245,10 @@ class PromotionService(
         )
         self._repo.add(promotion)
         await self._session.flush()
+        if item_rows is not None:
+            await self._items_repo.replace(
+                tenant_id=user.tenant_id, promotion_id=promotion.id, rows=item_rows
+            )
 
         # 7. 重复检测（EP05-S04 warning，非阻塞）
         duplicates = await self._repo.find_active_duplicate(
@@ -498,6 +519,8 @@ class PromotionService(
             tenant_id=user.tenant_id,
             promotion_ids=[row.promotion.id for row in rows],
         )
+        # 商品明细整页一次查（流程线 7.3）
+        page_items = await self._items_repo.list_by_promotions([row.promotion.id for row in rows])
 
         # 用 CTE 计算结果填充响应（避免重复计算 urge_status / dual_platform）
         items = [
@@ -516,6 +539,7 @@ class PromotionService(
                 goods_title=row.goods_title,
                 goods_short_name=row.goods_short_name,
                 goods_preloaded=True,
+                items=page_items.get(row.promotion.id, []),
             )
             for row in rows
         ]
