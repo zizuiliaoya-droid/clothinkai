@@ -17,6 +17,7 @@ import app.tasks.import_tasks as tasks
 from app.modules.importer.adapters.promotion import PromotionImportAdapter
 from app.modules.importer.registry import ImportAdapterRegistry
 from app.tasks.import_tasks import _run_import_batch
+from tests.conftest import purge_promotions
 
 
 async def _seed(Maker, suffix: str, batch_id):
@@ -66,11 +67,14 @@ async def _cleanup(Maker, suffix: str, batch_id):
     async with Maker() as c:
         await c.execute(text("DELETE FROM import_job WHERE batch_id = :id"), {"id": batch_id})
         await c.execute(text("DELETE FROM import_batch WHERE id = :id"), {"id": batch_id})
-        # promotion 引用 style/blogger，先删 promotion
-        await c.execute(
-            text("DELETE FROM promotion WHERE style_code_snapshot = :code"),
-            {"code": f"ST{suffix}A"},
-        )
+        # promotion 引用 style/blogger，先删 promotion（连同子表）
+        ids = (
+            await c.execute(
+                text("SELECT id FROM promotion WHERE style_code_snapshot = :code"),
+                {"code": f"ST{suffix}A"},
+            )
+        ).scalars()
+        await purge_promotions(c, ids)
         await c.execute(
             text(
                 "DELETE FROM promotion_sequence WHERE tenant_id IN "
