@@ -6,7 +6,8 @@
 - ``validate_style_main_image``：JPG / PNG / WebP 白名单、非空、严格小于 300KB、魔数与声明类型一致；
   返回固定的原因码，单张上传与批量各自映射成自己的文案
 - ``StyleMainImageStore.replace``：服务端生成 key → 代传私有桶 → 加锁重读款式 → 写 key → 审计 →
-  提交；提交失败回滚并删掉刚写的对象（补偿），成功后尽力删旧对象
+  提交；提交失败回滚并删掉刚写的对象（补偿），成功后尽力删旧对象；``only_if_empty``（导入补图）
+  时锁内已有主图就不写、补偿删除、返回 ``kept``
 - ``StyleImageBatchService.upload``：全部预检完才开始写；一条查询按款号（不区分大小写）匹配；
   逐张写入、逐张提交，单张失败不影响其他张
 """
@@ -15,7 +16,7 @@ from __future__ import annotations
 
 import logging
 from collections import Counter, defaultdict
-from collections.abc import AsyncGenerator, Sequence
+from collections.abc import AsyncGenerator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal
 from uuid import UUID
@@ -160,7 +161,8 @@ def validate_style_main_image(mime_type: str | None, data: bytes) -> ImageReject
 
 @dataclass(frozen=True)
 class MainImageWriteResult:
-    status: Literal["created", "replaced", "failed"]
+    status: Literal["created", "replaced", "kept", "failed"]
+    """``kept`` 只在 ``only_if_empty=True`` 时出现：锁内复判已有主图，没写。"""
     reason: str | None = None
     """失败原因（「存储失败」「款式已删除」「保存失败」）。"""
     error: BaseException | None = None
@@ -197,16 +199,23 @@ class StyleMainImageStore:
         *,
         style_id: UUID,
         tenant_id: UUID,
-        user_id: UUID,
+        user_id: UUID | None,
         mime_type: str,
         data: bytes,
         via: str | None = None,
         filename: str | None = None,
+        only_if_empty: bool = False,
+        actor_type: str | None = None,
+        audit_extra: Mapping[str, object] | None = None,
     ) -> MainImageWriteResult:
         """``mime_type`` / ``data`` 须已通过 ``validate_style_main_image``。
 
-        ``via`` 不为 None 时（批量上传）审计 after 里带 ``via`` 与 ``filename``；单张上传不带，
-        审计内容与原来一致。
+        ``via`` 不为 None 时（批量上传、导入补图）审计 after 里带 ``via`` 与 ``filename``；
+        单张上传不带，审计内容与原来一致。
+
+        ``only_if_empty=True``（导入补图）：加锁重读后款式已有主图就不写——回滚、补偿删除
+        刚写的对象、返回 ``kept``，保证「已有主图永不覆盖」在写库那一刻成立。``actor_type`` /
+        ``audit_extra`` 只影响审计（worker 身份、导入批次与行号）。默认参数下行为不变。
         """
         extension = STYLE_IMAGE_MIME_EXTENSIONS[mime_type]
         # 文件名只用来匹配款号，不进 key
@@ -237,15 +246,24 @@ class StyleMainImageStore:
                     style_id, new_key, "style_main_image_orphan_delete_failed"
                 )
                 return MainImageWriteResult("failed", "款式已删除")
+            if only_if_empty and style.main_image_key:
+                await self._session.rollback()
+                await self._delete_quietly(
+                    style_id, new_key, "style_main_image_import_kept_delete_failed"
+                )
+                return MainImageWriteResult("kept")
             old_key = style.main_image_key
             style.main_image_key = new_key
             after: dict[str, object] = {"main_image_changed": True}
             if via is not None:
                 after.update({"via": via, "filename": filename})
+            if audit_extra:
+                after.update(audit_extra)
             await AuditService(self._session).log(
                 action="style.main_image.update",
                 resource="style",
                 resource_id=style_id,
+                actor_type=actor_type,
                 before={"main_image_changed": old_key is not None},
                 after=after,
                 user_id=user_id,
@@ -357,6 +375,8 @@ class StyleImageBatchService:
                 via="batch_upload",
                 filename=entry.filename,
             )
+            # 批量上传不传 only_if_empty，不会得到 kept
+            assert written.status != "kept"
             entry.result = StyleImageBatchItem(
                 filename=entry.filename,
                 stem=entry.stem,

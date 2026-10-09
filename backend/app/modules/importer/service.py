@@ -61,7 +61,12 @@ from app.modules.importer.repository import (
     ImportBatchRepository,
     ImportJobRepository,
 )
-from app.modules.importer.schemas import ImportJobFilledItem, ImportJobNoteItem
+from app.modules.importer.schemas import (
+    ImportImageSummary,
+    ImportJobFilledItem,
+    ImportJobImageNote,
+    ImportJobNoteItem,
+)
 
 log = logging.getLogger(__name__)
 
@@ -414,6 +419,15 @@ class ImportService:
         """一页批次各自仍待处理的冲突条数（一条 GROUP BY，8a-6）。"""
         return await ImportConflictRepository(self._session).pending_by_batch(batch_ids)
 
+    async def image_summaries(self, batch_ids: Iterable[UUID]) -> dict[UUID, ImportImageSummary]:
+        """一页批次各自的内嵌图补主图款数（一条 GROUP BY）；没读过内嵌图的批次不在结果里。"""
+        known = ImportImageSummary.model_fields
+        counts = await self._job_repo.image_summary_by_batch(batch_ids)
+        return {
+            batch_id: ImportImageSummary(**{k: n for k, n in by_status.items() if k in known})
+            for batch_id, by_status in counts.items()
+        }
+
     async def batch_notes(
         self,
         batch_id: UUID,
@@ -435,6 +449,7 @@ class ImportService:
                     status=job.status,
                     warnings=[str(w) for w in notes.get("warnings") or []],
                     filled=[ImportJobFilledItem(**f) for f in notes.get("filled") or []],
+                    image=ImportJobImageNote(**notes["image"]) if notes.get("image") else None,
                 )
             )
         return items, total

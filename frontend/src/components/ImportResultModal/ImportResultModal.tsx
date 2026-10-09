@@ -6,6 +6,7 @@ import type { ColumnsType } from "antd/es/table";
 import { useNavigate } from "react-router-dom";
 import { getImportBatch, getImportBatchNotes } from "@/features/import/api";
 import { CONFLICT_FIELD_LABELS } from "@/features/import/conflictFields";
+import { IMAGE_NOTE_STATUS, imageSummaryText } from "@/features/import/imageSummary";
 import type { ImportJobNote, ImportJobStatus } from "@/features/import/types";
 import { extractErrorMessage } from "@/services/apiClient";
 
@@ -24,6 +25,9 @@ const ROW_STATUS: Record<ImportJobStatus, { label: string; color: string }> = {
 const COUNT_HELP =
   "「仅补空 b 行」是只补了空、其余都与系统相同的行数；「补空 N 条」是被补空的对象数（同一行里新增了 SKU 又补了商品简称的也算），每个对象留一条变更记录。";
 
+const IMAGE_HELP =
+  "按款计数：每款取文件里第一张内嵌图，只给还没有主图的款式补；已有主图的不覆盖。明细里「主图」列记在该款取图的那一行。";
+
 export interface ImportResultModalProps {
   open: boolean;
   batchId: string | null;
@@ -34,7 +38,8 @@ export interface ImportResultModalProps {
  * 一次导入的结果（8a-6，只对重复规则可切换的来源打开：商品资料、博主）。
  *
  * 每 2 秒轮询批次直到不再处理中（最多 2 分钟，超时提示去导入记录页看）；按行显示
- * 新增 / 仅补空 / 重复已跳过 / 冲突 / 失败，另显示补空对象数；下面分页列出带提示或补空的行。
+ * 新增 / 仅补空 / 重复已跳过 / 冲突 / 失败，另显示补空对象数与内嵌主图款数（读过内嵌图时）；
+ * 下面分页列出带提示、补空或主图结果的行。
  */
 export function ImportResultModal({ open, batchId, onClose }: ImportResultModalProps) {
   const navigate = useNavigate();
@@ -116,6 +121,27 @@ export function ImportResultModal({ open, batchId, onClose }: ImportResultModalP
           "—"
         ),
     },
+    {
+      title: "主图",
+      dataIndex: "image",
+      width: 180,
+      render: (img: ImportJobNote["image"]) => {
+        if (!img) return "—";
+        const s = IMAGE_NOTE_STATUS[img.status] ?? { label: img.status, color: "default" };
+        return (
+          <Space direction="vertical" size={0}>
+            <Space size={4} wrap>
+              <Tag color={s.color}>{s.label}</Tag>
+              <Typography.Text>{img.style_code}</Typography.Text>
+            </Space>
+            {/* 原因与标签相同（如「未找到款式」）时不重复显示 */}
+            {img.reason && img.reason !== s.label && (
+              <Typography.Text type="secondary">{img.reason}</Typography.Text>
+            )}
+          </Space>
+        );
+      },
+    },
   ];
 
   function goConflicts() {
@@ -130,6 +156,7 @@ export function ImportResultModal({ open, batchId, onClose }: ImportResultModalP
   }
 
   const hasConflicts = !!batch && (batch.conflicted > 0 || batch.pending_conflicts > 0);
+  const imageText = batch ? imageSummaryText(batch.image_summary) : null;
 
   return (
     <Modal
@@ -177,6 +204,14 @@ export function ImportResultModal({ open, batchId, onClose }: ImportResultModalP
               <QuestionCircleOutlined aria-label="计数说明" style={{ color: "#8c8c8c" }} />
             </Tooltip>
           </Typography.Paragraph>
+          {imageText && (
+            <Typography.Paragraph style={{ marginBottom: 0 }}>
+              {imageText}{" "}
+              <Tooltip title={IMAGE_HELP}>
+                <QuestionCircleOutlined aria-label="主图计数说明" style={{ color: "#8c8c8c" }} />
+              </Tooltip>
+            </Typography.Paragraph>
+          )}
           {batch.pending_conflicts > 0 && (
             <Alert
               type="warning"
@@ -191,14 +226,14 @@ export function ImportResultModal({ open, batchId, onClose }: ImportResultModalP
               message={`有 ${batch.failed} 行失败，可到「导入记录」页下载失败明细后改文件重导或重试`}
             />
           )}
-          <Typography.Text strong>提示与补空明细</Typography.Text>
+          <Typography.Text strong>提示、补空与主图明细</Typography.Text>
           <Table
             rowKey="row_number"
             size="small"
             loading={notesQuery.isLoading}
             columns={columns}
             dataSource={notesQuery.data?.items ?? []}
-            locale={{ emptyText: "没有提示或补空" }}
+            locale={{ emptyText: "没有提示、补空或主图结果" }}
             pagination={{
               current: notesPage,
               pageSize: NOTES_PAGE_SIZE,
@@ -206,7 +241,7 @@ export function ImportResultModal({ open, batchId, onClose }: ImportResultModalP
               onChange: setNotesPage,
               showSizeChanger: false,
             }}
-            scroll={{ x: 700 }}
+            scroll={{ x: 800 }}
           />
         </Space>
       )}

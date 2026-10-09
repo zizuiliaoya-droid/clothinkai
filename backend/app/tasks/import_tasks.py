@@ -8,6 +8,7 @@
 - **FB-C**：runner 持有 per-row 事务边界；adapter.upsert(session, tenant_id, actor_id) 不自 commit
 
 成功 job 与业务记录同 per-row 事务（原子）；失败 job 用独立 bypass session 写（不被回滚带走）。
+adapter 实现了 ``PostRowsImportAdapter`` 就在行循环之后、汇总之前调 ``after_rows``（异常隔离）。
 """
 
 from __future__ import annotations
@@ -22,7 +23,8 @@ from uuid import UUID
 import sentry_sdk
 from celery import Task
 from celery.signals import worker_process_init
-from sqlalchemy import Table, func, select, text, update
+from sqlalchemy import Table, func, literal_column, select, text, update
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.exc import IntegrityError, StatementError
 
 from app.core.attachment import BucketKind
@@ -35,7 +37,11 @@ from app.core.metrics import (
     import_rows_total,
 )
 from app.core.tenancy import tenant_id_ctx
-from app.modules.importer.adapter import ContextAwareImportAdapter
+from app.modules.importer.adapter import (
+    BatchRunContext,
+    ContextAwareImportAdapter,
+    PostRowsImportAdapter,
+)
 from app.modules.importer.exceptions import RowValidationError
 from app.modules.importer.models import ImportBatch, ImportJob
 from app.modules.importer.outcome import BatchSeen, ImportRowContext, RowKind, RowOutcome
@@ -149,6 +155,7 @@ async def _run_import_batch_claimed(batch_id: UUID, only_failed: bool = False) -
     mapping = await _load_mapping(source, tenant_id, batch.mapping_version)
 
     # ── 3. 取文件 + 解析（解析致命失败 → batch.failed，FB-E ①）──
+    raw: bytes | None = None
     try:
         if only_failed:
             rows = await _load_failed_rows(batch_id)  # [(row_number, raw_data), ...]
@@ -192,6 +199,32 @@ async def _run_import_batch_claimed(batch_id: UUID, only_failed: bool = False) -
             )
             result = counts.add(outcome)
             import_rows_total.labels(source=source, result=result).inc()
+        # 行之后的一段（商品资料导入读内嵌图补主图）：汇总之前做完，前端轮询到终态时结果已在
+        if isinstance(adapter, PostRowsImportAdapter):
+            first_raw = raw
+
+            def load_file() -> bytes:
+                if first_raw is not None:
+                    return first_raw
+                from app.core.attachment import attachment_service
+
+                return attachment_service.get_object_bytes(
+                    cast("BucketKind", file_bucket), file_r2_key
+                )
+
+            await _after_rows(
+                adapter,
+                BatchRunContext(
+                    batch_id=batch_id,
+                    tenant_id=tenant_id,
+                    actor_id=created_by,
+                    rows=rows,
+                    mapping=mapping,
+                    load_file=load_file,
+                    app_session=AsyncSessionApp,
+                    bypass_session=AsyncSessionBypass,
+                ),
+            )
     finally:
         tenant_id_ctx.reset(tok)
         import_batch_duration_seconds.labels(source=source).observe(time.perf_counter() - start)
@@ -204,6 +237,15 @@ async def _run_import_batch_claimed(batch_id: UUID, only_failed: bool = False) -
     if status in ("completed", "partial"):
         _enqueue_summary_refresh(tenant_id, affected, batch_id)
     return {"status": status, "imported": counts.imported, "failed": counts.failed}
+
+
+async def _after_rows(adapter: PostRowsImportAdapter, run: BatchRunContext) -> None:
+    """异常隔离：出错只记日志与 Sentry，不改批次状态、不回滚已提交的行。"""
+    try:
+        await adapter.after_rows(run)
+    except Exception as exc:
+        log.exception("import_after_rows_failed", extra={"batch_id": str(run.batch_id)})
+        sentry_sdk.capture_exception(exc)
 
 
 # RowKind → import_job.status（INSERTED / UPDATED 与旧来源的 success 同义）
@@ -422,6 +464,16 @@ def _job_notes(outcome: RowOutcome) -> dict[str, Any] | None:
     }
 
 
+# 重试改写行时保留原来的 notes.image（商品资料导入每款的主图结果）：图片段要靠它知道这一款这批之前的
+# 结果（已有定论的不再取图、失败 / 跳过的在原行重新取），否则重跑的行会把它冲掉
+_KEEP_IMAGE_NOTE = literal_column(
+    "CASE WHEN import_job.notes -> 'image' IS NULL THEN excluded.notes "
+    "ELSE COALESCE(excluded.notes, '{}'::jsonb) "
+    "|| jsonb_build_object('image', import_job.notes -> 'image') END",
+    JSONB,
+)
+
+
 async def _upsert_job(
     session: Any,
     *,
@@ -460,7 +512,7 @@ async def _upsert_job(
             "raw_data": stmt.excluded.raw_data,
             "error_detail": stmt.excluded.error_detail,
             "target_resource_id": stmt.excluded.target_resource_id,
-            "notes": stmt.excluded.notes,
+            "notes": _KEEP_IMAGE_NOTE,
             "attempt_count": ImportJob.attempt_count + 1,
             "updated_at": func.now(),
         },
