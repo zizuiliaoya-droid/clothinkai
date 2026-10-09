@@ -69,6 +69,37 @@ async def _seed_batch(Maker, suffix: str, batch_id, created_by: Any = None) -> A
     return tenant_id
 
 
+_QUALITY_TAGS_NOTICE = "质量标签是系统标签，由重算自动计算，导入不写入（整批只提示一次）"
+
+
+async def _add_tags(Maker, tenant_id: Any, *values: str) -> None:
+    """8b D2：类目标签只收字典里的；测试先建本租户的博主标签字典项（N18：重跑不撞唯一键）。"""
+    async with Maker() as s:
+        for value in values:
+            await s.execute(
+                text(
+                    "INSERT INTO dict_item (id, tenant_id, dict_type, value, sort_order, "
+                    "is_active, created_at, updated_at) VALUES (CAST(:id AS uuid), "
+                    "CAST(:tid AS uuid), 'blogger_tag', CAST(:v AS text), 0, true, NOW(), NOW()) "
+                    "ON CONFLICT (tenant_id, dict_type, value) DO NOTHING"
+                ),
+                {"id": str(uuid4()), "tid": str(tenant_id), "v": value},
+            )
+        await s.commit()
+
+
+async def _drop_tags(Maker, tenant_id: Any, *values: str) -> None:
+    async with Maker() as s:
+        await s.execute(
+            text(
+                "DELETE FROM dict_item WHERE tenant_id = CAST(:tid AS uuid) "
+                "AND dict_type = 'blogger_tag' AND value = ANY(CAST(:v AS text[]))"
+            ),
+            {"tid": str(tenant_id), "v": list(values)},
+        )
+        await s.commit()
+
+
 async def _cleanup(Maker, suffix: str, batch_id) -> None:
     async with Maker() as c:
         await c.execute(text("DELETE FROM import_job WHERE batch_id = :id"), {"id": batch_id})
@@ -107,6 +138,7 @@ class TestBloggerImportEndToEnd:
 
         batch_id = uuid4()
         tenant_id = await _seed_batch(Maker, suffix, batch_id)
+        await _add_tags(Maker, tenant_id, "美妆", "护肤")
         try:
             result = await _run_import_batch(batch_id, only_failed=False)
             assert result["status"] == "partial"
@@ -135,6 +167,14 @@ class TestBloggerImportEndToEnd:
                 assert blg[4] == ["美妆", "护肤"]
                 # 跨租户正确
                 assert str(blg[5]) == str(tenant_id)
+                # 8b D5：「质量标签」列（旧模版）不写
+                quality = (
+                    await check.execute(
+                        text("SELECT quality_tags FROM blogger WHERE xiaohongshu_id LIKE :p"),
+                        {"p": f"xhs{suffix}%"},
+                    )
+                ).scalar_one()
+                assert quality == []
 
                 jobs = (
                     await check.execute(
@@ -146,8 +186,8 @@ class TestBloggerImportEndToEnd:
                     )
                 ).fetchall()
                 assert [j[1] for j in jobs] == ["success", "skipped", "failed"]
-                assert "小红书ID" in (jobs[2][2] or "")
-                assert jobs[0][3] is None
+                assert "账号" in (jobs[2][2] or "")
+                assert jobs[0][3]["warnings"] == [_QUALITY_TAGS_NOTICE]
                 assert set(jobs[1][3]["warnings"]) == {
                     "第 2 行的昵称与第 1 行不一致，按第 1 行处理",
                     "第 2 行的粉丝数与第 1 行不一致，按第 1 行处理",
@@ -164,6 +204,7 @@ class TestBloggerImportEndToEnd:
         finally:
             ImportAdapterRegistry.clear()
             await _cleanup(Maker, suffix, batch_id)
+            await _drop_tags(Maker, tenant_id, "美妆", "护肤")
 
     async def test_tags_jsonb_first_row(self, engine: Any, monkeypatch) -> None:
         """验证多标签解析为 JSONB 数组（单行隔离，不被第 2 行 UPDATE 覆盖）。"""
@@ -186,7 +227,8 @@ class TestBloggerImportEndToEnd:
         )
 
         batch_id = uuid4()
-        await _seed_batch(Maker, suffix, batch_id)
+        tenant_id = await _seed_batch(Maker, suffix, batch_id)
+        await _add_tags(Maker, tenant_id, "美妆", "护肤", "穿搭")
         try:
             result = await _run_import_batch(batch_id, only_failed=False)
             assert result["status"] == "completed"
@@ -201,6 +243,7 @@ class TestBloggerImportEndToEnd:
         finally:
             ImportAdapterRegistry.clear()
             await _cleanup(Maker, suffix, batch_id)
+            await _drop_tags(Maker, tenant_id, "美妆", "护肤", "穿搭")
 
 
 # ---------------------------------------------------------------------------
@@ -338,6 +381,7 @@ class _Env:
             )
             await c.execute(text('DELETE FROM "user" WHERE id = :u'), {"u": self.user_id})
             await c.commit()
+        await _drop_tags(self.Maker, self.tenant_id, "美妆")
 
 
 @pytest.fixture
@@ -362,6 +406,8 @@ async def env(engine: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
             {"id": user_id, "tid": tenant_id, "u": f"imp_{suffix}"},
         )
         await s.commit()
+    # 8b D2：_line 默认类目标签「美妆」，建进字典，否则用例会多出字典外标签的提示
+    await _add_tags(Maker, tenant_id, "美妆")
     e = _Env(Maker=Maker, suffix=suffix, tenant_id=tenant_id, user_id=user_id)
 
     import app.core.attachment as att_mod
@@ -412,7 +458,7 @@ class TestBloggerDuplicateRules:
         bid = await env.blogger("C", remark=None)
         before = await env.blogger_row("C")
         batch_id, result = await env.run(
-            _line(env.xhs("C"), follower_count="2000", remark="新备注") + ",缺ID,,,,,,\n"
+            _line(env.xhs("C"), quote="600", remark="新备注") + ",缺ID,,,,,,\n"
         )
         assert result["status"] == "partial"
         jobs = await env.jobs(batch_id)
@@ -429,7 +475,7 @@ class TestBloggerDuplicateRules:
             1,
         )
         after = await env.blogger_row("C")
-        assert after.follower_count == 1000  # 冲突字段不改
+        assert after.quote == Decimal("500.00")  # 冲突字段不改
         assert after.remark == "新备注"  # 补空照做
         assert after.updated_at != before.updated_at
 
@@ -441,7 +487,7 @@ class TestBloggerDuplicateRules:
             env.user_id,
         )
         assert [(f["field"], f["system"], f["file"]) for f in c.fields] == [
-            ("follower_count", 1000, 2000)
+            ("quote", "500.00", "600.00")
         ]
         [audit] = await env.audits(bid)
         assert (audit.action, audit.actor_type, audit.user_id) == (
@@ -550,8 +596,8 @@ class TestBloggerDuplicateRules:
     async def test_other_batch_pending_superseded(self, env: _Env) -> None:
         """AC 47：别的批次的待处理冲突再导入 → 旧冲突取代、始终只一条待处理。"""
         bid = await env.blogger("X")
-        b1, _ = await env.run(_line(env.xhs("X"), follower_count="2000"))
-        b2, r2 = await env.run(_line(env.xhs("X"), follower_count="3000", nickname="小美 "))
+        b1, _ = await env.run(_line(env.xhs("X"), quote="600"))
+        b2, r2 = await env.run(_line(env.xhs("X"), quote="700", nickname="小美 "))
         assert r2["status"] == "completed"
         rows = await env.conflicts(bid)
         assert [r.status for r in rows] == ["superseded", "pending"]
@@ -559,9 +605,9 @@ class TestBloggerDuplicateRules:
         assert old.batch_id == b1
         assert old.superseded_by == new.id
         assert new.batch_id == b2
-        assert [(f["field"], f["file"]) for f in new.fields] == [("follower_count", 3000)]
+        assert [(f["field"], f["file"]) for f in new.fields] == [("quote", "700.00")]
         # 第三次导入与系统一致 → 旧冲突的字段都比较过且一致 → 取代、不建新冲突
-        _, r3 = await env.run(_line(env.xhs("X"), follower_count="1000"))
+        _, r3 = await env.run(_line(env.xhs("X"), quote="500"))
         assert r3["status"] == "completed"
         rows = await env.conflicts(bid)
         assert [r.status for r in rows] == ["superseded", "superseded"]

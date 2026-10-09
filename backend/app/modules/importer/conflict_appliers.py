@@ -32,6 +32,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import AuditService
+from app.modules.blogger.domain import normalize_homepage_url
 from app.modules.blogger.models import Blogger
 from app.modules.importer.compare import (
     MONEY_REASON,
@@ -41,6 +42,7 @@ from app.modules.importer.compare import (
     json_value,
     normalize,
 )
+from app.modules.importer.duplicate_rules import always_overwrite
 from app.modules.product.goods_models import GoodsMain
 from app.modules.product.goods_schemas import GOODS_SHORT_NAME_MAX_LEN
 from app.modules.product.images import normalize_external_image_url
@@ -153,36 +155,58 @@ def _text(name: str, value: JsonValue, *, max_len: int | None, required: bool = 
     return text
 
 
+def _blogger_spec(
+    name: str, label: str, kind: ValueKind, *, sensitive: tuple[str, str] | None = None
+) -> FieldSpec:
+    """博主比较字段；``always_overwrite`` 由 ``duplicate_rules.ALWAYS_OVERWRITE_FIELDS`` 派生（8b R2）。"""
+    return FieldSpec(
+        name, label, kind, sensitive=sensitive, always_overwrite=always_overwrite("blogger", name)
+    )
+
+
+# 8b：只为读旧冲突留在 specs 的两个字段，裁决选覆盖 → invalid_value（可改选保留）
+PLATFORM_READONLY_REASON = "平台是判重键，不能经导入修改"
+SYSTEM_TAG_READONLY_REASON = "系统标签只读"
+
+
 class BloggerApplier:
-    """博主（``manual_blogger``，设计 §5.5）。补空 / 覆盖 / 裁决都**不重算**博主类型。"""
+    """博主（``manual_blogger`` / 8b 起含灰豚抖音，设计 §5.5、8b §6.2）。补空 / 覆盖 / 裁决都**不重算**博主类型。
+
+    平台（判重键）与质量标签（系统标签，只由重算写）只为读旧冲突留在 ``specs``，``check`` 一律拒绝；
+    adapter 的 ``compare_specs()`` 不含它们。报价备注与报价同一条字段权限。
+    """
 
     object_type = "blogger"
     audit_action = "blogger.update"
     audit_resource = "blogger"
     specs: tuple[FieldSpec, ...] = (
-        FieldSpec("nickname", "昵称", ValueKind.TEXT),
-        FieldSpec("platform", "平台", ValueKind.TEXT),
-        FieldSpec("wechat", "微信", ValueKind.TEXT, sensitive=("blogger", "wechat")),
-        FieldSpec("phone", "手机号", ValueKind.TEXT, sensitive=("blogger", "phone")),
-        FieldSpec("follower_count", "粉丝数", ValueKind.INT),
-        FieldSpec("blogger_type", "博主类型", ValueKind.TEXT),
-        FieldSpec("gender_target", "性别投放", ValueKind.TEXT),
-        FieldSpec("category_tags", "类目标签", ValueKind.TAGS),
-        FieldSpec("quality_tags", "质量标签", ValueKind.TAGS),
-        FieldSpec("quote", "报价", ValueKind.DECIMAL, sensitive=("blogger", "quote")),
-        FieldSpec("cooperation_history", "合作历史", ValueKind.TEXT),
-        FieldSpec("remark", "备注", ValueKind.TEXT),
+        _blogger_spec("nickname", "昵称", ValueKind.TEXT),
+        _blogger_spec("platform", "平台", ValueKind.TEXT),
+        _blogger_spec("wechat", "微信", ValueKind.TEXT, sensitive=("blogger", "wechat")),
+        _blogger_spec("phone", "手机号", ValueKind.TEXT, sensitive=("blogger", "phone")),
+        _blogger_spec("follower_count", "粉丝数", ValueKind.INT),
+        _blogger_spec("blogger_type", "博主类型", ValueKind.TEXT),
+        _blogger_spec("gender_target", "性别投放", ValueKind.TEXT),
+        _blogger_spec("category_tags", "类目标签", ValueKind.TAGS),
+        _blogger_spec("quality_tags", "质量标签", ValueKind.TAGS),
+        _blogger_spec("quote", "报价", ValueKind.DECIMAL, sensitive=("blogger", "quote")),
+        _blogger_spec("cooperation_history", "合作历史", ValueKind.TEXT),
+        _blogger_spec("remark", "备注", ValueKind.TEXT),
+        _blogger_spec("web_id", "网页ID", ValueKind.TEXT),
+        _blogger_spec("homepage_url", "主页链接", ValueKind.TEXT),
+        _blogger_spec("quote_note", "报价备注", ValueKind.TEXT, sensitive=("blogger", "quote")),
     )
     # 文本字段的长度上限（None = Text 不限长）
     _TEXT_LIMITS: ClassVar[Mapping[str, int | None]] = {
         "nickname": 128,
-        "platform": 16,
         "blogger_type": 16,
         "gender_target": 16,
         "wechat": 64,
         "phone": 32,
         "cooperation_history": None,
         "remark": None,
+        "web_id": 64,
+        "quote_note": 500,
     }
 
     async def load_for_update(
@@ -196,10 +220,24 @@ class BloggerApplier:
         return {name: normalize(specs[name].kind, getattr(obj, name)) for name in names}
 
     def check(self, name: str, value: JsonValue) -> Any:
+        if name == "platform":
+            raise ApplierValueError(name, PLATFORM_READONLY_REASON)
+        if name == "quality_tags":
+            raise ApplierValueError(name, SYSTEM_TAG_READONLY_REASON)
         if value is None:
             raise ApplierValueError(name, "不能为空")
         if name in self._TEXT_LIMITS:
             return _text(name, value, max_len=self._TEXT_LIMITS[name], required=name == "nickname")
+        if name == "homepage_url":
+            if not isinstance(value, str):
+                raise ApplierValueError(name, GENERIC_INVALID_REASON)
+            try:
+                url = normalize_homepage_url(value)
+            except ValueError:
+                raise ApplierValueError(name, EXTERNAL_IMAGE_REASON) from None
+            if url is None:
+                raise ApplierValueError(name, "不能为空")
+            return url
         if name == "follower_count":
             if isinstance(value, bool) or not isinstance(value, int):
                 raise ApplierValueError(name, GENERIC_INVALID_REASON)
@@ -211,7 +249,7 @@ class BloggerApplier:
                 return check_money(value)
             except ValueError:
                 raise ApplierValueError(name, MONEY_REASON) from None
-        if name in ("category_tags", "quality_tags"):
+        if name == "category_tags":
             if not isinstance(value, list) or not all(isinstance(t, str) for t in value):
                 raise ApplierValueError(name, GENERIC_INVALID_REASON)
             tags = [t.strip() for t in value if isinstance(t, str) and t.strip()]
@@ -514,7 +552,9 @@ __all__ = [
     "CONFLICT_APPLIERS",
     "EXTERNAL_IMAGE_REASON",
     "GENERIC_INVALID_REASON",
+    "PLATFORM_READONLY_REASON",
     "SKU_SOURCING_VALUES",
+    "SYSTEM_TAG_READONLY_REASON",
     "ApplierValueError",
     "BloggerApplier",
     "ConflictApplier",

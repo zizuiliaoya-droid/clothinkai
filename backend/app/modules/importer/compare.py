@@ -49,6 +49,9 @@ class FieldSpec:
     kind: ValueKind
     create_only: bool = False  # 仅新建时写入，已有对象不比较（补充二 Q2）
     sensitive: tuple[str, str] | None = None  # (entity, field)，对应 FIELD_PERMISSION_REGISTRY
+    # 8b R2：两边都有值且不同时以文件为准覆盖、不进冲突。由 duplicate_rules.ALWAYS_OVERWRITE_FIELDS
+    # 派生（只给读 specs 的人看）；导入时 adapter 直接调 always_overwrite() 现查，不读这个标记
+    always_overwrite: bool = False
 
 
 @dataclass(frozen=True)

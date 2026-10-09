@@ -49,8 +49,8 @@ DUPLICATE_RULES: dict[str, DuplicateRule] = {
     "manual_style_sku": DuplicateRule(
         DuplicatePolicy.COMPARE, key="款号；SKU 编码；单品商品", configurable=True
     ),
-    # 博主：小红书 ID（主键改造归 8b）
-    "manual_blogger": DuplicateRule(DuplicatePolicy.COMPARE, key="小红书 ID", configurable=True),
+    # 博主：（平台, 账号）（8b-1；平台空当小红书）
+    "manual_blogger": DuplicateRule(DuplicatePolicy.COMPARE, key="平台 + 账号", configurable=True),
     # 财务结款单：推广单一对一，已有结算单 → 该行失败，不进冲突（FB3，写死）
     "manual_settlement": DuplicateRule(DuplicatePolicy.REJECT, key="推广单"),
     # 推广单：每行新建，永不覆盖（FB3）
@@ -66,6 +66,20 @@ DUPLICATE_RULES: dict[str, DuplicateRule] = {
 }
 
 
+# R2（8b 设计 §6.5，2026-10-08 业务方定）：统计类字段以文件为准自动覆盖并留审计，其余照导入规则
+# （两边都有值且不同 → 冲突裁决）。只对 COMPARE 有意义；业务方答复不同只改这里。
+# 账号、平台、网页ID（D1①：跨批网页ID 不同要进冲突）、昵称、联系方式、报价（含报价备注）、标签、
+# 博主类型永不进这个集合（tests/unit/test_always_overwrite_decl.py 护栏）
+ALWAYS_OVERWRITE_FIELDS: dict[str, frozenset[str]] = {
+    "blogger": frozenset({"follower_count", "platform_metrics"}),
+}
+
+
+def always_overwrite(object_type: str, field: str) -> bool:
+    """该对象类型的字段是否「总是覆盖」。每次调用现查 dict（测试可直接改 dict 项）。"""
+    return field in ALWAYS_OVERWRITE_FIELDS.get(object_type, frozenset())
+
+
 def rule_for(source: str) -> DuplicateRule:
     """取来源的规则。每次调用现查 dict（测试可直接改 dict 项）；未声明的来源抛 KeyError。"""
     return DUPLICATE_RULES[source]
@@ -78,10 +92,12 @@ def is_configurable(source: str) -> bool:
 
 
 __all__ = [
+    "ALWAYS_OVERWRITE_FIELDS",
     "DUPLICATE_RULES",
     "SWITCHABLE_POLICIES",
     "DuplicatePolicy",
     "DuplicateRule",
+    "always_overwrite",
     "is_configurable",
     "rule_for",
 ]
