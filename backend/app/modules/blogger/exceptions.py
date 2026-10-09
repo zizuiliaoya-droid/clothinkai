@@ -67,9 +67,45 @@ class InvalidTagFormatError(ValidationError):
     code = "INVALID_TAG_FORMAT"
 
 
+# ---------------------------------------------------------------------------
+# 8b-3 标签字典与系统标签
+# ---------------------------------------------------------------------------
+
+
+class BloggerSystemTagReadonlyError(ValidationError):
+    """改系统标签（quality_tags），或类目标签新加了系统标签词。"""
+
+    code = "BLOGGER_SYSTEM_TAG_READONLY"
+
+
+class BloggerTagNotInDictError(ValidationError):
+    """类目标签新加的词不在启用的标签字典里（``details.tags``）。"""
+
+    code = "BLOGGER_TAG_NOT_IN_DICT"
+
+
+class BloggerTagReservedError(ValidationError):
+    """系统标签不能进标签字典。"""
+
+    code = "BLOGGER_TAG_RESERVED"
+
+
+class BloggerTagExistsError(DuplicateResourceError):
+    code = "BLOGGER_TAG_EXISTS"
+
+
+class BloggerTagNotFoundError(ResourceNotFoundError):
+    code = "BLOGGER_TAG_NOT_FOUND"
+
+
 __all__ = [
     "BloggerHasReferenceError",
     "BloggerNotFoundError",
+    "BloggerSystemTagReadonlyError",
+    "BloggerTagExistsError",
+    "BloggerTagNotFoundError",
+    "BloggerTagNotInDictError",
+    "BloggerTagReservedError",
     "BloggerXhsIdConflictError",
     "FieldPermissionDenied",  # re-exported from modules/product/exceptions
     "InvalidFollowerCountError",

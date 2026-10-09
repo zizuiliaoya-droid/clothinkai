@@ -32,6 +32,8 @@ from app.modules.blogger.domain import (
 from app.modules.blogger.exceptions import (
     BloggerHasReferenceError,
     BloggerNotFoundError,
+    BloggerSystemTagReadonlyError,
+    BloggerTagNotInDictError,
     BloggerXhsIdConflictError,
     FieldPermissionDenied,
 )
@@ -43,7 +45,8 @@ from app.modules.blogger.schemas import (
     BloggerResponse,
     BloggerUpdate,
 )
-from app.modules.blogger.tag_config import TYPE_GRADED_PLATFORMS
+from app.modules.blogger.tag_config import SYSTEM_TAGS, TYPE_GRADED_PLATFORMS
+from app.modules.blogger.tag_dict import BloggerTagDictService
 from app.modules.blogger.tag_service import BloggerTagService
 from app.modules.promotion.repository import PromotionRepository
 
@@ -56,6 +59,7 @@ class BloggerService:
         self._perms = PermissionRepository(session)
         self._audit = AuditService(session)
         self._tags = BloggerTagService(session)
+        self._tag_dict = BloggerTagDictService(session)
         self._promotion_repo = PromotionRepository(session)
 
     # ============================================================
@@ -69,6 +73,8 @@ class BloggerService:
         # BR-U03-42: 字段写权限
         await self._check_sensitive_write_permission(payload, user)
         await self._check_quote_note_write(payload, user)
+        # 8b-3：系统标签只读、类目标签按字典
+        await self._check_tags(payload, None, user)
 
         blogger = Blogger(
             xiaohongshu_id=payload.xiaohongshu_id,
@@ -150,6 +156,8 @@ class BloggerService:
         # BR-U03-42: 字段写权限
         await self._check_sensitive_write_permission(payload, user)
         await self._check_quote_note_write(payload, user)
+        # 8b-3：系统标签只读、类目标签按字典
+        await self._check_tags(payload, blogger, user)
 
         changes = compute_blogger_changes(blogger, payload)
         if not changes:
@@ -517,6 +525,45 @@ class BloggerService:
         ctx = await build_field_perm_context(user.id, self._roles, self._perms)
         if not can_write_field("blogger", "quote", ctx):
             raise FieldPermissionDenied(field="quote_note", entity="blogger")
+
+    async def _check_tags(
+        self, payload: BloggerCreate | BloggerUpdate, blogger: Blogger | None, user: User
+    ) -> None:
+        """8b-3（设计 §5.4）：系统标签只读、类目标签新加的词要在启用字典里。
+
+        - ``quality_tags`` 只由重算写：create 传了非空、update 传了且归一后与库里不同 → 422
+        - ``category_tags`` 只看新加的（新值 − 库里的值）：含系统标签词 → 422；不在启用字典 → 422。
+          旧标签（含字典里已删的）可留可去
+        """
+        fields_set = payload.model_fields_set
+        if "quality_tags" in fields_set:
+            new_quality = set(payload.quality_tags or [])
+            old_quality = set(blogger.quality_tags or []) if blogger is not None else set()
+            if new_quality != old_quality:
+                raise BloggerSystemTagReadonlyError(
+                    "质量标签是系统标签，由重算自动打，不能手工修改",
+                    details={"field": "quality_tags"},
+                )
+
+        if "category_tags" not in fields_set:
+            return
+        old_category = set(blogger.category_tags or []) if blogger is not None else set()
+        added = [t for t in dict.fromkeys(payload.category_tags or []) if t not in old_category]
+        if not added:
+            return
+        system_words = [t for t in added if t in SYSTEM_TAGS]
+        if system_words:
+            raise BloggerSystemTagReadonlyError(
+                f"{'、'.join(system_words)} 是系统标签，不能手工加",
+                details={"field": "category_tags", "tags": system_words},
+            )
+        known = await self._tag_dict.active_values(user.tenant_id, added)
+        unknown = [t for t in added if t not in known]
+        if unknown:
+            raise BloggerTagNotInDictError(
+                f"这些标签不在标签字典里：{'、'.join(unknown)}；请先让主管在「标签字典」里添加",
+                details={"tags": unknown},
+            )
 
 
 __all__ = ["BloggerService"]

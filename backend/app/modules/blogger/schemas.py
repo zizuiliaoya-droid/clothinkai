@@ -197,10 +197,38 @@ class BloggerPage(BaseModel):
     page_size: int
 
 
+# ---------------------------------------------------------------------------
+# 8b-3 标签字典
+# ---------------------------------------------------------------------------
+
+
+class BloggerTagCreate(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    value: str = Field(min_length=1, max_length=32)
+    sort_order: int = Field(default=0, ge=0, le=9999)
+
+
+class BloggerTagItem(BaseModel):
+    id: UUID
+    value: str
+    sort_order: int
+
+
+class BloggerTagDictResponse(BaseModel):
+    items: list[BloggerTagItem]
+    system_tags: list[str]
+    # 前端据此显隐增删按钮（= 持有 blogger_tag:write），不硬编码角色
+    can_manage: bool
+
+
 __all__ = [
     "BloggerBase",
     "BloggerCreate",
     "BloggerPage",
     "BloggerResponse",
+    "BloggerTagCreate",
+    "BloggerTagDictResponse",
+    "BloggerTagItem",
     "BloggerUpdate",
 ]

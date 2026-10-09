@@ -20,8 +20,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import AuditService
 from app.core.db import get_session
+from app.core.exceptions import ValidationError
 from app.modules.auth.deps import CurrentActiveUser, require_permission
-from app.modules.product.dict_models import DictItem
+from app.modules.product.dict_models import RESERVED_DICT_TYPES, DictItem
 
 router = APIRouter(prefix="/api", tags=["dict"])
 
@@ -56,7 +57,10 @@ async def list_dict_items(
     is_active: bool = True,
 ) -> list[DictItemResponse]:
     stmt = select(DictItem).where(
-        DictItem.tenant_id == user.tenant_id, DictItem.is_active == is_active
+        DictItem.tenant_id == user.tenant_id,
+        DictItem.is_active == is_active,
+        # 8b-3：保留类型（博主标签字典）由各自模块的接口维护，这里看不到
+        DictItem.dict_type.notin_(RESERVED_DICT_TYPES),
     )
     if dict_type:
         stmt = stmt.where(DictItem.dict_type == dict_type)
@@ -85,6 +89,12 @@ async def create_dict_item(
     user: CurrentActiveUser,
     session: SessionDep,
 ) -> DictItemResponse:
+    if payload.dict_type in RESERVED_DICT_TYPES:
+        raise ValidationError(
+            f"字典类型 {payload.dict_type} 由专门的页面维护，不能在这里新增",
+            code="DICT_TYPE_RESERVED",
+            details={"dict_type": payload.dict_type},
+        )
     stmt = (
         pg_insert(DictItem)
         .values(
@@ -142,7 +152,12 @@ async def delete_dict_item(
     deleted = (
         await session.execute(
             delete(DictItem)
-            .where(DictItem.id == item_id, DictItem.tenant_id == user.tenant_id)
+            .where(
+                DictItem.id == item_id,
+                DictItem.tenant_id == user.tenant_id,
+                # 8b-3：保留类型删不掉（等于没找到）
+                DictItem.dict_type.notin_(RESERVED_DICT_TYPES),
+            )
             .returning(DictItem.dict_type, DictItem.value)
         )
     ).first()

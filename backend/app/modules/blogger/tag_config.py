@@ -30,6 +30,9 @@ HIT_RATE_THRESHOLD = Decimal("0.20")  # 爆文率 ≥ 20% → 带货型
 TAG_HIGH_VALUE = "高性价比"
 TAG_BESTSELLER = "带货型"
 
+# 8b-3 系统标签：只由重算写（quality_tags），不进标签字典、手工与导入都不能新加
+SYSTEM_TAGS: frozenset[str] = frozenset({TAG_HIGH_VALUE, TAG_BESTSELLER})
+
 # 质量聚合截断（防超大历史拖慢）
 QUALITY_AGG_LIMIT = 1000
 
@@ -41,6 +44,7 @@ __all__ = [
     "HIGH_CPL_THRESHOLD",
     "HIT_RATE_THRESHOLD",
     "QUALITY_AGG_LIMIT",
+    "SYSTEM_TAGS",
     "TAG_BESTSELLER",
     "TAG_HIGH_VALUE",
     "TYPE_GRADED_PLATFORMS",
