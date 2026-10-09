@@ -88,13 +88,14 @@ class TestTypeGradingPerPlatform:
         dy = await blogger_factory.blogger(
             platform="抖音", follower_count=500_000, blogger_type="素人"
         )
-        xhs = await blogger_factory.blogger(follower_count=500_000, blogger_type="KOL")
+        # 种子类型故意和粉丝数不一致（50 万粉丝按分级是 KOL）：改到抖音后仍是「素人」才说明是保留、不是重算
+        xhs = await blogger_factory.blogger(follower_count=500_000, blogger_type="素人")
         user = await factory.user(tenant_a, roles=[admin_role])
         svc = BloggerService(session)
         to_xhs = await svc.update_blogger(dy.id, BloggerUpdate(platform=Platform.XIAOHONGSHU), user)
         to_dy = await svc.update_blogger(xhs.id, BloggerUpdate(platform=Platform.DOUYIN), user)
         assert (to_xhs.platform, to_xhs.blogger_type) == ("小红书", "KOL")
-        assert (to_dy.platform, to_dy.blogger_type) == ("抖音", "KOL")
+        assert (to_dy.platform, to_dy.blogger_type) == ("抖音", "素人")
 
     async def test_platform_change_to_graded_without_followers_keeps_type(
         self,
