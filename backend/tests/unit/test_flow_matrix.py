@@ -717,6 +717,18 @@ def test_require_rule_before_gate(toy: Matrix) -> None:
     assert exc.value.details["rule"] == "star_first_level"
 
 
+def test_not_pr_owner_rejects_missing_negotiator(toy: Matrix) -> None:
+    """L1：快照漏填 ``negotiator_id`` 是写错了，当场炸——不能让自审规则静默放行。"""
+    doc = replace(TOY_DOCS["已发布"], negotiator_id=None)
+    with pytest.raises(ValueError, match="negotiator_id"):
+        NotPrOwner().ok(PERSONAS["pr"], doc)
+    for who in ("pr", "pr_manager"):
+        with pytest.raises(ValueError, match="negotiator_id"):
+            require(PERSONAS[who], doc, "review")
+        with pytest.raises(ValueError, match="negotiator_id"):
+            ui_for(PERSONAS[who], doc)
+
+
 def test_require_owner_or_reviewer(toy: Matrix) -> None:
     """「或」整体失败按第一个规则项报（7.2：其他人 → 403 not_owner），reason 与悬停文案同一份。"""
     doc = TOY_DOCS["已发布"]

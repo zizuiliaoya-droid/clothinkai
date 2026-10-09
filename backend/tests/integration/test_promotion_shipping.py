@@ -1025,6 +1025,72 @@ class TestFlowUi:
         got = await PromotionRepository(session).negotiator_ids([negotiated.id, imported.id])
         assert got == {negotiated.id: flow_users.pr2.id}
 
+    async def test_imported_self_review_blocked(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """L1：没有谈款的单（导入 / 主管补录）快照的谈款人 = 负责 PR，``NotPrOwner`` 挡住 PR 本人。
+
+        真实矩阵到 PR-6 才有带 ``NotPrOwner`` 的审核行：这里把 ``ship_include`` 那一格换成
+        「持 promotion:read 且 ≠ 谈款人」，走真实快照 + ``require``；再走现有的推广审核，PR 本人 403。
+        """
+        from dataclasses import replace
+
+        from app.modules.flow.matrix import (
+            MATRICES,
+            Cell,
+            NotPrOwner,
+            Row,
+            Scope,
+            require,
+        )
+        from app.modules.promotion.enums import ReviewAction
+        from app.modules.promotion.exceptions import SelfReviewForbiddenError
+        from app.modules.promotion.schemas import PromotionReviewRequest
+
+        svc = PromotionService(session)
+        imported = await _promotion(flow_users, product_factory, blogger_factory, promotion_factory)
+        doc = await svc._promotion_doc(imported)
+        assert doc.negotiator_id == flow_users.pr.id
+        assert "ship_include" in doc.allowed_actions()
+
+        read = Scope("promotion", "read")
+        real = MATRICES["promotion"]
+        rows = tuple(
+            Row(r.key, r.kind, {doc.stage: Cell(edit=(read, NotPrOwner()), read=(read,))})
+            if (r.kind, r.key) == ("action", "ship_include")
+            else r
+            for r in real.rows
+        )
+        monkeypatch.setitem(MATRICES, "promotion", replace(real, rows=rows))
+
+        pr = await svc._flow_actor(flow_users.pr)
+        with pytest.raises(AppException) as exc:
+            require(pr, doc, "ship_include")
+        assert exc.value.code == "FLOW_ACTION_FORBIDDEN"
+        assert exc.value.status_code == 403
+        assert exc.value.details == {"rule": "self_review", "reason": NotPrOwner().reason}
+        require(await svc._flow_actor(flow_users.pr_manager), doc, "ship_include")
+
+        reviewable = await _promotion(
+            flow_users,
+            product_factory,
+            blogger_factory,
+            promotion_factory,
+            publish_status="已发布",
+            settlement_status="待核查",
+        )
+        with pytest.raises(SelfReviewForbiddenError) as review_exc:
+            await svc.review(
+                reviewable.id, PromotionReviewRequest(action=ReviewAction.APPROVE), flow_users.pr
+            )
+        assert review_exc.value.status_code == 403
+
 
 # ---------------------------------------------------------------------------
 # PATCH：已入矩阵的字段（收件三项 → receiver，sku_id → goods_items）按当前格判（5.4 过渡规则）

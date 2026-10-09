@@ -313,12 +313,20 @@ class Owner(Rule):
 
 @dataclass(frozen=True)
 class NotPrOwner(Rule):
-    """≠ 谈款人：不能审自己谈的单。"""
+    """≠ 谈款人：不能审自己谈的单。
+
+    快照的 ``negotiator_id`` 为空是组快照写错了（没有谈款的推广单应回落到 ``pr_id``）：当场 ``ValueError``，
+    不能让「None ≠ 我」恒真、自审规则静默放行（PR-1 评审 L1）。
+    """
 
     reason: str = "不能审核自己谈的单"
     rule: ClassVar[str] = "self_review"
 
     def ok(self, actor: FlowActor, doc: FlowDocBase) -> bool:
+        if doc.negotiator_id is None:
+            raise ValueError(
+                f"{doc.kind} 快照缺 negotiator_id（阶段 {doc.stage!r}）：没有谈款的单要回落到负责 PR"
+            )
         return doc.negotiator_id != actor.user_id
 
 
