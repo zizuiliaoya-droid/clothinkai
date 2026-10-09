@@ -8,7 +8,7 @@ from app.modules.importer.adapters.blogger import (
     BloggerImportAdapter,
     _split_tags,
     _to_decimal,
-    _to_int,
+    to_int,
 )
 
 
@@ -46,23 +46,23 @@ def test_split_tags_single():
 
 
 # ---------------------------------------------------------------------------
-# _to_int / _to_decimal
+# to_int / _to_decimal
 # ---------------------------------------------------------------------------
 
 
 def test_to_int_thousands():
-    assert _to_int("12,500") == 12500
-    assert _to_int("1000") == 1000
+    assert to_int("12,500") == 12500
+    assert to_int("1000") == 1000
 
 
 def test_to_int_empty():
-    assert _to_int("") is None
-    assert _to_int(None) is None
+    assert to_int("") is None
+    assert to_int(None) is None
 
 
 def test_to_int_invalid_keeps_raw():
-    assert _to_int("abc") == "abc"
-    assert _to_int("12.5") == "12.5"  # float 串非 int → 原串
+    assert to_int("abc") == "abc"
+    assert to_int("12.5") == "12.5"  # float 串非 int → 原串
 
 
 def test_to_decimal_no_float():

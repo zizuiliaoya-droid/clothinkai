@@ -80,8 +80,8 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-_OBJECT_TYPE = "blogger"
-_APPLIER = BloggerApplier()
+OBJECT_TYPE = "blogger"
+APPLIER = BloggerApplier()
 
 # 标签分隔符（中英文分号/逗号）
 _TAG_SEP = re.compile(r"[;；,，]")
@@ -161,7 +161,7 @@ def _split_tags(raw: Any) -> list[str]:
     return [t.strip() for t in _TAG_SEP.split(str(raw)) if not is_placeholder(t)]
 
 
-def _to_int(raw: Any) -> int | str | None:
+def to_int(raw: Any) -> int | str | None:
     """粉丝数（8b §6.4）：千分位、w / 万 / 亿、占位符。整数 → int；带单位的小数 ROUND_HALF_UP 取整；
     不带单位的小数与解析不了的值保留原串供 validate 报错。空 → None。
     """
@@ -249,7 +249,7 @@ class BloggerImportAdapter:
             if col_type == "list":
                 parsed[target] = _split_tags(raw) or None
             elif col_type == "int":
-                parsed[target] = _to_int(raw)
+                parsed[target] = to_int(raw)
             elif col_type == "decimal":
                 parsed[target] = _to_decimal(raw)
             else:
@@ -301,11 +301,11 @@ class BloggerImportAdapter:
 
     def compare_specs(self) -> tuple[FieldSpec, ...]:
         """比较用的字段（§5.5 的表；账号是判重键，不比较）。"""
-        return tuple(s for s in _APPLIER.specs if s.name not in self._NOT_COMPARED)
+        return tuple(s for s in APPLIER.specs if s.name not in self._NOT_COMPARED)
 
     def compare_field_names(self) -> frozenset[str]:
         """冲突按字段筛选时认的字段名（含平台、质量标签：旧冲突还能筛出来批量保留）。"""
-        return frozenset(s.name for s in _APPLIER.specs if s.name not in self._NOT_FILTERABLE)
+        return frozenset(s.name for s in APPLIER.specs if s.name not in self._NOT_FILTERABLE)
 
     # ----------------------- upsert（复用 runner session，不 commit）----------------------- #
 
@@ -371,14 +371,14 @@ class BloggerImportAdapter:
             return RowOutcome(resource_id=existing.id, kind=RowKind.SKIPPED, warnings=warnings)
 
         recorder = ConflictRecorder(session, ctx)
-        conflict = await recorder.lock_pending(_OBJECT_TYPE, existing.id)
-        blogger = await _APPLIER.load_for_update(session, existing.id)
+        conflict = await recorder.lock_pending(OBJECT_TYPE, existing.id)
+        blogger = await APPLIER.load_for_update(session, existing.id)
         if blogger is None:
             raise RowValidationError(f"博主 {xhs_id} 在导入期间被删除，请重试")
 
         names = [spec.name for spec in specs]
-        current = _APPLIER.current_values(blogger, names)
-        screened, seen_warnings = screen_batch_seen(ctx, _OBJECT_TYPE, blogger.id, specs, incoming)
+        current = APPLIER.current_values(blogger, names)
+        screened, seen_warnings = screen_batch_seen(ctx, OBJECT_TYPE, blogger.id, specs, incoming)
         warnings += seen_warnings
         diff = diff_fields(specs, current, screened, fill_empty=rule.fill_empty)
         label = blogger.nickname
@@ -402,7 +402,7 @@ class BloggerImportAdapter:
                 blogger, parsed, session=session, ctx=ctx, policy=rule.policy, warnings=warnings
             )
             warnings += await recorder.touch(
-                conflict, _OBJECT_TYPE, blogger.id, compared=diff.compared, incoming=screened_norm
+                conflict, OBJECT_TYPE, blogger.id, compared=diff.compared, incoming=screened_norm
             )
             kind = RowKind.UPDATED if changes or snapshot else RowKind.SKIPPED
             return RowOutcome(resource_id=blogger.id, kind=kind, warnings=warnings)
@@ -417,7 +417,7 @@ class BloggerImportAdapter:
             warnings=warnings,
         )
         overwrite = {
-            d.field: d.file for d in diff.conflicts if always_overwrite(_OBJECT_TYPE, d.field)
+            d.field: d.file for d in diff.conflicts if always_overwrite(OBJECT_TYPE, d.field)
         }
         conflicts = [d for d in diff.conflicts if d.field not in overwrite]
         overwritten = await self._write(
@@ -431,7 +431,7 @@ class BloggerImportAdapter:
         snapshot = await self._write_snapshot(
             blogger, parsed, session=session, ctx=ctx, policy=rule.policy, warnings=warnings
         )
-        filled = [FilledRecord(_OBJECT_TYPE, label, list(changes))] if changes else []
+        filled = [FilledRecord(OBJECT_TYPE, label, list(changes))] if changes else []
         kinds = [RowKind.SKIPPED]
         if changes:
             kinds.append(RowKind.FILLED)
@@ -440,7 +440,7 @@ class BloggerImportAdapter:
         if conflicts:
             warnings += await recorder.record(
                 conflict,
-                _OBJECT_TYPE,
+                OBJECT_TYPE,
                 blogger.id,
                 f"{blogger.platform}·{xhs_id}",
                 label,
@@ -453,7 +453,7 @@ class BloggerImportAdapter:
             kinds.append(RowKind.CONFLICT)
         else:
             warnings += await recorder.touch(
-                conflict, _OBJECT_TYPE, blogger.id, compared=diff.compared, incoming=screened_norm
+                conflict, OBJECT_TYPE, blogger.id, compared=diff.compared, incoming=screened_norm
             )
         return RowOutcome(
             resource_id=blogger.id, kind=merge_kinds(kinds), warnings=warnings, filled=filled
@@ -477,7 +477,7 @@ class BloggerImportAdapter:
         url = prepared.get("homepage_url")
         if url is not None:
             try:
-                prepared["homepage_url"] = _APPLIER.check("homepage_url", url)
+                prepared["homepage_url"] = APPLIER.check("homepage_url", url)
             except APPLIER_VALUE_ERRORS as exc:
                 warnings.append(f"主页链接 的值不合法（{invalid_reason(exc)}），未写入")
                 prepared["homepage_url"] = None
@@ -550,7 +550,7 @@ class BloggerImportAdapter:
         session.add(blogger)
         await session.flush()
         # 新对象的 id 不可能已登记过：这一步只为登记，同批后面的行以本行写入的值为准
-        screen_batch_seen(ctx, _OBJECT_TYPE, blogger.id, self.compare_specs(), values)
+        screen_batch_seen(ctx, OBJECT_TYPE, blogger.id, self.compare_specs(), values)
         await self._write_snapshot(
             blogger, parsed, session=session, ctx=ctx, policy=None, warnings=warnings
         )
@@ -569,18 +569,18 @@ class BloggerImportAdapter:
         """经 applier 校验并写入；不合法的字段丢弃、加提示、撤回 batch_seen 登记（行不失败）。"""
         if not to_write:
             return {}
-        labels = {spec.name: spec.label for spec in _APPLIER.specs}
+        labels = {spec.name: spec.label for spec in APPLIER.specs}
         values: dict[str, Any] = {}
         for name, value in to_write.items():
             try:
-                values[name] = _APPLIER.check(name, value)
+                values[name] = APPLIER.check(name, value)
             except APPLIER_VALUE_ERRORS as exc:
                 warnings.append(f"{labels[name]} 的值不合法（{invalid_reason(exc)}），未写入")
-                ctx.batch_seen.staged.pop((_OBJECT_TYPE, blogger.id, name), None)
-        changes = await _APPLIER.apply(session, blogger, values)
+                ctx.batch_seen.staged.pop((OBJECT_TYPE, blogger.id, name), None)
+        changes = await APPLIER.apply(session, blogger, values)
         await write_object_audit(
             session,
-            _APPLIER,
+            APPLIER,
             blogger.id,
             changes,
             via=via,
@@ -603,4 +603,5 @@ def register() -> None:
     ImportAdapterRegistry.register(HuitunDouyinImportAdapter())
 
 
-__all__ = ["BloggerImportAdapter", "register"]
+# OBJECT_TYPE / APPLIER / to_int：灰豚抖音 adapter（blogger_douyin.py）复用
+__all__ = ["APPLIER", "OBJECT_TYPE", "BloggerImportAdapter", "register", "to_int"]

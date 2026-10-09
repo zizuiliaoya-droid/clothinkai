@@ -27,10 +27,10 @@ from app.core.audit import AuditService
 from app.modules.blogger.enums import Platform
 from app.modules.blogger.models import Blogger
 from app.modules.importer.adapters.blogger import (
-    _APPLIER,
-    _OBJECT_TYPE,
+    APPLIER,
+    OBJECT_TYPE,
     BloggerImportAdapter,
-    _to_int,
+    to_int,
 )
 from app.modules.importer.cn_numbers import parse_cn_number
 from app.modules.importer.compare import ValueKind, check_money, is_placeholder, normalize
@@ -190,7 +190,7 @@ class HuitunDouyinImportAdapter(BloggerImportAdapter):
             "wechat": _text(row.get(COL_WECHAT)),
             "quote": quote,
             "quote_note": quote_note,
-            "follower_count": _to_int(row.get(COL_FOLLOWER)),
+            "follower_count": to_int(row.get(COL_FOLLOWER)),
             SNAPSHOT_FIELD: _metrics(row),
         }
 
@@ -217,7 +217,7 @@ class HuitunDouyinImportAdapter(BloggerImportAdapter):
         if web_id is None:
             return None
         first = ctx.batch_seen.first_differing_row(
-            (_OBJECT_TYPE, existing.id, "web_id"), ctx.row_number, web_id
+            (OBJECT_TYPE, existing.id, "web_id"), ctx.row_number, web_id
         )
         if first is None:
             return None
@@ -247,7 +247,7 @@ class HuitunDouyinImportAdapter(BloggerImportAdapter):
             return False
         seen_value = json.dumps(metrics["raw"], ensure_ascii=False, sort_keys=True)
         first = ctx.batch_seen.first_differing_row(
-            (_OBJECT_TYPE, blogger.id, SNAPSHOT_FIELD), ctx.row_number, seen_value
+            (OBJECT_TYPE, blogger.id, SNAPSHOT_FIELD), ctx.row_number, seen_value
         )
         if first is not None:
             warnings.append(
@@ -264,15 +264,15 @@ class HuitunDouyinImportAdapter(BloggerImportAdapter):
         if (
             current is not None
             and policy is not DuplicatePolicy.OVERWRITE
-            and not always_overwrite(_OBJECT_TYPE, SNAPSHOT_FIELD)
+            and not always_overwrite(OBJECT_TYPE, SNAPSHOT_FIELD)
         ):
             warnings.append(SNAPSHOT_KEPT_NOTICE)
             return False
         blogger.platform_metrics = metrics
         await session.flush()
         await AuditService(session).log(
-            action=_APPLIER.audit_action,
-            resource=_APPLIER.audit_resource,
+            action=APPLIER.audit_action,
+            resource=APPLIER.audit_resource,
             resource_id=blogger.id,
             before={},
             after={

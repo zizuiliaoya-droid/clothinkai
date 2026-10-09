@@ -49,6 +49,8 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 _DEFAULT_PLATFORM = "小红书"
+# 059 时 blogger.enums.Platform 的全部取值（只用于升级时打印「不在枚举里的博主」）
+_KNOWN_PLATFORMS = ("小红书", "抖音", "快手", "B站")
 _OLD_INDEX = "uq_blogger_xiaohongshu_id"
 _NEW_INDEX = "uq_blogger_platform_account"
 # 新增四列（名字, 类型）
@@ -113,10 +115,9 @@ def _fill_platform(bind: Connection) -> None:
     )
     _log(f"平台为空的博主补「{_DEFAULT_PLATFORM}」：{res.rowcount or 0} 行")
 
-    # 只报告：取当前代码的枚举（得物等新平台随代码出现），不改已有的非小红书值
-    from app.modules.blogger.enums import Platform
-
-    known = [p.value for p in Platform]
+    # 只报告，不改已有的非小红书值。迁移不 import app 代码：写死 059 时 blogger.enums.Platform 的取值，
+    # 以后枚举加了平台（如得物）也不用改这里，只影响这一行打印
+    known = list(_KNOWN_PLATFORMS)
     n = bind.execute(
         sa.text(
             "SELECT count(*) FROM blogger WHERE NOT (platform = ANY(CAST(:known AS text[])))"
