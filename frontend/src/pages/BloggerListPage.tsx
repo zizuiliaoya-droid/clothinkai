@@ -33,6 +33,7 @@ import {
   restoreBlogger,
   updateBlogger,
 } from "@/features/blogger/api";
+import { toBloggerUpdate } from "@/features/blogger/edit";
 import type {
   Blogger,
   BloggerCreate,
@@ -121,7 +122,9 @@ export function BloggerListPage() {
 
   const saveMutation = useMutation({
     mutationFn: async (values: BloggerCreate) =>
-      editing ? updateBlogger(editing.id, values) : createBlogger(values),
+      editing
+        ? updateBlogger(editing.id, toBloggerUpdate(values, editing))
+        : createBlogger(values),
     onSuccess: () => {
       message.success(editing ? "博主已更新" : "博主已创建");
       setOpen(false);

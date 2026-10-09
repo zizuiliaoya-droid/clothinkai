@@ -170,6 +170,7 @@ class BloggerService:
         # BR-U03-42: 字段写权限
         await self._check_sensitive_write_permission(payload, user)
         await self._check_quote_note_write(payload, user)
+        await self._check_quote_note_readable(payload, user)
         # 8b-3：系统标签只读、类目标签按字典
         await self._check_tags(payload, blogger, user)
 
@@ -544,6 +545,18 @@ class BloggerService:
             return
         ctx = await build_field_perm_context(user.id, self._roles, self._perms)
         if not can_write_field("blogger", "quote", ctx):
+            raise FieldPermissionDenied(field="quote_note", entity="blogger")
+
+    async def _check_quote_note_readable(self, payload: BloggerUpdate, user: User) -> None:
+        """编辑时显式带了报价备注（含 null / 空串）而读不到报价 → 403（评审 L3）。
+
+        读不到的人收到的是遮挡后的 null，原样提交会把库里的备注静默清空；拒绝而不是忽略，
+        调用方能知道这个字段没存上。
+        """
+        if "quote_note" not in payload.model_fields_set:
+            return
+        ctx = await build_field_perm_context(user.id, self._roles, self._perms)
+        if not can_read_field("blogger", "quote", ctx):
             raise FieldPermissionDenied(field="quote_note", entity="blogger")
 
     async def _check_tags(

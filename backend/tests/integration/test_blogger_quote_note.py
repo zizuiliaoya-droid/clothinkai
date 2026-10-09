@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.tenancy import tenant_id_ctx
 from app.modules.auth.models import AuditLog, Permission, UserPermissionOverride
 from app.modules.blogger.exceptions import FieldPermissionDenied
+from app.modules.blogger.models import Blogger
 from app.modules.blogger.schemas import BloggerCreate, BloggerUpdate
 from app.modules.blogger.service import BloggerService
 
@@ -133,6 +134,30 @@ class TestWrite:
             await BloggerService(session).update_blogger(
                 b.id, BloggerUpdate(quote_note="图文1"), user
             )
+
+    async def test_write_without_read_cannot_touch_note_on_update(
+        self, session: AsyncSession, tenant_a: Any, factory: Any, pr_role: Any, blogger_factory: Any
+    ) -> None:
+        # fix F3（评审 L3）：保留写、去掉读的人看到的是 null，带着 null 保存不能把库里的备注清空
+        b = await _blogger_with_note(blogger_factory, session)
+        b_id = b.id
+        user = await factory.user(tenant_a, roles=[pr_role])
+        await _override(session, tenant_a, user, "field.blogger.quote:read", "revoke")
+        svc = BloggerService(session)
+        for value in (None, "", "图文1"):
+            with pytest.raises(FieldPermissionDenied) as exc:
+                await svc.update_blogger(
+                    b_id, BloggerUpdate(nickname="改名F3", quote_note=value), user
+                )
+            assert exc.value.status_code == 403
+            assert exc.value.field == "quote_note"
+        # 不带报价备注：其余字段照常保存，备注不动
+        resp = await svc.update_blogger(b_id, BloggerUpdate(nickname="改名F3"), user)
+        assert (resp.nickname, resp.quote_note) == ("改名F3", None)
+        note = (
+            await session.execute(select(Blogger.quote_note).where(Blogger.id == b_id))
+        ).scalar_one()
+        assert note == _NOTE
 
     async def test_pr_write_audit_only_changed(
         self, session: AsyncSession, tenant_a: Any, factory: Any, pr_role: Any, blogger_factory: Any
