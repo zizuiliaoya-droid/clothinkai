@@ -34,6 +34,33 @@ class SettlementStatus(str, Enum):
     REJECTED = "已驳回"
 
 
+class ShipStatus(str, Enum):
+    """ship_status 发货 3 态（流程线 3.3）。库里 NULL = 历史单，没进系统的发货流程。
+
+    待发货 → 待打单（主管 / 管理员确认推送仓库）→ 已发货（仓库回填快递信息）；
+    待打单可撤回或随取消退回待发货。
+    """
+
+    PENDING = "待发货"
+    PRINTING = "待打单"
+    SHIPPED = "已发货"
+
+
+class ShipCourier(str, Enum):
+    """快递公司（11-25：10 个）。库里不加 CHECK，增减只改这里。"""
+
+    SF = "顺丰"
+    ZTO = "中通"
+    YTO = "圆通"
+    YUNDA = "韵达"
+    STO = "申通"
+    JT = "极兔"
+    EMS = "邮政"
+    JD = "京东"
+    DEPPON = "德邦"
+    OTHER = "其他"
+
+
 class AmountChangeSource(str, Enum):
     """金额变更来源（金额时间线用）。
 

@@ -35,6 +35,7 @@ from sqlalchemy import (
     Index,
     Integer,
     Numeric,
+    SmallInteger,
     String,
     Text,
     text,
@@ -44,6 +45,11 @@ from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import TenantScopedModel
+
+# FK 目标表 style / sku / user：Celery 路径不一定经过 product / auth 模块，
+# 不显式 import 的话 flush PromotionItem 时 NoReferencedTableError（台账）
+from app.modules.auth import models as _auth_models  # noqa: F401
+from app.modules.product import models as _product_models  # noqa: F401
 
 # ---------------------------------------------------------------------------
 # Promotion（推广合作）
@@ -256,6 +262,24 @@ class Promotion(TenantScopedModel):
     resubmitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     """最近一次重新提交的时间（7a-4，与 resubmit_note 同轮覆盖）。"""
 
+    # --- 收件 / 发货（流程线 M1，060）---
+    receiver_name: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    receiver_phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    """收件电话，格式只在 service 校验（存量 3 个含手机号的地址原样进 receiver_address，这里留空）。"""
+    receiver_address: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    ship_status: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    """待发货 / 待打单 / 已发货；NULL = 历史单，没进系统的发货流程（导入、直接新建默认不进）。"""
+    ship_pushed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ship_pushed_by: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("user.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    ship_courier: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    """快递公司。取值由 schema 枚举（``ShipCourier``）校验，库里不加 CHECK，增减不用 DDL。"""
+    ship_waybill: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    shipped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     # --- 通用 ---
     is_active: Mapped[bool] = mapped_column(nullable=False, server_default=text("true"))
 
@@ -379,6 +403,19 @@ class Promotion(TenantScopedModel):
             "tenant_id",
             "cooperation_mode",
             postgresql_where=text("cooperation_mode IS NOT NULL"),
+        ),
+        CheckConstraint(
+            "ship_status IS NULL OR ship_status IN ('待发货', '待打单', '已发货')",
+            name="ck_promotion_ship_status",
+        ),
+        # 推广列表「发货」筛选与仓库页；历史单（NULL）不进索引
+        Index(
+            "idx_promotion_ship_status",
+            "tenant_id",
+            "ship_status",
+            text("cooperation_date DESC"),
+            text("created_at DESC"),
+            postgresql_where=text("ship_status IS NOT NULL"),
         ),
         # GIN trgm 索引在 alembic migration 中通过 op.execute 创建：
         # idx_promotion_internal_code_trgm
@@ -564,9 +601,56 @@ class BloggerRetrospective(TenantScopedModel):
     )
 
 
+# ---------------------------------------------------------------------------
+# PromotionItem（推广单商品明细，流程线 M1）
+# ---------------------------------------------------------------------------
+
+
+class PromotionItem(TenantScopedModel):
+    """推广单带的颜色尺码（7c-11），推送仓库直接用。
+
+    单品 1 行；套装按 ``goods_style_item`` 的成员各 1 行。「sku 属于该行的 style」「style 是该商品的成员」
+    在 service 校验。颜色 / 尺码不做快照，读 ``sku.color`` / ``sku.size``：SKU 改名属于主数据更正，
+    仓库按最新值发货；SKU 只软删，FK RESTRICT 保证明细不丢。
+    ``sku_id`` 不可空：推送前换商品时整组删掉、不建空行，推送时在弹窗里按新商品的成员补选。
+    """
+
+    __tablename__ = "promotion_item"
+
+    promotion_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("promotion.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    style_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("style.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    sku_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("sku.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    sort_order: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default=text("0"))
+
+    __table_args__ = (
+        Index(
+            "uq_promotion_item_style",
+            "tenant_id",
+            "promotion_id",
+            "style_id",
+            unique=True,
+        ),
+        # SKU 删除前的引用校验用
+        Index("idx_promotion_item_sku", "tenant_id", "sku_id"),
+    )
+
+
 __all__ = [
     "BloggerRetrospective",
     "Promotion",
     "PromotionAmountLog",
+    "PromotionItem",
     "PromotionSequence",
 ]

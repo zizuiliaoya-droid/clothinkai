@@ -23,13 +23,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.auth.default_roles import DEFAULT_ROLES
 
 # 每个流程线 PR 建的新表加到这里（PR-2 起：promotion_item、negotiation_item、line_event……）
-RLS_TABLES: tuple[str, ...] = ("import_conflict",)
+RLS_TABLES: tuple[str, ...] = ("import_conflict", "promotion_item")
 
 # 每个流程线 PR 新增 / 改授权的 scope 加到这里。
 # 现有两条：一条只授给单个角色，一条授给多个角色。
 ROLE_SCOPES: tuple[str, ...] = (
     "negotiation.review:approve",
     "negotiation:read",
+    # PR-2（060）
+    "promotion_ship:push",
+    "promotion_ship:fill",
+    "promotion_ship:export",
 )
 
 _APP_ROLE = "clothing_app"

@@ -264,31 +264,32 @@ TOY_DOCS: dict[str, FlowDocBase] = {
 }
 
 # 紧凑写法：值是 7 个字，顺序 = PERSONA_ORDER（pr pr2 pr_manager admin finance operations warehouse）；
-# 没列出的 (阶段标签, 行) 全是「隐」
-_ALL_OWNED = "改读读读隐读读"
+# 没列出的 (阶段标签, 行) 全是「隐」。
+# 玩具矩阵的「读」只认 promotion:read 通配；仓库 060 起收回了 promotion:read，所以仓库列全是「隐」
+_ALL_OWNED = "改读读读隐读隐"
 TOY_EXPECTED_COMPACT: dict[tuple[str, str, str], str] = {
     ("待推送", "action", "ship_push"): _ALL_OWNED,
     ("待推送", "action", "cancel"): _ALL_OWNED,
     ("已发布", "action", "cancel"): _ALL_OWNED,
-    ("待推送", "action", "recall_start"): "灰灰灰灰隐灰灰",
+    ("待推送", "action", "recall_start"): "灰灰灰灰隐灰隐",
     ("已发布", "action", "recall_start"): _ALL_OWNED,
-    ("已发布", "action", "urge"): "改读改改隐读读",
-    ("已发布", "action", "review"): "读改改读隐读读",
+    ("已发布", "action", "urge"): "改读改改隐读隐",
+    ("已发布", "action", "review"): "读改改读隐读隐",
     ("待财务付款·待付款", "action", "settlement_resubmit"): _ALL_OWNED,
     ("待财务付款·待财务付款", "action", "settlement_resubmit"): _ALL_OWNED,
     ("结款驳回", "action", "settlement_resubmit"): _ALL_OWNED,
-    ("待财务付款·待付款", "action", "metrics"): "灰灰灰灰隐灰灰",
-    ("待财务付款·待财务付款", "action", "metrics"): "灰灰灰灰隐灰灰",
+    ("待财务付款·待付款", "action", "metrics"): "灰灰灰灰隐灰隐",
+    ("待财务付款·待财务付款", "action", "metrics"): "灰灰灰灰隐灰隐",
     ("已发布", "action", "metrics"): _ALL_OWNED,
-    ("已发布", "action", "freight_submit"): "读读读改隐读读",
-    ("待推送", "action", "comment"): "改改改改隐灰灰",
-    ("待推送", "field", "quote_amount"): "改改改改隐读读",
+    ("已发布", "action", "freight_submit"): "读读读改隐读隐",
+    ("待推送", "action", "comment"): "改改改改隐灰隐",
+    ("待推送", "field", "quote_amount"): "改改改改隐读隐",
     ("待财务付款·待付款", "field", "payment_qr"): _ALL_OWNED,
-    ("待财务付款·待财务付款", "field", "payment_qr"): "读读读读隐读读",
-    ("待推送", "field", "shipping"): "灰灰灰灰隐灰灰",
-    ("已发布", "field", "shipping"): "读读读读隐读读",
-    ("待财务付款·待付款", "field", "settlement"): "读读读改改读读",
-    ("待财务付款·待财务付款", "field", "settlement"): "读读读改改读读",
+    ("待财务付款·待财务付款", "field", "payment_qr"): "读读读读隐读隐",
+    ("待推送", "field", "shipping"): "灰灰灰灰隐灰隐",
+    ("已发布", "field", "shipping"): "读读读读隐读隐",
+    ("待财务付款·待付款", "field", "settlement"): "读读读改改读隐",
+    ("待财务付款·待财务付款", "field", "settlement"): "读读读改改读隐",
 }
 
 
