@@ -4,7 +4,8 @@
 - compute_blogger_type：实时 O(1) 粉丝量分级（KOL/KOC/素人）。
 - compute_read_like_ratio：读时衍生点赞/阅读比（不存 DB），分母 0/None→None。
 - is_fake_account：ratio≤阈值→True；None（无数据）→False（保守）。
-- recompute_for_tenant：批量重算单租户全部活跃博主，单 blogger 失败不中止。
+- recompute_for_tenant：批量重算单租户全部活跃博主，单 blogger 失败不中止；
+  博主类型只对 ``TYPE_GRADED_PLATFORMS`` 里的平台重算（8b）。
 
 质量标签聚合委托 ``services/metric/blogger_quality.compute_quality_tags``。
 """
@@ -22,6 +23,7 @@ from app.modules.blogger.tag_config import (
     FAKE_RATIO_THRESHOLD,
     FOLLOWER_KOC_MIN,
     FOLLOWER_KOL_MIN,
+    TYPE_GRADED_PLATFORMS,
 )
 from app.services.metric.blogger_quality import compute_quality_tags
 
@@ -90,7 +92,8 @@ class BloggerTagService:
         failed = 0
         for b in bloggers:
             try:
-                b.blogger_type = self.compute_blogger_type(b.follower_count)
+                if b.platform in TYPE_GRADED_PLATFORMS:
+                    b.blogger_type = self.compute_blogger_type(b.follower_count)
                 ratio = self.compute_read_like_ratio(b.audience_profile)
                 b.is_suspected_fake = self.is_fake_account(ratio)
                 b.quality_tags = await compute_quality_tags(b.id, self._session, tenant_id)

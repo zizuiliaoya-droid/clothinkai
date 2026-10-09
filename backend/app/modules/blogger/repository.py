@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import builtins
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -17,6 +18,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.blogger.enums import Platform
 from app.modules.blogger.models import Blogger
 
 
@@ -59,6 +61,37 @@ class BloggerRepository:
         if not include_deleted:
             stmt = stmt.where(Blogger.is_deleted.is_(False))
         return (await self._session.execute(stmt)).scalar_one_or_none()
+
+    async def get_by_account(
+        self, platform: str, account: str, *, include_deleted: bool = False
+    ) -> Blogger | None:
+        """按（平台, 账号）取博主（8b 唯一键；账号即 ``xiaohongshu_id`` 列，按原样比较）。
+
+        未删除的至多一个（部分唯一索引兜底）；``include_deleted=True`` 时取任意一个。
+        """
+        stmt = select(Blogger).where(
+            Blogger.platform == platform, Blogger.xiaohongshu_id == account
+        )
+        if not include_deleted:
+            stmt = stmt.where(Blogger.is_deleted.is_(False))
+        return (await self._session.execute(stmt.limit(1))).scalars().first()
+
+    async def list_by_account(self, account: str) -> builtins.list[Blogger]:
+        """同一账号在所有平台上未删除的博主（推广单导入找不到同平台博主时回落用）。
+
+        按 ``Platform`` 枚举声明序排，不在枚举里的排最后（再按平台名）。
+        """
+        order = sa.case(
+            {p.value: i for i, p in enumerate(Platform)},
+            value=Blogger.platform,
+            else_=len(Platform),
+        )
+        stmt = (
+            select(Blogger)
+            .where(Blogger.xiaohongshu_id == account, Blogger.is_deleted.is_(False))
+            .order_by(order, Blogger.platform, Blogger.id)
+        )
+        return list((await self._session.execute(stmt)).scalars().all())
 
     async def code_exists(self, xhs_id: str) -> bool:
         stmt = (
@@ -111,6 +144,7 @@ class BloggerRepository:
             clauses = [
                 Blogger.nickname.ilike(pattern),
                 Blogger.xiaohongshu_id.ilike(pattern),
+                Blogger.web_id.ilike(pattern),
             ]
             if include_wechat_in_keyword:
                 clauses.append(Blogger.wechat.ilike(pattern))

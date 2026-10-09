@@ -243,7 +243,8 @@ class BloggerImportAdapter:
         specs = _APPLIER.specs
         incoming = {spec.name: parsed[spec.name] for spec in specs if spec.name in parsed}
 
-        existing = await repo.get_by_xiaohongshu_id(xhs_id, include_deleted=False)
+        # 8b：按（平台, 账号）判重；平台空缺省小红书（与 _insert 同口径）
+        existing = await repo.get_by_account(parsed.get("platform") or "小红书", xhs_id)
         if existing is None:
             return await self._insert(parsed, session=session, ctx=ctx)
 

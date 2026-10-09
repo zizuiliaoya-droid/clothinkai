@@ -15,6 +15,10 @@ from decimal import Decimal
 FOLLOWER_KOC_MIN = 10_000
 FOLLOWER_KOL_MIN = 100_000
 
+# 8b：只有这些平台按上面的阈值自动分级（建 / 改粉丝数 / 重算）。抖音粉丝量级不同，
+# 阈值等业务方给，届时加阈值并把抖音放进来；其余平台的 blogger_type 保持手填 / 导入值
+TYPE_GRADED_PLATFORMS: frozenset[str] = frozenset({"小红书"})
+
 # 假号嫌疑：点赞/阅读比 ≤ 1% 视为异常低互动
 FAKE_RATIO_THRESHOLD = Decimal("0.01")
 
@@ -39,4 +43,5 @@ __all__ = [
     "QUALITY_AGG_LIMIT",
     "TAG_BESTSELLER",
     "TAG_HIGH_VALUE",
+    "TYPE_GRADED_PLATFORMS",
 ]
