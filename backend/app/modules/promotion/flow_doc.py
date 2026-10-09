@@ -102,14 +102,15 @@ def build_promotion_doc(
     )
 
 
-def build_warehouse_doc(promotion: Promotion, *, stage: str) -> WarehouseDoc:
+def build_warehouse_doc(*, stage: str, pr_id: UUID | None, ship_status: str | None) -> WarehouseDoc:
+    """仓库行快照。入参是散的：仓库页只取投影列（``WarehouseShipmentRecord``），回填前取的是整张单。"""
     return WarehouseDoc(
         stage=stage,
         state=stage,
         column=STAGE_COLUMN[stage],
-        owner_id=promotion.pr_id,
-        negotiator_id=promotion.pr_id,
-        ship_status=promotion.ship_status,
+        owner_id=pr_id,
+        negotiator_id=pr_id,
+        ship_status=ship_status,
     )
 
 

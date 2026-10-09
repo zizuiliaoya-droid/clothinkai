@@ -15,8 +15,8 @@
 - 衍生字段实时计算（urge_status / dual_platform / effective_like_count / is_hit / cpl）
 - match 降级语义：业务未匹配 → 200 + 空数组；系统失败 → 异常自然冒泡 → 5xx + Sentry
 
-按职责拆成 mixin（``service_parts/``）：本文件留 CRUD 与仓库回填；共用依赖与 helper 在 ``base.py``，
-收款码 / 发布与取消 / 召回 / 审核与重提 / 数据与复盘 / 发货各一个文件。``PromotionService`` 的名字与路径不变。
+按职责拆成 mixin（``service_parts/``）：本文件留 CRUD；共用依赖与 helper 在 ``base.py``，
+收款码 / 发布与取消 / 召回 / 审核与重提 / 数据与复盘 / 发货与仓库各一个文件。``PromotionService`` 的名字与路径不变。
 """
 
 from __future__ import annotations
@@ -68,7 +68,6 @@ from app.modules.promotion.schemas import (
     PromotionPage,
     PromotionResponse,
     PromotionUpdate,
-    PromotionWarehouseWaybillRequest,
 )
 from app.modules.promotion.schemas import (
     PromotionListFilters as ApiPromotionListFilters,
@@ -506,25 +505,6 @@ class PromotionService(
         )
         await self._session.commit()
         return await self._to_response(promotion, user, actor=actor)
-
-    async def update_warehouse_waybill(
-        self, promotion_id: UUID, payload: PromotionWarehouseWaybillRequest, user: User
-    ) -> PromotionResponse:
-        promotion = await self._repo.get_by_id(promotion_id)
-        if promotion is None:
-            raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
-        source_extra = dict(promotion.source_extra or {})
-        source_extra["发货单号"] = payload.waybill.strip()
-        promotion.source_extra = source_extra
-        await self._audit.log(
-            action="promotion.warehouse_waybill.update",
-            resource="promotion",
-            resource_id=promotion.id,
-            after={"waybill_changed": True},
-            user_id=user.id,
-        )
-        await self._session.commit()
-        return await self._to_response(promotion, user)
 
     # ============================================================
     # Read

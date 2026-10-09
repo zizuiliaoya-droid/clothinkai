@@ -16,7 +16,7 @@ from __future__ import annotations
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
@@ -102,6 +102,51 @@ class PromotionListRow:
     goods_short_name: str | None = None
     # 流程线 3.8 当前阶段（stage_calculator.stage_sql_expr）；PR-10 之前不进响应
     stage: str | None = None
+
+
+@dataclass(frozen=True)
+class WarehouseShipmentRecord:
+    """仓库页一行（``warehouse_shipments``）：只取发货要用的列，不把整张推广单读出来。"""
+
+    id: UUID
+    pr_id: UUID | None
+    internal_code: str
+    style_code: str
+    display_short_name: str
+    goods_code: str | None
+    goods_title: str | None
+    sku_code: str | None
+    """推广单自己的 SKU 编码（没有明细的旧单导出那一行用）。"""
+    legacy_color_spec: str | None
+    """``source_extra['颜色及规格']`` 原文（有没有明细由调用方判）。"""
+    receiver_name: str | None
+    receiver_phone: str | None
+    receiver_address: str | None
+    ship_status: str
+    ship_pushed_at: datetime | None
+    ship_pushed_by_name: str | None
+    ship_courier: str | None
+    ship_waybill: str | None
+    shipped_at: datetime | None
+    stage: str
+
+
+# 仓库分桶 → 发货状态；「全部」= 待打单 + 已发货（不含待发货与历史单）
+_WAREHOUSE_BUCKETS: dict[str, tuple[str, ...]] = {
+    ShipStatus.PRINTING.value: (ShipStatus.PRINTING.value,),
+    ShipStatus.SHIPPED.value: (ShipStatus.SHIPPED.value,),
+    "全部": (ShipStatus.PRINTING.value, ShipStatus.SHIPPED.value),
+}
+# 待打单先推先打；已发货按发货时间倒序；全部 = 待打单在前（各按自己的序）；id 兜底
+_WAREHOUSE_ORDER: dict[str, str] = {
+    ShipStatus.PRINTING.value: "b.ship_pushed_at ASC NULLS FIRST, b.id",
+    ShipStatus.SHIPPED.value: "b.shipped_at DESC NULLS LAST, b.id",
+    "全部": (
+        "CASE WHEN b.ship_status = '待打单' THEN 0 ELSE 1 END, "
+        "CASE WHEN b.ship_status = '待打单' THEN b.ship_pushed_at END ASC NULLS FIRST, "
+        "b.shipped_at DESC NULLS LAST, b.id"
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -824,6 +869,95 @@ class PromotionRepository:
             )
         return rows, total
 
+    # ----------------------- 仓库页（流程线 7.4） ----------------------- #
+
+    async def warehouse_shipments(
+        self,
+        *,
+        tenant_id: UUID,
+        bucket: str,
+        keyword: str | None,
+        search_receiver: bool,
+        page: int,
+        page_size: int,
+        today: date,
+        urge_threshold_days: int,
+        important_threshold_days: int,
+        promotion_id: UUID | None = None,
+    ) -> tuple[list[WarehouseShipmentRecord], int]:
+        """仓库页列表 / 导出 / 回填响应共用：只取投影列（不复用 ``list_with_cte``，免得整张单被读出来）。
+
+        只看启用的单。``keyword`` 匹配内部编码、款式编码、品名、商品全称 / 编码、SKU 编码（推广单自己的与明细的）、
+        快递单号；``search_receiver`` 为真时也匹配收件人（读不到收件人的人不能拿它当搜索条件）。
+        ``promotion_id``：只取这一张（回填后组响应）。阶段（``stage``）给矩阵 ``ui`` 用，阈值参数同列表。
+        """
+        statuses = _WAREHOUSE_BUCKETS[bucket]
+        base_where = [
+            "p.tenant_id = :tenant_id",
+            "p.is_active = true",
+            "p.ship_status = ANY(CAST(:statuses AS varchar[]))",
+        ]
+        params: dict[str, Any] = {
+            "tenant_id": tenant_id,
+            "statuses": list(statuses),
+            "today": today,
+            "urge_days": urge_threshold_days,
+            "important_days": important_threshold_days,
+            "legacy_key": "颜色及规格",
+        }
+        if promotion_id is not None:
+            base_where.append("p.id = :promotion_id")
+            params["promotion_id"] = promotion_id
+        display = display_short_name_sql(promotion="b")
+        # 阶段只在只有推广单列的这一层算：goods_main / sku 也有 is_active，放进 JOIN 那层会歧义
+        from_sql = f"""
+        WITH base AS (
+            SELECT p.*, {stage_sql_expr()} AS stage
+            FROM promotion p
+            WHERE {" AND ".join(base_where)}
+        )
+        SELECT b.id, b.pr_id, b.internal_code, b.style_code_snapshot AS style_code,
+               {display} AS display_short_name,
+               g.goods_code, g.goods_title, ps.sku_code,
+               b.source_extra ->> CAST(:legacy_key AS text) AS legacy_color_spec,
+               b.receiver_name, b.receiver_phone, b.receiver_address,
+               b.ship_status, b.ship_pushed_at,
+               COALESCE(u.display_name, u.username) AS ship_pushed_by_name,
+               b.ship_courier, b.ship_waybill, b.shipped_at, b.stage
+        FROM base b
+        LEFT JOIN goods_main g ON g.id = b.goods_main_id AND g.tenant_id = b.tenant_id
+        LEFT JOIN sku ps ON ps.id = b.sku_id
+        LEFT JOIN "user" u ON u.id = b.ship_pushed_by
+        WHERE 1=1
+        """
+        if keyword:
+            ors = [
+                "b.internal_code ILIKE CAST(:kw AS text)",
+                "b.style_code_snapshot ILIKE CAST(:kw AS text)",
+                f"{display} ILIKE CAST(:kw AS text)",
+                "g.goods_title ILIKE CAST(:kw AS text)",
+                "g.goods_code ILIKE CAST(:kw AS text)",
+                "ps.sku_code ILIKE CAST(:kw AS text)",
+                "b.ship_waybill ILIKE CAST(:kw AS text)",
+                "EXISTS (SELECT 1 FROM promotion_item pi JOIN sku isk ON isk.id = pi.sku_id "
+                "WHERE pi.promotion_id = b.id AND isk.sku_code ILIKE CAST(:kw AS text))",
+            ]
+            if search_receiver:
+                ors.append("b.receiver_name ILIKE CAST(:kw AS text)")
+            from_sql += " AND (" + " OR ".join(ors) + ")"
+            params["kw"] = f"%{keyword}%"
+
+        total = int(
+            (
+                await self._session.execute(text(f"SELECT COUNT(*) FROM ({from_sql}) AS c"), params)
+            ).scalar_one()
+        )
+        data_sql = f"{from_sql} ORDER BY {_WAREHOUSE_ORDER[bucket]} LIMIT :limit OFFSET :offset"
+        params["limit"] = page_size
+        params["offset"] = (page - 1) * page_size
+        result = await self._session.execute(text(data_sql), params)
+        return [WarehouseShipmentRecord(**row) for row in result.mappings().all()], total
+
 
 # ---------------------------------------------------------------------------
 # 商品明细（promotion_item，流程线 M1）
@@ -842,6 +976,9 @@ class PromotionItemView:
     style_name: str
     style_short_name: str | None
     style_main_image_key: str | None
+    style_code: str
+    sku_code: str
+    """编码只进仓库导出（对账用），页面不显示。"""
 
 
 class PromotionItemRepository:
@@ -866,6 +1003,8 @@ class PromotionItemRepository:
                 Style.style_name,
                 Style.short_name,
                 Style.main_image_key,
+                Style.style_code,
+                Sku.sku_code,
             )
             .join(Sku, Sku.id == PromotionItem.sku_id)
             .join(Style, Style.id == PromotionItem.style_id)
@@ -992,4 +1131,5 @@ __all__ = [
     "PromotionListFilters",
     "PromotionListRow",
     "PromotionRepository",
+    "WarehouseShipmentRecord",
 ]

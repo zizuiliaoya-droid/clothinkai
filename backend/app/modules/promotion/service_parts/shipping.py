@@ -8,28 +8,58 @@
 
 from __future__ import annotations
 
+import builtins
+from collections.abc import Mapping
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+from app.core.security.field_permissions import can_read_field
 from app.modules.auth.models import User
-from app.modules.flow.matrix import ensure_gates, require
-from app.modules.promotion.enums import ShipStatus
+from app.modules.flow.matrix import FlowActor, ensure_gates, require, ui_for
+from app.modules.promotion.display_name import normalize_goods_short_name
+from app.modules.promotion.enums import ShipCourier, ShipStatus
 from app.modules.promotion.exceptions import (
+    ExportTooManyRowsError,
     PromotionNotFoundError,
+    ShippedAtInFutureError,
     StateTransitionConflictError,
 )
+from app.modules.promotion.flow_doc import build_warehouse_doc
 from app.modules.promotion.models import Promotion
 from app.modules.promotion.receiver import RECEIVER_FIELDS
+from app.modules.promotion.repository import PromotionItemView, WarehouseShipmentRecord
 from app.modules.promotion.schemas import (
     PromotionResponse,
     PromotionShipPushRequest,
     PromotionShipWithdrawRequest,
+    PromotionWarehouseWaybillRequest,
+    WarehouseShipmentItem,
+    WarehouseShipmentPage,
+    WarehouseShipmentRow,
 )
 from app.modules.promotion.service_parts.base import PromotionServiceBase, _utcnow
+from app.modules.promotion.shipment_export import (
+    EXPORT_ROW_LIMIT,
+    ShipmentExportItem,
+    ShipmentExportRow,
+    build_shipment_workbook,
+    count_lines,
+)
+from app.modules.promotion.urge_calculator import get_today
+from app.modules.urge.service import UrgeService
+
+
+def _item_short_name(view: PromotionItemView) -> str:
+    return normalize_goods_short_name(view.style_short_name) or view.style_name
+
+
+def _iso(v: datetime | None) -> str | None:
+    return v.isoformat() if v is not None else None
 
 
 class PromotionShippingMixin(PromotionServiceBase):
-    """纳入发货 / 确认推送仓库 / 撤回推送。"""
+    """纳入发货 / 确认推送仓库 / 撤回推送；仓库页列表、导出与回填（7.4，S5 / S6）。"""
 
     async def _get_or_404(self, promotion_id: UUID) -> Promotion:
         promotion = await self._repo.get_by_id(promotion_id)
@@ -169,3 +199,218 @@ class PromotionShippingMixin(PromotionServiceBase):
         )
         await self._session.commit()
         return await self._to_response(updated, user, actor=actor)
+
+    # ============================================================
+    # 仓库页（7.4）：只回 WarehouseShipmentRow 投影，仓库从任何接口都拿不到整张推广单
+    # ============================================================
+
+    async def _warehouse_records(
+        self,
+        user: User,
+        actor: FlowActor,
+        *,
+        bucket: str,
+        keyword: str | None,
+        page: int,
+        page_size: int,
+        promotion_id: UUID | None = None,
+    ) -> tuple[builtins.list[WarehouseShipmentRecord], int]:
+        thresholds = await UrgeService(self._session).get_urge_thresholds(user.tenant_id)
+        return await self._repo.warehouse_shipments(
+            tenant_id=user.tenant_id,
+            bucket=bucket,
+            keyword=(keyword or "").strip() or None,
+            search_receiver=can_read_field("promotion", "receiver_name", actor.field_ctx),
+            page=page,
+            page_size=page_size,
+            today=get_today(),
+            urge_threshold_days=thresholds.urge_days,
+            important_threshold_days=thresholds.important_days,
+            promotion_id=promotion_id,
+        )
+
+    @staticmethod
+    def _receiver_view(record: WarehouseShipmentRecord, actor: FlowActor) -> dict[str, Any]:
+        """收件三项逐项过字段规则（仓库行也过注册表，细化 §2）。"""
+        return {
+            f: (getattr(record, f) if can_read_field("promotion", f, actor.field_ctx) else None)
+            for f in RECEIVER_FIELDS
+        }
+
+    def _warehouse_row(
+        self,
+        record: WarehouseShipmentRecord,
+        items: builtins.list[PromotionItemView],
+        actor: FlowActor,
+    ) -> WarehouseShipmentRow:
+        doc = build_warehouse_doc(
+            stage=record.stage, pr_id=record.pr_id, ship_status=record.ship_status
+        )
+        actions = ui_for(actor, doc).actions
+        return WarehouseShipmentRow(
+            id=record.id,
+            internal_code=record.internal_code,
+            style_code=record.style_code,
+            display_short_name=record.display_short_name,
+            goods_title=record.goods_title,
+            items=[
+                WarehouseShipmentItem(
+                    display_short_name=_item_short_name(i), color=i.color, size=i.size
+                )
+                for i in items
+            ],
+            legacy_color_spec=None if items else record.legacy_color_spec,
+            **self._receiver_view(record, actor),
+            # 事件表随 M2（PR-4），这之前恒为 false
+            receiver_updated_after_push=False,
+            items_updated_after_push=False,
+            ship_status=record.ship_status,
+            ship_pushed_at=record.ship_pushed_at,
+            ship_pushed_by_name=record.ship_pushed_by_name,
+            ship_courier=record.ship_courier,
+            ship_waybill=record.ship_waybill,
+            shipped_at=record.shipped_at,
+            ui={"actions": {k: a.to_dict() for k, a in actions.items()}},
+        )
+
+    async def _items_of(
+        self, records: builtins.list[WarehouseShipmentRecord]
+    ) -> Mapping[UUID, builtins.list[PromotionItemView]]:
+        return await self._items_repo.list_by_promotions([r.id for r in records])
+
+    async def list_warehouse_shipments(
+        self, *, bucket: str, keyword: str | None, page: int, page_size: int, user: User
+    ) -> WarehouseShipmentPage:
+        actor = await self._flow_actor(user)
+        records, total = await self._warehouse_records(
+            user, actor, bucket=bucket, keyword=keyword, page=page, page_size=page_size
+        )
+        items = await self._items_of(records)
+        page_actions: dict[str, Any] = {}
+        if actor.perms.has("promotion_ship", "export"):
+            page_actions["export"] = {"state": "enabled"}
+        return WarehouseShipmentPage(
+            items=[self._warehouse_row(r, items.get(r.id, []), actor) for r in records],
+            total=total,
+            page=page,
+            page_size=page_size,
+            couriers=[c.value for c in ShipCourier],
+            ui={"actions": page_actions},
+        )
+
+    async def export_warehouse_shipments(
+        self, *, bucket: str, keyword: str | None, user: User
+    ) -> bytes:
+        """导出 xlsx：超过 ``EXPORT_ROW_LIMIT`` 张单 → 422 提示缩小范围；每次导出写一条 audit_log。"""
+        actor = await self._flow_actor(user)
+        records, total = await self._warehouse_records(
+            user, actor, bucket=bucket, keyword=keyword, page=1, page_size=EXPORT_ROW_LIMIT
+        )
+        if total > EXPORT_ROW_LIMIT:
+            raise ExportTooManyRowsError(
+                f"命中 {total} 张，超过导出上限 {EXPORT_ROW_LIMIT}，请缩小范围",
+                details={"total": total, "limit": EXPORT_ROW_LIMIT},
+            )
+        items = await self._items_of(records)
+        rows = [
+            ShipmentExportRow(
+                internal_code=r.internal_code,
+                ship_pushed_at=r.ship_pushed_at,
+                **self._receiver_view(r, actor),
+                style_code=r.style_code,
+                goods_code=r.goods_code,
+                sku_code=r.sku_code,
+                short_name=r.display_short_name,
+                legacy_color_spec=r.legacy_color_spec,
+                items=tuple(
+                    ShipmentExportItem(
+                        style_code=i.style_code,
+                        sku_code=i.sku_code,
+                        short_name=_item_short_name(i),
+                        color=i.color,
+                        size=i.size,
+                    )
+                    for i in items.get(r.id, [])
+                ),
+            )
+            for r in records
+        ]
+        content = build_shipment_workbook(rows, watermark=None)
+        await self._audit.log(
+            action="warehouse.shipments.export",
+            resource="warehouse_shipment",
+            after={
+                "bucket": bucket,
+                "keyword": (keyword or "").strip() or None,
+                "promotions": len(rows),
+                "rows": count_lines(rows),
+            },
+            user_id=user.id,
+        )
+        await self._session.commit()
+        return content
+
+    async def update_warehouse_waybill(
+        self, promotion_id: UUID, payload: PromotionWarehouseWaybillRequest, user: User
+    ) -> WarehouseShipmentRow:
+        """S5 仓库回填（待打单 → 已发货）/ S6 改快递信息（已发货不变）。
+
+        404 → 状态机（只认待打单 / 已发货，422）→ 矩阵（H 列只有管理员，403）→ 发货时间不晚于现在（422）
+        → 条件 UPDATE（发货状态没被别人改过，否则 409）。audit_log 记前后值；只回仓库行投影。
+        """
+        promotion = await self._get_or_404(promotion_id)
+        actor = await self._flow_actor(user)
+        stage = await self._compute_stage(promotion)
+        doc = build_warehouse_doc(
+            stage=stage, pr_id=promotion.pr_id, ship_status=promotion.ship_status
+        )
+        require(actor, doc, "ship_fill")
+        now = _utcnow()
+        shipped_at = payload.shipped_at or now
+        if shipped_at > now:
+            raise ShippedAtInFutureError(
+                "发货时间不能晚于现在",
+                details={"shipped_at": shipped_at.isoformat(), "now": now.isoformat()},
+            )
+        before = {
+            "ship_status": promotion.ship_status,
+            "ship_courier": promotion.ship_courier,
+            "ship_waybill": promotion.ship_waybill,
+            "shipped_at": _iso(promotion.shipped_at),
+        }
+        await self._ship_transition(
+            promotion,
+            user,
+            from_state=promotion.ship_status,
+            to_state=ShipStatus.SHIPPED.value,
+            extra_fields={
+                "ship_courier": payload.courier.value,
+                "ship_waybill": payload.waybill,
+                "shipped_at": shipped_at,
+            },
+        )
+        await self._audit.log(
+            action="promotion.warehouse_waybill.update",
+            resource="promotion",
+            resource_id=promotion_id,
+            before=before,
+            after={
+                "ship_status": ShipStatus.SHIPPED.value,
+                "ship_courier": payload.courier.value,
+                "ship_waybill": payload.waybill,
+                "shipped_at": shipped_at.isoformat(),
+            },
+            user_id=user.id,
+        )
+        await self._session.commit()
+        records, _ = await self._warehouse_records(
+            user,
+            actor,
+            bucket="全部",
+            keyword=None,
+            page=1,
+            page_size=1,
+            promotion_id=promotion_id,
+        )
+        items = await self._items_of(records)
+        return self._warehouse_row(records[0], items.get(promotion_id, []), actor)

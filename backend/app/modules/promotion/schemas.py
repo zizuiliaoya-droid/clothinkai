@@ -22,6 +22,7 @@ from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from pydantic import (
+    AwareDatetime,
     BaseModel,
     ConfigDict,
     Field,
@@ -36,6 +37,7 @@ from app.modules.promotion.enums import (
     RejectReasonCategory,
     ReviewAction,
     SettlementStatus,
+    ShipCourier,
 )
 
 _QuoteField = Annotated[
@@ -193,7 +195,16 @@ class PromotionPaymentQrBindRequest(BaseModel):
 
 
 class PromotionWarehouseWaybillRequest(BaseModel):
+    """仓库回填 / 改快递信息（流程线 S5 / S6）。旧 body 只传 ``waybill`` 会 422（前后端同一个 PR 上线）。
+
+    ``shipped_at`` 不传 = 现在；要带时区（不带的无法判断「不晚于现在」），晚于现在在 service 里 422。
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    courier: ShipCourier
     waybill: str = Field(min_length=1, max_length=128)
+    shipped_at: AwareDatetime | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -650,6 +661,65 @@ class PromotionListFilters(BaseModel):
     ship_status: ShipStatusFilter | None = None
 
 
+# ---------------------------------------------------------------------------
+# 仓库页 /api/warehouse（流程线 7.4）
+# ---------------------------------------------------------------------------
+
+
+WarehouseBucket = Literal["待打单", "已发货", "全部"]
+"""仓库页分桶：``全部`` = 待打单 + 已发货（不含待发货与历史单）。"""
+
+
+class WarehouseShipmentItem(BaseModel):
+    """仓库行的一个商品明细：只给对单要用的品名与颜色尺码（编码只进导出）。"""
+
+    display_short_name: str
+    color: str
+    size: str
+
+
+class WarehouseShipmentRow(BaseModel):
+    """仓库行投影（7.4）：仓库从任何接口都拿不到整张推广单。
+
+    没有博主、平台、发布链接、金额、收款码、``source_extra``（矩阵里对仓库都是「隐」）；
+    收件三项也过字段规则。列表与回填（``PATCH /{id}/warehouse-waybill``）都只回它。
+    """
+
+    id: UUID
+    internal_code: str
+    style_code: str
+    display_short_name: str
+    goods_title: str | None = None
+    items: list[WarehouseShipmentItem]
+    legacy_color_spec: str | None = None
+    """没有明细的旧单：「录入信息」里的颜色及规格原文。"""
+    receiver_name: str | None = None
+    receiver_phone: str | None = None
+    receiver_address: str | None = None
+    receiver_updated_after_push: bool = False
+    items_updated_after_push: bool = False
+    """推送后改过地址 / 明细。从事件推出，事件表随 M2（PR-4）上线，这之前恒为 false。"""
+    ship_status: str
+    ship_pushed_at: datetime | None = None
+    ship_pushed_by_name: str | None = None
+    ship_courier: str | None = None
+    ship_waybill: str | None = None
+    shipped_at: datetime | None = None
+    ui: dict[str, Any]
+    """``{"actions": {"ship_fill": …}}``：仓库行只有回填一个动作（``MATRICES["warehouse"]``）。"""
+
+
+class WarehouseShipmentPage(BaseModel):
+    items: list[WarehouseShipmentRow]
+    total: int
+    page: int
+    page_size: int
+    couriers: list[str]
+    """快递公司枚举（``ShipCourier``），前端不再写一份常量。"""
+    ui: dict[str, Any]
+    """页级动作：持 ``promotion_ship:export`` 才有 ``actions.export``（不进矩阵）。"""
+
+
 __all__ = [
     "PromotionBase",
     "PromotionCancelRequest",
@@ -677,4 +747,8 @@ __all__ = [
     "RetrospectiveConfirmRequest",
     "RetrospectiveResponse",
     "RetrospectiveSubmitRequest",
+    "WarehouseBucket",
+    "WarehouseShipmentItem",
+    "WarehouseShipmentPage",
+    "WarehouseShipmentRow",
 ]

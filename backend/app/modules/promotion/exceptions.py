@@ -232,6 +232,21 @@ class RetroContentMissingError(ValidationError):
     code = "RETRO_CONTENT_MISSING"
 
 
+class ShippedAtInFutureError(ValidationError):
+    """仓库回填的发货时间晚于现在（流程线 3.3 S5 / S6）。"""
+
+    code = "SHIPPED_AT_IN_FUTURE"
+
+
+class ExportTooManyRowsError(ValidationError):
+    """导出超过上限（仓库待打单导出 5,000 张单，11-26）：提示缩小范围。
+
+    ``details``：``{"total": 命中张数, "limit": 上限}``。
+    """
+
+    code = "EXPORT_TOO_MANY_ROWS"
+
+
 # ---------------------------------------------------------------------------
 # 状态机冲突
 # ---------------------------------------------------------------------------
@@ -269,6 +284,7 @@ __all__ = [
     "CancelReasonRequiredError",
     "CooperationModeImmutableError",
     "CooperationModeRequiredError",
+    "ExportTooManyRowsError",
     "FieldPermissionDenied",  # re-exported from modules/product/exceptions
     "RejectReasonCategoryRequiredError",
     "ReturnWaybillRequiredError",
@@ -288,6 +304,7 @@ __all__ = [
     "SelfReviewForbiddenError",
     "SequenceOverflowError",
     "SettlementNotPaidError",
+    "ShippedAtInFutureError",
     "SourceExtraKeyRetiredError",
     "StateTransitionConflictError",
 ]

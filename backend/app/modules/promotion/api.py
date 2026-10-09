@@ -52,7 +52,6 @@ from app.modules.promotion.schemas import (
     PromotionReturnWaybillRequest,
     PromotionReviewRequest,
     PromotionUpdate,
-    PromotionWarehouseWaybillRequest,
     RetrospectiveConfirmRequest,
     RetrospectiveResponse,
     RetrospectiveSubmitRequest,
@@ -255,20 +254,6 @@ async def remove_payment_qr(
 ) -> Response:
     await service.remove_payment_qr(promotion_id, user)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
-
-
-@router.patch(
-    "/promotions/{promotion_id}/warehouse-waybill",
-    response_model=PromotionResponse,
-    dependencies=[require_permission("promotion.warehouse", "write")],
-)
-async def update_warehouse_waybill(
-    promotion_id: UUID,
-    payload: PromotionWarehouseWaybillRequest,
-    user: CurrentActiveUser,
-    service: PromotionServiceDep,
-) -> PromotionResponse:
-    return await service.update_warehouse_waybill(promotion_id, payload, user)
 
 
 @router.delete(

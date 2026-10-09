@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.tenancy import tenant_id_ctx
 from app.modules.auth.models import AuditLog
+from app.modules.promotion.enums import ShipCourier
 from app.modules.promotion.schemas import (
     PromotionListFilters,
     PromotionUpdate,
@@ -65,12 +66,13 @@ async def _seed(
     blogger_factory: Any,
     promotion_factory: Any,
     source_extra: dict[str, Any],
+    **kw: Any,
 ) -> tuple[Any, UUID]:
     pr = await factory.user(tenant_a, roles=[pr_role])
     style = await product_factory.style()
     blogger = await blogger_factory.blogger()
     promo = await promotion_factory.promotion(
-        style=style, blogger=blogger, pr=pr, source_extra=source_extra
+        style=style, blogger=blogger, pr=pr, source_extra=source_extra, **kw
     )
     return pr, promo.id
 
@@ -119,7 +121,10 @@ class TestSourceExtraMerge:
         blogger_factory: Any,
         promotion_factory: Any,
     ) -> None:
-        """② PR 打开录入信息时还没有发货单号；仓库此时回填 SF123；PR 只改订单号保存 → SF123 仍在。"""
+        """② PR 打开录入信息时还没有发货单号；仓库此时回填 SF123；PR 只改订单号保存 → SF123 仍在。
+
+        060 起发货单号是 typed 列 ``ship_waybill``（回填不再写 ``source_extra``），录入信息的补丁碰不到它。
+        """
         token = tenant_id_ctx.set(tenant_a.id)
         try:
             pr, pid = await _seed(
@@ -129,29 +134,36 @@ class TestSourceExtraMerge:
                 product_factory=product_factory,
                 blogger_factory=blogger_factory,
                 promotion_factory=promotion_factory,
-                source_extra={"打单地址": "浙江省杭州市某路 1 号"},
+                source_extra={"负责PR": "小王"},
+                ship_status="待打单",
             )
             svc = PromotionService(session)
             # PR 打开弹窗时的快照（列表接口给的）：没有发货单号
             page = await svc.list_promotions(
                 filters=PromotionListFilters(), page=1, page_size=20, user=pr
             )
-            snapshot = next(p.source_extra for p in page.items if p.id == pid)
-            assert "发货单号" not in snapshot
+            row = next(p for p in page.items if p.id == pid)
+            assert row.ship_waybill is None
+            snapshot = row.source_extra
 
             warehouse = await factory.user(tenant_a, roles=[admin_role])
             await svc.update_warehouse_waybill(
-                pid, PromotionWarehouseWaybillRequest(waybill="SF123"), warehouse
+                pid,
+                PromotionWarehouseWaybillRequest(courier=ShipCourier.SF, waybill="SF123"),
+                warehouse,
             )
 
             # 前端只提交相对快照改过的键
+            assert snapshot == {"负责PR": "小王"}
             await svc.update_promotion(pid, PromotionUpdate(source_extra={"订单号": "TB001"}), pr)
 
-            assert await _db_extra(session, pid) == {
-                "打单地址": "浙江省杭州市某路 1 号",
-                "发货单号": "SF123",
-                "订单号": "TB001",
-            }
+            assert await _db_extra(session, pid) == {"负责PR": "小王", "订单号": "TB001"}
+            waybill = (
+                await session.execute(
+                    sa_text("SELECT ship_waybill FROM promotion WHERE id = :pid"), {"pid": pid}
+                )
+            ).scalar_one()
+            assert waybill == "SF123"
         finally:
             tenant_id_ctx.reset(token)
 
