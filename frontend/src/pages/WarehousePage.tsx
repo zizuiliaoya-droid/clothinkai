@@ -1,5 +1,5 @@
 import { useState, type CSSProperties } from "react";
-import { Button, Card, Input, Segmented, Table, Tag, Typography, message, theme } from "antd";
+import { Button, Card, Input, Result, Segmented, Table, Tag, Typography, message, theme } from "antd";
 import { DownloadOutlined } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
 import type { ColumnsType } from "antd/es/table";
@@ -13,7 +13,12 @@ import {
   WAREHOUSE_QUERY_KEY,
   WaybillFillModal,
 } from "@/features/warehouse/components/WaybillFillModal";
-import { exportErrorMessage, exportFilename, fillActionLabel } from "@/features/warehouse/shipmentForm";
+import {
+  exportErrorMessage,
+  exportFilename,
+  fillActionLabel,
+  isForbiddenError,
+} from "@/features/warehouse/shipmentForm";
 import {
   WAREHOUSE_BUCKETS,
   type WarehouseBucket,
@@ -39,9 +44,11 @@ export function WarehousePage() {
   const [exporting, setExporting] = useState(false);
 
   const kw = keyword.trim() || undefined;
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error } = useQuery({
     queryKey: [...WAREHOUSE_QUERY_KEY, bucket, kw, page, pageSize],
     queryFn: () => listWarehouseShipments({ bucket, keyword: kw, page, page_size: pageSize }),
+    // 403 重试没有意义，直接显示无权限
+    retry: (count, err) => !isForbiddenError(err) && count < 1,
   });
 
   const rows = data?.items ?? [];
@@ -163,13 +170,28 @@ export function WarehousePage() {
     },
   ];
 
+  const title = (
+    <Typography.Title level={4} style={{ margin: 0 }}>
+      仓库发货
+    </Typography.Title>
+  );
+
+  // 菜单只对仓库 / 管理员显示；直接输入 URL 进来、接口 403 时给明确提示，不显示空表
+  if (isForbiddenError(error)) {
+    return (
+      <Card title={title}>
+        <Result
+          status="403"
+          title="没有权限查看仓库发货"
+          subTitle="仓库发货只对仓库和管理员开放；需要查看请联系管理员开通权限。"
+        />
+      </Card>
+    );
+  }
+
   return (
     <Card
-      title={
-        <Typography.Title level={4} style={{ margin: 0 }}>
-          仓库发货
-        </Typography.Title>
-      }
+      title={title}
       extra={
         canExport ? (
           <Button

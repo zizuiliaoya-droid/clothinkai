@@ -6,6 +6,7 @@ import {
   exportFilename,
   fillActionLabel,
   fillInitialValues,
+  isForbiddenError,
   shippedAtError,
   waybillPayload,
 } from "./shipmentForm";
@@ -134,5 +135,15 @@ describe("exportErrorMessage", () => {
     await expect(
       exportErrorMessage({ response: { status: 403, data: { code: "PERMISSION_DENIED", message: "没有权限" } } })
     ).resolves.toBe("没有权限");
+  });
+});
+
+describe("isForbiddenError", () => {
+  it("只有 403 算无权限；500 / 网络错误 / 空值不算", () => {
+    expect(isForbiddenError({ response: { status: 403, data: { code: "PERMISSION_DENIED" } } })).toBe(true);
+    expect(isForbiddenError({ response: { status: 500 } })).toBe(false);
+    expect(isForbiddenError({ response: { status: 401 } })).toBe(false);
+    expect(isForbiddenError(new Error("Network Error"))).toBe(false);
+    expect(isForbiddenError(null)).toBe(false);
   });
 });

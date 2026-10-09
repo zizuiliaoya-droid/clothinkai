@@ -10,6 +10,11 @@ export function exportFilename(now: Dayjs): string {
   return `待打单_${now.format("YYYYMMDD_HHmm")}.xlsx`;
 }
 
+/** 列表接口 403（没有 promotion_ship:fill，如直接输入 URL 进来的 PR / 主管 / 运营）：页面显示无权限，不重试。 */
+export function isForbiddenError(err: unknown): boolean {
+  return (err as { response?: { status?: unknown } } | null | undefined)?.response?.status === 403;
+}
+
 /** 行操作文案：待打单「回填」，已发货「改单号」。 */
 export function fillActionLabel(status: WarehouseShipmentRow["ship_status"]): string {
   return status === "已发货" ? "改单号" : "回填";

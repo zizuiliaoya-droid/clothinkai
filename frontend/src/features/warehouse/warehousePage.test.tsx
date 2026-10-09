@@ -34,7 +34,10 @@ beforeAll(() => {
   }
 });
 
-beforeEach(() => listMock.mockReset());
+// 花括号不能省：beforeEach 返回的函数会被当成清理函数在用例结束后调用（返回 mockReset() 的 spy 会被多调一次）
+beforeEach(() => {
+  listMock.mockReset();
+});
 afterEach(cleanup);
 
 function row(over: Partial<WarehouseShipmentRow>): WarehouseShipmentRow {
@@ -162,6 +165,20 @@ describe("WarehousePage", () => {
     renderPage();
     expect(await screen.findByRole("button", { name: "回填" })).toBeTruthy();
     expect(screen.getAllByRole("button", { name: "改单号" })).toHaveLength(1);
+  });
+
+  it("接口 403（直接输入 URL 进来的非仓库角色）：显示「没有权限查看仓库发货」，不显示空表", async () => {
+    // 形状同 AxiosError：Error 上挂 response
+    listMock.mockRejectedValue(
+      Object.assign(new Error("Request failed with status code 403"), {
+        response: { status: 403, data: { code: "PERMISSION_DENIED", message: "没有权限" } },
+      })
+    );
+    renderPage();
+    expect(await screen.findByText("没有权限查看仓库发货")).toBeTruthy();
+    expect(screen.queryByText("暂无数据")).toBeNull();
+    expect(screen.queryByRole("table")).toBeNull();
+    expect(screen.queryByText("待打单")).toBeNull();
   });
 
   it("回填弹窗：顶部只读收件三项与颜色尺码，快递公司选项来自接口", async () => {
