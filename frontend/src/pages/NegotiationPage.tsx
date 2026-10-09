@@ -41,8 +41,8 @@ import { useAuthStore } from "@/stores/authStore";
 import { BloggerHoverCard } from "@/components/BloggerHoverCard/BloggerHoverCard";
 import { BloggerSelect } from "@/components/RemoteSelect/BloggerSelect";
 import { StyleSelect } from "@/components/RemoteSelect/StyleSelect";
+import { PLATFORMS } from "@/features/common/platforms";
 
-const PLATFORMS = ["小红书", "抖音", "快手", "B站"];
 const MODES: CooperationMode[] = ["寄拍", "送拍", "置换"];
 
 const MODE_HINT: Record<CooperationMode, string> = {
