@@ -8,7 +8,7 @@ service 里按来源调本模块判断。
   ``product.import:write``：跟单与运营（``product.*:*``）、管理员（``*``）命中；PR / 主管只有
   ``importer.*`` 与 W1 给的精确 ``product.style:read``，不命中——这就是从 PR / 主管收回的方式，
   不改他们的角色数据
-- 博主（``manual_blogger``）的裁决看 ``blogger:write``，其余同默认
+- 博主（``manual_blogger``、8b 的灰豚抖音 ``huitun_douyin``）的裁决看 ``blogger:write``，其余同默认
 - 其他来源（含未注册的来源）走默认规则，与 8a 之前一致
 - 批次可见性 = 原有 ``importer.batch:read`` **或**来源自己的 ``view`` 权限
 
@@ -56,6 +56,8 @@ SOURCE_ACCESS: dict[str, SourceAccess] = {
         resolve=(SCOPE_PRODUCT_IMPORT, "write"),
     ),
     "manual_blogger": replace(_DEFAULT, resolve=("blogger", "write")),
+    # 8b §6.7：灰豚抖音博主库与手工博主同一套
+    "huitun_douyin": replace(_DEFAULT, resolve=("blogger", "write")),
 }
 
 # 来源的中文名（导入记录页、权限说明用）；没列的来源显示来源编码本身
@@ -69,6 +71,7 @@ SOURCE_LABELS: dict[str, str] = {
     "manual_tao_order": "拍单",
     "manual_brush_order": "刷单",
     "huitun": "灰豚博主画像",
+    "huitun_douyin": "灰豚抖音博主库",
 }
 
 _BATCH_READ: tuple[str, str] = ("importer.batch", "read")

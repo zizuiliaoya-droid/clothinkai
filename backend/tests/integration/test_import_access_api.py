@@ -333,7 +333,7 @@ class TestConflictAccessHttp:
             resp = await c.get("/api/imports/access")
         assert resp.status_code == 200
         configurable = {i["source"] for i in resp.json() if i["configurable"]}
-        assert configurable == {STYLE_SKU, "manual_blogger"}
+        assert configurable == {STYLE_SKU, "manual_blogger", "huitun_douyin"}
 
     async def test_conflicts_visible_by_source(
         self, as_role: Any, session: AsyncSession, tenant_a: Any, import_batch_factory: Any

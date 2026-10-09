@@ -51,6 +51,8 @@ DUPLICATE_RULES: dict[str, DuplicateRule] = {
     ),
     # 博主：（平台, 账号）（8b-1；平台空当小红书）
     "manual_blogger": DuplicateRule(DuplicatePolicy.COMPARE, key="平台 + 账号", configurable=True),
+    # 灰豚抖音博主库：抖音 + 博主ID（8b §6.7；同 manual_blogger 的引擎）
+    "huitun_douyin": DuplicateRule(DuplicatePolicy.COMPARE, key="抖音博主ID", configurable=True),
     # 财务结款单：推广单一对一，已有结算单 → 该行失败，不进冲突（FB3，写死）
     "manual_settlement": DuplicateRule(DuplicatePolicy.REJECT, key="推广单"),
     # 推广单：每行新建，永不覆盖（FB3）

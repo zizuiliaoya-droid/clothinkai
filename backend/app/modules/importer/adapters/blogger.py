@@ -139,8 +139,8 @@ QUALITY_TAGS_NOTICE_KEY = "blogger.quality_tags_ignored"
 QUALITY_TAGS_NOTICE = "质量标签是系统标签，由重算自动计算，导入不写入（整批只提示一次）"
 
 _REQUIRED: tuple[tuple[str, str], ...] = (
-    ("xiaohongshu_id", "账号"),
-    ("nickname", "昵称"),
+    ("xiaohongshu_id", "账号不能为空"),
+    ("nickname", "昵称不能为空"),
 )
 _MAX_LEN: tuple[tuple[str, int], ...] = (
     ("xiaohongshu_id", 64),
@@ -216,6 +216,8 @@ class BloggerImportAdapter:
     }
     # 可切换的重复策略（duplicate_rules 的声明须在其内，护栏测试会查）
     supported_policies: ClassVar[frozenset[DuplicatePolicy]] = SWITCHABLE_POLICIES
+    # 必填字段与为空时的行失败原因（灰豚抖音子类换成自己的文案）
+    _REQUIRED_ERRORS: ClassVar[tuple[tuple[str, str], ...]] = _REQUIRED
 
     def builtin_columns(self) -> list[dict[str, Any]]:
         """内置默认映射。"""
@@ -259,9 +261,9 @@ class BloggerImportAdapter:
     def validate(self, parsed: dict[str, Any]) -> list[str]:
         """返回错误描述列表（空=通过）。"""
         errs: list[str] = []
-        for field, label in _REQUIRED:
+        for field, message in self._REQUIRED_ERRORS:
             if not parsed.get(field):
-                errs.append(f"{label}不能为空")
+                errs.append(message)
         account = parsed.get("xiaohongshu_id")
         if isinstance(account, str) and account and not _ACCOUNT_RE.fullmatch(account):
             errs.append(ACCOUNT_PATTERN_ERROR)
@@ -359,6 +361,10 @@ class BloggerImportAdapter:
         existing = await repo.get_by_account(parsed.get("platform") or _DEFAULT_PLATFORM, xhs_id)
         if existing is None:
             return await self._insert(parsed, session=session, ctx=ctx, warnings=warnings)
+        reason = self._identity_mismatch(existing, parsed, ctx)
+        if reason is not None:  # 可能是不同的人：整行不导（不补空、不覆盖、不记冲突）
+            warnings.append(reason)
+            return RowOutcome(resource_id=existing.id, kind=RowKind.SKIPPED, warnings=warnings)
 
         rule = rule_for(ctx.source)
         if rule.policy is DuplicatePolicy.KEEP:
@@ -488,6 +494,16 @@ class BloggerImportAdapter:
             warnings.append(QUALITY_TAGS_NOTICE)
         return prepared
 
+    def _identity_mismatch(
+        self, existing: Blogger, parsed: dict[str, Any], ctx: ImportRowContext
+    ) -> str | None:
+        """命中已有 / 本批刚建的博主后、加锁之前：返回提示 = 本行整行不导。手工模版不判，返回 None。"""
+        return None
+
+    def _insert_extra(self, parsed: dict[str, Any]) -> dict[str, Any]:
+        """新建时另写的列（灰豚抖音的报价备注）；手工模版没有。"""
+        return {}
+
     async def _write_snapshot(
         self,
         blogger: Blogger,
@@ -528,6 +544,7 @@ class BloggerImportAdapter:
             "remark": parsed.get("remark"),
             "web_id": parsed.get("web_id"),
             "homepage_url": parsed.get("homepage_url"),
+            **self._insert_extra(parsed),
         }
         blogger = Blogger(tenant_id=ctx.tenant_id, **values)
         session.add(blogger)
@@ -576,8 +593,14 @@ class BloggerImportAdapter:
 
 
 def register() -> None:
-    """注册到 ImportAdapterRegistry（由 register_import_adapters 双进程调用，NF-4）。"""
+    """注册到 ImportAdapterRegistry（由 register_import_adapters 双进程调用，NF-4）。
+
+    灰豚抖音博主库（``huitun_douyin``，8b §6.3）一并注册，不改 ``main.py``。
+    """
+    from app.modules.importer.adapters.blogger_douyin import HuitunDouyinImportAdapter
+
     ImportAdapterRegistry.register(BloggerImportAdapter())
+    ImportAdapterRegistry.register(HuitunDouyinImportAdapter())
 
 
 __all__ = ["BloggerImportAdapter", "register"]
