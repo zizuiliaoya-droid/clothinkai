@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from decimal import Decimal
 from typing import Annotated
@@ -19,6 +20,27 @@ _QuoteField = Annotated[
     Decimal,
     Field(ge=Decimal("0"), max_digits=10, decimal_places=2),
 ]
+
+
+# 平台账号（历史原因叫 xiaohongshu_id）：抖音博主ID 含「.」（8b）
+_ACCOUNT_PATTERN = r"^[A-Za-z0-9_.\-]+$"
+ACCOUNT_FORMAT_ERROR = "账号只能包含字母、数字、_ . -"
+
+
+def is_valid_account(v: str) -> bool:
+    """新建、以及编辑时账号真的改了才用（历史账号含中文，原样保存时不校验）。"""
+    return re.fullmatch(_ACCOUNT_PATTERN, v) is not None
+
+
+def _blank_to_none(v: str | None) -> str | None:
+    return v or None
+
+
+def _validate_homepage_url(v: str | None) -> str | None:
+    # domain 模块 import 了本模块，这里延迟 import 防循环
+    from app.modules.blogger.domain import normalize_homepage_url
+
+    return normalize_homepage_url(v)
 
 
 def _validate_tag_items(v: list[str] | None) -> list[str] | None:
@@ -51,10 +73,14 @@ class BloggerBase(BaseModel):
     cooperation_history: str | None = None
     remark: str | None = None
     is_suspected_fake: bool = False
+    # 8b：抖音「网页ID」、博主主页链接（http / https）、报价备注（权限同报价）
+    web_id: str | None = Field(default=None, max_length=64)
+    homepage_url: str | None = None
+    quote_note: str | None = Field(default=None, max_length=500)
 
 
 class BloggerCreate(BloggerBase):
-    xiaohongshu_id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_\-]+$")
+    xiaohongshu_id: str = Field(min_length=1, max_length=64, pattern=_ACCOUNT_PATTERN)
 
     @field_validator("category_tags", "quality_tags")
     @classmethod
@@ -62,15 +88,24 @@ class BloggerCreate(BloggerBase):
         result = _validate_tag_items(v)
         return result if result is not None else []
 
+    @field_validator("web_id", "quote_note")
+    @classmethod
+    def _blank_optional(cls, v: str | None) -> str | None:
+        return _blank_to_none(v)
+
+    @field_validator("homepage_url")
+    @classmethod
+    def _homepage_url(cls, v: str | None) -> str | None:
+        return _validate_homepage_url(v)
+
 
 class BloggerUpdate(BaseModel):
     """部分更新（PATCH 语义）。"""
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
-    xiaohongshu_id: str | None = Field(
-        default=None, min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_\-]+$"
-    )
+    # 不挂格式：历史账号（含中文）原样提交时不能 422；账号真的改了才由 service 校验格式
+    xiaohongshu_id: str | None = Field(default=None, min_length=1, max_length=64)
     nickname: str | None = Field(default=None, min_length=1, max_length=128)
     platform: Platform | None = None
     level: str | None = Field(default=None, max_length=8)
@@ -92,17 +127,31 @@ class BloggerUpdate(BaseModel):
     is_suspected_fake: bool | None = None
     is_active: bool | None = None
     crawler_metrics: dict | None = None
+    # 8b：可清空（空串 / null → None，按 model_fields_set 判断有没有传）
+    web_id: str | None = Field(default=None, max_length=64)
+    homepage_url: str | None = None
+    quote_note: str | None = Field(default=None, max_length=500)
 
     @field_validator("category_tags", "quality_tags")
     @classmethod
     def _validate_tags(cls, v: list[str] | None) -> list[str] | None:
         return _validate_tag_items(v)
 
+    @field_validator("web_id", "quote_note")
+    @classmethod
+    def _blank_optional(cls, v: str | None) -> str | None:
+        return _blank_to_none(v)
+
+    @field_validator("homepage_url")
+    @classmethod
+    def _homepage_url(cls, v: str | None) -> str | None:
+        return _validate_homepage_url(v)
+
 
 class BloggerResponse(BaseModel):
     """博主响应。
 
-    敏感字段（quote / wechat / phone）按角色过滤
+    敏感字段（quote / quote_note / wechat / phone）按角色过滤
     （详见 ``service.BloggerService.to_response``）。
     """
 
@@ -138,6 +187,11 @@ class BloggerResponse(BaseModel):
     read_like_ratio: Decimal | None = None
     # 灰豚爬虫指标（对齐 final.xlsx 博主库 41 列）
     crawler_metrics: dict = Field(default_factory=dict)
+    # 8b：网页ID、主页链接、平台统计（灰豚抖音，只读）、报价备注（敏感，权限同报价）
+    web_id: str | None = None
+    homepage_url: str | None = None
+    platform_metrics: dict | None = None
+    quote_note: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -149,10 +203,53 @@ class BloggerPage(BaseModel):
     page_size: int
 
 
+# ---------------------------------------------------------------------------
+# 8b-3 标签字典
+# ---------------------------------------------------------------------------
+
+
+class BloggerTagCreate(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    value: str = Field(min_length=1, max_length=32)
+    sort_order: int = Field(default=0, ge=0, le=9999)
+
+
+class BloggerTagItem(BaseModel):
+    id: UUID
+    value: str
+    sort_order: int
+
+
+class BloggerTagDictResponse(BaseModel):
+    items: list[BloggerTagItem]
+    system_tags: list[str]
+    # 前端据此显隐增删按钮（= 持有 blogger_tag:write），不硬编码角色
+    can_manage: bool
+
+
+class BloggerMissingTagItem(BaseModel):
+    tag: str
+    count: int
+    rows: list[int]  # 前 20 个行号（import_job.row_number），升序
+
+
+class BloggerMissingTagsResponse(BaseModel):
+    """导入缺的标签（§6.6）：``batch_id`` 为 None = 没有看得到的博主导入批次。"""
+
+    batch_id: UUID | None
+    items: list[BloggerMissingTagItem]
+
+
 __all__ = [
     "BloggerBase",
     "BloggerCreate",
+    "BloggerMissingTagItem",
+    "BloggerMissingTagsResponse",
     "BloggerPage",
     "BloggerResponse",
+    "BloggerTagCreate",
+    "BloggerTagDictResponse",
+    "BloggerTagItem",
     "BloggerUpdate",
 ]

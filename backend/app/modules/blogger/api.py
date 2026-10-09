@@ -21,16 +21,24 @@ from fastapi.responses import Response
 
 from app.modules.auth.deps import (
     CurrentActiveUser,
+    CurrentPerms,
     require_permission,
 )
-from app.modules.blogger.deps import BloggerServiceDep
+from app.modules.blogger.deps import BloggerServiceDep, BloggerTagDictServiceDep
 from app.modules.blogger.repository import BloggerListFilters
 from app.modules.blogger.schemas import (
     BloggerCreate,
+    BloggerMissingTagItem,
+    BloggerMissingTagsResponse,
     BloggerPage,
     BloggerResponse,
+    BloggerTagCreate,
+    BloggerTagDictResponse,
+    BloggerTagItem,
     BloggerUpdate,
 )
+from app.modules.blogger.tag_config import SYSTEM_TAGS
+from app.modules.product.dict_models import DictItem
 
 router = APIRouter(prefix="/api", tags=["blogger"])
 
@@ -184,6 +192,84 @@ async def recompute_blogger_tags(
     同步重算（小数据量）；大数据量由 Celery ``recompute_all_blogger_tags`` 定时跑。
     """
     return await service.recompute_tags_for_current_tenant(user.tenant_id)
+
+
+# ---------------------------------------------------------------------------
+# 8b-3 标签字典（设计 §5.3）：读用 blogger:read；增删要 blogger_tag:write（主管 + 管理员）
+# ---------------------------------------------------------------------------
+
+
+def _tag_item(row: DictItem) -> BloggerTagItem:
+    return BloggerTagItem(id=row.id, value=row.value, sort_order=row.sort_order)
+
+
+@router.get(
+    "/blogger-tags",
+    response_model=BloggerTagDictResponse,
+    dependencies=[require_permission("blogger", "read")],
+)
+async def list_blogger_tags(
+    user: CurrentActiveUser,
+    perms: CurrentPerms,
+    service: BloggerTagDictServiceDep,
+) -> BloggerTagDictResponse:
+    rows = await service.list(user.tenant_id)
+    return BloggerTagDictResponse(
+        items=[_tag_item(r) for r in rows],
+        system_tags=sorted(SYSTEM_TAGS),
+        can_manage=perms.has("blogger_tag", "write"),
+    )
+
+
+@router.post(
+    "/blogger-tags",
+    response_model=BloggerTagItem,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[require_permission("blogger_tag", "write")],
+)
+async def create_blogger_tag(
+    payload: BloggerTagCreate,
+    user: CurrentActiveUser,
+    service: BloggerTagDictServiceDep,
+) -> BloggerTagItem:
+    return _tag_item(await service.create(payload.value, payload.sort_order, user))
+
+
+@router.get(
+    "/blogger-tags/missing",
+    response_model=BloggerMissingTagsResponse,
+    dependencies=[require_permission("blogger", "read")],
+)
+async def list_missing_blogger_tags(
+    user: CurrentActiveUser,
+    perms: CurrentPerms,
+    service: BloggerTagDictServiceDep,
+    batch_id: UUID | None = None,
+) -> BloggerMissingTagsResponse:
+    """导入缺的标签（§6.6）：该批里不在当前字典的类目标签，读时现算。
+
+    批次可见性另按来源判（``importer/access.py::can_view``），看不到 → 404。
+    """
+    result = await service.missing_tags_for_batch(user.tenant_id, perms, batch_id)
+    return BloggerMissingTagsResponse(
+        batch_id=result.batch_id,
+        items=[BloggerMissingTagItem(tag=i.tag, count=i.count, rows=i.rows) for i in result.items],
+    )
+
+
+@router.delete(
+    "/blogger-tags/{tag_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[require_permission("blogger_tag", "write")],
+)
+async def delete_blogger_tag(
+    tag_id: UUID,
+    user: CurrentActiveUser,
+    service: BloggerTagDictServiceDep,
+) -> Response:
+    """只删字典项，不动博主身上已有的标签。"""
+    await service.delete(tag_id, user)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 __all__ = ["router"]

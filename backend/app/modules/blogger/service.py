@@ -32,17 +32,24 @@ from app.modules.blogger.domain import (
 from app.modules.blogger.exceptions import (
     BloggerHasReferenceError,
     BloggerNotFoundError,
+    BloggerSystemTagReadonlyError,
+    BloggerTagNotInDictError,
     BloggerXhsIdConflictError,
     FieldPermissionDenied,
+    InvalidAccountFormatError,
 )
 from app.modules.blogger.models import Blogger
 from app.modules.blogger.repository import BloggerListFilters, BloggerRepository
 from app.modules.blogger.schemas import (
+    ACCOUNT_FORMAT_ERROR,
     BloggerCreate,
     BloggerPage,
     BloggerResponse,
     BloggerUpdate,
+    is_valid_account,
 )
+from app.modules.blogger.tag_config import SYSTEM_TAGS, TYPE_GRADED_PLATFORMS
+from app.modules.blogger.tag_dict import BloggerTagDictService
 from app.modules.blogger.tag_service import BloggerTagService
 from app.modules.promotion.repository import PromotionRepository
 
@@ -55,6 +62,7 @@ class BloggerService:
         self._perms = PermissionRepository(session)
         self._audit = AuditService(session)
         self._tags = BloggerTagService(session)
+        self._tag_dict = BloggerTagDictService(session)
         self._promotion_repo = PromotionRepository(session)
 
     # ============================================================
@@ -62,19 +70,14 @@ class BloggerService:
     # ============================================================
 
     async def create_blogger(self, payload: BloggerCreate, user: User) -> BloggerResponse:
-        # BR-U03-01: 唯一性
-        existing = await self._repo.get_by_xiaohongshu_id(payload.xiaohongshu_id)
-        if existing is not None:
-            raise BloggerXhsIdConflictError(
-                "该博主已存在，是否查看？",
-                details={
-                    "xiaohongshu_id": payload.xiaohongshu_id,
-                    "existing_blogger_id": str(existing.id),
-                },
-            )
+        # BR-U03-01 / 8b-1: （平台, 账号）唯一
+        await self._ensure_account_free(payload.platform.value, payload.xiaohongshu_id)
 
         # BR-U03-42: 字段写权限
         await self._check_sensitive_write_permission(payload, user)
+        await self._check_quote_note_write(payload, user)
+        # 8b-3：系统标签只读、类目标签按字典
+        await self._check_tags(payload, None, user)
 
         blogger = Blogger(
             xiaohongshu_id=payload.xiaohongshu_id,
@@ -97,20 +100,26 @@ class BloggerService:
             cooperation_history=payload.cooperation_history,
             remark=payload.remark,
             is_suspected_fake=payload.is_suspected_fake,
+            web_id=payload.web_id,
+            homepage_url=payload.homepage_url,
+            quote_note=payload.quote_note,
         )
-        # U11 BR-U11-01: follower_count 提供时自动按阈值分级 blogger_type
-        if payload.follower_count is not None:
+        # U11 BR-U11-01: follower_count 提供时自动按阈值分级 blogger_type（8b：只对分级平台）
+        if payload.follower_count is not None and blogger.platform in TYPE_GRADED_PLATFORMS:
             blogger.blogger_type = self._tags.compute_blogger_type(payload.follower_count)
         self._repo.add(blogger)
         await self._session.flush()
 
-        # 审计：BR-U03-32 创建仅记 xiaohongshu_id + nickname（敏感值脱敏）
+        # 审计：BR-U03-32 创建仅记账号 + 昵称 + 平台（8b 判重键带平台；敏感值脱敏）
         after: dict[str, Any] = {
             "xiaohongshu_id": blogger.xiaohongshu_id,
             "nickname": blogger.nickname,
+            "platform": blogger.platform,
         }
         if blogger.quote is not None:
             after["quote_changed"] = True
+        if blogger.quote_note is not None:
+            after["quote_note_changed"] = True
         if blogger.wechat is not None:
             after["wechat_changed"] = True
         if blogger.phone is not None:
@@ -132,26 +141,42 @@ class BloggerService:
         if blogger is None:
             raise BloggerNotFoundError(f"博主 {blogger_id} 不存在")
 
-        # BR-U03-01: 改 xiaohongshu_id 时唯一性
-        if (
-            "xiaohongshu_id" in payload.model_fields_set
+        # BR-U03-01 / 8b-1: 平台或账号任一改了 → 新（平台, 账号）唯一（排除自己）
+        fields_set = payload.model_fields_set
+        new_platform = (
+            payload.platform.value
+            if "platform" in fields_set and payload.platform is not None
+            else blogger.platform
+        )
+        # 账号没变（没带 / 与库里相同，库里首尾空格不算差别）→ 不校验格式、不改库里原值：
+        # 历史账号含中文（昵称当账号导进来的），前端编辑时会原样带上
+        account_changed = (
+            "xiaohongshu_id" in fields_set
             and payload.xiaohongshu_id is not None
-            and payload.xiaohongshu_id != blogger.xiaohongshu_id
-        ):
-            existing = await self._repo.get_by_xiaohongshu_id(payload.xiaohongshu_id)
-            if existing is not None:
-                raise BloggerXhsIdConflictError(
-                    f"小红书 ID {payload.xiaohongshu_id} 已被使用",
-                    details={
-                        "xiaohongshu_id": payload.xiaohongshu_id,
-                        "existing_blogger_id": str(existing.id),
-                    },
-                )
+            and payload.xiaohongshu_id != (blogger.xiaohongshu_id or "").strip()
+        )
+        new_account = (
+            payload.xiaohongshu_id
+            if account_changed and payload.xiaohongshu_id is not None
+            else blogger.xiaohongshu_id
+        )
+        if account_changed and not is_valid_account(new_account):
+            raise InvalidAccountFormatError(
+                ACCOUNT_FORMAT_ERROR, details={"field": "xiaohongshu_id"}
+            )
+        if (new_platform, new_account) != (blogger.platform, blogger.xiaohongshu_id):
+            await self._ensure_account_free(new_platform, new_account, exclude_id=blogger.id)
 
         # BR-U03-42: 字段写权限
         await self._check_sensitive_write_permission(payload, user)
+        await self._check_quote_note_write(payload, user)
+        await self._check_quote_note_readable(payload, user)
+        # 8b-3：系统标签只读、类目标签按字典
+        await self._check_tags(payload, blogger, user)
 
         changes = compute_blogger_changes(blogger, payload)
+        if not account_changed:
+            changes.pop("xiaohongshu_id", None)
         if not changes:
             return await self._to_response(blogger, user)
 
@@ -163,8 +188,12 @@ class BloggerService:
                 new_value = new_value.value if new_value is not None else None
             setattr(blogger, field, new_value)
 
-        # U11 BR-U11-01: follower_count 变更时自动重算 blogger_type
-        if "follower_count" in changes:
+        # U11 BR-U11-01: follower_count 变更时自动重算 blogger_type（8b：只对分级平台）
+        # 只改平台：新平台分级且有粉丝数就重算；不分级（抖音）或没有粉丝数就保留原值
+        if blogger.platform in TYPE_GRADED_PLATFORMS and (
+            "follower_count" in changes
+            or ("platform" in changes and blogger.follower_count is not None)
+        ):
             blogger.blogger_type = self._tags.compute_blogger_type(blogger.follower_count)
 
         await self._session.flush()
@@ -290,16 +319,10 @@ class BloggerService:
         if blogger is None or not blogger.is_deleted:
             raise BloggerNotFoundError(f"博主 {blogger_id} 不存在或未被软删")
 
-        # 校验 xiaohongshu_id 是否被新博主占用
-        existing = await self._repo.get_by_xiaohongshu_id(blogger.xiaohongshu_id)
-        if existing is not None and existing.id != blogger.id:
-            raise BloggerXhsIdConflictError(
-                f"小红书 ID {blogger.xiaohongshu_id} 已被新博主占用，请先重命名",
-                details={
-                    "xiaohongshu_id": blogger.xiaohongshu_id,
-                    "existing_blogger_id": str(existing.id),
-                },
-            )
+        # 校验（平台, 账号）是否被新博主占用
+        await self._ensure_account_free(
+            blogger.platform, blogger.xiaohongshu_id, exclude_id=blogger.id
+        )
 
         blogger.is_deleted = False
         blogger.is_active = True
@@ -369,11 +392,12 @@ class BloggerService:
     # ============================================================
 
     async def recompute_blogger_type(self, blogger_id: UUID) -> Blogger:
-        """U11: 按 follower_count 自动重算 blogger_type."""
+        """U11: 按 follower_count 自动重算 blogger_type（8b：只对分级平台，其余不动）."""
         blogger = await self._repo.get_by_id(blogger_id)
         if blogger is None:
             raise BloggerNotFoundError(f"博主 {blogger_id} 不存在")
-        blogger.blogger_type = self._tags.compute_blogger_type(blogger.follower_count)
+        if blogger.platform in TYPE_GRADED_PLATFORMS:
+            blogger.blogger_type = self._tags.compute_blogger_type(blogger.follower_count)
         await self._session.flush()
         await self._session.commit()
         return blogger
@@ -491,9 +515,93 @@ class BloggerService:
             audience_profile=blogger.audience_profile,
             read_like_ratio=self._tags.compute_read_like_ratio(blogger.audience_profile),
             crawler_metrics=dict(blogger.crawler_metrics or {}),
+            web_id=blogger.web_id,
+            homepage_url=blogger.homepage_url,
+            platform_metrics=blogger.platform_metrics,
+            # 8b D3：报价备注与报价同一条读权限
+            quote_note=blogger.quote_note if can_see_quote else None,
             created_at=blogger.created_at,
             updated_at=blogger.updated_at,
         )
+
+    async def _ensure_account_free(
+        self, platform: str, account: str, *, exclude_id: UUID | None = None
+    ) -> None:
+        """8b-1：（平台, 账号）被别的未删除博主占用 → 409（code 不改，前端已在用）。"""
+        existing = await self._repo.get_by_account(platform, account)
+        if existing is not None and existing.id != exclude_id:
+            raise BloggerXhsIdConflictError(
+                f"{platform} 已有账号 {account} 的博主",
+                details={
+                    "platform": platform,
+                    "xiaohongshu_id": account,
+                    "existing_blogger_id": str(existing.id),
+                },
+            )
+
+    async def _check_quote_note_write(
+        self, payload: BloggerCreate | BloggerUpdate, user: User
+    ) -> None:
+        """8b D3：报价备注的写权限与报价完全相同（同一条 ``("blogger", "quote")`` 规则与个人授权）。
+
+        与报价一样只挡写入非空值。
+        """
+        if "quote_note" not in payload.model_fields_set or payload.quote_note is None:
+            return
+        ctx = await build_field_perm_context(user.id, self._roles, self._perms)
+        if not can_write_field("blogger", "quote", ctx):
+            raise FieldPermissionDenied(field="quote_note", entity="blogger")
+
+    async def _check_quote_note_readable(self, payload: BloggerUpdate, user: User) -> None:
+        """编辑时显式带了报价备注（含 null / 空串）而读不到报价 → 403（评审 L3）。
+
+        读不到的人收到的是遮挡后的 null，原样提交会把库里的备注静默清空；拒绝而不是忽略，
+        调用方能知道这个字段没存上。
+        """
+        if "quote_note" not in payload.model_fields_set:
+            return
+        ctx = await build_field_perm_context(user.id, self._roles, self._perms)
+        if not can_read_field("blogger", "quote", ctx):
+            raise FieldPermissionDenied(field="quote_note", entity="blogger")
+
+    async def _check_tags(
+        self, payload: BloggerCreate | BloggerUpdate, blogger: Blogger | None, user: User
+    ) -> None:
+        """8b-3（设计 §5.4）：系统标签只读、类目标签新加的词要在启用字典里。
+
+        - ``quality_tags`` 只由重算写：create 传了非空、update 传了且归一后与库里不同 → 422
+        - ``category_tags`` 只看新加的（新值 − 库里的值）：含系统标签词 → 422；不在启用字典 → 422。
+          旧标签（含字典里已删的）可留可去
+        """
+        fields_set = payload.model_fields_set
+        if "quality_tags" in fields_set:
+            new_quality = set(payload.quality_tags or [])
+            old_quality = set(blogger.quality_tags or []) if blogger is not None else set()
+            if new_quality != old_quality:
+                raise BloggerSystemTagReadonlyError(
+                    "质量标签是系统标签，由重算自动打，不能手工修改",
+                    details={"field": "quality_tags"},
+                )
+
+        if "category_tags" not in fields_set:
+            return
+        old_category = set(blogger.category_tags or []) if blogger is not None else set()
+        added = [t for t in dict.fromkeys(payload.category_tags or []) if t not in old_category]
+        if not added:
+            return
+        system_words = [t for t in added if t in SYSTEM_TAGS]
+        if system_words:
+            raise BloggerSystemTagReadonlyError(
+                f"{'、'.join(system_words)} 是系统标签，不能手工加",
+                details={"field": "category_tags", "tags": system_words},
+            )
+        known = await self._tag_dict.active_values(user.tenant_id, added)
+        unknown = [t for t in added if t not in known]
+        if unknown:
+            raise BloggerTagNotInDictError(
+                f"这些标签不在标签字典里：{'、'.join(unknown)}；请先让主管在「标签字典」里添加",
+                details={"tags": unknown},
+            )
 
 
 __all__ = ["BloggerService"]

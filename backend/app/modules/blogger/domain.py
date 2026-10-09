@@ -12,6 +12,7 @@ from typing import Any
 
 from app.modules.blogger.models import Blogger
 from app.modules.blogger.schemas import BloggerUpdate
+from app.modules.product.images import normalize_external_image_url
 
 # ---------------------------------------------------------------------------
 # 审计敏感字段配置（BR-U03-30）
@@ -19,12 +20,48 @@ from app.modules.blogger.schemas import BloggerUpdate
 
 
 BLOGGER_SENSITIVE_FIELDS: frozenset[str] = frozenset(
-    {"xiaohongshu_id", "nickname", "quote", "wechat", "phone"}
+    {
+        "xiaohongshu_id",
+        "nickname",
+        "quote",
+        "wechat",
+        "phone",
+        # 8b：平台是判重键的一部分；网页ID、主页链接记前后值；报价备注同报价只记 changed
+        "platform",
+        "web_id",
+        "homepage_url",
+        "quote_note",
+    }
 )
 """Blogger 表写 audit_log 的字段白名单（BR-U03-30）。"""
 
-BLOGGER_SENSITIVE_VALUE_FIELDS: frozenset[str] = frozenset({"quote", "wechat", "phone"})
+BLOGGER_SENSITIVE_VALUE_FIELDS: frozenset[str] = frozenset(
+    {"quote", "wechat", "phone", "quote_note"}
+)
 """Blogger 表 audit_log 不存历史值的字段（仅记 ``*_changed: true`` 标记）。"""
+
+
+# ---------------------------------------------------------------------------
+# 8b-4 主页链接
+# ---------------------------------------------------------------------------
+
+HOMEPAGE_URL_INVALID = (
+    "主页链接必须是 http:// 或 https:// 开头的完整网址，不含空格，且不超过 1024 字"
+)
+
+
+def normalize_homepage_url(raw: str | None) -> str | None:
+    """博主主页链接：空 / 只有空白 → None（清空）；合法 → 去首尾空白后的地址；否则 ``ValueError``。
+
+    规则同 ``product/images.py::normalize_external_image_url``（≤ 1024、无空白与控制字符、
+    http / https、host 非空）；那边把空和非法都当 None，这里先自判空，好区分「清空」与「非法」。
+    """
+    if raw is None or not raw.strip():
+        return None
+    url = normalize_external_image_url(raw)
+    if url is None:
+        raise ValueError(HOMEPAGE_URL_INVALID)
+    return url
 
 
 # ---------------------------------------------------------------------------
@@ -102,6 +139,8 @@ def _serialize(value: Any) -> Any:
 __all__ = [
     "BLOGGER_SENSITIVE_FIELDS",
     "BLOGGER_SENSITIVE_VALUE_FIELDS",
+    "HOMEPAGE_URL_INVALID",
     "build_blogger_audit_changes",
     "compute_blogger_changes",
+    "normalize_homepage_url",
 ]

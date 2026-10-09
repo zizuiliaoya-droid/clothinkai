@@ -86,6 +86,10 @@ RETRO_CONFIRM = "promotion.retro:confirm"
 # 7a-1 款式下拉（款式列表 / 款式下的商品 / 颜色尺码）。PR 只给这一条窄 scope，
 # 不给 product.*:read（会连带成本表、字典等整个 product 域）。
 PRODUCT_STYLE_READ = "product.style:read"
+# 8b-3 博主标签字典维护（主管 + 管理员；管理员靠 *）。独立一级域 blogger_tag，
+# 刻意不叫 blogger.tag:write —— has() 的前缀通配只看第一段，PR / 主管的 blogger.*:*
+# 会命中它，PR 就能改字典了。读字典用现有的 blogger:read。迁移 059 同步授予现存库。
+BLOGGER_TAG_WRITE = "blogger_tag:write"
 
 
 # ---------------------------------------------------------------------------
@@ -168,6 +172,7 @@ DEFAULT_ROLES: tuple[RoleSpec, ...] = (
             PROMOTION_ALL,
             BLOGGER_ALL,
             PROMOTION_REVIEW,
+            BLOGGER_TAG_WRITE,
             # 谈款：主管是唯一能审的角色
             NEGOTIATION_READ,
             NEGOTIATION_WRITE,

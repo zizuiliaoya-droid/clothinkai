@@ -8,7 +8,7 @@
 - 启用 RLS（migration 通过 ``rls.enable_rls_sql`` 配置）
 
 业务键唯一约束：
-- ``(tenant_id, xiaohongshu_id) WHERE is_deleted=false``
+- ``(tenant_id, platform, xiaohongshu_id) WHERE is_deleted=false``（8b 迁移 059 起带平台）
 
 GIN 索引（U03 强制建）：
 - ``idx_blogger_nickname_trgm``：单字段 GIN trgm（不拼接，数据量小）
@@ -40,6 +40,7 @@ class Blogger(TenantScopedModel):
 
     __tablename__ = "blogger"
 
+    # 平台账号（历史原因叫 xiaohongshu_id；8b 起与 platform 一起唯一，抖音存「博主ID」）
     xiaohongshu_id: Mapped[str] = mapped_column(String(64), nullable=False)
     nickname: Mapped[str] = mapped_column(String(128), nullable=False)
     platform: Mapped[str] = mapped_column(
@@ -77,14 +78,26 @@ class Blogger(TenantScopedModel):
     crawler_metrics: Mapped[dict] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )
+    # 8b：抖音「网页ID」（照存、可搜，不参与判重）
+    web_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # 8b-4：博主主页链接（只收 http / https）
+    homepage_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    # 8b：平台统计（灰豚抖音博主库的点赞 / 互动等，带原文）；None 存成 SQL NULL
+    platform_metrics: Mapped[dict | None] = mapped_column(
+        JSONB(none_as_null=True),  # type: ignore[no-untyped-call]
+        nullable=True,
+    )
+    # 8b D3：报价原文（如「图文500」），字段权限与报价相同
+    quote_note: Mapped[str | None] = mapped_column(String(500), nullable=True)
     is_active: Mapped[bool] = mapped_column(nullable=False, server_default=text("true"))
     is_deleted: Mapped[bool] = mapped_column(nullable=False, server_default=text("false"))
 
     __table_args__ = (
-        # 部分唯一索引：软删后 xiaohongshu_id 释放
+        # 部分唯一索引：（平台, 账号）唯一，软删后释放（迁移 059；按原样比较，不规范化大小写）
         Index(
-            "uq_blogger_xiaohongshu_id",
+            "uq_blogger_platform_account",
             "tenant_id",
+            "platform",
             "xiaohongshu_id",
             unique=True,
             postgresql_where=text("is_deleted = false"),

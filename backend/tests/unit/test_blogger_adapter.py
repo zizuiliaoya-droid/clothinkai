@@ -8,7 +8,7 @@ from app.modules.importer.adapters.blogger import (
     BloggerImportAdapter,
     _split_tags,
     _to_decimal,
-    _to_int,
+    to_int,
 )
 
 
@@ -46,23 +46,23 @@ def test_split_tags_single():
 
 
 # ---------------------------------------------------------------------------
-# _to_int / _to_decimal
+# to_int / _to_decimal
 # ---------------------------------------------------------------------------
 
 
 def test_to_int_thousands():
-    assert _to_int("12,500") == 12500
-    assert _to_int("1000") == 1000
+    assert to_int("12,500") == 12500
+    assert to_int("1000") == 1000
 
 
 def test_to_int_empty():
-    assert _to_int("") is None
-    assert _to_int(None) is None
+    assert to_int("") is None
+    assert to_int(None) is None
 
 
 def test_to_int_invalid_keeps_raw():
-    assert _to_int("abc") == "abc"
-    assert _to_int("12.5") == "12.5"  # float 串非 int → 原串
+    assert to_int("abc") == "abc"
+    assert to_int("12.5") == "12.5"  # float 串非 int → 原串
 
 
 def test_to_decimal_no_float():
@@ -99,7 +99,9 @@ def test_parse_row_default_mapping():
     assert parsed["follower_count"] == 12500
     assert parsed["quote"] == Decimal("500.00")
     assert parsed["category_tags"] == ["美妆", "护肤"]
-    assert parsed["quality_tags"] == ["优质"]
+    # 8b D5：质量标签只读，不取值，只记「文件给了」（非 spec 字段，只给整批提示用）
+    assert "quality_tags" not in parsed
+    assert parsed["quality_tags_present"] is True
     assert parsed["platform"] is None  # 缺列 → None（upsert 时默认"小红书"）
 
 
@@ -145,7 +147,7 @@ def test_validate_missing_xhs_id():
     p = _valid()
     p["xiaohongshu_id"] = None
     errs = _adapter().validate(p)
-    assert any("小红书ID" in e for e in errs)
+    assert any("账号" in e for e in errs)
 
 
 def test_validate_missing_nickname():
@@ -216,14 +218,14 @@ def test_placeholder_text_is_none():
 def test_placeholder_tags():
     assert _parse(类目标签="-")["category_tags"] is None
     assert _parse(类目标签="美妆;-")["category_tags"] == ["美妆"]
-    assert _parse(质量标签="—，优质")["quality_tags"] == ["优质"]
+    assert "quality_tags" not in _parse(质量标签="—，优质")
     assert _split_tags("美妆;--;护肤") == ["美妆", "护肤"]
 
 
 def test_placeholder_required_fails():
     parsed = _parse(小红书ID="-")
     assert parsed["xiaohongshu_id"] is None
-    assert "小红书ID不能为空" in _adapter().validate(parsed)
+    assert "账号不能为空" in _adapter().validate(parsed)
     parsed = _parse(昵称="--")
     assert "昵称不能为空" in _adapter().validate(parsed)
 
@@ -245,7 +247,11 @@ def test_compare_fields_declared():
         "quote",
         "cooperation_history",
         "remark",
+        "web_id",
+        "homepage_url",
     }
+    # 8b：平台是判重键、质量标签只读，只为读旧冲突留在 specs，不参与比较
+    assert {s.name for s in adapter.compare_specs()} == names - {"platform", "quality_tags"}
     sensitive = {s.name: s.sensitive for s in adapter.compare_specs() if s.sensitive}
     assert sensitive == {
         "wechat": ("blogger", "wechat"),

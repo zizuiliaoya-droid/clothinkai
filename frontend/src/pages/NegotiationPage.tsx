@@ -96,6 +96,7 @@ export function NegotiationPage() {
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Negotiation | null>(null);
   const [form] = Form.useForm();
+  const formPlatform = Form.useWatch("platform", form) as string | undefined;
   const [rejectTarget, setRejectTarget] = useState<Negotiation | null>(null);
   const [rejectForm] = Form.useForm();
 
@@ -443,7 +444,7 @@ export function NegotiationPage() {
             label="博主"
             rules={[{ required: true, message: "请选择博主" }]}
           >
-            <BloggerSelect selected={bloggerEcho} />
+            <BloggerSelect selected={bloggerEcho} platform={formPlatform} />
           </Form.Item>
           <Form.Item
             name="style_id"

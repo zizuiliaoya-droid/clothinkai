@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import builtins
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -17,6 +18,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.blogger.enums import Platform
 from app.modules.blogger.models import Blogger
 
 
@@ -52,13 +54,36 @@ class BloggerRepository:
             return None
         return blogger
 
-    async def get_by_xiaohongshu_id(
-        self, xhs_id: str, *, include_deleted: bool = False
+    async def get_by_account(
+        self, platform: str, account: str, *, include_deleted: bool = False
     ) -> Blogger | None:
-        stmt = select(Blogger).where(Blogger.xiaohongshu_id == xhs_id)
+        """按（平台, 账号）取博主（8b 唯一键；账号即 ``xiaohongshu_id`` 列，按原样比较）。
+
+        未删除的至多一个（部分唯一索引兜底）；``include_deleted=True`` 时取任意一个。
+        """
+        stmt = select(Blogger).where(
+            Blogger.platform == platform, Blogger.xiaohongshu_id == account
+        )
         if not include_deleted:
             stmt = stmt.where(Blogger.is_deleted.is_(False))
-        return (await self._session.execute(stmt)).scalar_one_or_none()
+        return (await self._session.execute(stmt.limit(1))).scalars().first()
+
+    async def list_by_account(self, account: str) -> builtins.list[Blogger]:
+        """同一账号在所有平台上未删除的博主（推广单导入找不到同平台博主时回落用）。
+
+        按 ``Platform`` 枚举声明序排，不在枚举里的排最后（再按平台名）。
+        """
+        order = sa.case(
+            {p.value: i for i, p in enumerate(Platform)},
+            value=Blogger.platform,
+            else_=len(Platform),
+        )
+        stmt = (
+            select(Blogger)
+            .where(Blogger.xiaohongshu_id == account, Blogger.is_deleted.is_(False))
+            .order_by(order, Blogger.platform, Blogger.id)
+        )
+        return list((await self._session.execute(stmt)).scalars().all())
 
     async def code_exists(self, xhs_id: str) -> bool:
         stmt = (
@@ -111,6 +136,7 @@ class BloggerRepository:
             clauses = [
                 Blogger.nickname.ilike(pattern),
                 Blogger.xiaohongshu_id.ilike(pattern),
+                Blogger.web_id.ilike(pattern),
             ]
             if include_wechat_in_keyword:
                 clauses.append(Blogger.wechat.ilike(pattern))
@@ -182,7 +208,7 @@ class BloggerRepository:
         tenant_id: UUID,
         values: dict[str, Any],
     ) -> tuple[Blogger, bool]:
-        """``ON CONFLICT (tenant_id, xiaohongshu_id) WHERE is_deleted=false DO UPDATE``。
+        """``ON CONFLICT (tenant_id, platform, xiaohongshu_id) WHERE is_deleted=false DO UPDATE``。
 
         Returns:
             ``(blogger, is_inserted)`` —— is_inserted=True 表示 INSERT 路径。
@@ -191,7 +217,8 @@ class BloggerRepository:
 
         约束：
         - ``values`` 必须包含 ``xiaohongshu_id, nickname``
-        - 不更新 ``id / tenant_id / created_at / xiaohongshu_id / is_deleted``
+        - 不更新 ``id / tenant_id / created_at / platform / xiaohongshu_id / is_deleted``
+          （平台不给时按列默认「小红书」）
         """
         update_fields = {
             k: v
@@ -201,6 +228,7 @@ class BloggerRepository:
                 "id",
                 "tenant_id",
                 "created_at",
+                "platform",
                 "xiaohongshu_id",
                 "is_deleted",
             }
@@ -213,8 +241,8 @@ class BloggerRepository:
         # 复用同名变量会让 mypy 报不兼容赋值。
         insert_stmt = pg_insert(Blogger).values(**full_values)
         stmt = insert_stmt.on_conflict_do_update(
-            index_elements=[Blogger.tenant_id, Blogger.xiaohongshu_id],
-            # 谓词必须与 partial UNIQUE 索引 uq_blogger_xiaohongshu_id 完全匹配
+            index_elements=[Blogger.tenant_id, Blogger.platform, Blogger.xiaohongshu_id],
+            # 谓词必须与 partial UNIQUE 索引 uq_blogger_platform_account 完全匹配
             # （migration 用 ``is_deleted = false``）；``.is_(False)`` 生成 ``IS false``
             # 会导致 PostgreSQL "no unique constraint matching ON CONFLICT" 报错。
             index_where=sa.text("is_deleted = false"),

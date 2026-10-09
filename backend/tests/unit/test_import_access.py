@@ -249,13 +249,13 @@ class TestDescribeAccess:
             assert set(item) == {
                 "source",
                 "label",
-                "configurable",  # 8a-6：重复规则可切换（只有商品资料、博主为真）
+                "configurable",  # 8a-6：重复规则可切换（商品资料、博主；8b 加灰豚抖音）
                 "can_view",
                 "can_upload",
                 "can_map",
                 "can_resolve",
             }
-            assert item["configurable"] is (item["source"] in {STYLE_SKU, BLOGGER})
+            assert item["configurable"] is (item["source"] in {STYLE_SKU, BLOGGER, "huitun_douyin"})
 
     def test_operations_flags(self, registered: None) -> None:
         by_source = {i["source"]: i for i in access.describe_access(_role_perms("operations"))}
@@ -287,3 +287,18 @@ class TestDescribeAccess:
         )
         assert by_source[BLOGGER]["can_resolve"] is True
         assert by_source["manual_promotion"]["can_upload"] is True
+
+    def test_huitun_douyin_flags(self, registered: None) -> None:
+        """8b §6.7：灰豚抖音与手工博主同一套权限（裁决看 blogger:write）。"""
+        assert access.access_for("huitun_douyin") == access.access_for(BLOGGER)
+        pr = {i["source"]: i for i in access.describe_access(_role_perms("pr"))}
+        ops = {i["source"]: i for i in access.describe_access(_role_perms("operations"))}
+        assert pr["huitun_douyin"]["label"] == "灰豚抖音博主库"
+        assert (pr["huitun_douyin"]["can_upload"], pr["huitun_douyin"]["can_resolve"]) == (
+            True,
+            True,
+        )
+        assert (ops["huitun_douyin"]["can_upload"], ops["huitun_douyin"]["can_resolve"]) == (
+            False,
+            False,
+        )

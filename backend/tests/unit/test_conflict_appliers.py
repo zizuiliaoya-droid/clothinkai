@@ -69,7 +69,7 @@ class TestBloggerCheck:
         [
             ("nickname", "  ", "不能为空"),
             ("nickname", "x" * 129, "超过 128 字"),
-            ("platform", "x" * 17, "超过 16 字"),
+            ("platform", "x" * 17, "平台是判重键，不能经导入修改"),
             ("blogger_type", "x" * 17, "超过 16 字"),
             ("gender_target", "x" * 17, "超过 16 字"),
             ("wechat", "x" * 65, "超过 64 字"),
@@ -80,7 +80,7 @@ class TestBloggerCheck:
             ("quote", "-0.01", "必须为非负数字且小于 1 亿"),
             ("quote", "100000000", "必须为非负数字且小于 1 亿"),
             ("category_tags", [f"t{i}" for i in range(21)], "最多 20 项"),
-            ("quality_tags", "美妆", GENERIC_INVALID_REASON),
+            ("quality_tags", "美妆", "系统标签只读"),
             ("nickname", None, "不能为空"),
         ],
     )

@@ -43,6 +43,12 @@ from app.modules.importer.adapter import (
     PostRowsImportAdapter,
 )
 from app.modules.importer.exceptions import RowValidationError
+from app.modules.importer.file_layout import (
+    HEADER_SCAN_ROWS,
+    LayoutNotFoundError,
+    XlsxLayout,
+    rename_duplicate_headers,
+)
 from app.modules.importer.models import ImportBatch, ImportJob
 from app.modules.importer.outcome import BatchSeen, ImportRowContext, RowKind, RowOutcome
 from app.modules.importer.registry import ImportAdapterRegistry
@@ -163,10 +169,11 @@ async def _run_import_batch_claimed(batch_id: UUID, only_failed: bool = False) -
             from app.core.attachment import attachment_service
 
             raw = attachment_service.get_object_bytes(cast("BucketKind", file_bucket), file_r2_key)
-            rows = _parse_rows(raw, original_filename)
+            rows = _parse_rows(raw, original_filename, getattr(adapter, "file_layout", None))
     except Exception as exc:
-        await _mark_batch_failed(batch_id, f"parse_error:{type(exc).__name__}")
-        sentry_sdk.capture_exception(exc)
+        await _mark_batch_failed(batch_id, _parse_failure_reason(exc))
+        if not isinstance(exc, LayoutNotFoundError):  # 传错文件是用户操作，不报 Sentry
+            sentry_sdk.capture_exception(exc)
         import_batch_total.labels(source=source, status="failed").inc()
         return {"status": "failed", "reason": "parse_error"}
 
@@ -548,17 +555,27 @@ async def _write_job_failed_bypass(
 # ---------------------------------------------------------------------------
 
 
-def _parse_rows(raw: bytes, filename: str) -> list[tuple[int, dict[str, Any]]]:
+def _parse_failure_reason(exc: Exception) -> str:
+    """解析失败写进 ``error_summary`` 的文字：版式找不到给用户看的提示，其余只记异常类名。"""
+    if isinstance(exc, LayoutNotFoundError):
+        return str(exc)
+    return f"parse_error:{type(exc).__name__}"
+
+
+def _parse_rows(
+    raw: bytes, filename: str, layout: XlsxLayout | None = None
+) -> list[tuple[int, dict[str, Any]]]:
     """解析 CSV / XLSX 为 [(row_number, {col: value}), ...]（row_number 从 1 起，不含表头）。
 
-    - CSV：utf-8-sig（兼容 BOM）+ DictReader
-    - XLSX：openpyxl ``read_only=True, data_only=True``（流式 + 读公式计算值，不执行宏）
+    - CSV：utf-8-sig（兼容 BOM）+ DictReader；不看版式
+    - XLSX：openpyxl ``read_only=True, data_only=True``（流式 + 读公式计算值，不执行宏）；
+      ``layout`` 是 adapter 声明的版式（8b §6.1），``None`` 与原来的读法一致
     """
     name = (filename or "").lower()
     if name.endswith(".csv"):
         return _parse_csv(raw)
     if name.endswith(".xlsx"):
-        return _parse_xlsx(raw)
+        return _parse_xlsx(raw, layout)
     raise ValueError(f"unsupported file extension: {filename}")
 
 
@@ -584,24 +601,58 @@ def _parse_csv(raw: bytes) -> list[tuple[int, dict[str, Any]]]:
     return rows
 
 
-def _parse_xlsx(raw: bytes) -> list[tuple[int, dict[str, Any]]]:
+def _xlsx_cells(excel_row: tuple[Any, ...]) -> list[str]:
+    return [str(c).strip() if c is not None else "" for c in excel_row]
+
+
+def _parse_xlsx(raw: bytes, layout: XlsxLayout | None = None) -> list[tuple[int, dict[str, Any]]]:
+    from itertools import chain
+
     from openpyxl import load_workbook
 
+    marker = layout.header_marker if layout is not None else None
     wb = load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
     try:
-        ws = wb.active
-        rows: list[tuple[int, dict[str, Any]]] = []
-        header: list[str] = []
-        row_number = 0
-        for excel_row in ws.iter_rows(values_only=True):
-            cells = [str(c).strip() if c is not None else "" for c in excel_row]
-            if not header:
-                # 平台导出常带前置空行/标题行（如生意参谋千牛表头在第 5 行）：
-                # 跳过完全空白的前置行，第一行非空行作为表头
-                if all(c == "" for c in cells):
-                    continue
-                header = cells
+        if layout is not None and layout.sheet and layout.sheet in wb.sheetnames:
+            ws = wb[layout.sheet]
+        elif layout is not None and layout.sheet and layout.required:
+            raise LayoutNotFoundError(layout.not_found_message())
+        else:
+            ws = wb.active
+        excel_rows = ws.iter_rows(values_only=True)
+        # 表头及之前的行先缓存：平台导出常带前置空行/标题行（如生意参谋千牛表头在第 5 行）。
+        # 没有表头标记 → 跳过完全空白的前置行，第一行非空行作为表头；
+        # 有标记 → 前 HEADER_SCAN_ROWS 个非空行里第一个含它的行，找不到回落到第一行非空行
+        head_rows: list[tuple[Any, ...]] = []
+        first_non_empty: int | None = None
+        header_idx: int | None = None
+        non_empty = 0
+        for excel_row in excel_rows:
+            head_rows.append(excel_row)
+            cells = _xlsx_cells(excel_row)
+            if all(c == "" for c in cells):
                 continue
+            non_empty += 1
+            if first_non_empty is None:
+                first_non_empty = len(head_rows) - 1
+            if marker is None or marker in cells:
+                header_idx = len(head_rows) - 1
+                break
+            if non_empty >= HEADER_SCAN_ROWS:
+                break
+        if header_idx is None:
+            if layout is not None and marker and layout.required:
+                raise LayoutNotFoundError(layout.not_found_message())
+            header_idx = first_non_empty
+        if header_idx is None:
+            return []
+        header = _xlsx_cells(head_rows[header_idx])
+        if layout is not None and layout.group_prefix_duplicates:
+            above = _xlsx_cells(head_rows[header_idx - 1]) if header_idx > 0 else []
+            header = rename_duplicate_headers(header, above if any(above) else None)
+        rows: list[tuple[int, dict[str, Any]]] = []
+        row_number = 0  # 从表头下一行起数
+        for excel_row in chain(head_rows[header_idx + 1 :], excel_rows):
             row_number += 1
             record = {
                 (header[j] if j < len(header) and header[j] else f"col_{j}"): (
@@ -750,7 +801,7 @@ _CONCURRENT_UNIQUE = (
     "uq_style_code",
     "uq_sku_code",
     "uq_goods_main_code",
-    "uq_blogger_xiaohongshu_id",
+    "uq_blogger_platform_account",
     "uq_import_conflict_pending",
 )
 
