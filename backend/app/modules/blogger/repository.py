@@ -54,14 +54,6 @@ class BloggerRepository:
             return None
         return blogger
 
-    async def get_by_xiaohongshu_id(
-        self, xhs_id: str, *, include_deleted: bool = False
-    ) -> Blogger | None:
-        stmt = select(Blogger).where(Blogger.xiaohongshu_id == xhs_id)
-        if not include_deleted:
-            stmt = stmt.where(Blogger.is_deleted.is_(False))
-        return (await self._session.execute(stmt)).scalar_one_or_none()
-
     async def get_by_account(
         self, platform: str, account: str, *, include_deleted: bool = False
     ) -> Blogger | None:

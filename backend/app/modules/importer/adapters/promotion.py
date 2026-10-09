@@ -180,9 +180,19 @@ class PromotionImportAdapter:
         style = await styles.get_by_code(parsed["style_code"])
         if style is None:
             raise RowValidationError(f"款式编码 {parsed['style_code']} 不存在")
-        blogger = await bloggers.get_by_xiaohongshu_id(parsed["xiaohongshu_id"])
+        # 推广平台是发布平台，只当首选；找不到时按账号跨平台回落（8b 设计 §3.9）
+        account = parsed["xiaohongshu_id"]
+        blogger = await bloggers.get_by_account(parsed.get("platform") or "小红书", account)
         if blogger is None:
-            raise RowValidationError(f"博主 {parsed['xiaohongshu_id']} 不存在")
+            candidates = await bloggers.list_by_account(account)  # 已按平台枚举序
+            if len(candidates) > 1:
+                names = "、".join(b.platform for b in candidates)
+                raise RowValidationError(
+                    f"账号 {account} 在多个平台都有博主（{names}），请把「平台」列填成博主所在的平台"
+                )
+            if not candidates:
+                raise RowValidationError(f"博主 {account} 不存在")
+            blogger = candidates[0]
         sku_id: UUID | None = None
         if parsed.get("sku_code"):
             sku = await SkuRepository(session).get_by_code(parsed["sku_code"])

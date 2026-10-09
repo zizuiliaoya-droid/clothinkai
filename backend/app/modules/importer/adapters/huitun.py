@@ -1,7 +1,7 @@
 """U13 灰豚博主画像导入适配器（HuitunImportAdapter）。
 
 source=huitun → 更新 blogger.audience_profile（U11 read_like_ratio 据此衍生）。
-- 按 xiaohongshu_id 匹配 blogger
+- 按 xiaohongshu_id 匹配 blogger（只认小红书博主，8b）
 - 未匹配 → DataQualityIssue(warning)，不阻塞
 - audience_profile JSON：{note_stats:{avg_likes,avg_reads}, gender, age, region ...}
 """
@@ -15,6 +15,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.blogger.enums import Platform
 from app.modules.blogger.models import Blogger
 from app.modules.collect.data_quality_service import DataQualityService
 from app.modules.importer.registry import ImportAdapterRegistry
@@ -94,6 +95,8 @@ class HuitunImportAdapter:
         blogger = (
             await session.execute(
                 select(Blogger).where(
+                    # 灰豚画像是小红书的数据，只认小红书博主（8b 设计 §3.9）
+                    Blogger.platform == Platform.XIAOHONGSHU.value,
                     Blogger.xiaohongshu_id == xhs_id,
                     Blogger.is_deleted.is_(False),
                 )
