@@ -54,7 +54,7 @@ from app.modules.negotiation.schemas import (
     NegotiationReviewRequest,
     NegotiationUpdate,
 )
-from app.modules.promotion.enums import CooperationMode
+from app.modules.promotion.enums import CooperationMode, ShipStatus
 from app.modules.promotion.metrics_calculator import (
     calculate_cpl,
     calculate_effective_like_count,
@@ -335,6 +335,7 @@ class NegotiationService:
                 details={"pr_id": str(negotiation.pr_id)},
             )
 
+        # 过渡期（流程线 PR-2，S1）：谈款还是旧 4 态，审核通过即定稿，建的单直接进待发货、等主管确认推送仓库
         promotion = await PromotionService(self._session).create_promotion(
             PromotionCreate(
                 style_id=negotiation.style_id,
@@ -348,6 +349,7 @@ class NegotiationService:
             ),
             pr_user,
             autocommit=False,
+            ship_status=ShipStatus.PENDING,
         )
 
         negotiation.status = NegotiationStatus.APPROVED.value

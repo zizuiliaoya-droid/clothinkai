@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from pydantic import (
@@ -129,6 +129,10 @@ class PromotionCreate(PromotionBase):
     """商品明细（颜色尺码）。不传 = 先不选、推送时补；传了就每行都要有 sku，款式集合 = 归属商品的启用成员
     （单品 1 行、套装每个成员 1 行），``promotion.sku_id`` 取主款式那一行。"""
 
+    need_shipping: bool = False
+    """需要仓库发货（流程线 S1，11-58）。默认不勾：直接新建是补录历史用，与导入一样 ``ship_status`` = NULL、
+    不进待推送队列；勾了才写「待发货」。事后要发货走「纳入发货」。"""
+
 
 class PromotionUpdate(BaseModel):
     """部分更新（PATCH 语义）。
@@ -190,6 +194,33 @@ class PromotionPaymentQrBindRequest(BaseModel):
 
 class PromotionWarehouseWaybillRequest(BaseModel):
     waybill: str = Field(min_length=1, max_length=128)
+
+
+# ---------------------------------------------------------------------------
+# 发货（流程线 3.3）
+# ---------------------------------------------------------------------------
+
+
+class PromotionShipPushRequest(BaseModel):
+    """确认推送仓库（S3）。推送弹窗里补选的颜色尺码、补填的收件信息，与推送同一事务写入，写完再判 ★。
+
+    都不传 = 只推送；``items`` 传了就整组替换（规则同 ``PUT /{id}/items``），收件三项传了才改（``model_fields_set``）。
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    items: list[GoodsItemIn] | None = Field(default=None, max_length=10)
+    receiver_name: _ReceiverNameField = None
+    receiver_phone: _ReceiverPhoneField = None
+    receiver_address: _ReceiverAddressField = None
+
+
+class PromotionShipWithdrawRequest(BaseModel):
+    """撤回推送（S4）：原因必填，1 ~ 500 字（7.1 文本长度），进 audit_log。"""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    reason: str = Field(min_length=1, max_length=500)
 
 
 # ---------------------------------------------------------------------------
@@ -555,6 +586,14 @@ class PromotionResponse(BaseModel):
     receiver_phone: str | None = None
     receiver_address: str | None = None
 
+    # 发货（流程线 3.3）：NULL = 历史单（没进系统的发货流程）；推送人名字列表一页一次批量查
+    ship_status: str | None = None
+    ship_pushed_at: datetime | None = None
+    ship_pushed_by_name: str | None = None
+    ship_courier: str | None = None
+    ship_waybill: str | None = None
+    shipped_at: datetime | None = None
+
     # 商品明细（流程线 M1）：列表一页一次批量查；没有明细的旧单回落 source_extra['颜色及规格'] 原文
     items: list[PromotionItemResponse] = Field(default_factory=list)
     legacy_color_spec: str | None = None
@@ -584,6 +623,10 @@ class PromotionPage(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+ShipStatusFilter = Literal["待发货", "待打单", "已发货", "none"]
+"""推广列表「发货」筛选（7.3）：``none`` = 历史单（NULL）；``待发货`` 只回阶段「待推送仓库」那批（被取消的不算）。"""
+
+
 class PromotionListFilters(BaseModel):
     """列表过滤入参（query string 解析后构造）。"""
 
@@ -604,8 +647,7 @@ class PromotionListFilters(BaseModel):
     is_active: bool | None = True
     only_dual_platform: bool = False
     is_hit: bool | None = None
-    has_print_address: bool | None = None
-    has_waybill: bool | None = None
+    ship_status: ShipStatusFilter | None = None
 
 
 __all__ = [
@@ -627,6 +669,8 @@ __all__ = [
     "PromotionResponse",
     "PromotionResubmitRequest",
     "PromotionReviewRequest",
+    "PromotionShipPushRequest",
+    "PromotionShipWithdrawRequest",
     "PromotionUpdate",
     "PromotionUpdateLikeRequest",
     "PromotionWarehouseWaybillRequest",

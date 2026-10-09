@@ -81,6 +81,7 @@ from app.modules.promotion.schemas import (
     PromotionCreate,
     PromotionItemResponse,
     PromotionResponse,
+    PromotionShipPushRequest,
     PromotionUpdate,
 )
 from app.modules.promotion.stage_calculator import compute_stage
@@ -95,7 +96,7 @@ from app.modules.urge.service import UrgeService
 # 沿用拆分前的 logger 名，日志检索不受影响
 log = logging.getLogger("app.modules.promotion.service")
 
-_PayloadT = TypeVar("_PayloadT", PromotionCreate, PromotionUpdate)
+_PayloadT = TypeVar("_PayloadT", PromotionCreate, PromotionUpdate, PromotionShipPushRequest)
 
 
 def _utcnow() -> datetime:
@@ -507,6 +508,7 @@ class PromotionServiceBase:
         stage: str | None = None,
         negotiators: Mapping[UUID, UUID] | None = None,
         members_by_goods: Mapping[UUID, builtins.list[UUID]] | None = None,
+        user_names: Mapping[UUID, str] | None = None,
     ) -> PromotionResponse:
         """组装响应：字段权限过滤 + 衍生字段计算 + 矩阵 ``ui``.
 
@@ -524,6 +526,7 @@ class PromotionServiceBase:
             view: ``ui`` 的形状，列表 ``list``（actions + edits），其余 ``detail``（actions + fields）。
             stage: 列表 CTE 算好的派生阶段；None 时按 ``stage_calculator.compute_stage`` 现算。
             negotiators / members_by_goods: 列表整页一次查好的谈款人与套装成员；None 时单条现查。
+            user_names: 列表整页一次查好的推送人名字；None 时单条现查。
         """
         if actor is None:
             actor = await self._flow_actor(user)
@@ -685,6 +688,10 @@ class PromotionServiceBase:
         )
         ui = ui_for(actor, doc).to_dict(view=view)
 
+        pushed_by = promotion.ship_pushed_by
+        if pushed_by is not None and user_names is None:
+            user_names = await self._repo.user_names([pushed_by])
+
         return PromotionResponse(
             id=promotion.id,
             internal_code=promotion.internal_code,
@@ -752,6 +759,14 @@ class PromotionServiceBase:
             cpl=cpl if (can_see_quote and can_see_cost) else None,
             source_extra=source_extra,
             **receiver,
+            ship_status=promotion.ship_status,
+            ship_pushed_at=promotion.ship_pushed_at,
+            ship_pushed_by_name=(
+                user_names.get(pushed_by) if pushed_by is not None and user_names else None
+            ),
+            ship_courier=promotion.ship_courier,
+            ship_waybill=promotion.ship_waybill,
+            shipped_at=promotion.shipped_at,
             items=self._item_responses(items),
             legacy_color_spec=legacy_color_spec,
             payment_qr_attachment_id=visible_payment_qr_id,

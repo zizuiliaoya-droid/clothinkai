@@ -1,12 +1,15 @@
 """流程线 PR-2：推广单收件 / 发货（设计 3.3、4.6、7.3）。
 
 本文件按条目逐步长：S5 收件三项（字段规则投影、写权限、电话规范化、``source_extra`` 退役键拒收）；
-S6 商品明细（``POST /`` 的 ``items`` 校验、响应 ``items`` / ``legacy_color_spec``、列表一次批量查、SKU 引用计数）。
+S6 商品明细（``POST /`` 的 ``items`` 校验、响应 ``items`` / ``legacy_color_spec``、列表一次批量查、SKU 引用计数）；
+S7 矩阵 ``ui`` / PATCH / ``PUT items``；S8 发货状态机（纳入 / 推送 / 撤回、取消联动、新建 ``need_shipping``、30 并发推送）。
 角色一律用 ``flow_users``（迁移 seed 的真实角色）。断言落库值时直接 SELECT，不看响应。
 """
 
 from __future__ import annotations
 
+import asyncio
+from datetime import date
 from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
@@ -16,9 +19,15 @@ from sqlalchemy import event, select
 from sqlalchemy import text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import ValidationError
+from app.core.exceptions import (
+    AppException,
+    IllegalStateTransitionError,
+    PermissionDeniedError,
+    ValidationError,
+)
 from app.core.tenancy import tenant_id_ctx
-from app.modules.auth.models import Permission, UserPermissionOverride
+from app.modules.auth.models import Permission, User, UserPermissionOverride
+from app.modules.flow.exceptions import FlowGateMissingError
 from app.modules.product.goods_models import GoodsMain, GoodsStyleItem
 from app.modules.product.service import SkuService
 from app.modules.promotion.enums import CooperationMode
@@ -28,14 +37,20 @@ from app.modules.promotion.exceptions import (
     InvalidSkuReferenceError,
     PromotionNotFoundError,
     SourceExtraKeyRetiredError,
+    StateTransitionConflictError,
 )
 from app.modules.promotion.schemas import (
     GoodsItemIn,
+    PromotionCancelRequest,
     PromotionCreate,
     PromotionListFilters,
+    PromotionShipPushRequest,
+    PromotionShipWithdrawRequest,
     PromotionUpdate,
 )
 from app.modules.promotion.service import PromotionService
+from tests.concurrency import committed, default_tenant_id, run_concurrently
+from tests.conftest import purge_promotions
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
@@ -1309,3 +1324,690 @@ async def _call(session: AsyncSession, user: Any, method: str, path: str, json: 
     finally:
         for dep in (get_session, get_current_user_active, get_current_perms):
             app.dependency_overrides.pop(dep, None)
+
+
+# ---------------------------------------------------------------------------
+# S8 发货 3 态（3.3 S1 ~ S4、S7）：service 顺序 404 → 状态机 422 → 规则 403 → 条件 UPDATE 409 → 写补选 → ★ 422
+# 推送失败会 rollback：前置数据先 commit、id 先取出来（rollback 后 ORM 对象全部过期）
+# ---------------------------------------------------------------------------
+
+
+async def _db_ship(session: AsyncSession, promotion_id: UUID) -> dict[str, Any]:
+    row = (
+        (
+            await session.execute(
+                sa_text(
+                    "SELECT ship_status, ship_pushed_at, ship_pushed_by, receiver_name, "
+                    "receiver_phone, receiver_address, sku_id FROM promotion WHERE id = :pid"
+                ),
+                {"pid": promotion_id},
+            )
+        )
+        .mappings()
+        .one()
+    )
+    return dict(row)
+
+
+async def _user_name(session: AsyncSession, user_id: UUID) -> str:
+    name: str = (
+        await session.execute(
+            sa_text('SELECT COALESCE(display_name, username) FROM "user" WHERE id = :u'),
+            {"u": user_id},
+        )
+    ).scalar_one()
+    return name
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+class TestShipInclude:
+    async def test_manager_includes_history(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        promo = await _promotion(flow_users, product_factory, blogger_factory, promotion_factory)
+        resp = await PromotionService(session).ship_include(promo.id, flow_users.pr_manager)
+        assert (await _db_ship(session, promo.id))["ship_status"] == "待发货"
+        assert resp.ship_status == "待发货"
+        # 进了 A 列：主管接着能推送（缺项都在弹窗里补）
+        assert resp.ui is not None
+        assert resp.ui["column"] == "A"
+        assert resp.ui["actions"]["ship_push"]["state"] == "enabled"
+
+    @pytest.mark.parametrize(
+        "kw",
+        [
+            {"ship_status": "待发货"},
+            {"ship_status": "已发货"},
+            {"publish_status": "已发布"},
+            {"publish_status": "已取消"},
+            {"recall_status": "召回中"},
+        ],
+    )
+    async def test_state_machine(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        kw: dict[str, Any],
+    ) -> None:
+        """（已停用的单 ``get_by_id`` 取不到 → 404，与其他动作一致。）"""
+        promo = await _promotion(
+            flow_users, product_factory, blogger_factory, promotion_factory, **kw
+        )
+        with pytest.raises(IllegalStateTransitionError) as exc_info:
+            await PromotionService(session).ship_include(promo.id, flow_users.pr_manager)
+        assert exc_info.value.code == "ILLEGAL_STATE_TRANSITION"
+        assert exc_info.value.details["action"] == "ship_include"
+
+    async def test_pr_and_404(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        promo = await _promotion(flow_users, product_factory, blogger_factory, promotion_factory)
+        svc = PromotionService(session)
+        with pytest.raises(PromotionNotFoundError):
+            await svc.ship_include(uuid4(), flow_users.pr_manager)
+        with pytest.raises(PermissionDeniedError) as exc_info:
+            await svc.ship_include(promo.id, flow_users.pr)
+        assert exc_info.value.code == "PERMISSION_DENIED"
+        assert (await _db_ship(session, promo.id))["ship_status"] is None
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+class TestShipPush:
+    async def test_push_writes_marks_and_moves_to_b(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        style = await product_factory.style()
+        sku = await product_factory.sku(style)
+        blogger = await blogger_factory.blogger()
+        promo = await promotion_factory.promotion(
+            style=style,
+            blogger=blogger,
+            pr=flow_users.pr,
+            sku_id=sku.id,
+            ship_status="待发货",
+            **_RECEIVER,
+            items=[(style, sku)],
+        )
+        manager = flow_users.pr_manager
+        resp = await PromotionService(session).ship_push(
+            promo.id, PromotionShipPushRequest(), manager
+        )
+        db = await _db_ship(session, promo.id)
+        assert db["ship_status"] == "待打单"
+        assert db["ship_pushed_by"] == manager.id
+        assert db["ship_pushed_at"] is not None
+        assert resp.ship_status == "待打单"
+        assert resp.ship_pushed_at == db["ship_pushed_at"]
+        assert resp.ship_pushed_by_name == await _user_name(session, manager.id)
+        assert resp.ui is not None
+        assert resp.ui["column"] == "B"
+        assert resp.ui["actions"] == {"ship_withdraw": {"state": "enabled"}}
+        # 列表与详情同一份发货字段（推送人整页一次查）
+        page = await PromotionService(session).list_promotions(
+            filters=PromotionListFilters(), page=1, page_size=100, user=manager
+        )
+        row = next(p for p in page.items if p.id == promo.id)
+        assert (row.ship_status, row.ship_pushed_by_name) == ("待打单", resp.ship_pushed_by_name)
+
+    async def test_repush_is_state_error_not_missing(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        """已推送（待打单）、收件与明细都空的单再推 → 422 状态错，不是缺项（A1）。"""
+        promo = await _promotion(
+            flow_users, product_factory, blogger_factory, promotion_factory, ship_status="待打单"
+        )
+        with pytest.raises(AppException) as exc_info:
+            await PromotionService(session).ship_push(
+                promo.id, PromotionShipPushRequest(), flow_users.pr_manager
+            )
+        assert exc_info.value.code == "ILLEGAL_STATE_TRANSITION"
+        assert exc_info.value.details == {"from_state": "待仓库发货", "action": "ship_push"}
+
+    @pytest.mark.parametrize(
+        "kw",
+        [
+            {"publish_status": "已发布"},
+            {"publish_status": "异常"},
+            {"recall_status": "召回中"},
+            {"ship_status": "已发货"},
+            {"ship_status": None},  # 历史单（发货为空）先走纳入发货
+        ],
+    )
+    async def test_state_machine(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        kw: dict[str, Any],
+    ) -> None:
+        kw = {"ship_status": "待发货", **kw}
+        promo = await _promotion(
+            flow_users, product_factory, blogger_factory, promotion_factory, **_RECEIVER, **kw
+        )
+        with pytest.raises(AppException) as exc_info:
+            await PromotionService(session).ship_push(
+                promo.id, PromotionShipPushRequest(), flow_users.pr_manager
+            )
+        assert exc_info.value.code == "ILLEGAL_STATE_TRANSITION"
+
+    async def test_pr_is_permission_denied(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        promo = await _promotion(
+            flow_users, product_factory, blogger_factory, promotion_factory, ship_status="待发货"
+        )
+        with pytest.raises(AppException) as exc_info:
+            await PromotionService(session).ship_push(
+                promo.id, PromotionShipPushRequest(), flow_users.pr
+            )
+        assert exc_info.value.code == "PERMISSION_DENIED"
+        assert (await _db_ship(session, promo.id))["ship_status"] == "待发货"
+
+    async def test_missing_exactly_two_and_same_as_ui(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        suit: _Suit,
+    ) -> None:
+        """缺电话（格式不对）+ 套装少一个成员 → 422 缺项恰两项，与 ui 逐条相同；整笔回滚。"""
+        blogger = await blogger_factory.blogger()
+        promo = await promotion_factory.promotion(
+            style=suit.top,
+            blogger=blogger,
+            pr=flow_users.pr,
+            goods_main_id=suit.goods.id,
+            ship_status="待发货",
+            receiver_name="张三",
+            receiver_phone="12345",
+            receiver_address="杭州",
+            items=[(suit.top, suit.top_sku)],
+        )
+        svc = PromotionService(session)
+        detail = await svc.get_promotion(promo.id, flow_users.pr_manager)
+        assert detail.ui is not None
+        ui_missing = detail.ui["actions"]["ship_push"]["missing"]
+        await session.commit()
+        pid, manager = promo.id, flow_users.pr_manager
+        with pytest.raises(FlowGateMissingError) as exc_info:
+            await svc.ship_push(pid, PromotionShipPushRequest(), manager)
+        assert exc_info.value.details["missing"] == ui_missing
+        assert ui_missing == [
+            {"key": "receiver_phone", "label": "收件电话"},
+            {"key": "goods_items", "label": "颜色尺码"},
+        ]
+        db = await _db_ship(session, pid)
+        assert (db["ship_status"], db["ship_pushed_at"], db["ship_pushed_by"]) == (
+            "待发货",
+            None,
+            None,
+        )
+
+    async def test_dialog_fill_written_with_push(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        suit: _Suit,
+    ) -> None:
+        """没有明细与收件的单（存量、直接新建）在推送弹窗里补，与推送同一事务。"""
+        blogger = await blogger_factory.blogger()
+        promo = await promotion_factory.promotion(
+            style=suit.top,
+            blogger=blogger,
+            pr=flow_users.pr,
+            goods_main_id=suit.goods.id,
+            ship_status="待发货",
+        )
+        resp = await PromotionService(session).ship_push(
+            promo.id,
+            PromotionShipPushRequest(
+                items=_items((suit.pants, suit.pants_sku), (suit.top, suit.top_sku)),
+                receiver_name=" 李四 ",
+                receiver_phone="+86 138-1234-5678",
+                receiver_address="上海市某路 2 号",
+            ),
+            flow_users.pr_manager,
+        )
+        db = await _db_ship(session, promo.id)
+        assert db["ship_status"] == "待打单"
+        assert (db["receiver_name"], db["receiver_phone"], db["receiver_address"]) == (
+            "李四",
+            "13812345678",
+            "上海市某路 2 号",
+        )
+        assert db["sku_id"] == suit.top_sku.id
+        assert await _db_items(session, promo.id) == [
+            (suit.pants.id, suit.pants_sku.id, 0),
+            (suit.top.id, suit.top_sku.id, 1),
+        ]
+        assert [(i.color, i.size) for i in resp.items] == [("白色", "L"), ("黑色", "M")]
+
+    async def test_gate_failure_rolls_back_dialog_fill(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        suit: _Suit,
+    ) -> None:
+        """补了明细、没补收件 → 422 缺收件三项；条件 UPDATE 与补的明细一起回滚。"""
+        blogger = await blogger_factory.blogger()
+        promo = await promotion_factory.promotion(
+            style=suit.top,
+            blogger=blogger,
+            pr=flow_users.pr,
+            goods_main_id=suit.goods.id,
+            ship_status="待发货",
+        )
+        await session.commit()
+        pid, manager = promo.id, flow_users.pr_manager
+        body = PromotionShipPushRequest(
+            items=_items((suit.top, suit.top_sku), (suit.pants, suit.pants_sku))
+        )
+        with pytest.raises(FlowGateMissingError) as exc_info:
+            await PromotionService(session).ship_push(pid, body, manager)
+        assert [m["key"] for m in exc_info.value.details["missing"]] == [
+            "receiver_name",
+            "receiver_phone",
+            "receiver_address",
+        ]
+        db = await _db_ship(session, pid)
+        assert (db["ship_status"], db["ship_pushed_at"], db["sku_id"]) == ("待发货", None, None)
+        assert await _db_items(session, pid) == []
+
+    @pytest.mark.parametrize(
+        ("body", "code"),
+        [
+            ({"receiver_phone": "12345"}, "INVALID_RECEIVER_PHONE"),
+            ("wrong_sku", "INVALID_SKU_REFERENCE"),
+            ("missing_member", "VALIDATION_ERROR"),
+        ],
+    )
+    async def test_bad_dialog_fill_422(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        suit: _Suit,
+        body: Any,
+        code: str,
+    ) -> None:
+        blogger = await blogger_factory.blogger()
+        promo = await promotion_factory.promotion(
+            style=suit.top,
+            blogger=blogger,
+            pr=flow_users.pr,
+            goods_main_id=suit.goods.id,
+            ship_status="待发货",
+            **_RECEIVER,
+        )
+        if body == "wrong_sku":  # 上衣那行填了裤子的 SKU
+            payload = PromotionShipPushRequest(
+                items=_items((suit.top, suit.pants_sku), (suit.pants, suit.pants_sku))
+            )
+        elif body == "missing_member":
+            payload = PromotionShipPushRequest(items=_items((suit.top, suit.top_sku)))
+        else:
+            payload = PromotionShipPushRequest(
+                **body, items=_items((suit.top, suit.top_sku), (suit.pants, suit.pants_sku))
+            )
+        await session.commit()
+        pid, manager = promo.id, flow_users.pr_manager
+        with pytest.raises(AppException) as exc_info:
+            await PromotionService(session).ship_push(pid, payload, manager)
+        assert exc_info.value.code == code
+        db = await _db_ship(session, pid)
+        assert (db["ship_status"], db["receiver_phone"]) == ("待发货", _RECEIVER["receiver_phone"])
+        assert await _db_items(session, pid) == []
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+class TestShipWithdraw:
+    async def test_manager_withdraws_and_keeps_push_marks(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        from datetime import UTC, datetime
+
+        pushed_at = datetime(2026, 10, 9, 8, 0, tzinfo=UTC)
+        promo = await _promotion(
+            flow_users,
+            product_factory,
+            blogger_factory,
+            promotion_factory,
+            ship_status="待打单",
+            ship_pushed_at=pushed_at,
+            ship_pushed_by=flow_users.admin.id,
+        )
+        resp = await PromotionService(session).ship_withdraw(
+            promo.id, PromotionShipWithdrawRequest(reason=" 地址写错了 "), flow_users.pr_manager
+        )
+        db = await _db_ship(session, promo.id)
+        # 撤回不清推送时间 / 人（偏差 §2-10：再推覆盖）
+        assert (db["ship_status"], db["ship_pushed_at"], db["ship_pushed_by"]) == (
+            "待发货",
+            pushed_at,
+            flow_users.admin.id,
+        )
+        assert resp.ship_status == "待发货"
+        audit = (
+            await session.execute(
+                sa_text(
+                    "SELECT before, after FROM audit_log WHERE action = 'promotion.ship.withdraw' "
+                    "AND resource_id = :r"
+                ),
+                {"r": str(promo.id)},
+            )
+        ).one()
+        assert audit[0] == {"ship_status": "待打单"}
+        assert audit[1] == {"ship_status": "待发货", "reason": "地址写错了"}
+
+    @pytest.mark.parametrize("ship_status", [None, "待发货", "已发货"])
+    async def test_only_from_printing(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        ship_status: str | None,
+    ) -> None:
+        promo = await _promotion(
+            flow_users, product_factory, blogger_factory, promotion_factory, ship_status=ship_status
+        )
+        with pytest.raises(AppException) as exc_info:
+            await PromotionService(session).ship_withdraw(
+                promo.id, PromotionShipWithdrawRequest(reason="x"), flow_users.pr_manager
+            )
+        assert exc_info.value.code == "ILLEGAL_STATE_TRANSITION"
+
+    async def test_pr_denied(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        promo = await _promotion(
+            flow_users, product_factory, blogger_factory, promotion_factory, ship_status="待打单"
+        )
+        with pytest.raises(AppException) as exc_info:
+            await PromotionService(session).ship_withdraw(
+                promo.id, PromotionShipWithdrawRequest(reason="x"), flow_users.pr
+            )
+        assert exc_info.value.code == "PERMISSION_DENIED"
+        assert (await _db_ship(session, promo.id))["ship_status"] == "待打单"
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+class TestCancelLinkage:
+    @pytest.mark.parametrize(
+        ("before", "after"),
+        [("待打单", "待发货"), ("待发货", "待发货"), ("已发货", "已发货"), (None, None)],
+    )
+    async def test_cancel_returns_printing_to_pending(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        before: str | None,
+        after: str | None,
+    ) -> None:
+        promo = await _promotion(
+            flow_users, product_factory, blogger_factory, promotion_factory, ship_status=before
+        )
+        resp = await PromotionService(session).cancel(
+            promo.id, PromotionCancelRequest(cancel_reason="博主不合作了"), flow_users.pr
+        )
+        assert (await _db_ship(session, promo.id))["ship_status"] == after
+        assert resp.ship_status == after
+        assert resp.publish_status == "已取消"
+
+    async def test_cancelled_leaves_warehouse_and_pending_filter(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        """待打单被取消 → 回到待发货，但不在「待打单」也不在推广列表「待发货」筛选里（阶段 = 已完结 · 不合作）。"""
+        promo = await _promotion(
+            flow_users, product_factory, blogger_factory, promotion_factory, ship_status="待打单"
+        )
+        svc = PromotionService(session)
+        await svc.cancel(promo.id, PromotionCancelRequest(cancel_reason="取消"), flow_users.pr)
+        for value in ("待打单", "待发货"):
+            page = await svc.list_promotions(
+                filters=PromotionListFilters(ship_status=value),
+                page=1,
+                page_size=100,
+                user=flow_users.pr_manager,
+            )
+            assert promo.id not in {p.id for p in page.items}, value
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+class TestCreateNeedShipping:
+    async def test_route_default_null_and_checked_pending(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+    ) -> None:
+        """主管直接新建：不勾「需要仓库发货」= NULL（补录历史，不进待推送）；勾了 = 待发货（11-58，C5）。"""
+        style = await product_factory.style()
+        blogger = await blogger_factory.blogger(quote=Decimal("100.00"))
+        body = {
+            "style_id": str(style.id),
+            "blogger_id": str(blogger.id),
+            "platform": "小红书",
+            "cooperation_mode": "送拍",
+        }
+        plain = await _call(session, flow_users.pr_manager, "POST", "/api/promotions/", body)
+        assert plain.status_code == 201, plain.text
+        assert plain.json()["ship_status"] is None
+        checked = await _call(
+            session,
+            flow_users.pr_manager,
+            "POST",
+            "/api/promotions/",
+            {**body, "need_shipping": True},
+        )
+        assert checked.status_code == 201, checked.text
+        assert checked.json()["ship_status"] == "待发货"
+        got = {
+            r[0]: r[1]
+            for r in (
+                await session.execute(
+                    sa_text("SELECT id, ship_status FROM promotion WHERE id IN (:a, :b)"),
+                    {"a": UUID(plain.json()["id"]), "b": UUID(checked.json()["id"])},
+                )
+            ).all()
+        }
+        assert got == {UUID(plain.json()["id"]): None, UUID(checked.json()["id"]): "待发货"}
+        page = await PromotionService(session).list_promotions(
+            filters=PromotionListFilters(ship_status="待发货"),
+            page=1,
+            page_size=100,
+            user=flow_users.pr_manager,
+        )
+        assert {p.id for p in page.items} & set(got) == {UUID(checked.json()["id"])}
+
+
+# ---------------------------------------------------------------------------
+# S8 并发：30 个独立连接同时推送同一张单（都带补选明细）→ 1 成功、29 个 409、0 个 500（A3 / A8）
+# ---------------------------------------------------------------------------
+
+
+class TestShipPushConcurrent:
+    async def test_30_concurrent_pushes(self, engine: Any) -> None:
+        from app.core.security.auth import hash_password
+
+        tenant_id = await default_tenant_id(engine)
+        suffix = uuid4().hex[:8]
+        promotion_id, style_id, sku_id, blogger_id = uuid4(), uuid4(), uuid4(), uuid4()
+        user_ids = [uuid4(), uuid4()]  # 主管、管理员轮流推
+        async with committed(engine) as seed:
+            for uid, code in zip(user_ids, ("pr_manager", "admin"), strict=True):
+                await seed.execute(
+                    sa_text(
+                        'INSERT INTO "user" (id, tenant_id, username, password_hash, status, '
+                        "password_must_change, created_at, updated_at) "
+                        "VALUES (:id, :tid, :un, :ph, 'active', false, NOW(), NOW())"
+                    ),
+                    {
+                        "id": uid,
+                        "tid": tenant_id,
+                        "un": f"ship_{code}_{suffix}",
+                        "ph": hash_password("Password123"),
+                    },
+                )
+                await seed.execute(
+                    sa_text(
+                        "INSERT INTO user_role (id, tenant_id, user_id, role_id) "
+                        "SELECT gen_random_uuid(), :tid, :uid, id FROM role WHERE code = :code"
+                    ),
+                    {"tid": tenant_id, "uid": uid, "code": code},
+                )
+            await seed.execute(
+                sa_text(
+                    "INSERT INTO style (id, tenant_id, style_code, style_name, category, "
+                    "design_status, is_active, is_deleted, created_at, updated_at) "
+                    "VALUES (:id, :tid, :code, '并发款', '连衣裙', '大货', true, false, NOW(), NOW())"
+                ),
+                {"id": style_id, "tid": tenant_id, "code": f"SHIPC{suffix}"},
+            )
+            await seed.execute(
+                sa_text(
+                    "INSERT INTO sku (id, tenant_id, style_id, sku_code, color, size, base_price, "
+                    "sourcing_type, is_active, is_deleted, created_at, updated_at) VALUES (:id, "
+                    ":tid, :sid, :code, '黑色', 'M', 200, '自产', true, false, NOW(), NOW())"
+                ),
+                {"id": sku_id, "tid": tenant_id, "sid": style_id, "code": f"SHIPK{suffix}"},
+            )
+            await seed.execute(
+                sa_text(
+                    "INSERT INTO blogger (id, tenant_id, xiaohongshu_id, nickname, platform, "
+                    "is_suspected_fake, is_active, is_deleted, created_at, updated_at) "
+                    "VALUES (:id, :tid, :xhs, '并发博主', '小红书', false, true, false, NOW(), NOW())"
+                ),
+                {"id": blogger_id, "tid": tenant_id, "xhs": f"XHS{suffix}"},
+            )
+            await seed.execute(
+                sa_text(
+                    "INSERT INTO promotion (id, tenant_id, style_id, blogger_id, pr_id, "
+                    "internal_code, style_code_snapshot, style_short_name_snapshot, quote_amount, "
+                    "platform, cooperation_date, publish_status, recall_status, settlement_status, "
+                    "is_active, ship_status, receiver_name, receiver_phone, receiver_address, "
+                    "created_at, updated_at) VALUES (:id, :tid, :sid, :bid, :uid, :code, 'SC', "
+                    "'SN', 500.00, '小红书', :cd, '未发布', '未召回', '未核查', true, '待发货', "
+                    "'张三', '13812345678', '杭州某路', NOW(), NOW())"
+                ),
+                {
+                    "id": promotion_id,
+                    "tid": tenant_id,
+                    "sid": style_id,
+                    "bid": blogger_id,
+                    "uid": user_ids[0],
+                    "code": f"SHIPPR{suffix}",
+                    "cd": date(2026, 10, 9),
+                },
+            )
+
+        n = 30
+        barrier = asyncio.Barrier(n)
+
+        async def attempt(s: AsyncSession, i: int) -> str:
+            user = await s.get(User, user_ids[i % 2])  # 顺带先拿到连接，再一起出发
+            assert user is not None
+            await barrier.wait()
+            try:
+                await PromotionService(s).ship_push(
+                    promotion_id,
+                    PromotionShipPushRequest(items=[GoodsItemIn(style_id=style_id, sku_id=sku_id)]),
+                    user,
+                )
+                return "ok"
+            except StateTransitionConflictError:
+                return "conflict"
+            except Exception as e:
+                return f"other:{type(e).__name__}:{getattr(e, 'code', '')}"
+
+        try:
+            results = await run_concurrently(engine, n, attempt, tenant_id=tenant_id)
+            assert results.count("ok") == 1, results
+            assert results.count("conflict") == n - 1, results
+            winner = user_ids[results.index("ok") % 2]
+            async with committed(engine) as check:
+                row = (
+                    await check.execute(
+                        sa_text(
+                            "SELECT ship_status, ship_pushed_by, "
+                            "(SELECT COUNT(*) FROM promotion_item WHERE promotion_id = p.id) "
+                            "FROM promotion p WHERE id = :id"
+                        ),
+                        {"id": promotion_id},
+                    )
+                ).one()
+            assert tuple(row) == ("待打单", winner, 1)
+        finally:
+            async with committed(engine) as cleanup:
+                await purge_promotions(cleanup, [promotion_id])
+                await cleanup.execute(
+                    sa_text("DELETE FROM audit_log WHERE resource_id = :r"),
+                    {"r": str(promotion_id)},
+                )
+                for sql, key in (
+                    ("DELETE FROM sku WHERE id = :id", sku_id),
+                    ("DELETE FROM style WHERE id = :id", style_id),
+                    ("DELETE FROM blogger WHERE id = :id", blogger_id),
+                ):
+                    await cleanup.execute(sa_text(sql), {"id": key})
+                for uid in user_ids:
+                    await cleanup.execute(
+                        sa_text("DELETE FROM user_role WHERE user_id = :id"), {"id": uid}
+                    )
+                    await cleanup.execute(sa_text('DELETE FROM "user" WHERE id = :id'), {"id": uid})

@@ -16,7 +16,7 @@
 - match 降级语义：业务未匹配 → 200 + 空数组；系统失败 → 异常自然冒泡 → 5xx + Sentry
 
 按职责拆成 mixin（``service_parts/``）：本文件留 CRUD 与仓库回填；共用依赖与 helper 在 ``base.py``，
-收款码 / 发布与取消 / 召回 / 审核与重提 / 数据与复盘各一个文件。``PromotionService`` 的名字与路径不变。
+收款码 / 发布与取消 / 召回 / 审核与重提 / 数据与复盘 / 发货各一个文件。``PromotionService`` 的名字与路径不变。
 """
 
 from __future__ import annotations
@@ -40,6 +40,7 @@ from app.modules.promotion.enums import (
     PublishStatus,
     RecallStatus,
     SettlementStatus,
+    ShipStatus,
 )
 from app.modules.promotion.exceptions import (
     CooperationModeImmutableError,
@@ -84,6 +85,7 @@ from app.modules.promotion.service_parts.publish import PromotionPublishMixin
 from app.modules.promotion.service_parts.recall import PromotionRecallMixin
 from app.modules.promotion.service_parts.retro import PromotionRetroMixin
 from app.modules.promotion.service_parts.review import PromotionReviewMixin
+from app.modules.promotion.service_parts.shipping import PromotionShippingMixin
 from app.modules.promotion.urge_calculator import (
     get_today,
 )
@@ -96,6 +98,7 @@ class PromotionService(
     PromotionRecallMixin,
     PromotionReviewMixin,
     PromotionRetroMixin,
+    PromotionShippingMixin,
 ):
     """推广合作业务服务。"""
 
@@ -104,7 +107,12 @@ class PromotionService(
     # ============================================================
 
     async def create_promotion(
-        self, payload: PromotionCreate, user: User, *, autocommit: bool = True
+        self,
+        payload: PromotionCreate,
+        user: User,
+        *,
+        autocommit: bool = True,
+        ship_status: ShipStatus | None = None,
     ) -> PromotionResponse:
         """EP05-S02 创建推广 + 自动 internal_code + 重复检测.
 
@@ -112,6 +120,8 @@ class PromotionService(
             autocommit: 默认 True，HTTP 路径下自己提交。谈款审核通过时要在同一个事务里
                 「改谈款状态 + 建推广单」，那边传 False 由调用方统一提交 ——
                 否则中间失败会留下「审核通过但没有推广单」的单据。
+            ship_status: 发货状态初值（流程线 S1）。HTTP 新建按 ``need_shipping`` 传「待发货」或 None，
+                谈款审核通过传「待发货」；None = 历史单口径，不进待推送队列（11-58）。
         """
         # 0. 退役键最先判（流程线 7.3）
         self._reject_retired_source_extra_keys(payload)
@@ -242,6 +252,7 @@ class PromotionService(
             receiver_name=payload.receiver_name,
             receiver_phone=payload.receiver_phone,
             receiver_address=payload.receiver_address,
+            ship_status=ship_status.value if ship_status is not None else None,
             publish_status=PublishStatus.UNPUBLISHED.value,
             recall_status=RecallStatus.NOT_RECALLED.value,
             settlement_status=SettlementStatus.NOT_REVIEWED.value,
@@ -558,8 +569,7 @@ class PromotionService(
             only_dual_platform=filters.only_dual_platform,
             is_hit=filters.is_hit,
             hit_threshold=HIT_THRESHOLD_LIKE_COUNT,
-            has_print_address=filters.has_print_address,
-            has_waybill=filters.has_waybill,
+            ship_status=filters.ship_status,
         )
 
         # 阈值读租户配置（后台可改），整页共用一次查询
@@ -589,6 +599,9 @@ class PromotionService(
         members_by_goods = await self._items_repo.members_by_goods(
             list({r.promotion.goods_main_id for r in rows if r.promotion.goods_main_id is not None})
         )
+        user_names = await self._repo.user_names(
+            [r.promotion.ship_pushed_by for r in rows if r.promotion.ship_pushed_by is not None]
+        )
 
         # 用 CTE 计算结果填充响应（避免重复计算 urge_status / dual_platform）
         items = [
@@ -613,6 +626,7 @@ class PromotionService(
                 stage=row.stage,
                 negotiators=negotiators,
                 members_by_goods=members_by_goods,
+                user_names=user_names,
             )
             for row in rows
         ]

@@ -27,6 +27,7 @@ from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.metrics import promotion_sequence_lock_duration_seconds
+from app.modules.auth.models import User
 from app.modules.negotiation.models import Negotiation
 from app.modules.product.goods_models import GoodsMain, GoodsStyleItem
 from app.modules.product.models import Sku, Style
@@ -34,10 +35,14 @@ from app.modules.promotion.display_name import (
     PROMOTION_DISPLAY_SHORT_NAME_SQL,
     display_short_name_sql,
 )
+from app.modules.promotion.enums import ShipStatus
 from app.modules.promotion.exceptions import SequenceOverflowError
 from app.modules.promotion.models import BloggerRetrospective, Promotion, PromotionItem
-from app.modules.promotion.stage_calculator import stage_sql_expr
+from app.modules.promotion.stage_calculator import PROMOTION_STAGES, STAGE_COLUMN, stage_sql_expr
 from app.modules.promotion.urge_calculator import URGE_STATUS_SQL_EXPR
+
+# 「待发货」筛选只回的那个阶段：A 列（待推送仓库）只有它一个
+SHIP_PENDING_STAGE = next(s for s in PROMOTION_STAGES if STAGE_COLUMN[s] == "A")
 
 # list_with_cte 把 raw row 重组成 ORM 实例时要往构造器里喂哪些列。
 #
@@ -76,11 +81,9 @@ class PromotionListFilters:
     only_dual_platform: bool = False
     is_hit: bool | None = None
     hit_threshold: int = 1000
-    # 仓库打单用：按 source_extra 里的「打单地址」/「发货单号」是否已填筛选。
-    # 这两个筛选必须在服务端做 —— 打单单量只占推广总量的极小比例，
-    # 客户端过滤会既慢（要拉全量）又漏（只看得到当前页）。
-    has_print_address: bool | None = None
-    has_waybill: bool | None = None
+    # 「发货」筛选（流程线 7.3）：待发货 / 待打单 / 已发货 / none（历史单 = NULL）。
+    # 待发货只算阶段「待推送仓库」那批：被取消的待发货单归「已完结 · 不合作」，不在待推送队列里
+    ship_status: str | None = None
 
 
 @dataclass(frozen=True)
@@ -207,6 +210,16 @@ class PromotionRepository:
             .order_by(Negotiation.promotion_id, Negotiation.created_at.desc(), Negotiation.id)
         )
         return {row[0]: row[1] for row in (await self._session.execute(stmt)).all() if row[0]}
+
+    async def user_names(self, user_ids: Sequence[UUID]) -> dict[UUID, str]:
+        """用户 → 显示名（``display_name``，没填回落 ``username``）。推送人这类「谁做的」列整页一次查。"""
+        ids = list({uid for uid in user_ids if uid is not None})
+        if not ids:
+            return {}
+        stmt = select(User.id, func.coalesce(User.display_name, User.username)).where(
+            User.id.in_(ids)
+        )
+        return {row[0]: row[1] for row in (await self._session.execute(stmt)).all()}
 
     async def get_by_internal_code(self, internal_code: str) -> Promotion | None:
         stmt = (
@@ -442,7 +455,7 @@ class PromotionRepository:
         promotion_id: UUID,
         tenant_id: UUID,
         from_state_field: str,
-        from_state_value: str,
+        from_state_value: str | None,
         to_state_value: str,
         extra_fields: dict[str, Any] | None = None,
     ) -> Promotion | None:
@@ -460,7 +473,9 @@ class PromotionRepository:
             ``StateTransitionConflictError``。
 
         Args:
-            from_state_field: ``"publish_status"`` / ``"recall_status"`` / ``"settlement_status"``
+            from_state_field: ``"publish_status"`` / ``"recall_status"`` / ``"settlement_status"`` /
+                ``"retro_status"`` / ``"ship_status"``
+            from_state_value: 旧状态；``None`` 只对 ``ship_status`` 有意义（历史单，``IS NULL``）。
             extra_fields: 状态推进时一并写入的字段（如 publish 时的 publish_url、
                 actual_publish_date；review 时的 reviewed_by、reviewed_at 等）。
         """
@@ -469,10 +484,14 @@ class PromotionRepository:
             "recall_status",
             "settlement_status",
             "retro_status",  # PRD V1.4 改动 4，第 4 个并行状态机
+            "ship_status",  # 流程线 3.3 发货 3 态（NULL = 历史单）
         }:
             raise ValueError(f"unsupported state field: {from_state_field}")
 
         state_col = getattr(Promotion, from_state_field)
+        state_cond = (
+            state_col.is_(None) if from_state_value is None else state_col == from_state_value
+        )
         values: dict[str, Any] = dict(extra_fields or {})
         values[from_state_field] = to_state_value
         values["updated_at"] = func.now()
@@ -483,7 +502,7 @@ class PromotionRepository:
                 Promotion.id == promotion_id,
                 Promotion.tenant_id == tenant_id,
                 Promotion.is_active.is_(True),
-                state_col == from_state_value,
+                state_cond,
             )
             .values(**values)
             .returning(Promotion)
@@ -752,13 +771,14 @@ class PromotionRepository:
                 "OR goods_code ILIKE :kw)"
             )
             params["kw"] = f"%{filters.keyword}%"
-        # 表达式与 idx_promotion_print_address 部分索引的谓词保持一致，否则不命中索引。
-        if filters.has_print_address is not None:
-            op = "<>" if filters.has_print_address else "="
-            clauses.append(f"COALESCE(BTRIM(source_extra->>'打单地址'), '') {op} ''")
-        if filters.has_waybill is not None:
-            op = "<>" if filters.has_waybill else "="
-            clauses.append(f"COALESCE(BTRIM(source_extra->>'发货单号'), '') {op} ''")
+        if filters.ship_status == "none":
+            clauses.append("ship_status IS NULL")
+        elif filters.ship_status:
+            clauses.append("ship_status = CAST(:ship_status AS varchar)")
+            params["ship_status"] = filters.ship_status
+            if filters.ship_status == ShipStatus.PENDING.value:
+                clauses.append("stage = CAST(:ship_pending_stage AS text)")
+                params["ship_pending_stage"] = SHIP_PENDING_STAGE
 
         where_extra = ""
         if clauses:

@@ -13,6 +13,7 @@ from app.modules.auth.models import User
 from app.modules.promotion.enums import (
     PublishStatus,
     SettlementStatus,
+    ShipStatus,
 )
 from app.modules.promotion.events import (
     PromotionPublished,
@@ -192,11 +193,26 @@ class PromotionPublishMixin(PromotionServiceBase):
             status_field="publish",
         ).inc()
 
+        # 流程线 S7：已推送仓库（待打单）的单同事务退回待发货、离开仓库队列；
+        # 没推送的 0 行不报错，已发货的不动（衣服要回来走召回）
+        withdrawn = await self._repo.update_state(
+            promotion_id=promotion_id,
+            tenant_id=user.tenant_id,
+            from_state_field="ship_status",
+            from_state_value=ShipStatus.PRINTING.value,
+            to_state_value=ShipStatus.PENDING.value,
+        )
+        if withdrawn is not None:
+            updated = withdrawn
+
+        cancel_after: dict[str, str] = {"publish_status": PublishStatus.CANCELLED.value}
+        if withdrawn is not None:
+            cancel_after["ship_status"] = ShipStatus.PENDING.value
         await self._audit.log(
             action="promotion.cancel",
             resource="promotion",
             resource_id=promotion_id,
-            after={"publish_status": PublishStatus.CANCELLED.value},
+            after=cancel_after,
             user_id=user.id,
         )
 

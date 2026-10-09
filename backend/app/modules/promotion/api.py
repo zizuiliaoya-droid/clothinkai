@@ -31,6 +31,7 @@ from app.modules.promotion.enums import (
     PublishStatus,
     RecallStatus,
     SettlementStatus,
+    ShipStatus,
 )
 from app.modules.promotion.schemas import (
     GoodsItemIn,
@@ -55,6 +56,7 @@ from app.modules.promotion.schemas import (
     RetrospectiveConfirmRequest,
     RetrospectiveResponse,
     RetrospectiveSubmitRequest,
+    ShipStatusFilter,
 )
 
 router = APIRouter(prefix="/api", tags=["promotion"])
@@ -76,8 +78,14 @@ async def create_promotion(
     user: CurrentActiveUser,
     service: PromotionServiceDep,
 ) -> PromotionResponse:
-    """EP05-S02 PR 创建推广 + 自动 internal_code + 重复检测."""
-    return await service.create_promotion(payload, user)
+    """EP05-S02 PR 创建推广 + 自动 internal_code + 重复检测.
+
+    ``need_shipping`` 默认 false：直接新建是补录历史用，``ship_status`` 保持 NULL、不进待推送队列；
+    勾了才写「待发货」（流程线 S1，11-58）。
+    """
+    return await service.create_promotion(
+        payload, user, ship_status=ShipStatus.PENDING if payload.need_shipping else None
+    )
 
 
 @router.get(
@@ -105,10 +113,13 @@ async def list_promotions(
     is_active: bool | None = True,
     only_dual_platform: bool = False,
     is_hit: bool | None = None,
-    has_print_address: bool | None = None,
-    has_waybill: bool | None = None,
+    ship_status: ShipStatusFilter | None = None,
 ) -> PromotionPage:
-    """EP05-S03 / S05 / S06 列表 + CTE 衍生字段（urge_status / dual_platform）."""
+    """EP05-S03 / S05 / S06 列表 + CTE 衍生字段（urge_status / dual_platform）.
+
+    ``ship_status``：待发货（只算阶段「待推送仓库」）/ 待打单 / 已发货 / ``none``（历史单）。
+    060 前的 ``has_print_address`` / ``has_waybill`` 已删（旧前端传了 FastAPI 忽略、不过滤）。
+    """
     from datetime import date
 
     def _parse_date(s: str | None) -> date | None:
@@ -130,8 +141,7 @@ async def list_promotions(
         is_active=is_active,
         only_dual_platform=only_dual_platform,
         is_hit=is_hit,
-        has_print_address=has_print_address,
-        has_waybill=has_waybill,
+        ship_status=ship_status,
     )
     return await service.list_promotions(filters=filters, page=page, page_size=page_size, user=user)
 
