@@ -42,8 +42,8 @@ import type {
 import { extractErrorMessage } from "@/services/apiClient";
 import { ImportUploadButton } from "@/components/ImportUploadButton";
 import { BloggerHoverCard } from "@/components/BloggerHoverCard/BloggerHoverCard";
+import { PLATFORMS } from "@/features/common/platforms";
 
-const PLATFORMS = ["小红书", "抖音", "快手", "B站"];
 const TYPES = ["素人", "KOC", "KOL", "明星"];
 const GENDER_TARGETS = ["女性", "男性", "中性"];
 const LEVELS = ["A", "B", "C", "D"];

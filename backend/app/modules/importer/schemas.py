@@ -13,6 +13,16 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
 # ---------------------------------------------------------------------------
 
 
+class ImportImageSummary(BaseModel):
+    """内嵌图补主图的款数：补了 / 已有主图跳过 / 图片无效 / 未找到或已删除款式 / 保存失败。"""
+
+    set: int = 0
+    kept: int = 0
+    invalid: int = 0
+    skipped: int = 0
+    failed: int = 0
+
+
 class ImportBatchResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -38,6 +48,8 @@ class ImportBatchResponse(BaseModel):
     warning_count: int = 0
     filled_objects: int = 0
     pending_conflicts: int = 0  # 该批次仍待处理的冲突条数
+    # 导入时读内嵌图补主图的每款结果（读时按 import_job.notes.image 汇总）；没读过内嵌图 → null
+    image_summary: ImportImageSummary | None = None
 
 
 class ImportBatchPage(BaseModel):
@@ -195,6 +207,14 @@ class ImportJobFilledItem(BaseModel):
     fields: list[str]
 
 
+class ImportJobImageNote(BaseModel):
+    """该行所属款式的内嵌图补主图结果（只记在该款取图的那一行）。"""
+
+    status: Literal["set", "kept", "invalid", "skipped", "failed"]
+    style_code: str
+    reason: str | None = None
+
+
 class ImportJobNoteItem(BaseModel):
     """一行的提示与补空明细（只有字段名，不含任何值）。"""
 
@@ -202,6 +222,7 @@ class ImportJobNoteItem(BaseModel):
     status: str
     warnings: list[str] = Field(default_factory=list)
     filled: list[ImportJobFilledItem] = Field(default_factory=list)
+    image: ImportJobImageNote | None = None
 
 
 class ImportJobNotesPage(BaseModel):
@@ -353,7 +374,9 @@ __all__ = [
     "ImportBatchResponse",
     "ImportConflictItem",
     "ImportConflictPage",
+    "ImportImageSummary",
     "ImportJobFilledItem",
+    "ImportJobImageNote",
     "ImportJobNoteItem",
     "ImportJobNotesPage",
     "ImportJobResponse",

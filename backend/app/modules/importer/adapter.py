@@ -9,6 +9,8 @@ per-row 事务边界（adapter 不自行 commit）。
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 from uuid import UUID
 
@@ -72,4 +74,39 @@ class ContextAwareImportAdapter(Protocol):
     ) -> RowOutcome: ...
 
 
-__all__ = ["ContextAwareImportAdapter", "ImportAdapter"]
+@dataclass(frozen=True)
+class BatchRunContext:
+    """一次批次执行的上下文，给 ``PostRowsImportAdapter.after_rows`` 用。
+
+    ``rows`` 是本次执行处理的全部行（只重跑失败行时只有重跑的行），不看行结果；
+    ``load_file`` 取原文件字节（首跑直接返回已读的文件，只重跑失败行时才去存储取）；
+    两个会话工厂与 runner 用的相同（app 会话受 RLS 约束，用前要 ``set_config``）。
+    """
+
+    batch_id: UUID
+    tenant_id: UUID
+    actor_id: UUID | None
+    rows: Sequence[tuple[int, dict[str, Any]]]
+    mapping: FieldMapping | None
+    load_file: Callable[[], bytes]
+    app_session: Callable[[], AsyncSession]
+    bypass_session: Callable[[], AsyncSession]
+
+
+@runtime_checkable
+class PostRowsImportAdapter(Protocol):
+    """可选协议（8a 补充）：行循环之后、批次汇总之前再做一段（商品资料导入读内嵌图补主图）。
+
+    runner 在 tenant 上下文里调用，整段异常隔离：出错只记日志与 Sentry，不改批次状态、
+    不回滚已提交的行。实现方自己管事务与提交。
+    """
+
+    async def after_rows(self, run: BatchRunContext) -> None: ...
+
+
+__all__ = [
+    "BatchRunContext",
+    "ContextAwareImportAdapter",
+    "ImportAdapter",
+    "PostRowsImportAdapter",
+]

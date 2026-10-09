@@ -131,6 +131,32 @@ class TestUpdateBlogger:
         finally:
             tenant_id_ctx.reset(token)
 
+    async def test_update_multiple_denied_fields_lists_all(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        finance_role: Any,
+        blogger_factory: Any,
+    ) -> None:
+        """流程线 7.1：一次带两个越权字段，details.fields 全列出（顺序固定），field 仍是第一个."""
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            blogger = await blogger_factory.blogger()
+            user = await factory.user(tenant_a, roles=[finance_role])
+            svc = BloggerService(session)
+            with pytest.raises(FieldPermissionDenied) as exc_info:
+                await svc.update_blogger(
+                    blogger.id,
+                    BloggerUpdate(wechat="wx-1", quote=Decimal("999.00")),
+                    user,
+                )
+            assert exc_info.value.code == "FIELD_PERMISSION_DENIED"
+            assert exc_info.value.details["fields"] == ["quote", "wechat"]
+            assert exc_info.value.details["field"] == "quote"
+        finally:
+            tenant_id_ctx.reset(token)
+
     async def test_update_quote_with_designer_denied(
         self,
         session: AsyncSession,

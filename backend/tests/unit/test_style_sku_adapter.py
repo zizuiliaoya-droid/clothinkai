@@ -180,7 +180,10 @@ def test_parse_row_jst_15_column_export():
 # sanitize_optional：图片列（没给品牌时不碰数据库）
 # ---------------------------------------------------------------------------
 
-_EMBEDDED = "图片列是表格内嵌图片，系统暂不读取，请用「批量上传主图」"
+_EMBEDDED = (
+    "图片列是 Excel 格式的内嵌图片，系统读不到；请用 WPS 打开聚水潭导出的原文件直接导入"
+    "（不要用 Excel 另存），或用「批量上传主图」"
+)
 _NOT_LINK = "图片列有不是 http/https 链接的值，未保存（整批只提示一次）"
 _BAD_LINK = "图片链接不是 http/https 地址或超过 1024 字符，未保存"
 
@@ -205,13 +208,12 @@ async def _sanitize_image(seen: BatchSeen, row: int, raw: str) -> tuple[Any, lis
 @pytest.mark.parametrize(
     ("raw", "hint"),
     [
-        ('=DISPIMG("ID_760E0C523F17496689390AEF9B0CB3E5",1)', _EMBEDDED),  # WPS 缓存值
-        ('=_xlfn.DISPIMG("ID_760E0C523F17496689390AEF9B0CB3E5",1)', _EMBEDDED),  # 公式本身
         ("#NAME?", _EMBEDDED),  # 用 Excel 另存过（Excel 不认 DISPIMG）
         ("#VALUE!", _EMBEDDED),  # Excel 365「放在单元格中」的图片
         ("ftp://img.example.invalid/a.jpg", _NOT_LINK),
         ("javascript:alert(1)", _NOT_LINK),
         ("见附件", _NOT_LINK),
+        ('=DISPIMG("ID-坏",1)', _NOT_LINK),  # 认不出图片 ID 的 DISPIMG：图片段读不到，照旧提示
     ],
 )
 async def test_image_not_link_hinted_once_per_batch(raw: str, hint: str) -> None:
@@ -244,6 +246,22 @@ async def test_image_not_link_kinds_share_one_hint() -> None:
     assert await _sanitize_image(seen, 1, "#NAME?") == (None, [_EMBEDDED])
     seen.commit_row()
     assert await _sanitize_image(seen, 2, "ftp://img.example.invalid/a.jpg") == (None, [])
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        '=DISPIMG("ID_760E0C523F17496689390AEF9B0CB3E5",1)',  # WPS 缓存值
+        '=_xlfn.DISPIMG("ID_760E0C523F17496689390AEF9B0CB3E5",1)',  # 公式本身
+    ],
+)
+async def test_wps_embedded_image_not_hinted(raw: str) -> None:
+    """WPS 内嵌图（DISPIMG）由导入后的图片段读来补主图：不当链接存、不提示，也不占「整批一次」的提示。"""
+    seen = BatchSeen()
+    assert await _sanitize_image(seen, 1, raw) == (None, [])
+    seen.commit_row()
+    assert seen.notified == set()
+    assert await _sanitize_image(seen, 2, "见附件") == (None, [_NOT_LINK])
 
 
 async def test_valid_link_kept_without_hint() -> None:

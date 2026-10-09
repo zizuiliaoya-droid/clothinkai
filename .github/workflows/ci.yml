@@ -176,6 +176,11 @@ jobs:
         working-directory: frontend
         run: npm run type-check
 
+      - name: Unit test (vitest)
+        working-directory: frontend
+        # package.json 的 test = "vitest --run"，单次运行、不进 watch
+        run: npm test
+
       - name: Build
         working-directory: frontend
         env:

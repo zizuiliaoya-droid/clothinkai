@@ -14,7 +14,8 @@
 - 第 0 步：款式要新建而 SKU 编码已属于别的款式 → 不建款式、不建单品商品，只对 SKU 记键冲突
 - 套装永远不会被导入修改；任何已有商品编码都不会被修改（§5.3）
 - 占位符（``-``、``--``、``—``、``——``）与空格子一样当没给值；金额去千分位与空白
-- 「图片」不是 http(s) 链接（WPS 内嵌图片的 DISPIMG 公式文字、``#NAME?`` 等）当没给链接，整批只提示一次
+- 「图片」不是 http(s) 链接时当没给链接：WPS 内嵌图片的 DISPIMG 公式文字不提示（导入后的图片段
+  读内嵌图补主图）；``#NAME?`` / ``#VALUE!`` 与其他文字整批只提示一次
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ from app.modules.importer.adapters.style_sku_goods import (
     decide_goods_target,
     load_goods_context,
 )
+from app.modules.importer.adapters.style_sku_images import apply_embedded_main_images
 from app.modules.importer.compare import (
     MONEY_REASON,
     FieldSpec,
@@ -60,6 +62,7 @@ from app.modules.importer.duplicate_rules import (
     DuplicateRule,
     rule_for,
 )
+from app.modules.importer.embedded_images import parse_dispimg_id
 from app.modules.importer.exceptions import RowValidationError
 from app.modules.importer.outcome import (
     BatchSeen,
@@ -77,6 +80,7 @@ from app.modules.product.models import Brand, Sku, Style
 from app.modules.product.repository import SkuRepository, StyleRepository
 
 if TYPE_CHECKING:
+    from app.modules.importer.adapter import BatchRunContext
     from app.modules.importer.models import FieldMapping
 
 log = logging.getLogger(__name__)
@@ -148,22 +152,30 @@ def _to_decimal(raw: Any) -> Decimal | str | None:
 
 
 # 「图片」不是 http(s) 链接时整批只提示一次（BatchSeen.first_notice 的键）。聚水潭导出的「图片」多是
-# 单元格内嵌图片：runner 用 data_only 读到的是 WPS 缓存的 DISPIMG 公式文字；用 Excel 另存过的是
-# #NAME?（Excel 不认 DISPIMG）；Excel 365「放在单元格中」的图片是 #VALUE!
+# 单元格内嵌图片：runner 用 data_only 读到的是 WPS 缓存的 DISPIMG 公式文字（导入后的图片段读
+# xl/cellimages.xml 补主图，行上不提示、不占这条提示）；用 Excel 另存过的是 #NAME?（Excel 不认
+# DISPIMG，cellimages 多半已丢）；Excel 365「放在单元格中」的图片是 #VALUE!——这两种读不到
 _IMAGE_NOTICE = "image_not_link"
 _EMBEDDED_IMAGE_VALUES = frozenset({"#NAME?", "#VALUE!"})
+_EXCEL_EMBEDDED_HINT = (
+    "图片列是 Excel 格式的内嵌图片，系统读不到；请用 WPS 打开聚水潭导出的原文件直接导入"
+    "（不要用 Excel 另存），或用「批量上传主图」"
+)
 
 
 def _image_warnings(raw: str, seen: BatchSeen) -> list[str]:
     """「图片」不合法（值已丢弃）时的提示：是 http(s) 链接但超长 / 含空白 / 没有主机 → 逐行提示；
-    不是 http(s) 链接 → 当没给链接，整批只提示一次（文案按第一次遇到的值）。"""
+    WPS 内嵌图（认得出图片 ID 的 DISPIMG）→ 不提示（图片段补主图）；其余不是 http(s) 链接 →
+    当没给链接，整批只提示一次（文案按第一次遇到的值）。"""
     text = raw.strip()
     if text.lower().startswith(("http://", "https://")):
         return ["图片链接不是 http/https 地址或超过 1024 字符，未保存"]
+    if parse_dispimg_id(text) is not None:
+        return []
     if not seen.first_notice(_IMAGE_NOTICE):
         return []
-    if "DISPIMG(" in text.upper() or text in _EMBEDDED_IMAGE_VALUES:
-        return ["图片列是表格内嵌图片，系统暂不读取，请用「批量上传主图」"]
+    if text in _EMBEDDED_IMAGE_VALUES:
+        return [_EXCEL_EMBEDDED_HINT]
     return ["图片列有不是 http/https 链接的值，未保存（整批只提示一次）"]
 
 
@@ -396,6 +408,12 @@ class StyleSkuImportAdapter:
             warnings=row.warnings,
             filled=row.filled,
         )
+
+    # ----------------------- 行之后：内嵌图补主图（8a 补充）----------------------- #
+
+    async def after_rows(self, run: BatchRunContext) -> None:
+        """读 WPS 单元格内嵌图，给还没有主图的款式补主图（见 ``style_sku_images``）。"""
+        await apply_embedded_main_images(self, run)
 
 
 class _Row:

@@ -37,6 +37,20 @@ export interface ImportBatch {
   filled_objects: number;
   /** 该批次仍待处理的冲突条数 */
   pending_conflicts: number;
+  /** 导入时读内嵌图补主图的款数；没读过内嵌图 → null（旧后端不返回 → undefined） */
+  image_summary?: ImportImageSummary | null;
+}
+
+/** 内嵌图补主图的每款结果：补了 / 已有主图跳过 / 图片无效 / 未找到或已删除款式 / 保存失败 */
+export type ImportImageNoteStatus = "set" | "kept" | "invalid" | "skipped" | "failed";
+
+export type ImportImageSummary = Record<ImportImageNoteStatus, number>;
+
+/** 该行所属款式的内嵌图补主图结果（只记在该款取图的那一行） */
+export interface ImportJobImageNote {
+  status: ImportImageNoteStatus;
+  style_code: string;
+  reason: string | null;
 }
 
 /** GET /api/imports/batches/{id}/notes 的一行：提示与补空明细（只有字段名，不含值）。 */
@@ -45,6 +59,7 @@ export interface ImportJobNote {
   status: ImportJobStatus;
   warnings: string[];
   filled: { object_type: string; object_label: string; fields: string[] }[];
+  image?: ImportJobImageNote | null;
 }
 
 export interface ImportJobNotesPage {

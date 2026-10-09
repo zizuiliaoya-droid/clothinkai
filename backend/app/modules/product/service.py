@@ -761,9 +761,14 @@ class SkuService:
             return
 
         ctx = await build_field_perm_context(user.id, self._roles, self._perms)
-        for offending in sensitive_set:
-            if not can_write_field("sku", offending, ctx):
-                raise FieldPermissionDenied(field=offending, entity="sku")
+        # 收齐全部越权字段再抛（流程线 7.1：details.fields）；原来遍历 set，报哪个字段不固定
+        denied = [
+            f
+            for f in ("cost_price", "purchase_price")
+            if f in sensitive_set and not can_write_field("sku", f, ctx)
+        ]
+        if denied:
+            raise FieldPermissionDenied(fields=denied, entity="sku")
 
     async def _to_response(self, sku: Sku, user: User) -> SkuResponse:
         """BR-U02-41 / U09: 字段读过滤（经 core 注册表 + 字段级 override）。"""

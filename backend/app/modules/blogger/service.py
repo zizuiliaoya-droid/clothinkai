@@ -469,11 +469,16 @@ class BloggerService:
 
         ctx = await build_field_perm_context(user.id, self._roles, self._perms)
 
-        for field_name in ("quote", "wechat", "phone"):
-            if field_name in sensitive_set:
-                value = getattr(payload, field_name)
-                if value is not None and not can_write_field("blogger", field_name, ctx):
-                    raise FieldPermissionDenied(field=field_name, entity="blogger")
+        # 收齐全部越权字段再抛（流程线 7.1：details.fields），顺序固定
+        denied = [
+            field_name
+            for field_name in ("quote", "wechat", "phone")
+            if field_name in sensitive_set
+            and getattr(payload, field_name) is not None
+            and not can_write_field("blogger", field_name, ctx)
+        ]
+        if denied:
+            raise FieldPermissionDenied(fields=denied, entity="blogger")
 
     async def _to_response(self, blogger: Blogger, user: User) -> BloggerResponse:
         """BR-U03-41 / U09: 字段读过滤（经 core 注册表 + 字段级 override）。"""

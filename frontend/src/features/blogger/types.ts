@@ -1,7 +1,9 @@
 // U03 blogger feature 类型定义。
 
+import type { Platform } from "@/features/common/platforms";
+
+export type { Platform };
 export type BloggerType = "素人" | "KOC" | "KOL" | "明星";
-export type Platform = "小红书" | "抖音" | "快手" | "B站";
 export type GenderTarget = "女性" | "男性" | "中性";
 
 /**

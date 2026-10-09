@@ -74,7 +74,11 @@ _WPS_IMAGE_CELL = (
 )
 _EXCEL_IMAGE_CELL = '<c r="{ref}" t="e"><f>_xlfn.DISPIMG(&quot;{id}&quot;,1)</f><v>#NAME?</v></c>'
 _SHEET_XML = "xl/worksheets/sheet1.xml"
-_EMBEDDED_HINT = "图片列是表格内嵌图片，系统暂不读取，请用「批量上传主图」"
+# WPS 的 DISPIMG 由导入后的图片段读来补主图，行上不提示；只有 Excel 的 #NAME? / #VALUE! 整批提示一次
+_EMBEDDED_HINT = (
+    "图片列是 Excel 格式的内嵌图片，系统读不到；请用 WPS 打开聚水潭导出的原文件直接导入"
+    "（不要用 Excel 另存），或用「批量上传主图」"
+)
 _TITLE_A = "LENNEA 23/AW 原创秋冬女长袖通勤宽松宽松高腰学生设计条纹衬衫"
 _TITLE_B = "LENNEA 23/AW 原创秋冬无领女正肩修身短款小香风学院夹克外套"
 
@@ -1218,24 +1222,26 @@ class TestJstFifteenColumnExport:
     """业务方实际用的 15 列导出（WPS，「图片」是单元格内嵌图片）走真实 runner。"""
 
     @pytest.mark.parametrize(
-        "image_cell", [_WPS_IMAGE_CELL, _EXCEL_IMAGE_CELL], ids=["wps", "excel_name_error"]
+        ("image_cell", "hints"),
+        [(_WPS_IMAGE_CELL, []), (_EXCEL_IMAGE_CELL, [_EMBEDDED_HINT])],
+        ids=["wps", "excel_name_error"],
     )
-    async def test_new_styles(self, env: _Env, image_cell: str) -> None:
-        """款式不存在：建款式 / SKU / 单品商品。内嵌图片当没给链接（不存、行不失败、不冲突），
-        整批只提示一次；季节原样写到商品；采购价 / 吊牌价为空 = 没给值。"""
+    async def test_new_styles(self, env: _Env, image_cell: str, hints: list[str]) -> None:
+        """款式不存在：建款式 / SKU / 单品商品。内嵌图片当没给链接（不存、行不失败、不冲突）：
+        WPS 的不提示，Excel 的 #NAME? 整批只提示一次；季节原样写到商品；采购价 / 吊牌价为空 = 没给值。"""
         brand_id = await env.brand("L", f"LENNEALAB{env.suffix}")
         batch_id, result = await env.run(_jst15_rows(env), header=JST_15, image_cell=image_cell)
         assert result == {"status": "completed", "imported": 2, "failed": 0}
         jobs = await env.jobs(batch_id)
         assert [j.status for j in jobs] == ["success", "success"]
-        assert [_warnings(j) for j in jobs] == [[_EMBEDDED_HINT], []]
+        assert [_warnings(j) for j in jobs] == [hints, []]
         b = await env.batch(batch_id)
         assert (b.total_rows, b.imported, b.conflicted, b.failed, b.warning_count) == (
             2,
             2,
             0,
             0,
-            1,
+            len(hints),
         )
         expected = [
             ("A", _TITLE_A, "条纹衬衫", "蓝色", "42.00", "138.00"),
@@ -1280,7 +1286,7 @@ class TestJstFifteenColumnExport:
         assert result["status"] == "completed"
         jobs = await env.jobs(batch_id)
         assert [j.status for j in jobs] == ["success", "success"]  # 都新建了 SKU
-        assert [_warnings(j) for j in jobs] == [[_EMBEDDED_HINT], []]
+        assert [_warnings(j) for j in jobs] == [[], []]  # WPS 内嵌图不提示
         assert jobs[0].notes["filled"] == [
             {
                 "object_type": "goods",
@@ -1289,7 +1295,7 @@ class TestJstFifteenColumnExport:
             }
         ]
         b = await env.batch(batch_id)
-        assert (b.imported, b.conflicted, b.warning_count, b.filled_objects) == (2, 0, 1, 1)
+        assert (b.imported, b.conflicted, b.warning_count, b.filled_objects) == (2, 0, 0, 1)
 
         goods_a = await env.goods_row(env.sc("A"))
         assert (goods_a.goods_title, goods_a.short_name, goods_a.season, goods_a.brand_id) == (
@@ -1329,7 +1335,7 @@ class TestJstFifteenColumnExport:
 
         monkeypatch.setattr(tasks, "_upsert_job", flaky)
         batch_id, result = await env.run(
-            _jst15_rows(env), header=JST_15, image_cell=_WPS_IMAGE_CELL
+            _jst15_rows(env), header=JST_15, image_cell=_EXCEL_IMAGE_CELL
         )
         assert result["status"] == "partial"
         jobs = await env.jobs(batch_id)

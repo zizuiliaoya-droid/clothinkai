@@ -2,7 +2,8 @@
 
 跨连接并发测试需要"真实已提交"数据对多个连接可见，故本文件不使用
 rollback 隔离的 ``session`` fixture，而是用独立的 committed 数据（003 seed 的
-默认 tenant）+ 显式清理。并发度压到 30 以内避免 PostgreSQL ``max_connections`` 上限。
+默认 tenant）+ 显式清理（helper 见 ``tests/concurrency.py``）。并发度压到 30 以内
+避免 PostgreSQL ``max_connections`` 上限。
 
 - next_internal_sequence 30 并发首次创建 → 序号无重复
 - update_state 30 并发 publish 同 promotion → 1 成功其余冲突
@@ -10,20 +11,19 @@ rollback 隔离的 ``session`` fixture，而是用独立的 committed 数据（0
 
 from __future__ import annotations
 
-import asyncio
 from datetime import date
 from typing import Any
 from uuid import uuid4
 
 import pytest
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.tenancy import tenant_id_ctx
 from app.modules.promotion.exceptions import StateTransitionConflictError
 from app.modules.promotion.repository import PromotionRepository
 from app.modules.promotion.schemas import PromotionPublishRequest
 from app.modules.promotion.service import PromotionService
+from tests.concurrency import committed, default_tenant_id, run_concurrently
 
 
 @pytest.mark.integration
@@ -33,41 +33,28 @@ class TestSequenceConcurrent:
 
     async def test_concurrent_first_create_no_duplicates(self, engine: Any) -> None:
         """30 并发同 (tenant_id, date_key) 首次序号 → 1..30 全部互不重复."""
-        Session = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
         date_key = date(2026, 5, 27)
-
-        async with Session() as s0:
-            tenant_row = (
-                await s0.execute(text("SELECT id FROM tenant ORDER BY created_at ASC LIMIT 1"))
-            ).first()
-            assert tenant_row is not None, "默认 tenant 缺失（003 seed 未跑）"
-            tenant_id = tenant_row[0]
+        tenant_id = await default_tenant_id(engine)
 
         # 前置清理（防上一轮残留导致起点 != 1）
-        async with Session() as pre:
+        async with committed(engine) as pre:
             await pre.execute(
                 text("DELETE FROM promotion_sequence " "WHERE tenant_id = :tid AND date_key = :dk"),
                 {"tid": tenant_id, "dk": date_key},
             )
-            await pre.commit()
 
-        async def fetch_one() -> int:
-            async with Session() as s:
-                token = tenant_id_ctx.set(tenant_id)
-                try:
-                    repo = PromotionRepository(s)
-                    seq = await repo.next_internal_sequence(tenant_id=tenant_id, date_key=date_key)
-                    await s.commit()
-                    return seq
-                finally:
-                    tenant_id_ctx.reset(token)
+        async def fetch_one(s: AsyncSession, _i: int) -> int:
+            repo = PromotionRepository(s)
+            seq = await repo.next_internal_sequence(tenant_id=tenant_id, date_key=date_key)
+            await s.commit()
+            return seq
 
         try:
-            results = await asyncio.gather(*[fetch_one() for _ in range(30)])
+            results = await run_concurrently(engine, 30, fetch_one, tenant_id=tenant_id)
             assert len(set(results)) == 30, f"序号重复: {sorted(results)}"
             assert sorted(results) == list(range(1, 31))
         finally:
-            async with Session() as cleanup:
+            async with committed(engine) as cleanup:
                 await cleanup.execute(
                     text(
                         "DELETE FROM promotion_sequence "
@@ -75,7 +62,6 @@ class TestSequenceConcurrent:
                     ),
                     {"tid": tenant_id, "dk": date_key},
                 )
-                await cleanup.commit()
 
 
 @pytest.mark.integration
@@ -91,19 +77,14 @@ class TestPublishConcurrent:
 
         全自包含 committed 数据（用 003 seed 的默认 tenant）+ finally 清理。
         """
-        Session = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
         promotion_id = uuid4()
         style_id = uuid4()
         blogger_id = uuid4()
         user_id = uuid4()
         suffix = uuid4().hex[:8]
+        tenant_id = await default_tenant_id(engine)
 
-        async with Session() as seed:
-            tenant_row = (
-                await seed.execute(text("SELECT id FROM tenant ORDER BY created_at ASC LIMIT 1"))
-            ).first()
-            assert tenant_row is not None
-            tenant_id = tenant_row[0]
+        async with committed(engine) as seed:
             role_row = (
                 await seed.execute(text("SELECT id FROM role WHERE code = 'admin' LIMIT 1"))
             ).first()
@@ -182,40 +163,34 @@ class TestPublishConcurrent:
                 text("UPDATE promotion SET brand_comment_attachment_id = :a WHERE id = :p"),
                 {"a": bc_id, "p": promotion_id},
             )
-            await seed.commit()
 
         # 取 user ORM 对象供 service 使用
         from app.modules.auth.models import User
 
-        async def attempt_publish() -> str:
-            async with Session() as s:
-                tok = tenant_id_ctx.set(tenant_id)
-                try:
-                    user = await s.get(User, user_id)
-                    svc = PromotionService(s)
-                    try:
-                        await svc.publish(
-                            promotion_id,
-                            PromotionPublishRequest(
-                                publish_url="https://x.com/n",
-                                actual_publish_date=date(2026, 5, 28),
-                            ),
-                            user,
-                        )
-                        return "ok"
-                    except StateTransitionConflictError:
-                        return "conflict"
-                    except Exception as e:
-                        return f"other:{type(e).__name__}"
-                finally:
-                    tenant_id_ctx.reset(tok)
+        async def attempt_publish(s: AsyncSession, _i: int) -> str:
+            user = await s.get(User, user_id)
+            svc = PromotionService(s)
+            try:
+                await svc.publish(
+                    promotion_id,
+                    PromotionPublishRequest(
+                        publish_url="https://x.com/n",
+                        actual_publish_date=date(2026, 5, 28),
+                    ),
+                    user,
+                )
+                return "ok"
+            except StateTransitionConflictError:
+                return "conflict"
+            except Exception as e:
+                return f"other:{type(e).__name__}"
 
         try:
-            results = await asyncio.gather(*[attempt_publish() for _ in range(30)])
+            results = await run_concurrently(engine, 30, attempt_publish, tenant_id=tenant_id)
             ok_count = sum(1 for r in results if r == "ok")
             assert ok_count == 1, f"expected exactly 1 success, got {ok_count}; results: {results}"
         finally:
-            async with Session() as cleanup:
+            async with committed(engine) as cleanup:
                 await cleanup.execute(
                     text("DELETE FROM promotion WHERE id = :id"),
                     {"id": promotion_id},
@@ -236,4 +211,3 @@ class TestPublishConcurrent:
                     text('DELETE FROM "user" WHERE id = :id'),
                     {"id": user_id},
                 )
-                await cleanup.commit()
