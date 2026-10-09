@@ -133,6 +133,8 @@ class _Seed:
     async def promotion(self, **kw: Any) -> Promotion:
         style = kw.pop("style", None) or await self.product_factory.style()
         blogger = await self.blogger_factory.blogger()
+        # 工厂默认编号只有 3 位随机（4,096 种），一条用例建 9 张时约 1% 撞唯一键：给足 8 位
+        kw.setdefault("internal_code", f"DEWH{uuid4().hex[:8].upper()}")
         return await self.pf.promotion(style=style, blogger=blogger, pr=self.flow_users.pr, **kw)
 
 
