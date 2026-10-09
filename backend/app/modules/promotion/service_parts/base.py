@@ -6,7 +6,7 @@ import builtins
 import logging
 from datetime import UTC, date, datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, TypeVar
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
@@ -42,6 +42,7 @@ from app.modules.promotion.enums import (
 from app.modules.promotion.exceptions import (
     FieldPermissionDenied,
     PublishDateInFutureError,
+    SourceExtraKeyRetiredError,
 )
 from app.modules.promotion.legacy_settings import HIT_THRESHOLD_LIKE_COUNT
 from app.modules.promotion.metrics_calculator import (
@@ -52,6 +53,11 @@ from app.modules.promotion.metrics_calculator import (
 from app.modules.promotion.models import (
     Promotion,
     PromotionAmountLog,
+)
+from app.modules.promotion.receiver import (
+    RECEIVER_FIELDS,
+    normalize_receiver_phone,
+    retired_source_extra_keys,
 )
 from app.modules.promotion.repository import (
     PromotionAttachmentRefs,
@@ -73,6 +79,8 @@ from app.modules.urge.service import UrgeService
 
 # 沿用拆分前的 logger 名，日志检索不受影响
 log = logging.getLogger("app.modules.promotion.service")
+
+_PayloadT = TypeVar("_PayloadT", PromotionCreate, PromotionUpdate)
 
 
 def _utcnow() -> datetime:
@@ -281,6 +289,38 @@ class PromotionServiceBase:
         if not can_write_field("promotion", "quote_amount", ctx):
             raise FieldPermissionDenied(field="quote_amount", entity="promotion")
 
+    @staticmethod
+    def _reject_retired_source_extra_keys(payload: PromotionCreate | PromotionUpdate) -> None:
+        """``source_extra`` 带「打单地址」「发货单号」→ 422（流程线 7.1）。PATCH 与 ``POST /`` 最先判。"""
+        keys = retired_source_extra_keys((payload.source_extra or {}).keys())
+        if keys:
+            raise SourceExtraKeyRetiredError(
+                f"「{'」「'.join(keys)}」已改为收件 / 发货字段，不能再写进录入信息",
+                details={"keys": keys},
+            )
+
+    async def _normalize_receiver(self, payload: _PayloadT, user: User) -> _PayloadT:
+        """收件三项：字段写权限（越权的全列出来）→ 电话校验与规范化 → 去空白后空串 = 清空。
+
+        只处理这次传了的（``model_fields_set``）；清空也算写，同样要写权限。
+        返回带规范化值的副本，后面的比对、落库都用它。
+        """
+        fields = [f for f in RECEIVER_FIELDS if f in payload.model_fields_set]
+        if not fields:
+            return payload
+        ctx = await build_field_perm_context(user.id, self._roles, self._perms)
+        denied = [f for f in fields if not can_write_field("promotion", f, ctx)]
+        if denied:
+            raise FieldPermissionDenied(fields=denied, entity="promotion")
+        normalized: dict[str, str | None] = {}
+        for field in fields:
+            value: str | None = getattr(payload, field)
+            if field == "receiver_phone":
+                normalized[field] = normalize_receiver_phone(value)
+            else:
+                normalized[field] = (value.strip() or None) if value is not None else None
+        return payload.model_copy(update=normalized)
+
     async def _to_response(
         self,
         promotion: Promotion,
@@ -314,6 +354,11 @@ class PromotionServiceBase:
         ctx = await build_field_perm_context(user.id, self._roles, self._perms)
         can_see_quote = can_read_field("promotion", "quote_amount", ctx)
         can_see_cost = can_read_field("promotion", "cost_snapshot", ctx)
+        # 收件三项逐项过字段规则（个人授予 / 撤销可以只动其中一项）
+        receiver: dict[str, Any] = {
+            field: (getattr(promotion, field) if can_read_field("promotion", field, ctx) else None)
+            for field in RECEIVER_FIELDS
+        }
         can_see_payment_attachments = bool(
             ctx.role_codes & {"admin", "platform_admin", "pr", "pr_manager"}
         )
@@ -510,6 +555,7 @@ class PromotionServiceBase:
             # 要两个读权限都有
             cpl=cpl if (can_see_quote and can_see_cost) else None,
             source_extra=dict(getattr(promotion, "source_extra", {}) or {}),
+            **receiver,
             payment_qr_attachment_id=visible_payment_qr_id,
             payment_qr_signed_url=payment_qr_url,
             settlement_payment_proof_signed_url=settlement_proof_url,

@@ -76,6 +76,26 @@ class InvalidGoodsReferenceError(ValidationError):
     code = "INVALID_GOODS_REFERENCE"
 
 
+class InvalidReceiverPhoneError(ValidationError):
+    """收件电话格式不对（流程线 7.1）。
+
+    规则只有 ``receiver.normalize_receiver_phone`` 一处：推广单 PATCH / ``POST /`` / 推送仓库补填，
+    以及谈款确认收货信息（N9）共用。
+    """
+
+    code = "INVALID_RECEIVER_PHONE"
+
+
+class SourceExtraKeyRetiredError(ValidationError):
+    """``source_extra`` 带了已退役的键（流程线 7.1）。
+
+    「打单地址」「发货单号」M1（060）起是 typed 列（``receiver_address`` / ``ship_waybill``）；
+    再从 JSONB 写进来，仓库页与发货状态都看不到，等于两份数据。``details.keys`` 列出带了的退役键。
+    """
+
+    code = "SOURCE_EXTRA_KEY_RETIRED"
+
+
 class InvalidPaymentQrAttachmentError(ValidationError):
     """收款码附件不存在、跨租户或属性不符合要求。"""
 
@@ -254,6 +274,7 @@ __all__ = [
     "ReturnWaybillRequiredError",
     "InvalidBloggerReferenceError",
     "InvalidPaymentQrAttachmentError",
+    "InvalidReceiverPhoneError",
     "InvalidSkuReferenceError",
     "InvalidStyleReferenceError",
     "MetricsScreenshotRequiredError",
@@ -267,5 +288,6 @@ __all__ = [
     "SelfReviewForbiddenError",
     "SequenceOverflowError",
     "SettlementNotPaidError",
+    "SourceExtraKeyRetiredError",
     "StateTransitionConflictError",
 ]

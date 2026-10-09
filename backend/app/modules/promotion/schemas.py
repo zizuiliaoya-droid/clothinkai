@@ -92,6 +92,14 @@ class PromotionBase(BaseModel):
     source_extra: dict = Field(default_factory=dict)
 
 
+# 收件三项（流程线 M1）。长度按列宽；电话的格式与规范化在 service 里走 receiver.normalize_receiver_phone
+# （422 要报 INVALID_RECEIVER_PHONE，schema 的 ValueError 只会是通用 VALIDATION_ERROR）。
+# 去空白后是空串 = 清空。
+_ReceiverNameField = Annotated[str | None, Field(max_length=32)]
+_ReceiverPhoneField = Annotated[str | None, Field(max_length=32)]
+_ReceiverAddressField = Annotated[str | None, Field(max_length=255)]
+
+
 class PromotionCreate(PromotionBase):
     """创建入参。"""
 
@@ -101,6 +109,10 @@ class PromotionCreate(PromotionBase):
 
     return_shipping_fee: _FeeField | None = None
     """寄回运费。一般在召回时才录，建单时通常为空。"""
+
+    receiver_name: _ReceiverNameField = None
+    receiver_phone: _ReceiverPhoneField = None
+    receiver_address: _ReceiverAddressField = None
 
 
 class PromotionUpdate(BaseModel):
@@ -133,7 +145,12 @@ class PromotionUpdate(BaseModel):
 
     不再整包覆盖：整包会删掉表单上没有的键，也会让弹窗开着期间仓库回填的发货单号
     被旧快照冲掉。合并规则在 ``domain.merge_source_extra``。
+    「打单地址」「发货单号」M1 起是 typed 列，带了就 422 ``SOURCE_EXTRA_KEY_RETIRED``。
     """
+    receiver_name: _ReceiverNameField = None
+    receiver_phone: _ReceiverPhoneField = None
+    receiver_address: _ReceiverAddressField = None
+    """收件三项：传了才改（``model_fields_set``），null 或去空白后是空串 = 清空。"""
 
 
 class PromotionPaymentQrUploadInitRequest(BaseModel):
@@ -502,6 +519,11 @@ class PromotionResponse(BaseModel):
 
     # 人工源列扩展（对齐 final.xlsx 站外推广源列）
     source_extra: dict = Field(default_factory=dict)
+
+    # 收件三项（流程线 M1）：字段规则 promotion.receiver_*，读不到的（财务、运营）投影成 None
+    receiver_name: str | None = None
+    receiver_phone: str | None = None
+    receiver_address: str | None = None
 
     # 结款附件（仅 PR/PR主管/管理员可见；warehouse 始终为 null）
     payment_qr_attachment_id: UUID | None = None

@@ -64,6 +64,19 @@ FIELD_PERMISSION_REGISTRY: dict[str, dict[str, FieldRule]] = {
             frozenset({"admin", "pr", "pr_manager", "finance"}),
             frozenset({"admin", "pr", "pr_manager"}),
         ),
+        # 流程线 4.6：收件三项。财务看不到收货地址（Q4），运营看不到收件；仓库只读（仓库页与导出）
+        "receiver_name": FieldRule(
+            frozenset({"admin", "pr", "pr_manager", "warehouse"}),
+            frozenset({"admin", "pr", "pr_manager"}),
+        ),
+        "receiver_phone": FieldRule(
+            frozenset({"admin", "pr", "pr_manager", "warehouse"}),
+            frozenset({"admin", "pr", "pr_manager"}),
+        ),
+        "receiver_address": FieldRule(
+            frozenset({"admin", "pr", "pr_manager", "warehouse"}),
+            frozenset({"admin", "pr", "pr_manager"}),
+        ),
     },
     "settlement": {
         "amount": FieldRule(frozenset({"admin", "pr_manager", "finance"})),

@@ -109,6 +109,9 @@ class PromotionService(
                 「改谈款状态 + 建推广单」，那边传 False 由调用方统一提交 ——
                 否则中间失败会留下「审核通过但没有推广单」的单据。
         """
+        # 0. 退役键最先判（流程线 7.3）
+        self._reject_retired_source_extra_keys(payload)
+
         # 1. 引用完整性
         style = await self._style_repo.get_by_id(payload.style_id)
         if style is None:
@@ -149,8 +152,9 @@ class PromotionService(
         if blogger is None:
             raise InvalidBloggerReferenceError(f"博主 {payload.blogger_id} 不存在或已删除")
 
-        # 2. 字段写权限（quote_amount 可写）
+        # 2. 字段写权限（quote_amount 可写）；收件三项过写权限并规范化电话
         await self._check_amount_write_permission(payload, user)
+        payload = await self._normalize_receiver(payload, user)
 
         # 3. 取 tenant_code 用于 internal_code 前缀
         tenant_code = await self._get_tenant_code(user.tenant_id)
@@ -214,6 +218,9 @@ class PromotionService(
             note_title=payload.note_title,
             remark=payload.remark,
             source_extra=dict(payload.source_extra or {}),
+            receiver_name=payload.receiver_name,
+            receiver_phone=payload.receiver_phone,
+            receiver_address=payload.receiver_address,
             publish_status=PublishStatus.UNPUBLISHED.value,
             recall_status=RecallStatus.NOT_RECALLED.value,
             settlement_status=SettlementStatus.NOT_REVIEWED.value,
@@ -288,13 +295,16 @@ class PromotionService(
         promotion = await self._repo.get_by_id(promotion_id)
         if promotion is None:
             raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
+        # 顺序（流程线 7.1）：404 → 退役键 422 → 字段写权限 → 其余校验
+        self._reject_retired_source_extra_keys(payload)
 
         # 金额时间线的「更新前」快照必须在这里取 —— 下面补合作模式那一步就会改成本，
         # 等到算 changes 时拿到的已经是中间值了。
         amount_before = self._amount_snapshot(promotion)
 
-        # 字段写权限
+        # 字段写权限；收件三项过写权限并规范化电话（之后的比对与落库都用规范化值）
         await self._check_amount_write_permission(payload, user)
+        payload = await self._normalize_receiver(payload, user)
 
         # 合作模式：空值可以补一次（历史导入数据没有这个信息），有值就锁死。
         # PRD 的「生成后不可修改」靠这里拦，不靠前端禁用 —— 接口直接传值一样挡住。
