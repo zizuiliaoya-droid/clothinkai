@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 
@@ -78,18 +79,32 @@ class PermissionDeniedError(AppException):
 class FieldPermissionDenied(PermissionDeniedError):
     """字段级写权限拒绝（U09 统一字段级权限）。
 
-    兼容签名：``FieldPermissionDenied(field=...)``（U02-U05 既有调用）与
-    ``FieldPermissionDenied(field=..., entity=...)``（U09 新调用）。
+    兼容签名：``FieldPermissionDenied(field=...)``（U02-U05 既有调用）、
+    ``FieldPermissionDenied(field=..., entity=...)``（U09 新调用）与
+    ``FieldPermissionDenied(fields=[...], entity=...)``（流程线：一次列出全部越权字段）。
     """
 
     code = "FIELD_PERMISSION_DENIED"
 
-    def __init__(self, field: str, entity: str | None = None) -> None:
-        details: dict[str, Any] = {"field": field}
+    def __init__(
+        self,
+        field: str | None = None,
+        entity: str | None = None,
+        *,
+        fields: Sequence[str] | None = None,
+    ) -> None:
+        # 流程线 7.1：details.fields 列出全部越权字段；details.field 保留为第一个，兼容旧断言
+        all_fields = tuple(fields) if fields is not None else ((field,) if field else ())
+        if not all_fields:
+            raise ValueError("FieldPermissionDenied 至少要有一个字段")
+        if field is not None and field != all_fields[0]:
+            raise ValueError("field 必须是 fields 的第一个")
+        details: dict[str, Any] = {"field": all_fields[0], "fields": list(all_fields)}
         if entity is not None:
             details["entity"] = entity
-        super().__init__(f"无权写入字段: {field}", details=details)
-        self.field = field
+        super().__init__(f"无权写入字段: {', '.join(all_fields)}", details=details)
+        self.field = all_fields[0]
+        self.fields = all_fields
         self.entity = entity
 
 

@@ -21,6 +21,7 @@ class Platform(str, Enum):
     DOUYIN = "抖音"
     KUAISHOU = "快手"
     BILIBILI = "B站"
+    DEWU = "得物"
 
 
 class GenderTarget(str, Enum):

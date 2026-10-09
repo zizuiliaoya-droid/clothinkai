@@ -167,6 +167,33 @@ class TestUpdateSkuFieldPermission:
         finally:
             tenant_id_ctx.reset(token)
 
+    async def test_designer_denied_lists_both_price_fields(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        designer_role: Any,
+        product_factory: Any,
+    ) -> None:
+        """流程线 7.1：两个价格字段都越权时 details.fields 全列出，顺序固定."""
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            style = await product_factory.style()
+            sku = await product_factory.sku(style, cost_price=Decimal("100.00"))
+            user = await factory.user(tenant_a, roles=[designer_role])
+            svc = SkuService(session)
+            with pytest.raises(FieldPermissionDenied) as exc_info:
+                await svc.update_sku(
+                    sku.id,
+                    SkuUpdate(purchase_price=Decimal("90.00"), cost_price=Decimal("120.00")),
+                    user,
+                )
+            assert exc_info.value.code == "FIELD_PERMISSION_DENIED"
+            assert exc_info.value.details["fields"] == ["cost_price", "purchase_price"]
+            assert exc_info.value.details["field"] == "cost_price"
+        finally:
+            tenant_id_ctx.reset(token)
+
     async def test_pr_cannot_see_cost_price_in_response(
         self,
         session: AsyncSession,
