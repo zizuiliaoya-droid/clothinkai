@@ -1,8 +1,19 @@
 import { useEffect, useState } from "react";
-import { DatePicker, Form, Input, InputNumber, Modal, Select, Space, message } from "antd";
+import {
+  Checkbox,
+  DatePicker,
+  Form,
+  Input,
+  InputNumber,
+  Modal,
+  Select,
+  Space,
+  message,
+} from "antd";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dayjs from "dayjs";
 import { createPromotion } from "@/features/promotion/api";
+import { buildCreatePayload } from "@/features/promotion/createPayload";
 import type { PromotionCreate } from "@/features/promotion/types";
 import { listGoodsForStyle, type GoodsOption } from "@/features/product/api";
 import { goodsNameLabel } from "@/features/promotion/goodsLabel";
@@ -62,21 +73,7 @@ export function CreatePromotionModal({ open, onClose }: Props) {
   });
 
   function handleCreate(values: Record<string, unknown>) {
-    const payload: PromotionCreate = {
-      style_id: values.style_id as string,
-      goods_main_id: (values.goods_main_id as string) || null,
-      blogger_id: values.blogger_id as string,
-      cooperation_mode: values.cooperation_mode as string,
-      platform: values.platform as string,
-      cooperation_date: dayjs(values.cooperation_date as dayjs.Dayjs).format(
-        "YYYY-MM-DD"
-      ),
-      quote_amount:
-        values.quote_amount != null ? String(values.quote_amount) : null,
-      note_title: (values.note_title as string) || null,
-      remark: (values.remark as string) || null,
-    };
-    createMutation.mutate(payload);
+    createMutation.mutate(buildCreatePayload(values));
   }
 
   return (
@@ -94,7 +91,7 @@ export function CreatePromotionModal({ open, onClose }: Props) {
         layout="vertical"
         onFinish={handleCreate}
         style={{ marginTop: 16 }}
-        initialValues={{ platform: "小红书", cooperation_date: dayjs() }}
+        initialValues={{ platform: "小红书", cooperation_date: dayjs(), need_shipping: false }}
       >
         <Form.Item
           name="style_id"
@@ -171,6 +168,15 @@ export function CreatePromotionModal({ open, onClose }: Props) {
         </Form.Item>
         <Form.Item name="remark" label="备注">
           <Input.TextArea rows={2} placeholder="备注（可选）" />
+        </Form.Item>
+        {/* 默认不勾（11-58）：补录历史单不进发货；事后要发货可在操作菜单「纳入发货」 */}
+        <Form.Item
+          name="need_shipping"
+          valuePropName="checked"
+          style={{ marginBottom: 0 }}
+          extra="补录历史单不用勾；勾了才进待推送仓库"
+        >
+          <Checkbox>需要仓库发货</Checkbox>
         </Form.Item>
       </Form>
     </Modal>

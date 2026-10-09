@@ -9,7 +9,6 @@ import {
 } from "@/features/promotion/api";
 import { buildSourceExtraPatch } from "@/features/promotion/sourceExtra";
 import type { Promotion } from "@/features/promotion/types";
-import { listSkusByStyle } from "@/features/product/api";
 import { SOURCE_FIELDS, SOURCE_FIELD_NAMES } from "@/features/promotion/listConstants";
 import { extractErrorMessage } from "@/services/apiClient";
 
@@ -20,7 +19,10 @@ type Props = {
   canManagePaymentQr: boolean;
 };
 
-/** 录入推广信息（source_extra 人工源列 + 博主收款码）。 */
+/**
+ * 录入推广信息（source_extra 人工源列 + 博主收款码）。
+ * 颜色尺码、收件地址、快递单号已不在这里填（流程线 PR-2）：改走「改颜色尺码」「改收件信息」与仓库回填。
+ */
 export function SourceExtraModal({ target, onClose, canManagePaymentQr }: Props) {
   const qc = useQueryClient();
   const [extraForm] = Form.useForm();
@@ -33,10 +35,6 @@ export function SourceExtraModal({ target, onClose, canManagePaymentQr }: Props)
   const [extraInitial, setExtraInitial] = useState<Record<string, unknown>>({});
   const [paymentQrFile, setPaymentQrFile] = useState<File | null>(null);
   const [paymentQrUploading, setPaymentQrUploading] = useState(false);
-  // §11：颜色及规格按货号联动——当前推广所属款式的 SKU 颜色+尺码组合
-  const [colorSizeOptions, setColorSizeOptions] = useState<
-    { label: string; value: string }[]
-  >([]);
 
   useEffect(() => {
     setQrUpdated(null);
@@ -47,24 +45,6 @@ export function SourceExtraModal({ target, onClose, canManagePaymentQr }: Props)
     setExtraInitial(initial);
     extraForm.resetFields();
     extraForm.setFieldsValue(initial);
-    // §11：按货号(款式)加载该款 SKU 的「颜色 + 尺码」组合作为下拉选项
-    setColorSizeOptions([]);
-    if (target.style_id) {
-      void listSkusByStyle(target.style_id)
-        .then((skus) => {
-          const seen = new Set<string>();
-          const opts: { label: string; value: string }[] = [];
-          for (const s of skus) {
-            const combo = `${s.color}${s.size ? " " + s.size : ""}`.trim();
-            if (combo && !seen.has(combo)) {
-              seen.add(combo);
-              opts.push({ label: combo, value: combo });
-            }
-          }
-          setColorSizeOptions(opts);
-        })
-        .catch(() => setColorSizeOptions([]));
-    }
   }, [target, extraForm]);
 
   const updateExtraMutation = useMutation({
@@ -136,7 +116,7 @@ export function SourceExtraModal({ target, onClose, canManagePaymentQr }: Props)
 
   return (
     <Modal
-      title="录入推广信息（地址/订单号等）"
+      title="录入推广信息（订单号等）"
       open={!!target}
       onCancel={closeExtra}
       onOk={() => extraForm.submit()}
@@ -151,7 +131,7 @@ export function SourceExtraModal({ target, onClose, canManagePaymentQr }: Props)
         onFinish={(values: Record<string, unknown>) => {
           if (!extraTarget) return;
           // 只交相对打开弹窗时改过的键；清空的给 null（后端删键），没碰的不带 ——
-          // 后端按键合并，表单外的键和仓库刚回填的发货单号都不会被冲掉（7a-5）
+          // 后端按键合并，表单外的键（导入写的、已删字段的旧值）都不会被冲掉（7a-5）
           const patch = buildSourceExtraPatch(extraInitial, values, SOURCE_FIELD_NAMES);
           if (Object.keys(patch).length === 0) {
             message.info("没有改动");
@@ -248,19 +228,7 @@ export function SourceExtraModal({ target, onClose, canManagePaymentQr }: Props)
 
         {SOURCE_FIELDS.map((f) => (
           <Form.Item key={f.name} name={f.name} label={f.name} style={{ marginBottom: 12 }}>
-            {f.name === "颜色及规格" ? (
-              <Select
-                allowClear
-                showSearch
-                placeholder={
-                  colorSizeOptions.length
-                    ? "按货号选择颜色+尺码组合"
-                    : "该款暂无SKU，可在商品成本表维护后选择"
-                }
-                options={colorSizeOptions}
-                notFoundContent="该货号下暂无颜色/尺码，请先在商品成本表维护"
-              />
-            ) : f.type === "select" ? (
+            {f.type === "select" ? (
               <Select
                 allowClear
                 placeholder={`请选择${f.name}`}

@@ -34,6 +34,7 @@ import { goodsDisplayName } from "@/features/product/api";
 import {
   COOPERATION_MODE_HINT,
   SOURCE_FIELD_NAMES,
+  SOURCE_LIST_COLUMNS,
   recallColor,
 } from "@/features/promotion/listConstants";
 import { AmountLogPanel } from "@/features/promotion/components/AmountLogPanel";
@@ -433,7 +434,7 @@ export function PromotionListPage() {
           <Tag color={retroColor[v]}>{v}</Tag>
         ),
     },
-    ...SOURCE_FIELD_NAMES.map((f) => ({
+    ...SOURCE_LIST_COLUMNS.map((f) => ({
       title: f,
       key: `se_${f}`,
       width: 110,

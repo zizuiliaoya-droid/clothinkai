@@ -62,3 +62,13 @@ export function shipDetailLines(
   }
   return [];
 }
+
+/**
+ * 「改归属商品」弹窗的提示（11-53）：推送前（历史单 / 待发货）换商品会清空颜色尺码，推送时按新商品重选；
+ * 推送之后（待打单 / 已发货）只改投产报表归属，明细不动。与后端 update_promotion 同口径。
+ */
+export function changeGoodsHint(shipStatus: Promotion["ship_status"] | undefined): string {
+  return shipStatus === "待打单" || shipStatus === "已发货"
+    ? "只改报表归属，不改已发出的颜色尺码"
+    : "换商品后，推送时要重新选颜色尺码";
+}

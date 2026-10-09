@@ -1,7 +1,8 @@
 import { useEffect } from "react";
-import { Form, Modal, Select, Typography, message } from "antd";
+import { Alert, Form, Modal, Select, Typography, message } from "antd";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { updatePromotion } from "@/features/promotion/api";
+import { changeGoodsHint } from "@/features/promotion/shipDisplay";
 import type { Promotion } from "@/features/promotion/types";
 import { listGoodsForStyle, type GoodsOption } from "@/features/product/api";
 import { goodsNameLabel } from "@/features/promotion/goodsLabel";
@@ -70,6 +71,14 @@ export function ChangeGoodsModal({ target, onClose }: Props) {
           });
         }}
       >
+        {target && (
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 16 }}
+            message={changeGoodsHint(target.ship_status)}
+          />
+        )}
         <Form.Item
           name="goods_main_id"
           label="归属商品"
