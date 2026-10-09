@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from decimal import Decimal
 from typing import Annotated
@@ -23,6 +24,12 @@ _QuoteField = Annotated[
 
 # 平台账号（历史原因叫 xiaohongshu_id）：抖音博主ID 含「.」（8b）
 _ACCOUNT_PATTERN = r"^[A-Za-z0-9_.\-]+$"
+ACCOUNT_FORMAT_ERROR = "账号只能包含字母、数字、_ . -"
+
+
+def is_valid_account(v: str) -> bool:
+    """新建、以及编辑时账号真的改了才用（历史账号含中文，原样保存时不校验）。"""
+    return re.fullmatch(_ACCOUNT_PATTERN, v) is not None
 
 
 def _blank_to_none(v: str | None) -> str | None:
@@ -97,9 +104,8 @@ class BloggerUpdate(BaseModel):
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
-    xiaohongshu_id: str | None = Field(
-        default=None, min_length=1, max_length=64, pattern=_ACCOUNT_PATTERN
-    )
+    # 不挂格式：历史账号（含中文）原样提交时不能 422；账号真的改了才由 service 校验格式
+    xiaohongshu_id: str | None = Field(default=None, min_length=1, max_length=64)
     nickname: str | None = Field(default=None, min_length=1, max_length=128)
     platform: Platform | None = None
     level: str | None = Field(default=None, max_length=8)

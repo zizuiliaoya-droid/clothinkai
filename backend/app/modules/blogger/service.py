@@ -36,14 +36,17 @@ from app.modules.blogger.exceptions import (
     BloggerTagNotInDictError,
     BloggerXhsIdConflictError,
     FieldPermissionDenied,
+    InvalidAccountFormatError,
 )
 from app.modules.blogger.models import Blogger
 from app.modules.blogger.repository import BloggerListFilters, BloggerRepository
 from app.modules.blogger.schemas import (
+    ACCOUNT_FORMAT_ERROR,
     BloggerCreate,
     BloggerPage,
     BloggerResponse,
     BloggerUpdate,
+    is_valid_account,
 )
 from app.modules.blogger.tag_config import SYSTEM_TAGS, TYPE_GRADED_PLATFORMS
 from app.modules.blogger.tag_dict import BloggerTagDictService
@@ -145,11 +148,22 @@ class BloggerService:
             if "platform" in fields_set and payload.platform is not None
             else blogger.platform
         )
+        # 账号没变（没带 / 与库里相同，库里首尾空格不算差别）→ 不校验格式、不改库里原值：
+        # 历史账号含中文（昵称当账号导进来的），前端编辑时会原样带上
+        account_changed = (
+            "xiaohongshu_id" in fields_set
+            and payload.xiaohongshu_id is not None
+            and payload.xiaohongshu_id != (blogger.xiaohongshu_id or "").strip()
+        )
         new_account = (
             payload.xiaohongshu_id
-            if "xiaohongshu_id" in fields_set and payload.xiaohongshu_id is not None
+            if account_changed and payload.xiaohongshu_id is not None
             else blogger.xiaohongshu_id
         )
+        if account_changed and not is_valid_account(new_account):
+            raise InvalidAccountFormatError(
+                ACCOUNT_FORMAT_ERROR, details={"field": "xiaohongshu_id"}
+            )
         if (new_platform, new_account) != (blogger.platform, blogger.xiaohongshu_id):
             await self._ensure_account_free(new_platform, new_account, exclude_id=blogger.id)
 
@@ -160,6 +174,8 @@ class BloggerService:
         await self._check_tags(payload, blogger, user)
 
         changes = compute_blogger_changes(blogger, payload)
+        if not account_changed:
+            changes.pop("xiaohongshu_id", None)
         if not changes:
             return await self._to_response(blogger, user)
 

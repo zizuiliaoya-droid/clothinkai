@@ -67,6 +67,12 @@ class InvalidTagFormatError(ValidationError):
     code = "INVALID_TAG_FORMAT"
 
 
+class InvalidAccountFormatError(ValidationError):
+    """编辑时把账号改成了不合格式的值（新建由 schema 挡；账号没变不校验）。"""
+
+    code = "INVALID_ACCOUNT_FORMAT"
+
+
 # ---------------------------------------------------------------------------
 # 8b-3 标签字典与系统标签
 # ---------------------------------------------------------------------------
@@ -108,6 +114,7 @@ __all__ = [
     "BloggerTagReservedError",
     "BloggerXhsIdConflictError",
     "FieldPermissionDenied",  # re-exported from modules/product/exceptions
+    "InvalidAccountFormatError",
     "InvalidFollowerCountError",
     "InvalidQuoteError",
     "InvalidTagFormatError",
