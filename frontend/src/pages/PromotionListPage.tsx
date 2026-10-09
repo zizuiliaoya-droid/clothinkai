@@ -12,6 +12,7 @@ import {
   Tooltip,
   Typography,
   message,
+  theme,
 } from "antd";
 import { DownOutlined, PlusOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -22,7 +23,10 @@ import type {
   Promotion,
   PromotionListFilters,
   RetroStatus,
+  ShipStatusFilter,
 } from "@/features/promotion/types";
+import { itemSpecLines, shipDetailLines } from "@/features/promotion/shipDisplay";
+import { shipStatusStyle } from "@/features/flow/stageStyle";
 import { goodsDisplayName } from "@/features/product/api";
 import {
   COOPERATION_MODE_HINT,
@@ -51,6 +55,16 @@ import { UrgeModal } from "@/components/UrgeModal/UrgeModal";
 import { PLATFORMS } from "@/features/common/platforms";
 
 const PUBLISH_STATUS = ["未发布", "已发布", "已取消", "异常", "已删除"];
+
+/** 发货筛选（7.3）：「待发货」只回待推送仓库那批；未进发货流程 = 历史单（none）。 */
+const SHIP_FILTER_OPTIONS: { label: string; value: ShipStatusFilter }[] = [
+  { label: "待发货", value: "待发货" },
+  { label: "待打单", value: "待打单" },
+  { label: "已发货", value: "已发货" },
+  { label: "未进发货流程", value: "none" },
+];
+
+const ONE_LINE = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } as const;
 
 const cooperationModeColor: Record<string, string> = {
   寄拍: "blue",
@@ -83,6 +97,7 @@ const statusColor: Record<string, string> = {
 
 export function PromotionListPage() {
   const qc = useQueryClient();
+  const { token } = theme.useToken();
   const user = useAuthStore((s) => s.user);
   const canManagePaymentQr = Boolean(
     user?.roles.some((r) => ["admin", "platform_admin", "pr", "pr_manager"].includes(r))
@@ -144,14 +159,33 @@ export function PromotionListPage() {
     },
     { title: "货号", dataIndex: "style_code_snapshot", width: 110, fixed: "left" },
     {
-      // 品名 = 商品简称，没填回落建单快照（7a-8，后端 display_name.py 一处定规则）
+      // 品名 = 商品简称，没填回落建单快照（7a-8，后端 display_name.py 一处定规则）；
+      // 下面一行小字颜色尺码（items，套装每个成员一行）；没有明细的旧单显示录入信息里的原文 + 「旧」
       title: "品名",
       dataIndex: "display_short_name",
-      width: 130,
-      ellipsis: { showTitle: false },
-      render: (v: string | null, row: Promotion) => (
-        <DisplayNameCell name={v ?? row.style_short_name_snapshot} fullTitle={row.goods_title} />
-      ),
+      width: 160,
+      render: (v: string | null, row: Promotion) => {
+        const spec = itemSpecLines(row);
+        return (
+          <div style={{ minWidth: 0 }}>
+            <div style={ONE_LINE}>
+              <DisplayNameCell name={v ?? row.style_short_name_snapshot} fullTitle={row.goods_title} />
+            </div>
+            {spec?.lines.map((line, i) => (
+              <div
+                key={i}
+                title={line}
+                style={{ ...ONE_LINE, color: token.colorTextSecondary, fontSize: token.fontSizeSM }}
+              >
+                {line}
+                {spec.legacy && i === 0 && (
+                  <Tag style={{ marginInlineStart: 4, fontSize: token.fontSizeSM }}>旧</Tag>
+                )}
+              </div>
+            ))}
+          </div>
+        );
+      },
     },
     {
       // 只显示商品名（简称，没填回落全称）+ 套装标记，不显示商品编码（业务方 10-06）。
@@ -199,6 +233,34 @@ export function PromotionListPage() {
       dataIndex: "quote_amount",
       width: 90,
       render: (v: string | null) => (v == null ? "—" : `¥${v}`),
+    },
+    {
+      // 发货 3 态（流程线 3.3）；历史单（null）没进发货流程显示「—」。
+      // 待打单悬停看推送人与时间，已发货悬停看快递公司 + 单号 + 发货时间
+      title: "发货",
+      dataIndex: "ship_status",
+      width: 100,
+      render: (v: string | null, row: Promotion) => {
+        if (!v) return <span style={{ color: token.colorTextSecondary }}>—</span>;
+        const style = shipStatusStyle(v);
+        const detail = shipDetailLines(row);
+        const tag = <Tag color={style.color}>{style.label}</Tag>;
+        return detail.length ? (
+          <Tooltip
+            title={
+              <div>
+                {detail.map((line) => (
+                  <div key={line}>{line}</div>
+                ))}
+              </div>
+            }
+          >
+            {tag}
+          </Tooltip>
+        ) : (
+          tag
+        );
+      },
     },
     {
       title: "是否催发",
@@ -482,6 +544,16 @@ export function PromotionListPage() {
           options={PLATFORMS.map((p) => ({ label: p, value: p }))}
           onChange={(v) => setFilters((f) => ({ ...f, platform: v, page: 1 }))}
         />
+        <Select<ShipStatusFilter>
+          placeholder="发货"
+          aria-label="发货"
+          allowClear
+          style={{ width: 140 }}
+          options={SHIP_FILTER_OPTIONS}
+          onChange={(v) =>
+            setFilters((f) => ({ ...f, ship_status: v ?? undefined, page: 1 }))
+          }
+        />
       </Space>
 
       <Table
@@ -489,7 +561,7 @@ export function PromotionListPage() {
         loading={isLoading}
         columns={columns}
         dataSource={data?.items ?? []}
-        scroll={{ x: 2400 }}
+        scroll={{ x: 2530 }}
         pagination={{
           current: data?.page ?? 1,
           pageSize: data?.page_size ?? 10,

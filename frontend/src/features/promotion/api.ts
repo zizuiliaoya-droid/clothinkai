@@ -2,6 +2,7 @@
 
 import { apiClient } from "@/services/apiClient";
 import type {
+  GoodsItemIn,
   Promotion,
   PromotionCancelRequest,
   PromotionCreate,
@@ -12,6 +13,8 @@ import type {
   PromotionAmountLog,
   PromotionResubmitRequest,
   PromotionReviewRequest,
+  PromotionShipPushRequest,
+  PromotionShipWithdrawRequest,
   PromotionUpdate,
   Retrospective,
 } from "./types";
@@ -99,6 +102,57 @@ export async function updateWarehouseWaybill(
 ): Promise<Promotion> {
   const resp = await apiClient.patch<Promotion>(
     `/api/promotions/${promotionId}/warehouse-waybill`, { waybill }
+  );
+  return resp.data;
+}
+
+// ---------------------------------------------------------------------------
+// 发货（流程线 3.3 / 7.3）：三个动作都返回动作之后的整张推广单（带 ui）
+// ---------------------------------------------------------------------------
+
+/** 纳入发货：历史单（发货为空、未发布、未召回）→ 待发货。管理员或 PR 主管。 */
+export async function shipInclude(promotionId: string): Promise<Promotion> {
+  const resp = await apiClient.post<Promotion>(
+    `/api/promotions/${promotionId}/ship/include`
+  );
+  return resp.data;
+}
+
+/**
+ * 确认推送仓库：待发货 → 待打单。管理员或 PR 主管。
+ * 弹窗里补的颜色尺码 / 收件信息同一事务写入；写完仍有缺项 → 422 FLOW_GATE_MISSING（整笔回滚）。
+ */
+export async function shipPush(
+  promotionId: string,
+  payload: PromotionShipPushRequest = {}
+): Promise<Promotion> {
+  const resp = await apiClient.post<Promotion>(
+    `/api/promotions/${promotionId}/ship/push`,
+    payload
+  );
+  return resp.data;
+}
+
+/** 撤回推送：待打单 → 待发货，原因必填。 */
+export async function shipWithdraw(
+  promotionId: string,
+  payload: PromotionShipWithdrawRequest
+): Promise<Promotion> {
+  const resp = await apiClient.post<Promotion>(
+    `/api/promotions/${promotionId}/ship/withdraw`,
+    payload
+  );
+  return resp.data;
+}
+
+/** 整组替换颜色尺码明细（不换商品）。能不能改看 `ui.edits` 是否含 goods_items，不是「改」→ 403。 */
+export async function putItems(
+  promotionId: string,
+  items: GoodsItemIn[]
+): Promise<Promotion> {
+  const resp = await apiClient.put<Promotion>(
+    `/api/promotions/${promotionId}/items`,
+    items
   );
   return resp.data;
 }
