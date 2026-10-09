@@ -14,12 +14,21 @@ import {
   Typography,
   message,
 } from "antd";
-import { PlusOutlined, SearchOutlined } from "@ant-design/icons";
+import { PlusOutlined, SearchOutlined, TagsOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnsType } from "antd/es/table";
 import {
+  DOUYIN_METRIC_FIELDS,
+  douyinMetricText,
+  usesDouyinMetrics,
+} from "@/features/blogger/douyinMetrics";
+import { safeHomepageUrl } from "@/features/blogger/display";
+import { BloggerTagDictModal } from "@/components/BloggerTagDict/BloggerTagDictModal";
+import { useAuthStore } from "@/stores/authStore";
+import {
   createBlogger,
   disableBlogger,
+  listBloggerTags,
   listBloggers,
   restoreBlogger,
   updateBlogger,
@@ -53,6 +62,19 @@ const CRAWLER_FIELDS = [
   "3天阅读涨跌", "7天阅读涨跌", "3天点赞涨跌", "7天点赞涨跌",
 ];
 
+// 8b §6.2：博主模版表头（别名：账号 = 小红书ID / 小红书号，昵称 = 小红书昵称，微信 = 微信号，粉丝数 = 粉丝量，类目标签 = 标签）
+const MANUAL_BLOGGER_COLUMNS = [
+  "账号", "昵称", "平台", "微信", "手机号", "粉丝数", "博主类型", "性别投放",
+  "类目标签", "报价", "合作历史", "备注", "主页链接", "网页ID",
+];
+// 8b §6.3：灰豚抖音版式固定，只列读的列；r1 N8：列说明要 templateColumns 非空才显示
+const DOUYIN_IMPORT_COLUMNS = ["博主ID", "抖音博主", "网页ID", "微信号", "报价", "粉丝总量", "统计列（灰豚指数 … 曝光点赞比）"];
+const DOUYIN_IMPORT_NOTE =
+  "直接传灰豚导出的 .xlsx 原文件，读『抖音博主库』sheet，7天视频详情暂不导入。按博主ID 判重，读这些列：";
+// 报价（及报价备注）的默认可写角色，同后端 FIELD_PERMISSION_REGISTRY["blogger"]["quote"]；最终以后端校验为准
+const QUOTE_WRITE_ROLES = ["admin", "platform_admin", "pr", "pr_manager"];
+const CATEGORY_TAG_MAX = 20;
+
 function isRecentGrowthValue(value: unknown): boolean {
   if (typeof value === "boolean") return value;
   if (typeof value === "number") return Number.isFinite(value) && value > 0;
@@ -75,11 +97,27 @@ export function BloggerListPage() {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Blogger | null>(null);
   const [form] = Form.useForm<BloggerCreate>();
+  const [tagDictOpen, setTagDictOpen] = useState(false);
+  // 本页刚上传的博主导入批次，「标签字典 → 导入缺的标签」按它定位（r1 N14 改法）
+  const [lastBloggerBatchId, setLastBloggerBatchId] = useState<string>();
+  const user = useAuthStore((s) => s.user);
+  const canEditQuote = Boolean(user?.roles.some((r) => QUOTE_WRITE_ROLES.includes(r)));
 
   const { data, isLoading } = useQuery({
     queryKey: ["bloggers", filters],
     queryFn: () => listBloggers(filters),
   });
+
+  // 类目标签只能从字典里选；弹窗开着才查
+  const tagDictQuery = useQuery({
+    queryKey: ["blogger-tags"],
+    queryFn: listBloggerTags,
+    enabled: open,
+  });
+  const categoryTagOptions = (tagDictQuery.data?.items ?? []).map((t) => ({
+    label: t.value,
+    value: t.value,
+  }));
 
   const saveMutation = useMutation({
     mutationFn: async (values: BloggerCreate) =>
@@ -139,14 +177,44 @@ export function BloggerListPage() {
         </BloggerHoverCard>
       ),
     },
-    { title: "小红书ID", dataIndex: "xiaohongshu_id", width: 130 },
+    // 8b-1：列名历史原因叫 xiaohongshu_id，语义是平台账号（抖音 = 灰豚博主ID）
+    { title: "账号", dataIndex: "xiaohongshu_id", width: 130 },
     { title: "平台", dataIndex: "platform", width: 80 },
+    { title: "网页ID", dataIndex: "web_id", width: 130, render: (v) => v || "—" },
+    {
+      title: "主页",
+      dataIndex: "homepage_url",
+      width: 70,
+      render: (v: string | null | undefined, r: Blogger) => {
+        const href = safeHomepageUrl(v);
+        return href ? (
+          <a
+            href={href}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label={`打开 ${r.nickname} 的主页（新窗口）`}
+          >
+            打开
+          </a>
+        ) : (
+          "—"
+        );
+      },
+    },
     { title: "微信号", dataIndex: "wechat", width: 110, render: (v) => v || "—" },
     {
       title: "报价",
       dataIndex: "quote",
       width: 100,
       render: (v: string | null) => (v == null ? "—" : `¥${v}`),
+    },
+    {
+      // 与报价同一条字段权限，看不到报价的人收到 null
+      title: "报价备注",
+      dataIndex: "quote_note",
+      width: 140,
+      ellipsis: { showTitle: true },
+      render: (v: string | null | undefined) => v || "—",
     },
     {
       title: "粉丝量",
@@ -180,23 +248,54 @@ export function BloggerListPage() {
       render: (v) => v || "—",
     },
     {
+      // 类目标签蓝色；质量标签系统自动计算，金色 + 锁形提示
+      title: "标签",
+      key: "tags",
+      width: 180,
+      render: (_: unknown, r: Blogger) =>
+        r.category_tags.length || r.quality_tags.length ? (
+          <Space size={[0, 4]} wrap>
+            {r.category_tags.map((t) => (
+              <Tag key={`c_${t}`} color="blue">
+                {t}
+              </Tag>
+            ))}
+            {r.quality_tags.map((t) => (
+              <Tag key={`q_${t}`} color="gold" title="系统标签">
+                {t}
+              </Tag>
+            ))}
+          </Space>
+        ) : (
+          "—"
+        ),
+    },
+    {
       title: "是否假号",
       dataIndex: "is_suspected_fake",
       width: 90,
       render: (v: boolean) => (v ? <Tag color="red">疑似</Tag> : "—"),
     },
-    ...CRAWLER_FIELDS.map((f) => ({
-      title: f,
-      key: `cm_${f}`,
-      width: 110,
-      render: (_: unknown, r: Blogger) => {
-        const v = (r.crawler_metrics ?? {})[f];
-        if (f === "近期数据涨的博主") {
-          return isRecentGrowthValue(v) ? <Tag color="green">上涨</Tag> : "—";
-        }
-        return v == null || v === "" ? "—" : String(v);
-      },
-    })),
+    // 8b §7.4：平台筛「抖音」时换成灰豚抖音的统计列（读 platform_metrics.raw 原文），否则照旧
+    ...(usesDouyinMetrics(filters.platform)
+      ? DOUYIN_METRIC_FIELDS.map((f) => ({
+          title: f,
+          key: `pm_${f}`,
+          width: 120,
+          render: (_: unknown, r: Blogger) => douyinMetricText(r.platform_metrics, f),
+        }))
+      : CRAWLER_FIELDS.map((f) => ({
+          title: f,
+          key: `cm_${f}`,
+          width: 110,
+          render: (_: unknown, r: Blogger) => {
+            const v = (r.crawler_metrics ?? {})[f];
+            if (f === "近期数据涨的博主") {
+              return isRecentGrowthValue(v) ? <Tag color="green">上涨</Tag> : "—";
+            }
+            return v == null || v === "" ? "—" : String(v);
+          },
+        }))),
     {
       title: "状态",
       dataIndex: "is_active",
@@ -230,19 +329,32 @@ export function BloggerListPage() {
   return (
     <Card
       title={<Typography.Title level={4} style={{ margin: 0 }}>博主管理</Typography.Title>}
+      // 页头按钮多了，窄屏时标题保持原宽、按钮在右侧换行（否则标题被挤没）
+      styles={{ title: { flex: "0 0 auto" }, extra: { minWidth: 0, padding: "8px 0 8px 12px" } }}
       extra={
-        <Space>
+        <Space wrap>
           <ImportUploadButton
             source="manual_blogger"
             label="导入博主库"
-            invalidateKeys={[["bloggers"]]}
-            templateColumns={["小红书ID", "小红书昵称", "平台", "微信号", "报价", "粉丝量", "博主类型"]}
+            invalidateKeys={[["bloggers"], ["blogger-tags"]]}
+            templateColumns={MANUAL_BLOGGER_COLUMNS}
+            onUploaded={setLastBloggerBatchId}
           />
           <ImportUploadButton
             source="huitun"
             label="导入灰豚画像"
             invalidateKeys={[["bloggers"]]}
           />
+          <ImportUploadButton
+            source="huitun_douyin"
+            label="导入灰豚抖音博主"
+            invalidateKeys={[["bloggers"]]}
+            templateColumns={DOUYIN_IMPORT_COLUMNS}
+            columnsNote={DOUYIN_IMPORT_NOTE}
+          />
+          <Button icon={<TagsOutlined />} onClick={() => setTagDictOpen(true)}>
+            标签字典
+          </Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
             新建博主
           </Button>
@@ -251,9 +363,10 @@ export function BloggerListPage() {
     >
       <Space style={{ marginBottom: 16 }} wrap>
         <Input.Search
-          placeholder="搜索昵称 / 小红书ID"
+          placeholder="搜索昵称 / 账号 / 网页ID"
+          aria-label="搜索博主"
           allowClear
-          style={{ width: 220 }}
+          style={{ width: 280, maxWidth: "100%" }}
           enterButton={<SearchOutlined />}
           onSearch={(v) =>
             setFilters((f) => ({ ...f, keyword: v || undefined, page: 1 }))
@@ -305,7 +418,7 @@ export function BloggerListPage() {
         loading={isLoading}
         columns={columns}
         dataSource={data?.items ?? []}
-        scroll={{ x: 2600 }}
+        scroll={{ x: 3200 }}
         pagination={{
           current: data?.page ?? 1,
           pageSize: data?.page_size ?? 10,
@@ -334,10 +447,11 @@ export function BloggerListPage() {
         >
           <Form.Item
             name="xiaohongshu_id"
-            label="小红书ID"
-            rules={[{ required: true, message: "请输入小红书ID" }]}
+            label="账号"
+            extra="抖音填灰豚的博主ID；同一平台下账号不能重复"
+            rules={[{ required: true, message: "请输入账号" }]}
           >
-            <Input placeholder="小红书账号 ID" disabled={!!editing} />
+            <Input placeholder="平台账号" maxLength={64} disabled={!!editing} />
           </Form.Item>
           <Form.Item
             name="nickname"
@@ -412,11 +526,58 @@ export function BloggerListPage() {
               <Input placeholder="微信号（可选）" style={{ width: 180 }} />
             </Form.Item>
           </Space>
+          <Form.Item name="web_id" label="网页ID">
+            <Input placeholder="抖音网页ID（可选）" maxLength={64} />
+          </Form.Item>
+          <Form.Item
+            name="homepage_url"
+            label="主页链接"
+            rules={[
+              {
+                pattern: /^\s*https?:\/\//i,
+                message: "主页链接需以 http:// 或 https:// 开头",
+              },
+            ]}
+          >
+            <Input placeholder="https://…（可选）" maxLength={1024} />
+          </Form.Item>
+          <Form.Item
+            name="category_tags"
+            label="类目标签"
+            extra="只能从标签字典里选；字典外的旧标签可以去掉"
+            rules={[
+              {
+                type: "array",
+                max: CATEGORY_TAG_MAX,
+                message: `最多 ${CATEGORY_TAG_MAX} 个`,
+              },
+            ]}
+          >
+            <Select
+              mode="multiple"
+              allowClear
+              placeholder="从字典选择"
+              loading={tagDictQuery.isLoading}
+              options={categoryTagOptions}
+              maxCount={CATEGORY_TAG_MAX}
+            />
+          </Form.Item>
+          {canEditQuote ? (
+            <Form.Item name="quote_note" label="报价备注" extra="报价原文，如「图文500」">
+              <Input.TextArea rows={2} maxLength={500} placeholder="报价备注（可选）" />
+            </Form.Item>
+          ) : null}
           <Form.Item name="remark" label="备注">
             <Input.TextArea rows={2} placeholder="备注（可选）" />
           </Form.Item>
         </Form>
       </Modal>
+
+      <BloggerTagDictModal
+        open={tagDictOpen}
+        onClose={() => setTagDictOpen(false)}
+        batchId={lastBloggerBatchId}
+      />
     </Card>
   );
 }
