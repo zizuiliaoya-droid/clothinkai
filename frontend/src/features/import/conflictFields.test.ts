@@ -22,9 +22,24 @@ describe("conflictFieldOptions", () => {
         "quote",
         "cooperation_history",
         "remark",
+        "web_id",
+        "homepage_url",
       ].sort()
     );
     expect(CONFLICT_FIELD_LABELS.manual_blogger.quote).toBe("报价");
+    expect(CONFLICT_FIELD_LABELS.manual_blogger.web_id).toBe("网页ID");
+    expect(CONFLICT_FIELD_LABELS.manual_blogger.homepage_url).toBe("主页链接");
+    // 手工模版没有报价备注列，后端 manual_blogger 的 compare_field_names 不含它（传了会 422）
+    expect(values).not.toContain("quote_note");
+  });
+
+  it("灰豚抖音来源 = 博主来源的全部字段 + 报价备注（与后端 compare_field_names 一致，8b）", () => {
+    const douyin = conflictFieldOptions("huitun_douyin");
+    const manual = conflictFieldOptions("manual_blogger");
+    expect(douyin.filter((o) => o.value !== "quote_note")).toEqual(manual);
+    expect(douyin.map((o) => o.value)).toContain("quote_note");
+    expect(douyin).toHaveLength(15);
+    expect(CONFLICT_FIELD_LABELS.huitun_douyin.quote_note).toBe("报价备注");
   });
 
   it("商品资料来源列出款式 / SKU / 商品的比较字段（8a-4）", () => {

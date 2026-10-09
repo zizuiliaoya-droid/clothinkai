@@ -1,21 +1,27 @@
 // 导入冲突的比较字段：按来源的「字段名 → 中文名」静态表（冲突页的字段筛选用，8a-6）。
 // 与后端各 adapter 的 compare_field_names() 一致；后端会拒绝不在名单里的字段（422）。
 
+// 博主（8b）：平台、质量标签只为按字段筛出旧冲突留着；报价备注只有灰豚抖音来源有（手工模版没有这列）
+const BLOGGER_FIELD_LABELS: Record<string, string> = {
+  nickname: "昵称",
+  platform: "平台",
+  wechat: "微信",
+  phone: "手机号",
+  follower_count: "粉丝数",
+  blogger_type: "博主类型",
+  gender_target: "性别投放",
+  category_tags: "类目标签",
+  quality_tags: "质量标签",
+  quote: "报价",
+  cooperation_history: "合作历史",
+  remark: "备注",
+  web_id: "网页ID",
+  homepage_url: "主页链接",
+};
+
 export const CONFLICT_FIELD_LABELS: Record<string, Record<string, string>> = {
-  manual_blogger: {
-    nickname: "昵称",
-    platform: "平台",
-    wechat: "微信",
-    phone: "手机号",
-    follower_count: "粉丝数",
-    blogger_type: "博主类型",
-    gender_target: "性别投放",
-    category_tags: "类目标签",
-    quality_tags: "质量标签",
-    quote: "报价",
-    cooperation_history: "合作历史",
-    remark: "备注",
-  },
+  manual_blogger: BLOGGER_FIELD_LABELS,
+  huitun_douyin: { ...BLOGGER_FIELD_LABELS, quote_note: "报价备注" },
   // 商品资料：款式（图片）、SKU（颜色…货源类型）、商品（简称、品牌、季节）；中文名与映射目录一致
   manual_style_sku: {
     external_image_url: "图片",
