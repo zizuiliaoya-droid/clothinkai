@@ -1,125 +1,164 @@
-import { useState } from "react";
-import {
-  Button,
-  Card,
-  Form,
-  Input,
-  Modal,
-  Segmented,
-  Table,
-  Tag,
-  Typography,
-  message,
-} from "antd";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState, type CSSProperties } from "react";
+import { Button, Card, Input, Segmented, Table, Tag, Typography, message, theme } from "antd";
+import { DownloadOutlined } from "@ant-design/icons";
+import { useQuery } from "@tanstack/react-query";
 import type { ColumnsType } from "antd/es/table";
-import { listPromotions, updateWarehouseWaybill } from "@/features/promotion/api";
-import type { Promotion } from "@/features/promotion/types";
-import { extractErrorMessage } from "@/services/apiClient";
+import dayjs from "dayjs";
 import { DisplayNameCell } from "@/components/DisplayNameCell/DisplayNameCell";
+import { FlowAction } from "@/features/flow/FlowAction";
+import { shipStatusStyle } from "@/features/flow/stageStyle";
+import { itemSpecLines } from "@/features/promotion/shipDisplay";
+import { exportWarehouseShipments, listWarehouseShipments } from "@/features/warehouse/api";
+import {
+  WAREHOUSE_QUERY_KEY,
+  WaybillFillModal,
+} from "@/features/warehouse/components/WaybillFillModal";
+import { exportErrorMessage, exportFilename, fillActionLabel } from "@/features/warehouse/shipmentForm";
+import {
+  WAREHOUSE_BUCKETS,
+  type WarehouseBucket,
+  type WarehouseShipmentRow,
+} from "@/features/warehouse/types";
 
-type Bucket = "待打单" | "已打单" | "全部";
+const ONE_LINE: CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
 
-function se(p: Promotion, k: string): string {
-  const v = (p.source_extra ?? {})[k];
-  return v == null ? "" : String(v);
-}
+const fmtTime = (v: string | null) => (v ? dayjs(v).format("YYYY-MM-DD HH:mm") : null);
 
 /**
- * 仓库打单：集中展示"已填打单地址、待仓库打单"的站外推广单，
- * 仓库打完单后回传发货单号（写入 source_extra['发货单号']）→ 视为已打单。
- * 避免逐条翻找。数据源复用站外推广 + source_extra，无需额外建单。
+ * 仓库发货（流程线设计 8.5）：只看推送过的推广单（待打单 / 已发货），数据走仓库专用接口
+ * `/api/warehouse/shipments`——仓库 060 起没有 promotion:read，拿不到整张推广单。
+ * 回填按钮按行 `ui.actions.ship_fill`，导出按页级 `ui.actions.export`；不放时间线、不做批量回填。
  */
-/** 分桶 → 服务端 has_waybill 参数。全部则不限制。 */
-function waybillParam(bucket: Bucket): boolean | undefined {
-  if (bucket === "已打单") return true;
-  if (bucket === "待打单") return false;
-  return undefined;
-}
-
 export function WarehousePage() {
-  const qc = useQueryClient();
-  const [bucket, setBucket] = useState<Bucket>("待打单");
+  const { token } = theme.useToken();
+  const [bucket, setBucket] = useState<WarehouseBucket>("待打单");
+  const [keyword, setKeyword] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
-  const [target, setTarget] = useState<Promotion | null>(null);
-  const [form] = Form.useForm();
+  const [target, setTarget] = useState<WarehouseShipmentRow | null>(null);
+  const [exporting, setExporting] = useState(false);
 
-  // 筛选全部交给服务端。此前是拉一页 100 条再在浏览器里过滤打单地址，
-  // 结果第 101 条以后的打单单根本看不到，而且每次都要让后端算完整页的
-  // 催单状态与 dual_platform 子查询 —— 这就是页面慢的原因。
+  const kw = keyword.trim() || undefined;
   const { data, isLoading } = useQuery({
-    queryKey: ["promotions", "warehouse", bucket, page, pageSize],
-    queryFn: () =>
-      listPromotions({
-        page,
-        page_size: pageSize,
-        is_active: true,
-        has_print_address: true,
-        has_waybill: waybillParam(bucket),
-      }),
+    queryKey: [...WAREHOUSE_QUERY_KEY, bucket, kw, page, pageSize],
+    queryFn: () => listWarehouseShipments({ bucket, keyword: kw, page, page_size: pageSize }),
   });
 
   const rows = data?.items ?? [];
+  const canExport = Boolean(data?.ui.actions?.export) && bucket === "待打单";
+  const secondary: CSSProperties = { color: token.colorTextSecondary, fontSize: token.fontSizeSM };
+  const dash = <span style={{ color: token.colorTextSecondary }}>—</span>;
 
-  const saveMutation = useMutation({
-    mutationFn: ({ id, waybill }: { id: string; waybill: string }) =>
-      updateWarehouseWaybill(id, waybill),
-    onSuccess: () => {
-      message.success("发货单号已回传，标记为已打单");
-      setTarget(null);
-      form.resetFields();
-      void qc.invalidateQueries({ queryKey: ["promotions"] });
-    },
-    onError: (err) => message.error(extractErrorMessage(err)),
-  });
-
-  function openFill(p: Promotion) {
-    setTarget(p);
-    form.resetFields();
-    form.setFieldsValue({ 发货单号: se(p, "发货单号") });
+  async function handleExport() {
+    setExporting(true);
+    try {
+      const blob = await exportWarehouseShipments({ bucket: "待打单", keyword: kw });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = exportFilename(dayjs());
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+    } catch (err) {
+      message.error(await exportErrorMessage(err));
+    } finally {
+      setExporting(false);
+    }
   }
 
-  const columns: ColumnsType<Promotion> = [
-    { title: "内部编码", dataIndex: "internal_code", width: 150 },
-    { title: "货号", dataIndex: "style_code_snapshot", width: 110 },
+  const columns: ColumnsType<WarehouseShipmentRow> = [
+    { title: "内部编码", dataIndex: "internal_code", width: 140, fixed: "left" },
+    { title: "货号", dataIndex: "style_code", width: 110 },
     {
-      // 品名 = 商品简称，没填回落建单快照（7a-8，与推广列表同一规则）
+      // 品名 = 商品简称，没填回落建单快照（7a-8）；悬停看全称
       title: "品名",
       dataIndex: "display_short_name",
-      width: 130,
+      width: 140,
       ellipsis: { showTitle: false },
-      render: (v: string | null, r: Promotion) => (
-        <DisplayNameCell name={v ?? r.style_short_name_snapshot} fullTitle={r.goods_title} />
+      render: (v: string, r) => <DisplayNameCell name={v} fullTitle={r.goods_title} />,
+    },
+    {
+      // 套装每个成员一行「简称 · 黑色 / M」；没有明细的旧单显示录入信息原文 + 「旧」；不显示 SKU 编码（规-1）
+      title: "颜色尺码",
+      key: "spec",
+      width: 180,
+      render: (_, r) => {
+        const spec = itemSpecLines(r);
+        return (
+          <div style={{ minWidth: 0 }}>
+            {spec
+              ? spec.lines.map((line, i) => (
+                  <div key={i} title={line} style={ONE_LINE}>
+                    {line}
+                    {spec.legacy && i === 0 && <Tag style={{ marginInlineStart: 4 }}>旧</Tag>}
+                  </div>
+                ))
+              : dash}
+            {r.items_updated_after_push && <Tag color="orange">明细已更新</Tag>}
+          </div>
+        );
+      },
+    },
+    { title: "收件人", dataIndex: "receiver_name", width: 100, render: (v: string | null) => v || dash },
+    { title: "电话", dataIndex: "receiver_phone", width: 130, render: (v: string | null) => v || dash },
+    {
+      title: "地址",
+      dataIndex: "receiver_address",
+      width: 240,
+      render: (v: string | null, r) => (
+        <div>
+          {v ? <span>{v}</span> : dash}
+          {r.receiver_updated_after_push && (
+            <Tag color="orange" style={{ marginInlineStart: 4 }}>
+              地址已更新
+            </Tag>
+          )}
+        </div>
       ),
     },
-    { title: "颜色及规格", key: "cs", width: 120, render: (_, r) => se(r, "颜色及规格") || "—" },
-    { title: "打单地址", key: "addr", width: 240, render: (_, r) => se(r, "打单地址") || "—" },
     {
-      title: "发货单号",
-      key: "waybill",
-      width: 160,
-      render: (_, r) => se(r, "发货单号") || "—",
+      title: "推送时间",
+      dataIndex: "ship_pushed_at",
+      width: 140,
+      render: (v: string | null, r) => (
+        <div>
+          <div>{fmtTime(v) ?? dash}</div>
+          {r.ship_pushed_by_name && <div style={secondary}>{r.ship_pushed_by_name}</div>}
+        </div>
+      ),
+    },
+    { title: "快递公司", dataIndex: "ship_courier", width: 90, render: (v: string | null) => v || dash },
+    { title: "单号", dataIndex: "ship_waybill", width: 160, render: (v: string | null) => v || dash },
+    {
+      title: "发货时间",
+      dataIndex: "shipped_at",
+      width: 140,
+      render: (v: string | null) => fmtTime(v) ?? dash,
     },
     {
-      title: "打单状态",
-      key: "status",
-      width: 100,
-      render: (_, r) =>
-        se(r, "发货单号").trim() !== "" ? (
-          <Tag color="green">已打单</Tag>
-        ) : (
-          <Tag color="orange">待打单</Tag>
-        ),
+      title: "状态",
+      dataIndex: "ship_status",
+      width: 90,
+      render: (v: string) => {
+        const s = shipStatusStyle(v);
+        return <Tag color={s.color}>{s.label}</Tag>;
+      },
     },
     {
       title: "操作",
-      width: 120,
+      key: "op",
+      width: 90,
       fixed: "right",
       render: (_, r) => (
-        <Button type="link" size="small" onClick={() => openFill(r)}>
-          {se(r, "发货单号").trim() !== "" ? "修改单号" : "回传单号"}
-        </Button>
+        <FlowAction
+          ui={r.ui}
+          actionKey="ship_fill"
+          label={fillActionLabel(r.ship_status)}
+          onClick={() => setTarget(r)}
+          buttonProps={{ type: "link", size: "small" }}
+        />
       ),
     },
   ];
@@ -128,32 +167,55 @@ export function WarehousePage() {
     <Card
       title={
         <Typography.Title level={4} style={{ margin: 0 }}>
-          仓库打单
+          仓库发货
         </Typography.Title>
       }
       extra={
-        <Segmented
-          value={bucket}
-          onChange={(v) => {
-            setBucket(v as Bucket);
-            setPage(1);
-          }}
-          options={["待打单", "已打单", "全部"]}
-        />
+        canExport ? (
+          <Button
+            icon={<DownloadOutlined />}
+            loading={exporting}
+            disabled={(data?.total ?? 0) === 0}
+            onClick={() => void handleExport()}
+          >
+            导出待打单 Excel
+          </Button>
+        ) : null
       }
     >
-      <Table
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 16 }}>
+        <Segmented<WarehouseBucket>
+          value={bucket}
+          onChange={(v) => {
+            setBucket(v);
+            setPage(1);
+          }}
+          options={[...WAREHOUSE_BUCKETS]}
+        />
+        <Input.Search
+          aria-label="搜索发货单"
+          placeholder="编码 / 品名 / 收件人 / 单号"
+          allowClear
+          style={{ width: 300, maxWidth: "100%" }}
+          onSearch={(v) => {
+            setKeyword(v);
+            setPage(1);
+          }}
+        />
+      </div>
+      <Table<WarehouseShipmentRow>
         rowKey="id"
         size="small"
         loading={isLoading}
         columns={columns}
         dataSource={rows}
-        scroll={{ x: 1100 }}
+        scroll={{ x: 1750 }}
         pagination={{
-          current: data?.page ?? 1,
+          current: data?.page ?? page,
           pageSize: data?.page_size ?? pageSize,
           total: data?.total ?? 0,
           showSizeChanger: true,
+          pageSizeOptions: [10, 20, 50, 100],
           showTotal: (t) => `共 ${t} 条`,
           onChange: (p, ps) => {
             setPage(p);
@@ -162,34 +224,7 @@ export function WarehousePage() {
         }}
       />
 
-      <Modal
-        title="回传发货单号"
-        open={!!target}
-        onCancel={() => setTarget(null)}
-        onOk={() => form.submit()}
-        confirmLoading={saveMutation.isPending}
-        destroyOnHidden
-      >
-        <div style={{ marginBottom: 12, color: "#475569" }}>
-          打单地址：{target ? se(target, "打单地址") || "—" : "—"}
-        </div>
-        <Form
-          form={form}
-          layout="vertical"
-          onFinish={(v) =>
-            target &&
-            saveMutation.mutate({ id: target.id, waybill: String(v.发货单号).trim() })
-          }
-        >
-          <Form.Item
-            name="发货单号"
-            label="发货单号"
-            rules={[{ required: true, message: "请输入发货单号" }]}
-          >
-            <Input placeholder="仓库打单回传的快递单号" allowClear />
-          </Form.Item>
-        </Form>
-      </Modal>
+      <WaybillFillModal target={target} couriers={data?.couriers ?? []} onClose={() => setTarget(null)} />
     </Card>
   );
 }

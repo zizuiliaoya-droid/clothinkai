@@ -1,7 +1,7 @@
 // 推广列表的颜色尺码小字与发货悬停内容（流程线 8.4）。纯函数，vitest 测；不出现 SKU 编码（规-1）。
 
 import dayjs from "dayjs";
-import type { Promotion } from "./types";
+import type { Promotion, PromotionItem } from "./types";
 
 /** 「黑色 / M」；缺一项只显示另一项，都没有回「—」。 */
 export function colorSizeLabel(color: string | null | undefined, size: string | null | undefined): string {
@@ -18,10 +18,12 @@ export interface ItemSpec {
 /**
  * 品名下的颜色尺码：单品一行「黑色 / M」；套装每个成员一行「简称 · 黑色 / M」；
  * 没有明细的旧单显示 legacy_color_spec 原文（调用方另标「旧」）；都没有 → null。
+ * 推广列表与仓库页共用（仓库行的明细只有品名与颜色尺码）。
  */
-export function itemSpecLines(
-  row: Partial<Pick<Promotion, "items" | "legacy_color_spec">>
-): ItemSpec | null {
+export function itemSpecLines(row: {
+  items?: readonly Pick<PromotionItem, "display_short_name" | "color" | "size">[] | null;
+  legacy_color_spec?: string | null;
+}): ItemSpec | null {
   const items = row.items ?? [];
   if (items.length === 1) {
     return { lines: [colorSizeLabel(items[0].color, items[0].size)], legacy: false };

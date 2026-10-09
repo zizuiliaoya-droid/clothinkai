@@ -358,10 +358,4 @@ export interface PromotionListFilters {
   is_hit?: boolean;
   /** 发货筛选（流程线 7.3）。 */
   ship_status?: ShipStatusFilter;
-  /**
-   * @deprecated 后端 M1 起已删这个参数（传了被忽略）；仓库页改走 /api/warehouse 时一并删。
-   */
-  has_print_address?: boolean;
-  /** @deprecated 同上。 */
-  has_waybill?: boolean;
 }

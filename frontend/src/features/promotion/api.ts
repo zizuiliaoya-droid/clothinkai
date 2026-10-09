@@ -97,15 +97,6 @@ export async function removePaymentQr(promotionId: string): Promise<void> {
   await apiClient.delete(`/api/promotions/${promotionId}/payment-qr`);
 }
 
-export async function updateWarehouseWaybill(
-  promotionId: string, waybill: string
-): Promise<Promotion> {
-  const resp = await apiClient.patch<Promotion>(
-    `/api/promotions/${promotionId}/warehouse-waybill`, { waybill }
-  );
-  return resp.data;
-}
-
 // ---------------------------------------------------------------------------
 // 发货（流程线 3.3 / 7.3）：三个动作都返回动作之后的整张推广单（带 ui）
 // ---------------------------------------------------------------------------
