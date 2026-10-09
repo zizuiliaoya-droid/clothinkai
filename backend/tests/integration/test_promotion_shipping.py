@@ -68,6 +68,20 @@ def tenant_ctx(tenant_a: Any) -> Any:
     tenant_id_ctx.reset(token)
 
 
+@pytest.fixture
+def promotion_factory(promotion_factory: Any) -> Any:
+    """工厂默认编号只有 3 位随机（4,096 种），一条用例建多张时约 0.5% 撞 ``uq_promotion_internal_code``：
+    本文件默认给足 8 位（照 ``test_warehouse_api.py``），显式传 ``internal_code`` 的不受影响。"""
+    create = promotion_factory.promotion
+
+    async def promotion(**kw: Any) -> Any:
+        kw.setdefault("internal_code", f"DESH{uuid4().hex[:8].upper()}")
+        return await create(**kw)
+
+    promotion_factory.promotion = promotion
+    return promotion_factory
+
+
 async def _override(session: AsyncSession, tenant: Any, user: Any, scope: str, effect: str) -> None:
     perm = (await session.execute(select(Permission).where(Permission.scope == scope))).scalar_one()
     session.add(

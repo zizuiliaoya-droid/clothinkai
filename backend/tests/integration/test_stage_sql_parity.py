@@ -12,6 +12,7 @@ from __future__ import annotations
 import itertools
 from datetime import date, timedelta
 from typing import Any
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import text
@@ -172,7 +173,14 @@ async def test_list_with_cte_carries_stage(
         ]
         expected: dict[Any, str] = {}
         for kw in cases:
-            p = await promotion_factory.promotion(style=style, blogger=blogger, pr=pr, **kw)
+            # 工厂默认编号只有 3 位随机，一次建 7 张约 0.5% 撞唯一键：给足 8 位
+            p = await promotion_factory.promotion(
+                style=style,
+                blogger=blogger,
+                pr=pr,
+                internal_code=f"DESG{uuid4().hex[:8].upper()}",
+                **kw,
+            )
             expected[p.id] = compute_stage(
                 publish_status=p.publish_status,
                 recall_status=p.recall_status,
