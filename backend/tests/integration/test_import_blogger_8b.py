@@ -19,10 +19,12 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import app.tasks.import_tasks as tasks
+from app.core.security.permissions import EffectivePermissions
 from app.core.tenancy import tenant_id_ctx
 from app.modules.auth.models import Role
 from app.modules.auth.service import AuthService
 from app.modules.blogger.models import Blogger
+from app.modules.blogger.tag_dict import BloggerTagDictService
 from app.modules.importer.adapters.blogger import BloggerImportAdapter
 from app.modules.importer.conflicts import ImportConflictService
 from app.modules.importer.models import ImportConflict
@@ -143,6 +145,16 @@ class _Env:
             "WHERE batch_id = :b ORDER BY row_number",
             b=batch_id,
         )
+
+    async def missing(self, batch_id: UUID) -> list[tuple[str, int, list[int]]]:
+        """``/api/blogger-tags/missing`` 背后的服务（管理员视角）。"""
+        perms = EffectivePermissions(user_id=str(self.user_id), scopes=frozenset({"*"}))
+        async with self.Maker() as s:
+            result = await BloggerTagDictService(s).missing_tags_for_batch(
+                self.tenant_id, perms, batch_id
+            )
+        assert result.batch_id == batch_id
+        return [(i.tag, i.count, i.rows) for i in result.items]
 
     async def conflicts(self, object_id: UUID) -> list[Any]:
         return await self.all(
@@ -326,9 +338,15 @@ class TestManualBlogger8b:
         assert (await env.row("T3")).category_tags == [a]
         b = await env.one("SELECT warning_count FROM import_batch WHERE id = :b", b=batch_id)
         assert b.warning_count == 1
+        # 整批汇总（/missing 的服务）读的就是 runner 落下的原始行
+        missing = await env.missing(batch_id)
+        assert missing == sorted(
+            [(x, 1, [jobs[0].row_number]), (y, 1, [jobs[1].row_number])], key=lambda m: m[0]
+        )
 
         # §6.6 补回：主管补字典后再导（新文件）→ 原来没有标签的补空；已有别的标签的进冲突
         await env.add_tags(x, y)
+        assert await env.missing(batch_id) == []
         batch2, result2 = await env.run(
             _csv(_H, f"{env.acc('T1')},甲,,,,{a};{x},", f"{env.acc('T2')},乙,,,,{y},")
         )

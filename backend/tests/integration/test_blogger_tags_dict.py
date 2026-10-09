@@ -4,11 +4,13 @@
 - 系统标签（高性价比 / 带货型）进不了字典；字典删除不动博主身上的标签
 - 博主建 / 改：改 ``quality_tags`` → 422；类目标签新加字典外词或系统标签词 → 422，保留旧词可以
 - 商品字典接口 ``/api/dict-items`` 读不到 / 加不了 / 删不掉 ``blogger_tag``
+- ``/api/blogger-tags/missing``：导入缺的标签按批次现算（计数、行号、补字典后变短、看不到 → 404）
 """
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -17,11 +19,15 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppException
+from app.core.security.permissions import EffectivePermissions
 from app.core.tenancy import tenant_id_ctx
 from app.modules.auth.models import AuditLog, Role
 from app.modules.blogger.schemas import BloggerCreate, BloggerUpdate
 from app.modules.blogger.service import BloggerService
 from app.modules.blogger.tag_config import SYSTEM_TAGS, TAG_BESTSELLER, TAG_HIGH_VALUE
+from app.modules.importer.adapters.blogger import BloggerImportAdapter
+from app.modules.importer.models import FieldMapping, ImportBatch, ImportJob
+from app.modules.importer.registry import ImportAdapterRegistry
 from app.modules.product.dict_models import DictItem
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
@@ -45,8 +51,12 @@ async def _call(
     method: str,
     path: str,
     json: Any = None,
+    perms: EffectivePermissions | None = None,
 ) -> Any:
-    """真实路由 + 用户的有效权限（照 test_season_options::TestSeasonOptionsHttp）。"""
+    """真实路由 + 用户的有效权限（照 test_season_options::TestSeasonOptionsHttp）。
+
+    ``perms`` 不给 → 按用户的角色现算；给了就用它（造「只有某几个 scope」的查看者）。
+    """
     from httpx import ASGITransport, AsyncClient
 
     from app.core.db import get_session
@@ -57,7 +67,8 @@ async def _call(
     async def _session_override() -> AsyncIterator[AsyncSession]:
         yield session
 
-    perms = await AuthService(session).load_effective_permissions(user.id)
+    if perms is None:
+        perms = await AuthService(session).load_effective_permissions(user.id)
     try:
         app.dependency_overrides[get_session] = _session_override
         app.dependency_overrides[get_current_user_active] = lambda: user
@@ -425,3 +436,237 @@ class TestProductDictReserved:
         assert resp.status_code == 204, resp.text
         assert await _dict_values(session, tenant_a, "blogger_tag") == ["美妆8b"]
         assert await _audits(session, "dict_item.delete", str(UUID(str(item.id)))) == []
+
+
+# ---------------------------------------------------------------------------
+# 导入缺的标签 /api/blogger-tags/missing（设计 §5.3、§6.6）
+# ---------------------------------------------------------------------------
+
+_T0 = datetime(2026, 10, 1, 9, 0, tzinfo=UTC)
+
+
+@pytest.fixture
+def blogger_source() -> Iterator[None]:
+    """HTTP 测试不跑 lifespan，博主来源要自己登记（测完还原注册表）。"""
+    saved = dict(ImportAdapterRegistry._adapters)
+    ImportAdapterRegistry.register(BloggerImportAdapter())
+    yield
+    ImportAdapterRegistry.clear()
+    ImportAdapterRegistry._adapters.update(saved)
+
+
+def _raw(tags: str, **extra: Any) -> dict[str, Any]:
+    """照 CSV 解析出来的原始行（中文表头、字符串格）；账号 / 昵称是造的。"""
+    return {"账号": f"m8{uuid4().hex[:8]}", "昵称": "测试号", "平台": "", "类目标签": tags, **extra}
+
+
+async def _seed_batch(
+    session: AsyncSession,
+    tenant: Any,
+    jobs: list[tuple[int, str, dict[str, Any]]],
+    *,
+    source: str = "manual_blogger",
+    created_at: datetime = _T0,
+    mapping_version: int | None = None,
+) -> UUID:
+    batch = ImportBatch(
+        tenant_id=tenant.id,
+        source=source,
+        file_hash=uuid4().hex,
+        original_filename="bloggers.csv",
+        file_r2_key=f"imports/{tenant.id}/{uuid4()}/bloggers.csv",
+        mapping_version=mapping_version,
+        status="completed",
+        created_at=created_at,
+    )
+    session.add(batch)
+    await session.flush()
+    session.add_all(
+        [
+            ImportJob(
+                tenant_id=tenant.id,
+                batch_id=batch.id,
+                row_number=n,
+                status=status,
+                raw_data=raw,
+            )
+            for n, status, raw in jobs
+        ]
+    )
+    await session.flush()
+    return batch.id
+
+
+async def _missing(session: AsyncSession, user: Any, batch_id: Any = None, **kw: Any) -> Any:
+    path = "/api/blogger-tags/missing"
+    if batch_id is not None:
+        path += f"?batch_id={batch_id}"
+    return await _call(session, user, "GET", path, **kw)
+
+
+@pytest.mark.usefixtures("tenant_ctx", "blogger_source")
+class TestMissingTags:
+    async def test_counts_rows_and_order(
+        self, session: AsyncSession, tenant_a: Any, factory: Any
+    ) -> None:
+        """非失败行按标签计次（同一行重复只算一次）、记行号；减去启用字典与系统标签；
+        按次数降序、标签升序。"""
+        await _seed_dict(session, tenant_a, "美妆8m")
+        batch_id = await _seed_batch(
+            session,
+            tenant_a,
+            [
+                (1, "success", _raw("美妆8m;外星8m，火星8m")),
+                (2, "skipped", _raw("外星8m;外星8m")),
+                (3, "failed", _raw("外星8m;水星8m")),  # 失败行不算
+                (4, "conflict", _raw(f"{TAG_HIGH_VALUE};火星8m,木星8m")),
+                (5, "filled", _raw("外星8m；木星8m")),
+                (6, "success", _raw("--")),  # 占位符 = 没给
+            ],
+        )
+        user = await _role_user(session, factory, tenant_a, "pr")
+        resp = await _missing(session, user, batch_id)
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["batch_id"] == str(batch_id)
+        assert body["items"] == [
+            {"tag": "外星8m", "count": 3, "rows": [1, 2, 5]},
+            *sorted(
+                [
+                    {"tag": "火星8m", "count": 2, "rows": [1, 4]},
+                    {"tag": "木星8m", "count": 2, "rows": [4, 5]},
+                ],
+                key=lambda i: i["tag"],
+            ),
+        ]
+
+    async def test_shrinks_after_dict_added(
+        self, session: AsyncSession, tenant_a: Any, factory: Any
+    ) -> None:
+        """读时现算：主管补了字典，清单就变短（FI-17）。"""
+        batch_id = await _seed_batch(
+            session,
+            tenant_a,
+            [(1, "success", _raw("外星8m;火星8m")), (2, "success", _raw("火星8m"))],
+        )
+        user = await _role_user(session, factory, tenant_a, "pr_manager")
+        before = (await _missing(session, user, batch_id)).json()["items"]
+        assert [i["tag"] for i in before] == ["火星8m", "外星8m"]
+
+        resp = await _call(session, user, "POST", "/api/blogger-tags", {"value": "火星8m"})
+        assert resp.status_code == 201, resp.text
+        after = (await _missing(session, user, batch_id)).json()["items"]
+        assert after == [{"tag": "外星8m", "count": 1, "rows": [1]}]
+
+    async def test_rows_capped_at_20(
+        self, session: AsyncSession, tenant_a: Any, factory: Any
+    ) -> None:
+        batch_id = await _seed_batch(
+            session, tenant_a, [(n, "success", _raw("多8m")) for n in range(25, 0, -1)]
+        )
+        user = await _role_user(session, factory, tenant_a, "operations")
+        items = (await _missing(session, user, batch_id)).json()["items"]
+        assert items == [{"tag": "多8m", "count": 25, "rows": list(range(1, 21))}]
+
+    async def test_uses_batch_mapping_version(
+        self, session: AsyncSession, tenant_a: Any, factory: Any
+    ) -> None:
+        """按该批的映射版本取类目标签：自定义映射把「标签列8m」映到类目标签。"""
+        session.add(
+            FieldMapping(
+                tenant_id=tenant_a.id,
+                source="manual_blogger",
+                version=7,
+                mapping_config={
+                    "columns": [
+                        {"source_col": "账号", "target_field": "xiaohongshu_id", "type": "str"},
+                        {"source_col": "昵称", "target_field": "nickname", "type": "str"},
+                        {
+                            "source_col": "标签列8m",
+                            "target_field": "category_tags",
+                            "type": "list",
+                        },
+                    ]
+                },
+                is_active=False,
+            )
+        )
+        await session.flush()
+        batch_id = await _seed_batch(
+            session,
+            tenant_a,
+            [(1, "success", _raw("默认列8m", **{"标签列8m": "映射列8m"}))],
+            mapping_version=7,
+        )
+        user = await _role_user(session, factory, tenant_a, "pr")
+        items = (await _missing(session, user, batch_id)).json()["items"]
+        assert items == [{"tag": "映射列8m", "count": 1, "rows": [1]}]
+
+    async def test_default_latest_blogger_batch(
+        self, session: AsyncSession, tenant_a: Any, factory: Any
+    ) -> None:
+        user = await _role_user(session, factory, tenant_a, "pr")
+        # 本租户还没有博主导入批次 → 空清单（不报错，弹窗直接显示「没有」）
+        resp = await _missing(session, user)
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {"batch_id": None, "items": []}
+
+        await _seed_batch(session, tenant_a, [(1, "success", _raw("旧批8m"))])
+        latest = await _seed_batch(
+            session,
+            tenant_a,
+            [(1, "success", _raw("新批8m"))],
+            created_at=_T0 + timedelta(hours=1),
+        )
+        # 更新的非博主批次不算
+        await _seed_batch(
+            session,
+            tenant_a,
+            [(1, "success", _raw("商品8m"))],
+            source="manual_style_sku",
+            created_at=_T0 + timedelta(hours=2),
+        )
+        body = (await _missing(session, user)).json()
+        assert body == {
+            "batch_id": str(latest),
+            "items": [{"tag": "新批8m", "count": 1, "rows": [1]}],
+        }
+
+    async def test_not_found_cases(
+        self, session: AsyncSession, tenant_a: Any, tenant_b: Any, factory: Any
+    ) -> None:
+        """不存在 / 别的租户 / 不是博主来源 / 看不到该来源 → 404，不暴露存在性。"""
+        style_batch = await _seed_batch(
+            session, tenant_a, [(1, "success", _raw("商品8m"))], source="manual_style_sku"
+        )
+        token = tenant_id_ctx.set(tenant_b.id)
+        try:
+            other_batch = await _seed_batch(session, tenant_b, [(1, "success", _raw("别家8m"))])
+        finally:
+            tenant_id_ctx.reset(token)
+        mine = await _seed_batch(session, tenant_a, [(1, "success", _raw("外星8m"))])
+        user = await _role_user(session, factory, tenant_a, "admin")
+        for batch_id in (uuid4(), style_batch, other_batch):
+            resp = await _missing(session, user, batch_id)
+            assert resp.status_code == 404, resp.text
+            assert resp.json()["code"] == "IMPORT_BATCH_NOT_FOUND"
+
+        # 只有 blogger:read、看不到博主导入批次的查看者
+        blind = EffectivePermissions(user_id=str(user.id), scopes=frozenset({"blogger:read"}))
+        resp = await _missing(session, user, mine, perms=blind)
+        assert resp.status_code == 404, resp.text
+        # 不指定批次：只在看得到的博主来源里取最近一批，看不到就当没有
+        resp = await _missing(session, user, perms=blind)
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {"batch_id": None, "items": []}
+        # 同一批次，能看的人拿得到（场景有效）
+        resp = await _missing(session, user, mine)
+        assert resp.status_code == 200, resp.text
+        assert [i["tag"] for i in resp.json()["items"]] == ["外星8m"]
+
+    async def test_requires_blogger_read(
+        self, session: AsyncSession, tenant_a: Any, factory: Any
+    ) -> None:
+        user = await _role_user(session, factory, tenant_a, "warehouse")
+        resp = await _missing(session, user)
+        assert resp.status_code == 403, resp.text

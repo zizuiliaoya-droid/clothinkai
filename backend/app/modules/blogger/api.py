@@ -28,6 +28,8 @@ from app.modules.blogger.deps import BloggerServiceDep, BloggerTagDictServiceDep
 from app.modules.blogger.repository import BloggerListFilters
 from app.modules.blogger.schemas import (
     BloggerCreate,
+    BloggerMissingTagItem,
+    BloggerMissingTagsResponse,
     BloggerPage,
     BloggerResponse,
     BloggerTagCreate,
@@ -231,6 +233,28 @@ async def create_blogger_tag(
     service: BloggerTagDictServiceDep,
 ) -> BloggerTagItem:
     return _tag_item(await service.create(payload.value, payload.sort_order, user))
+
+
+@router.get(
+    "/blogger-tags/missing",
+    response_model=BloggerMissingTagsResponse,
+    dependencies=[require_permission("blogger", "read")],
+)
+async def list_missing_blogger_tags(
+    user: CurrentActiveUser,
+    perms: CurrentPerms,
+    service: BloggerTagDictServiceDep,
+    batch_id: UUID | None = None,
+) -> BloggerMissingTagsResponse:
+    """导入缺的标签（§6.6）：该批里不在当前字典的类目标签，读时现算。
+
+    批次可见性另按来源判（``importer/access.py::can_view``），看不到 → 404。
+    """
+    result = await service.missing_tags_for_batch(user.tenant_id, perms, batch_id)
+    return BloggerMissingTagsResponse(
+        batch_id=result.batch_id,
+        items=[BloggerMissingTagItem(tag=i.tag, count=i.count, rows=i.rows) for i in result.items],
+    )
 
 
 @router.delete(

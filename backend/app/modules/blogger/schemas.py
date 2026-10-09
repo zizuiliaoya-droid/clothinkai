@@ -222,9 +222,24 @@ class BloggerTagDictResponse(BaseModel):
     can_manage: bool
 
 
+class BloggerMissingTagItem(BaseModel):
+    tag: str
+    count: int
+    rows: list[int]  # 前 20 个行号（import_job.row_number），升序
+
+
+class BloggerMissingTagsResponse(BaseModel):
+    """导入缺的标签（§6.6）：``batch_id`` 为 None = 没有看得到的博主导入批次。"""
+
+    batch_id: UUID | None
+    items: list[BloggerMissingTagItem]
+
+
 __all__ = [
     "BloggerBase",
     "BloggerCreate",
+    "BloggerMissingTagItem",
+    "BloggerMissingTagsResponse",
     "BloggerPage",
     "BloggerResponse",
     "BloggerTagCreate",
