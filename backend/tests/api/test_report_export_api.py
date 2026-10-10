@@ -13,9 +13,11 @@ from httpx import ASGITransport, AsyncClient
 from openpyxl import load_workbook
 
 from app.core.security.field_permissions import FieldPermissionContext
+from app.core.security.permissions import EffectivePermissions
 from app.modules.report.pr_scope import PR_SCOPE_ALL
 
 _SUPER_CTX = FieldPermissionContext(frozenset(), frozenset(), frozenset(), is_superuser=True)
+_ALL_PERMS = EffectivePermissions(user_id="test", scopes=frozenset({"*"}))
 
 
 @pytest.mark.api
@@ -242,7 +244,12 @@ class TestReportExportApiContract:
         assert work_calls == [(period, {"scope": PR_SCOPE_ALL, "field_ctx": _SUPER_CTX})]
 
         response = await service.export(
-            uuid4(), "production", period, granularity="day", field_ctx=_SUPER_CTX
+            uuid4(),
+            "production",
+            period,
+            granularity="day",
+            field_ctx=_SUPER_CTX,
+            perms=_ALL_PERMS,
         )
         body = b"".join([chunk async for chunk in response.body_iterator])
         worksheet = load_workbook(io.BytesIO(body), data_only=False).active
@@ -257,7 +264,12 @@ class TestReportExportApiContract:
         assert worksheet.cell(2, 3).data_type != "f"
 
         store_response = await service.export(
-            uuid4(), "store-daily", period, granularity="week", field_ctx=_SUPER_CTX
+            uuid4(),
+            "store-daily",
+            period,
+            granularity="week",
+            field_ctx=_SUPER_CTX,
+            perms=_ALL_PERMS,
         )
         store_body = b"".join([chunk async for chunk in store_response.body_iterator])
         store_sheet = load_workbook(io.BytesIO(store_body), data_only=False).active

@@ -211,13 +211,14 @@ class BiStoreSummary(BaseModel):
 
 
 class BiPromotionSummary(BaseModel):
-    commission_amount: Decimal
+    # 4 个金额过 F3（field_mask.aggregate_promo_amounts_visible）：R1 恒有值，收紧时为 null
+    commission_amount: Decimal | None
     commission_count: int
-    published_spend: Decimal
+    published_spend: Decimal | None
     published_count: int
-    unpublished_spend: Decimal
+    unpublished_spend: Decimal | None
     unpublished_count: int
-    cancelled_amount: Decimal
+    cancelled_amount: Decimal | None
     cancelled_count: int
     publish_rate: Decimal | None = None
 

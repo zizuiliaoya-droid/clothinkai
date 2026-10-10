@@ -7,6 +7,8 @@
   旧参数 ``month`` 换算成整月；F3 聚合金额运营与管理员相同
 - 发文进度 4 个接口：``require_any_permission(read, read_own)``；只持 ``read_own`` 的 PR 只看到
   本人的单（``PrScope`` 下推到 SQL，摘要 / 卡片 total 也只数本人）
+- BI 三个端点挂 ``report.bi:read``（不再挂 ``report.production:read``）；推广汇总 4 个金额过 F3
+- 导出：路由仍要 ``report.export:read``，service 再按报表类型判对应读权限（缺 → 403）
 """
 
 from __future__ import annotations
@@ -19,10 +21,11 @@ from uuid import uuid4
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.tenancy import tenant_id_ctx
+from app.modules.auth.models import Permission, UserPermissionOverride
 from app.modules.promotion.urge_calculator import get_today
 
 pytestmark = [pytest.mark.api, pytest.mark.asyncio]
@@ -281,3 +284,152 @@ class TestPublishProgress:
         for path in _pp_paths(style_a, style_b).values():
             resp = await _call(session, getattr(users, role), "GET", path)
             assert (resp.status_code, resp.json()["code"]) == (403, "PERMISSION_DENIED"), path
+
+
+async def _override(session: AsyncSession, user: Any, scope: str, effect: str) -> None:
+    """给用户造一条个人授予 / 撤销（scope 须已入册）。"""
+    perm = (await session.execute(select(Permission).where(Permission.scope == scope))).scalar_one()
+    session.add(
+        UserPermissionOverride(
+            tenant_id=user.tenant_id, user_id=user.id, permission_id=perm.id, effect=effect
+        )
+    )
+    await session.flush()
+
+
+_BI = "/api/reports/bi"
+_BI_RANGE = f"preset=custom&date_from={_M_LO}&date_to={_M_HI}"
+_PROD = f"/api/reports/production?{_BI_RANGE}"
+
+
+@pytest.fixture
+async def bi_seeded(
+    flow_users: Any, product_factory: Any, blogger_factory: Any, promotion_factory: Any
+) -> Any:
+    """上个月：已发布 / 未发布 / 已取消各一单，推广汇总 4 个金额都非零。"""
+    style = await product_factory.style(style_code=f"BI{uuid4().hex[:8]}")
+    blogger = await blogger_factory.blogger()
+    for i, (status, amount) in enumerate(
+        [("已发布", "300.00"), ("未发布", "150.00"), ("已取消", "80.00")]
+    ):
+        await promotion_factory.promotion(
+            style=style,
+            blogger=blogger,
+            pr=flow_users.pr,
+            internal_code=f"BI{uuid4().hex[:10].upper()}",
+            cooperation_date=_M_LO + timedelta(days=i + 1),
+            quote_amount=Decimal(amount),
+            publish_status=status,
+        )
+    return flow_users
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+class TestBi:
+    async def test_finance_bi_and_layout_but_not_production(
+        self, session: AsyncSession, flow_users: Any
+    ) -> None:
+        fin = flow_users.finance
+        bi = await _call(session, fin, "GET", f"{_BI}?{_BI_RANGE}")
+        assert bi.status_code == 200, bi.text
+        get_layout = await _call(session, fin, "GET", f"{_BI}/layout")
+        assert get_layout.status_code == 200, get_layout.text
+        put_layout = await _call(session, fin, "PUT", f"{_BI}/layout", json={"cards": ["x"]})
+        assert put_layout.status_code == 200, put_layout.text
+        assert (await _call(session, fin, "GET", f"{_BI}/layout")).json() == {"cards": ["x"]}
+        # BI 拆出来后，给财务 BI 不再连带放开投产页
+        prod = await _call(session, fin, "GET", _PROD)
+        assert (prod.status_code, prod.json()["code"]) == (403, "PERMISSION_DENIED")
+
+    async def test_production_read_alone_is_not_bi(
+        self, session: AsyncSession, flow_users: Any
+    ) -> None:
+        wh = flow_users.warehouse
+        await _override(session, wh, "report.production:read", "grant")
+        # 场景有效性：授予生效（投产页能进）
+        assert (await _call(session, wh, "GET", _PROD)).status_code == 200
+        for method, path, body in [
+            ("GET", f"{_BI}?{_BI_RANGE}", None),
+            ("GET", f"{_BI}/layout", None),
+            ("PUT", f"{_BI}/layout", {"cards": ["x"]}),
+        ]:
+            resp = await _call(session, wh, method, path, json=body)
+            assert (resp.status_code, resp.json()["code"]) == (403, "PERMISSION_DENIED"), path
+
+    @pytest.mark.parametrize("role", ["pr", "warehouse"])
+    async def test_forbidden(self, session: AsyncSession, flow_users: Any, role: str) -> None:
+        resp = await _call(session, getattr(flow_users, role), "GET", f"{_BI}?{_BI_RANGE}")
+        assert (resp.status_code, resp.json()["code"]) == (403, "PERMISSION_DENIED")
+
+    async def test_operations_promo_amounts_equal_admin(
+        self, session: AsyncSession, bi_seeded: Any
+    ) -> None:
+        """F3：运营读不到逐单 ``quote_amount``，BI 推广汇总金额照样与管理员相同。"""
+        ops = await _call(session, bi_seeded.operations, "GET", f"{_BI}?{_BI_RANGE}")
+        admin = await _call(session, bi_seeded.admin, "GET", f"{_BI}?{_BI_RANGE}")
+        assert ops.status_code == admin.status_code == 200
+        assert ops.json() == admin.json()
+        summary = ops.json()["promotion_summary"]
+        # 场景有效性：4 个金额都非零
+        assert (
+            summary["commission_amount"],
+            summary["published_spend"],
+            summary["unpublished_spend"],
+            summary["cancelled_amount"],
+        ) == ("530.00", "300.00", "150.00", "80.00")
+
+
+def _export(kind: str) -> str:
+    return f"/api/reports/{kind}/export?{_BI_RANGE}"
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+class TestExport:
+    @pytest.mark.parametrize(
+        ("kind", "status"),
+        [("work-progress", 200), ("production", 403), ("store-daily", 403)],
+    )
+    async def test_finance_by_report_type(
+        self, session: AsyncSession, flow_users: Any, kind: str, status: int
+    ) -> None:
+        """财务持 ``report.export:read`` + 工作进度 read：能导工作进度，投产 / 店铺 403。"""
+        resp = await _call(session, flow_users.finance, "GET", _export(kind))
+        assert resp.status_code == status, resp.text
+        if status == 403:
+            assert resp.json()["code"] == "PERMISSION_DENIED"
+            assert resp.json()["details"]["required_action"] == "read"
+        else:
+            assert resp.headers["content-type"].startswith(
+                "application/vnd.openxmlformats-officedocument.spreadsheetml"
+            )
+
+    @pytest.mark.parametrize("kind", ["work-progress", "production", "store-daily"])
+    async def test_operations_all_types(
+        self, session: AsyncSession, flow_users: Any, kind: str
+    ) -> None:
+        resp = await _call(session, flow_users.operations, "GET", _export(kind))
+        assert resp.status_code == 200, resp.text
+
+    async def test_follows_read_permission(self, session: AsyncSession, flow_users: Any) -> None:
+        """判的是对应读权限本身：财务个人授予投产读后，导出投产放行，店铺照旧 403。"""
+        fin = flow_users.finance
+        before = await _call(session, fin, "GET", _export("production"))
+        assert (before.status_code, before.json()["code"]) == (403, "PERMISSION_DENIED")
+        assert before.json()["details"]["required_scope"] == "report.production"
+        await _override(session, fin, "report.production:read", "grant")
+        assert (await _call(session, fin, "GET", _export("production"))).status_code == 200
+        store = await _call(session, fin, "GET", _export("store-daily"))
+        assert store.json()["details"]["required_scope"] == "report.store_daily"
+
+    async def test_invalid_type_still_400(self, session: AsyncSession, flow_users: Any) -> None:
+        """类型先校验：不认识的类型照旧 400，不因为没有对应读权限变成 403。"""
+        resp = await _call(session, flow_users.finance, "GET", _export("unknown"))
+        assert (resp.status_code, resp.json()["code"]) == (400, "REPORT_EXPORT_TYPE_INVALID")
+
+    @pytest.mark.parametrize("role", ["pr", "warehouse"])
+    async def test_without_export_scope(
+        self, session: AsyncSession, flow_users: Any, role: str
+    ) -> None:
+        resp = await _call(session, getattr(flow_users, role), "GET", _export("work-progress"))
+        assert (resp.status_code, resp.json()["code"]) == (403, "PERMISSION_DENIED")
+        assert resp.json()["details"]["required_scope"] == "report.export"
