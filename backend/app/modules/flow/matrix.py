@@ -24,7 +24,8 @@
 3. ``writable_fields(actor, doc)`` / ``ensure_patch_allowed(...)``：过渡期只管已入矩阵的 PATCH 字段（``Matrix.patch_groups``），
    没入矩阵的沿用现状
 
-PR-1 只有类型与三个出口，``MATRICES`` 为空，不接任何接口、页面与 PATCH（设计 10.1）。
+PR-1 只有类型与三个出口；PR-2 起各单据模块在 import 时把自己的表 ``MATRICES.update(...)`` 进来
+（推广单 / 仓库行：``promotion/flow_matrix.py``，由 ``promotion/flow_doc.py`` import 保证注册）。
 改矩阵必须同时改设计 5.2 / 5.3 与 ``tests/unit/fixtures/flow_matrix_expected.py``。
 """
 
@@ -42,7 +43,11 @@ from app.core.exceptions import (
     IllegalStateTransitionError,
     PermissionDeniedError,
 )
-from app.core.security.field_permissions import FieldPermissionContext, can_write_field
+from app.core.security.field_permissions import (
+    FieldPermissionContext,
+    can_read_field,
+    can_write_field,
+)
 from app.core.security.permissions import EffectivePermissions
 from app.modules.flow.exceptions import FlowActionForbiddenError, FlowGateMissingError
 
@@ -241,6 +246,25 @@ class FieldWrite(Capability):
         return can_write_field(self.entity, self.field, actor.field_ctx)
 
 
+@dataclass(frozen=True)
+class FieldRead(Capability):
+    """字段读规则（4.6）：字段级权限先于矩阵，读不到的字段所在分组不该出现在 ``ui``（7.1）。"""
+
+    entity: str
+    field: str
+
+    def ok(self, actor: FlowActor, doc: FlowDocBase) -> bool:
+        return can_read_field(self.entity, self.field, actor.field_ctx)
+
+
+@dataclass(frozen=True)
+class Star(Capability):
+    """持 ``*``（管理员）。5.3 里「只有管理员改」的格（已推送后的收件、颜色尺码，已完结的发货信息）。"""
+
+    def ok(self, actor: FlowActor, doc: FlowDocBase) -> bool:
+        return actor.is_star
+
+
 class AnyOf(Check):
     """几项满足一个即可（「或」），能力项、规则项都能组合，可以嵌套。
 
@@ -289,12 +313,20 @@ class Owner(Rule):
 
 @dataclass(frozen=True)
 class NotPrOwner(Rule):
-    """≠ 谈款人：不能审自己谈的单。"""
+    """≠ 谈款人：不能审自己谈的单。
+
+    快照的 ``negotiator_id`` 为空是组快照写错了（没有谈款的推广单应回落到 ``pr_id``）：当场 ``ValueError``，
+    不能让「None ≠ 我」恒真、自审规则静默放行（PR-1 评审 L1）。
+    """
 
     reason: str = "不能审核自己谈的单"
     rule: ClassVar[str] = "self_review"
 
     def ok(self, actor: FlowActor, doc: FlowDocBase) -> bool:
+        if doc.negotiator_id is None:
+            raise ValueError(
+                f"{doc.kind} 快照缺 negotiator_id（阶段 {doc.stage!r}）：没有谈款的单要回落到负责 PR"
+            )
         return doc.negotiator_id != actor.user_id
 
 
@@ -352,6 +384,12 @@ class RecallIn(_AttrIn):
 
 class PublishIn(_AttrIn):
     attr = "publish_status"
+
+
+class ShipIn(_AttrIn):
+    """推广单发货状态（3.3）；``ShipIn(None)`` = 历史单（发货为空）。"""
+
+    attr = "ship_status"
 
 
 Predicate = _AttrIn
@@ -462,7 +500,7 @@ class Matrix:
             raise ValueError(f"{self.kind} 矩阵没有阶段 {stage!r}")
 
 
-# 真实矩阵：PR-2 起各 PR 把它碰到的行加进来（设计 10.1）。PR-1 为空
+# 真实矩阵：PR-2 起各 PR 把它碰到的行加进来（设计 10.1），由各单据模块 import 时登记
 MATRICES: dict[str, Matrix] = {}
 
 
@@ -656,23 +694,30 @@ def ui_for(actor: FlowActor, doc: FlowDocBase) -> UiState:
 # ---------------------------------------------------------------------------
 
 
-def require(actor: FlowActor, doc: FlowDocBase, action: str) -> None:
-    """service 在每个转移前调用。顺序固定（7.1 ②~④）：
-
-    状态机不允许 → 422 ``ILLEGAL_STATE_TRANSITION``；到不了「改」→ 第一个不满足的是规则项 403 ``FLOW_ACTION_FORBIDDEN``、
-    是能力项（或这一格没有「改」）403 ``PERMISSION_DENIED``；★ 缺项（含弹窗里补的）→ 422 ``FLOW_GATE_MISSING``。
-    """
+def _action_cell(doc: FlowDocBase, action: str) -> Cell | None:
     m = matrix_for(doc.kind)
     if action not in ACTION_KEYS[m.kind]:
         raise ValueError(f"{m.kind} 没有动作键 {action!r}")
     m.check_stage(doc.stage)
+    row = m.row("action", action)
+    return row.cell_for(doc) if row is not None else None
+
+
+def require(actor: FlowActor, doc: FlowDocBase, action: str, *, gates: bool = True) -> None:
+    """service 在每个转移前调用。顺序固定（7.1 ②~④）：
+
+    状态机不允许 → 422 ``ILLEGAL_STATE_TRANSITION``；到不了「改」→ 第一个不满足的是规则项 403 ``FLOW_ACTION_FORBIDDEN``、
+    是能力项（或这一格没有「改」）403 ``PERMISSION_DENIED``；★ 缺项（含弹窗里补的）→ 422 ``FLOW_GATE_MISSING``。
+
+    ``gates=False``：只判 ②③，★ 留给 ``ensure_gates``——弹窗里补的缺项要先在条件 UPDATE 之后写进去、
+    重组快照再判（推送仓库 S3 的 ③ 前后，细化 §3）。
+    """
+    cell = _action_cell(doc, action)
     if action not in doc.allowed_actions():
         raise IllegalStateTransitionError(
             f"当前状态「{doc.state}」不允许此操作",
             details={"from_state": doc.state, "action": action},
         )
-    row = m.row("action", action)
-    cell = row.cell_for(doc) if row is not None else None
     if cell is None:
         raise PermissionDeniedError(details={"action": action})
     level, failed = _evaluate(cell, actor, doc)
@@ -680,6 +725,24 @@ def require(actor: FlowActor, doc: FlowDocBase, action: str) -> None:
         if isinstance(failed, Rule):
             raise FlowActionForbiddenError(rule=failed.rule, reason=failed.reason)
         raise PermissionDeniedError(details={"action": action})
+    if gates:
+        _raise_missing(cell, doc)
+
+
+def ensure_gates(actor: FlowActor, doc: FlowDocBase, action: str) -> None:
+    """只判 ★（``require(..., gates=False)`` 的后半段）。
+
+    ``doc`` 是补完弹窗内容后重组的快照，``stage`` 仍是动作之前的阶段（取同一格的卡点）；
+    缺项 → 422 ``FLOW_GATE_MISSING``，``missing`` 与 ``ui`` 逐条相同。``actor`` 留着与 ``require`` 对称。
+    """
+    del actor
+    cell = _action_cell(doc, action)
+    if cell is None:
+        raise PermissionDeniedError(details={"action": action})
+    _raise_missing(cell, doc)
+
+
+def _raise_missing(cell: Cell, doc: FlowDocBase) -> None:
     missing = _missing(cell, doc)
     if missing:
         raise FlowGateMissingError(_gate_items(missing))

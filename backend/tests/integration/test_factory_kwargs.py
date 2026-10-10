@@ -144,3 +144,38 @@ async def test_special_kwargs_accepted(ctx: dict[str, Any], session: Any) -> Non
 
     s = await _settlement(ctx, {"promotion_id": p.id})
     assert s.promotion_id == p.id
+
+
+async def test_shipping_kwargs_applied(ctx: dict[str, Any], session: Any) -> None:
+    """流程线 PR-2 的收件 / 发货列与 ``items``：都给非默认值，漏补进工厂就会是 None。"""
+    from datetime import UTC, datetime
+
+    from sqlalchemy import select
+
+    from app.modules.promotion.models import PromotionItem
+
+    style, sku = ctx["style"], await ctx["product_factory"].sku(ctx["style"])
+    pusher = await ctx["factory"].user(ctx["tenant_a"])
+    at = datetime(2026, 6, 1, 8, 0, tzinfo=UTC)
+    cols = {
+        "ship_status": "已发货",
+        "receiver_name": "张三",
+        "receiver_phone": "13800000000",
+        "receiver_address": "上海市某区某路 1 号",
+        "ship_courier": "顺丰",
+        "ship_waybill": "SF123",
+        "shipped_at": at,
+        "ship_pushed_at": at,
+        "ship_pushed_by": pusher.id,
+    }
+    p = await _promotion(ctx, {**cols, "items": [(style, sku)]})
+    for k, v in cols.items():
+        assert getattr(p, k) == v, k
+    rows = (
+        await session.execute(
+            select(PromotionItem.style_id, PromotionItem.sku_id, PromotionItem.sort_order).where(
+                PromotionItem.promotion_id == p.id
+            )
+        )
+    ).all()
+    assert [tuple(r) for r in rows] == [(style.id, sku.id, 0)]

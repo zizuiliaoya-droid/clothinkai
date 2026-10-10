@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.tenancy import tenant_id_ctx
 from app.modules.finance.repository import SettlementRepository
+from tests.conftest import purge_promotions
 
 
 @pytest.mark.integration
@@ -189,14 +190,8 @@ class TestUpdateStateConcurrent:
             assert sum(1 for r in results if r == "ok") == 1
         finally:
             async with Session() as cleanup:
-                await cleanup.execute(
-                    text("DELETE FROM settlement WHERE id = :id"),
-                    {"id": settlement_id},
-                )
-                await cleanup.execute(
-                    text("DELETE FROM promotion WHERE id = :id"),
-                    {"id": promotion_id},
-                )
+                # 结款单挂在推广单上，一起清
+                await purge_promotions(cleanup, [promotion_id])
                 await cleanup.execute(
                     text("DELETE FROM blogger WHERE id = :id"),
                     {"id": blogger_id},

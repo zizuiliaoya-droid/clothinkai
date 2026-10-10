@@ -24,6 +24,7 @@ from app.modules.promotion.repository import PromotionRepository
 from app.modules.promotion.schemas import PromotionPublishRequest
 from app.modules.promotion.service import PromotionService
 from tests.concurrency import committed, default_tenant_id, run_concurrently
+from tests.conftest import purge_promotions
 
 
 @pytest.mark.integration
@@ -191,10 +192,7 @@ class TestPublishConcurrent:
             assert ok_count == 1, f"expected exactly 1 success, got {ok_count}; results: {results}"
         finally:
             async with committed(engine) as cleanup:
-                await cleanup.execute(
-                    text("DELETE FROM promotion WHERE id = :id"),
-                    {"id": promotion_id},
-                )
+                await purge_promotions(cleanup, [promotion_id])
                 await cleanup.execute(
                     text("DELETE FROM user_role WHERE user_id = :id"),
                     {"id": user_id},

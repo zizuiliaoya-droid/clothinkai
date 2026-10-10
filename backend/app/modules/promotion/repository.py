@@ -16,25 +16,33 @@ from __future__ import annotations
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import bindparam, exists, func, select, text, update
+from sqlalchemy import bindparam, delete, exists, func, select, text, union_all, update
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.metrics import promotion_sequence_lock_duration_seconds
-from app.modules.product.goods_models import GoodsStyleItem
+from app.modules.auth.models import User
+from app.modules.negotiation.models import Negotiation
+from app.modules.product.goods_models import GoodsMain, GoodsStyleItem
+from app.modules.product.models import Sku, Style
 from app.modules.promotion.display_name import (
     PROMOTION_DISPLAY_SHORT_NAME_SQL,
     display_short_name_sql,
 )
+from app.modules.promotion.enums import ShipStatus
 from app.modules.promotion.exceptions import SequenceOverflowError
-from app.modules.promotion.models import BloggerRetrospective, Promotion
+from app.modules.promotion.models import BloggerRetrospective, Promotion, PromotionItem
+from app.modules.promotion.stage_calculator import PROMOTION_STAGES, STAGE_COLUMN, stage_sql_expr
 from app.modules.promotion.urge_calculator import URGE_STATUS_SQL_EXPR
+
+# 「待发货」筛选只回的那个阶段：A 列（待推送仓库）只有它一个
+SHIP_PENDING_STAGE = next(s for s in PROMOTION_STAGES if STAGE_COLUMN[s] == "A")
 
 # list_with_cte 把 raw row 重组成 ORM 实例时要往构造器里喂哪些列。
 #
@@ -73,11 +81,9 @@ class PromotionListFilters:
     only_dual_platform: bool = False
     is_hit: bool | None = None
     hit_threshold: int = 1000
-    # 仓库打单用：按 source_extra 里的「打单地址」/「发货单号」是否已填筛选。
-    # 这两个筛选必须在服务端做 —— 打单单量只占推广总量的极小比例，
-    # 客户端过滤会既慢（要拉全量）又漏（只看得到当前页）。
-    has_print_address: bool | None = None
-    has_waybill: bool | None = None
+    # 「发货」筛选（流程线 7.3）：待发货 / 待打单 / 已发货 / none（历史单 = NULL）。
+    # 待发货只算阶段「待推送仓库」那批：被取消的待发货单归「已完结 · 不合作」，不在待推送队列里
+    ship_status: str | None = None
 
 
 @dataclass(frozen=True)
@@ -94,6 +100,53 @@ class PromotionListRow:
     display_short_name: str | None = None
     goods_title: str | None = None
     goods_short_name: str | None = None
+    # 流程线 3.8 当前阶段（stage_calculator.stage_sql_expr）；PR-10 之前不进响应
+    stage: str | None = None
+
+
+@dataclass(frozen=True)
+class WarehouseShipmentRecord:
+    """仓库页一行（``warehouse_shipments``）：只取发货要用的列，不把整张推广单读出来。"""
+
+    id: UUID
+    pr_id: UUID | None
+    internal_code: str
+    style_code: str
+    display_short_name: str
+    goods_code: str | None
+    goods_title: str | None
+    sku_code: str | None
+    """推广单自己的 SKU 编码（没有明细的旧单导出那一行用）。"""
+    legacy_color_spec: str | None
+    """``source_extra['颜色及规格']`` 原文（有没有明细由调用方判）。"""
+    receiver_name: str | None
+    receiver_phone: str | None
+    receiver_address: str | None
+    ship_status: str
+    ship_pushed_at: datetime | None
+    ship_pushed_by_name: str | None
+    ship_courier: str | None
+    ship_waybill: str | None
+    shipped_at: datetime | None
+    stage: str
+
+
+# 仓库分桶 → 发货状态；「全部」= 待打单 + 已发货（不含待发货与历史单）
+_WAREHOUSE_BUCKETS: dict[str, tuple[str, ...]] = {
+    ShipStatus.PRINTING.value: (ShipStatus.PRINTING.value,),
+    ShipStatus.SHIPPED.value: (ShipStatus.SHIPPED.value,),
+    "全部": (ShipStatus.PRINTING.value, ShipStatus.SHIPPED.value),
+}
+# 待打单先推先打；已发货按发货时间倒序；全部 = 待打单在前（各按自己的序）；id 兜底
+_WAREHOUSE_ORDER: dict[str, str] = {
+    ShipStatus.PRINTING.value: "b.ship_pushed_at ASC NULLS FIRST, b.id",
+    ShipStatus.SHIPPED.value: "b.shipped_at DESC NULLS LAST, b.id",
+    "全部": (
+        "CASE WHEN b.ship_status = '待打单' THEN 0 ELSE 1 END, "
+        "CASE WHEN b.ship_status = '待打单' THEN b.ship_pushed_at END ASC NULLS FIRST, "
+        "b.shipped_at DESC NULLS LAST, b.id"
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -117,8 +170,18 @@ class PromotionRepository:
     # ----------------------- get / count ----------------------- #
 
     async def count_by_sku(self, sku_id: UUID) -> int:
-        """统计 SKU 的全部历史推广引用；租户隔离由 RLS 保证。"""
-        stmt = select(func.count()).select_from(Promotion).where(Promotion.sku_id == sku_id)
+        """统计引用这个 SKU 的推广单数；租户隔离由 RLS 保证。
+
+        ``promotion.sku_id`` 与商品明细 ``promotion_item.sku_id`` 两处都算，按推广单去重
+        （同一张单两处都引用只算 1，流程线 7.8）。
+        """
+        refs = union_all(
+            select(Promotion.id.label("promotion_id")).where(Promotion.sku_id == sku_id),
+            select(PromotionItem.promotion_id.label("promotion_id")).where(
+                PromotionItem.sku_id == sku_id
+            ),
+        ).subquery()
+        stmt = select(func.count(func.distinct(refs.c.promotion_id)))
         return int((await self._session.execute(stmt)).scalar_one())
 
     async def count_by_blogger(self, blogger_id: UUID) -> int:
@@ -179,6 +242,29 @@ class PromotionRepository:
             )
             for row in result.mappings().all()
         }
+
+    async def negotiator_ids(self, promotion_ids: Sequence[UUID]) -> dict[UUID, UUID]:
+        """推广单 → 谈款的 PR（矩阵快照的 ``negotiator_id``）。没有谈款的单不在结果里；
+        一张推广单正常只有一张谈款，万一多张取最新那张。"""
+        if not promotion_ids:
+            return {}
+        stmt = (
+            select(Negotiation.promotion_id, Negotiation.pr_id)
+            .where(Negotiation.promotion_id.in_(list(promotion_ids)))
+            .distinct(Negotiation.promotion_id)
+            .order_by(Negotiation.promotion_id, Negotiation.created_at.desc(), Negotiation.id)
+        )
+        return {row[0]: row[1] for row in (await self._session.execute(stmt)).all() if row[0]}
+
+    async def user_names(self, user_ids: Sequence[UUID]) -> dict[UUID, str]:
+        """用户 → 显示名（``display_name``，没填回落 ``username``）。推送人这类「谁做的」列整页一次查。"""
+        ids = list({uid for uid in user_ids if uid is not None})
+        if not ids:
+            return {}
+        stmt = select(User.id, func.coalesce(User.display_name, User.username)).where(
+            User.id.in_(ids)
+        )
+        return {row[0]: row[1] for row in (await self._session.execute(stmt)).all()}
 
     async def get_by_internal_code(self, internal_code: str) -> Promotion | None:
         stmt = (
@@ -414,9 +500,10 @@ class PromotionRepository:
         promotion_id: UUID,
         tenant_id: UUID,
         from_state_field: str,
-        from_state_value: str,
+        from_state_value: str | None,
         to_state_value: str,
         extra_fields: dict[str, Any] | None = None,
+        also_where: dict[str, str] | None = None,
     ) -> Promotion | None:
         """乐观并发 UPDATE WHERE old_state RETURNING（FB7 强化）。
 
@@ -425,6 +512,7 @@ class PromotionRepository:
         - ``tenant_id = :tenant_id``（多租户防护，与 RLS 双保险）
         - ``is_active = true``（软删除防护）
         - ``<state_field> = :from_state_value``（旧状态防护）
+        - ``also_where`` 里其他状态机的 ``字段 = 值``（如发货推送要求仍未发布、未召回，防并发取消）
 
         Returns:
             ``Promotion`` 实例（推进成功）；
@@ -432,19 +520,30 @@ class PromotionRepository:
             ``StateTransitionConflictError``。
 
         Args:
-            from_state_field: ``"publish_status"`` / ``"recall_status"`` / ``"settlement_status"``
+            from_state_field: ``"publish_status"`` / ``"recall_status"`` / ``"settlement_status"`` /
+                ``"retro_status"`` / ``"ship_status"``
+            from_state_value: 旧状态；``None`` 只对 ``ship_status`` 有意义（历史单，``IS NULL``）。
             extra_fields: 状态推进时一并写入的字段（如 publish 时的 publish_url、
                 actual_publish_date；review 时的 reviewed_by、reviewed_at 等）。
         """
-        if from_state_field not in {
+        state_fields = {
             "publish_status",
             "recall_status",
             "settlement_status",
             "retro_status",  # PRD V1.4 改动 4，第 4 个并行状态机
-        }:
+            "ship_status",  # 流程线 3.3 发货 3 态（NULL = 历史单）
+        }
+        if from_state_field not in state_fields:
             raise ValueError(f"unsupported state field: {from_state_field}")
+        also = dict(also_where or {})
+        if not set(also) <= state_fields:
+            raise ValueError(f"unsupported state field: {sorted(set(also) - state_fields)}")
 
         state_col = getattr(Promotion, from_state_field)
+        state_cond = (
+            state_col.is_(None) if from_state_value is None else state_col == from_state_value
+        )
+        also_conds = [getattr(Promotion, field) == value for field, value in also.items()]
         values: dict[str, Any] = dict(extra_fields or {})
         values[from_state_field] = to_state_value
         values["updated_at"] = func.now()
@@ -455,7 +554,8 @@ class PromotionRepository:
                 Promotion.id == promotion_id,
                 Promotion.tenant_id == tenant_id,
                 Promotion.is_active.is_(True),
-                state_col == from_state_value,
+                state_cond,
+                *also_conds,
             )
             .values(**values)
             .returning(Promotion)
@@ -615,7 +715,7 @@ class PromotionRepository:
         urge_threshold_days: int,
         important_threshold_days: int,
     ) -> tuple[list[PromotionListRow], int]:
-        """列表查询，CTE 注入 ``urge_status`` / ``dual_platform`` 计算列。
+        """列表查询，CTE 注入 ``urge_status`` / ``dual_platform`` / ``stage`` 计算列。
 
         关键点（FB8）：
         - ``today`` 由 service 层 ``get_today()`` 注入；SQL 不用 ``CURRENT_DATE``
@@ -650,8 +750,13 @@ class PromotionRepository:
             LEFT JOIN goods_main g
               ON g.id = p.goods_main_id AND g.tenant_id = p.tenant_id
             WHERE p.tenant_id = :tenant_id
+        ),
+        -- 阶段放在只有推广单列的这一层算：style 也有 is_active，放进上面的 JOIN 会歧义
+        staged AS (
+            SELECT base.*, {stage_sql_expr()} AS stage
+            FROM base
         )
-        SELECT * FROM base WHERE 1=1
+        SELECT * FROM staged WHERE 1=1
         """
         params: dict[str, Any] = {
             "tenant_id": tenant_id,
@@ -719,13 +824,14 @@ class PromotionRepository:
                 "OR goods_code ILIKE :kw)"
             )
             params["kw"] = f"%{filters.keyword}%"
-        # 表达式与 idx_promotion_print_address 部分索引的谓词保持一致，否则不命中索引。
-        if filters.has_print_address is not None:
-            op = "<>" if filters.has_print_address else "="
-            clauses.append(f"COALESCE(BTRIM(source_extra->>'打单地址'), '') {op} ''")
-        if filters.has_waybill is not None:
-            op = "<>" if filters.has_waybill else "="
-            clauses.append(f"COALESCE(BTRIM(source_extra->>'发货单号'), '') {op} ''")
+        if filters.ship_status == "none":
+            clauses.append("ship_status IS NULL")
+        elif filters.ship_status:
+            clauses.append("ship_status = CAST(:ship_status AS varchar)")
+            params["ship_status"] = filters.ship_status
+            if filters.ship_status == ShipStatus.PENDING.value:
+                clauses.append("stage = CAST(:ship_pending_stage AS text)")
+                params["ship_pending_stage"] = SHIP_PENDING_STAGE
 
         where_extra = ""
         if clauses:
@@ -766,14 +872,281 @@ class PromotionRepository:
                     display_short_name=row["display_short_name"],
                     goods_title=row["goods_title"],
                     goods_short_name=row["goods_short_name"],
+                    stage=row["stage"],
                 )
             )
         return rows, total
 
+    # ----------------------- 仓库页（流程线 7.4） ----------------------- #
+
+    async def warehouse_shipments(
+        self,
+        *,
+        tenant_id: UUID,
+        bucket: str,
+        keyword: str | None,
+        search_receiver: bool,
+        page: int,
+        page_size: int,
+        today: date,
+        urge_threshold_days: int,
+        important_threshold_days: int,
+        promotion_id: UUID | None = None,
+    ) -> tuple[list[WarehouseShipmentRecord], int]:
+        """仓库页列表 / 导出 / 回填响应共用：只取投影列（不复用 ``list_with_cte``，免得整张单被读出来）。
+
+        只看启用的单。``keyword`` 匹配内部编码、款式编码、品名、商品全称 / 编码、SKU 编码（推广单自己的与明细的）、
+        快递单号；``search_receiver`` 为真时也匹配收件人（读不到收件人的人不能拿它当搜索条件）。
+        ``promotion_id``：只取这一张（回填后组响应）。阶段（``stage``）给矩阵 ``ui`` 用，阈值参数同列表。
+        """
+        statuses = _WAREHOUSE_BUCKETS[bucket]
+        base_where = [
+            "p.tenant_id = :tenant_id",
+            "p.is_active = true",
+            "p.ship_status = ANY(CAST(:statuses AS varchar[]))",
+        ]
+        params: dict[str, Any] = {
+            "tenant_id": tenant_id,
+            "statuses": list(statuses),
+            "today": today,
+            "urge_days": urge_threshold_days,
+            "important_days": important_threshold_days,
+            "legacy_key": "颜色及规格",
+        }
+        if promotion_id is not None:
+            base_where.append("p.id = :promotion_id")
+            params["promotion_id"] = promotion_id
+        display = display_short_name_sql(promotion="b")
+        # 阶段只在只有推广单列的这一层算：goods_main / sku 也有 is_active，放进 JOIN 那层会歧义
+        from_sql = f"""
+        WITH base AS (
+            SELECT p.*, {stage_sql_expr()} AS stage
+            FROM promotion p
+            WHERE {" AND ".join(base_where)}
+        )
+        SELECT b.id, b.pr_id, b.internal_code, b.style_code_snapshot AS style_code,
+               {display} AS display_short_name,
+               g.goods_code, g.goods_title, ps.sku_code,
+               b.source_extra ->> CAST(:legacy_key AS text) AS legacy_color_spec,
+               b.receiver_name, b.receiver_phone, b.receiver_address,
+               b.ship_status, b.ship_pushed_at,
+               COALESCE(u.display_name, u.username) AS ship_pushed_by_name,
+               b.ship_courier, b.ship_waybill, b.shipped_at, b.stage
+        FROM base b
+        LEFT JOIN goods_main g ON g.id = b.goods_main_id AND g.tenant_id = b.tenant_id
+        LEFT JOIN sku ps ON ps.id = b.sku_id
+        LEFT JOIN "user" u ON u.id = b.ship_pushed_by
+        WHERE 1=1
+        """
+        if keyword:
+            ors = [
+                "b.internal_code ILIKE CAST(:kw AS text)",
+                "b.style_code_snapshot ILIKE CAST(:kw AS text)",
+                f"{display} ILIKE CAST(:kw AS text)",
+                "g.goods_title ILIKE CAST(:kw AS text)",
+                "g.goods_code ILIKE CAST(:kw AS text)",
+                "ps.sku_code ILIKE CAST(:kw AS text)",
+                "b.ship_waybill ILIKE CAST(:kw AS text)",
+                "EXISTS (SELECT 1 FROM promotion_item pi JOIN sku isk ON isk.id = pi.sku_id "
+                "WHERE pi.promotion_id = b.id AND isk.sku_code ILIKE CAST(:kw AS text))",
+            ]
+            if search_receiver:
+                ors.append("b.receiver_name ILIKE CAST(:kw AS text)")
+            from_sql += " AND (" + " OR ".join(ors) + ")"
+            params["kw"] = f"%{keyword}%"
+
+        total = int(
+            (
+                await self._session.execute(text(f"SELECT COUNT(*) FROM ({from_sql}) AS c"), params)
+            ).scalar_one()
+        )
+        data_sql = f"{from_sql} ORDER BY {_WAREHOUSE_ORDER[bucket]} LIMIT :limit OFFSET :offset"
+        params["limit"] = page_size
+        params["offset"] = (page - 1) * page_size
+        result = await self._session.execute(text(data_sql), params)
+        return [WarehouseShipmentRecord(**row) for row in result.mappings().all()], total
+
+
+# ---------------------------------------------------------------------------
+# 商品明细（promotion_item，流程线 M1）
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PromotionItemView:
+    """明细一行 + 款式 / SKU 上要显示的列（颜色尺码实时读 SKU）。"""
+
+    promotion_id: UUID
+    style_id: UUID
+    sku_id: UUID
+    color: str
+    size: str
+    style_name: str
+    style_short_name: str | None
+    style_main_image_key: str | None
+    style_code: str
+    sku_code: str
+    """编码只进仓库导出（对账用），页面不显示。"""
+
+
+class PromotionItemRepository:
+    """推广单商品明细的读写。成员与 SKU 归属的校验在 service（不写业务规则）。"""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def list_by_promotions(
+        self, promotion_ids: Sequence[UUID]
+    ) -> dict[UUID, list[PromotionItemView]]:
+        """一次查出这些推广单的全部明细（列表一页一条查询），按 ``sort_order`` 排。"""
+        if not promotion_ids:
+            return {}
+        stmt = (
+            select(
+                PromotionItem.promotion_id,
+                PromotionItem.style_id,
+                PromotionItem.sku_id,
+                Sku.color,
+                Sku.size,
+                Style.style_name,
+                Style.short_name,
+                Style.main_image_key,
+                Style.style_code,
+                Sku.sku_code,
+            )
+            .join(Sku, Sku.id == PromotionItem.sku_id)
+            .join(Style, Style.id == PromotionItem.style_id)
+            .where(PromotionItem.promotion_id.in_(list(promotion_ids)))
+            .order_by(PromotionItem.promotion_id, PromotionItem.sort_order, PromotionItem.id)
+        )
+        grouped: dict[UUID, list[PromotionItemView]] = {}
+        for row in (await self._session.execute(stmt)).all():
+            grouped.setdefault(row[0], []).append(PromotionItemView(*row))
+        return grouped
+
+    async def replace(
+        self,
+        *,
+        tenant_id: UUID,
+        promotion_id: UUID,
+        rows: Sequence[tuple[UUID, UUID]],
+    ) -> None:
+        """整组替换：删掉这张单的旧明细，按 ``rows`` 的顺序插入（``sort_order`` 从 0）。不提交。"""
+        await self._session.execute(
+            delete(PromotionItem).where(PromotionItem.promotion_id == promotion_id)
+        )
+        for order, (style_id, sku_id) in enumerate(rows):
+            self._session.add(
+                PromotionItem(
+                    tenant_id=tenant_id,
+                    promotion_id=promotion_id,
+                    style_id=style_id,
+                    sku_id=sku_id,
+                    sort_order=order,
+                )
+            )
+        await self._session.flush()
+
+    async def members_of(self, *, goods_main_id: UUID | None, style_id: UUID) -> list[UUID]:
+        """明细应有的款式集合：套装 = ``goods_style_item`` 里启用的成员（按 ``sort_order``）；
+        没有归属商品、单品（或套装没有启用成员）= ``[style_id]``。"""
+        if goods_main_id is None:
+            return [style_id]
+        stmt = (
+            select(GoodsStyleItem.style_id)
+            .join(GoodsMain, GoodsMain.id == GoodsStyleItem.goods_main_id)
+            .where(
+                GoodsStyleItem.goods_main_id == goods_main_id,
+                GoodsStyleItem.is_active.is_(True),
+                GoodsMain.is_suit.is_(True),
+            )
+            .order_by(GoodsStyleItem.sort_order, GoodsStyleItem.style_id)
+        )
+        members = list((await self._session.execute(stmt)).scalars().all())
+        return members or [style_id]
+
+    async def members_by_goods(self, goods_main_ids: Sequence[UUID]) -> dict[UUID, list[UUID]]:
+        """``members_of`` 的整页批量版：只回有启用成员的套装；不在结果里的按 ``[style_id]``。"""
+        if not goods_main_ids:
+            return {}
+        stmt = (
+            select(GoodsStyleItem.goods_main_id, GoodsStyleItem.style_id)
+            .join(GoodsMain, GoodsMain.id == GoodsStyleItem.goods_main_id)
+            .where(
+                GoodsStyleItem.goods_main_id.in_(list(goods_main_ids)),
+                GoodsStyleItem.is_active.is_(True),
+                GoodsMain.is_suit.is_(True),
+            )
+            .order_by(
+                GoodsStyleItem.goods_main_id, GoodsStyleItem.sort_order, GoodsStyleItem.style_id
+            )
+        )
+        grouped: dict[UUID, list[UUID]] = {}
+        for goods_id, style_id in (await self._session.execute(stmt)).all():
+            grouped.setdefault(goods_id, []).append(style_id)
+        return grouped
+
+    async def style_names(self, style_ids: Sequence[UUID]) -> dict[UUID, tuple[str, str | None]]:
+        """款式 → ``(style_name, short_name)``，给 ``goods_members`` 出名字；一次查（列表整页共用）。"""
+        if not style_ids:
+            return {}
+        stmt = select(Style.id, Style.style_name, Style.short_name).where(
+            Style.id.in_(list(style_ids))
+        )
+        return {row[0]: (row[1], row[2]) for row in (await self._session.execute(stmt)).all()}
+
+    async def set_style_sku(
+        self, *, tenant_id: UUID, promotion_id: UUID, style_id: UUID, sku_id: UUID | None
+    ) -> None:
+        """改一个款式那一行的 SKU（PATCH ``sku_id`` 同步主款式那行）：有就改、没有就追加到最后；
+        ``sku_id`` 为 None 删掉那一行（明细的 sku 不可空）。不提交。"""
+        if sku_id is None:
+            await self._session.execute(
+                delete(PromotionItem).where(
+                    PromotionItem.promotion_id == promotion_id, PromotionItem.style_id == style_id
+                )
+            )
+            return
+        updated = await self._session.execute(
+            update(PromotionItem)
+            .where(PromotionItem.promotion_id == promotion_id, PromotionItem.style_id == style_id)
+            .values(sku_id=sku_id)
+            .returning(PromotionItem.id)
+        )
+        if updated.first() is not None:
+            return
+        next_order = (
+            await self._session.execute(
+                select(func.coalesce(func.max(PromotionItem.sort_order) + 1, 0)).where(
+                    PromotionItem.promotion_id == promotion_id
+                )
+            )
+        ).scalar_one()
+        self._session.add(
+            PromotionItem(
+                tenant_id=tenant_id,
+                promotion_id=promotion_id,
+                style_id=style_id,
+                sku_id=sku_id,
+                sort_order=next_order,
+            )
+        )
+        await self._session.flush()
+
+    async def skus_by_ids(self, sku_ids: Sequence[UUID]) -> dict[UUID, Sku]:
+        """按 id 批量取 SKU（含已删的，由调用方判 ``is_deleted``）。"""
+        if not sku_ids:
+            return {}
+        stmt = select(Sku).where(Sku.id.in_(list(sku_ids)))
+        return {sku.id: sku for sku in (await self._session.execute(stmt)).scalars().all()}
+
 
 __all__ = [
     "PromotionAttachmentRefs",
+    "PromotionItemRepository",
+    "PromotionItemView",
     "PromotionListFilters",
     "PromotionListRow",
     "PromotionRepository",
+    "WarehouseShipmentRecord",
 ]

@@ -38,6 +38,9 @@ export function AppLayout() {
   const canViewDataQuality = canViewCredentials;
   // 平台链接是运维视图：绑错一条链接，整条销售数据就记到别的商品名下
   const canViewPlatformLinks = canViewCredentials;
+  // 仓库发货只走 promotion_ship:fill / export（060 起只授 warehouse，管理员靠 *）；
+  // PR / 主管 / 财务 / 运营点进去是 403，菜单里就不放。只管显示，后端 403 才是闸门
+  const canViewWarehouse = isSystemAdmin || roles.includes("warehouse");
 
   async function handleLogout() {
     try {
@@ -104,7 +107,9 @@ export function AppLayout() {
         { key: "/negotiations", label: <Link to="/negotiations">谈款审核</Link> },
         { key: "/promotions", label: <Link to="/promotions">站外推广</Link> },
         { key: "/urge-tasks", label: <Link to="/urge-tasks">催发任务</Link> },
-        { key: "/warehouse-orders", label: <Link to="/warehouse-orders">仓库打单</Link> },
+        ...(canViewWarehouse
+          ? [{ key: "/warehouse-orders", label: <Link to="/warehouse-orders">仓库发货</Link> }]
+          : []),
         {
           key: "/work-progress",
           label: <Link to="/work-progress">工作进度表</Link>,
@@ -206,7 +211,7 @@ export function AppLayout() {
     },
   ];
 
-  // 仓库角色只能操作打单：仅保留「仓库打单」菜单（admin/平台管理员不受限）
+  // 仓库角色只能操作发货：仅保留「仓库发货」菜单（admin/平台管理员不受限）
   const isWarehouseOnly =
     roles.includes("warehouse") &&
     !roles.some((r) => r === "admin" || r === "platform_admin");
@@ -215,7 +220,7 @@ export function AppLayout() {
         {
           key: "/warehouse-orders",
           icon: <NotificationOutlined />,
-          label: <Link to="/warehouse-orders">仓库打单</Link>,
+          label: <Link to="/warehouse-orders">仓库发货</Link>,
         },
       ]
     : menuItems;

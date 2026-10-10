@@ -27,6 +27,7 @@ import app.tasks.import_tasks as tasks
 from app.modules.importer.adapters.settlement import SettlementImportAdapter
 from app.modules.importer.registry import ImportAdapterRegistry
 from app.tasks.import_tasks import _run_import_batch
+from tests.conftest import purge_promotions
 
 
 async def _seed(Maker, suffix: str, batch_id):
@@ -126,24 +127,20 @@ async def _cleanup(Maker, suffix: str, batch_id):
     async with Maker() as c:
         await c.execute(text("DELETE FROM import_job WHERE batch_id = :id"), {"id": batch_id})
         await c.execute(text("DELETE FROM import_batch WHERE id = :id"), {"id": batch_id})
-        # settlement 引用 promotion/style/blogger，先删 settlement
-        await c.execute(
-            text(
-                "DELETE FROM settlement WHERE promotion_id IN "
-                "(SELECT id FROM promotion WHERE style_code_snapshot = :code)"
-            ),
-            {"code": f"ST{suffix}A"},
-        )
+        # settlement 引用 promotion/style/blogger：推广单连同结款单等子表一起删
+        ids = (
+            await c.execute(
+                text("SELECT id FROM promotion WHERE style_code_snapshot = :code"),
+                {"code": f"ST{suffix}A"},
+            )
+        ).scalars()
+        await purge_promotions(c, ids)
         await c.execute(
             text(
                 "DELETE FROM settlement_sequence WHERE tenant_id IN "
                 "(SELECT id FROM tenant ORDER BY created_at ASC LIMIT 1) "
                 "AND date_key = '2026-06-01'"
             )
-        )
-        await c.execute(
-            text("DELETE FROM promotion WHERE style_code_snapshot = :code"),
-            {"code": f"ST{suffix}A"},
         )
         await c.execute(
             text("DELETE FROM blogger WHERE xiaohongshu_id = :xhs"),

@@ -593,11 +593,11 @@ class TestUpdatePromotion:
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-class TestWarehouseFilters:
-    """仓库打单的服务端筛选（source_extra 打单地址 / 发货单号）。
+class TestShipStatusFilter:
+    """推广列表的「发货」筛选（流程线 7.3 ``ship_status``；替代 060 前按 source_extra 打单地址 / 发货单号的
+    ``has_print_address`` / ``has_waybill``）。筛选落在服务端（原「仓库打单页每次加载都很慢」的回归）。
 
-    回归用户反馈「仓库打单页每次加载都很慢」：原实现拉一页 100 条推广后在浏览器里
-    过滤打单地址，既慢又会漏掉第 101 条以后的打单单。筛选必须落在服务端。
+    ``待发货`` 只算阶段「待推送仓库」那批：被取消的待发货单归「已完结 · 不合作」，不在待推送队列里。
     """
 
     async def _seed(
@@ -613,41 +613,31 @@ class TestWarehouseFilters:
         user = await factory.user(tenant_a, roles=[admin_role])
         style = await product_factory.style()
         blogger = await blogger_factory.blogger()
-        # 1) 有地址、无单号 → 待打单
-        await promotion_factory.promotion(
-            style=style,
-            blogger=blogger,
-            pr=user,
-            internal_code="WH_PENDING",
-            source_extra={"打单地址": "浙江省杭州市某路 1 号"},
-        )
-        # 2) 有地址、有单号 → 已打单
-        await promotion_factory.promotion(
-            style=style,
-            blogger=blogger,
-            pr=user,
-            internal_code="WH_DONE",
-            source_extra={"打单地址": "广东省广州市某路 2 号", "发货单号": "SF123456"},
-        )
-        # 3) 无地址 → 不该出现在仓库打单页
-        await promotion_factory.promotion(
-            style=style,
-            blogger=blogger,
-            pr=user,
-            internal_code="WH_NO_ADDR",
-            source_extra={},
-        )
-        # 4) 地址只有空白 → 等同于没填
-        await promotion_factory.promotion(
-            style=style,
-            blogger=blogger,
-            pr=user,
-            internal_code="WH_BLANK_ADDR",
-            source_extra={"打单地址": "   "},
-        )
+        # internal_code → 工厂参数
+        specs: dict[str, dict[str, Any]] = {
+            "WH_TO_PUSH": {"ship_status": "待发货"},
+            "WH_PENDING": {"ship_status": "待打单", "receiver_address": "浙江省杭州市某路 1 号"},
+            "WH_DONE": {"ship_status": "已发货", "ship_waybill": "SF123456"},
+            "WH_HISTORY": {},  # 历史单（发货为空）
+            # 被取消的待发货单：发货仍是待发货，但阶段 = 已完结 · 不合作
+            "WH_CANCELLED": {"ship_status": "待发货", "publish_status": "已取消"},
+        }
+        for code, kw in specs.items():
+            await promotion_factory.promotion(
+                style=style, blogger=blogger, pr=user, internal_code=code, **kw
+            )
         return user
 
-    async def test_has_print_address_excludes_blank_and_missing(
+    @pytest.mark.parametrize(
+        ("ship_status", "expected"),
+        [
+            ("待发货", {"WH_TO_PUSH"}),
+            ("待打单", {"WH_PENDING"}),
+            ("已发货", {"WH_DONE"}),
+            ("none", {"WH_HISTORY"}),
+        ],
+    )
+    async def test_ship_status_buckets(
         self,
         session: AsyncSession,
         tenant_a: Any,
@@ -656,6 +646,8 @@ class TestWarehouseFilters:
         product_factory: Any,
         blogger_factory: Any,
         promotion_factory: Any,
+        ship_status: str,
+        expected: set[str],
     ) -> None:
         token = tenant_id_ctx.set(tenant_a.id)
         try:
@@ -667,58 +659,24 @@ class TestWarehouseFilters:
                 blogger_factory=blogger_factory,
                 promotion_factory=promotion_factory,
             )
-            svc = PromotionService(session)
-            page = await svc.list_promotions(
-                filters=PromotionListFilters(has_print_address=True),
+            page = await PromotionService(session).list_promotions(
+                filters=PromotionListFilters(ship_status=ship_status),
                 page=1,
                 page_size=50,
                 user=user,
             )
-            codes = {p.internal_code for p in page.items}
-            assert codes == {"WH_PENDING", "WH_DONE"}
-            assert page.total == 2
+            assert {p.internal_code for p in page.items} == expected
+            assert page.total == len(expected)
         finally:
             tenant_id_ctx.reset(token)
 
-    async def test_pending_and_done_buckets(
-        self,
-        session: AsyncSession,
-        tenant_a: Any,
-        factory: Any,
-        admin_role: Any,
-        product_factory: Any,
-        blogger_factory: Any,
-        promotion_factory: Any,
-    ) -> None:
-        token = tenant_id_ctx.set(tenant_a.id)
-        try:
-            user = await self._seed(
-                factory=factory,
-                tenant_a=tenant_a,
-                admin_role=admin_role,
-                product_factory=product_factory,
-                blogger_factory=blogger_factory,
-                promotion_factory=promotion_factory,
-            )
-            svc = PromotionService(session)
+    async def test_old_params_removed_and_value_checked(self) -> None:
+        """``has_print_address`` / ``has_waybill`` 删掉（JSONB 键 060 已搬走）；``ship_status`` 只认 4 个值。"""
+        from pydantic import ValidationError as PydanticValidationError
 
-            pending = await svc.list_promotions(
-                filters=PromotionListFilters(has_print_address=True, has_waybill=False),
-                page=1,
-                page_size=50,
-                user=user,
-            )
-            assert {p.internal_code for p in pending.items} == {"WH_PENDING"}
-
-            done = await svc.list_promotions(
-                filters=PromotionListFilters(has_print_address=True, has_waybill=True),
-                page=1,
-                page_size=50,
-                user=user,
-            )
-            assert {p.internal_code for p in done.items} == {"WH_DONE"}
-        finally:
-            tenant_id_ctx.reset(token)
+        assert not {"has_print_address", "has_waybill"} & set(PromotionListFilters.model_fields)
+        with pytest.raises(PydanticValidationError):
+            PromotionListFilters(ship_status="待推送")
 
     async def test_filters_absent_returns_everything(
         self,
@@ -730,7 +688,7 @@ class TestWarehouseFilters:
         blogger_factory: Any,
         promotion_factory: Any,
     ) -> None:
-        """不传这两个筛选时行为不变（其它页面不受影响）。"""
+        """不传发货筛选时行为不变（其它页面不受影响）。"""
         token = tenant_id_ctx.set(tenant_a.id)
         try:
             user = await self._seed(
@@ -748,7 +706,7 @@ class TestWarehouseFilters:
                 page_size=50,
                 user=user,
             )
-            assert page.total == 4
+            assert page.total == 5
         finally:
             tenant_id_ctx.reset(token)
 

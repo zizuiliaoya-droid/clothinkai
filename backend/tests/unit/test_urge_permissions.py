@@ -50,9 +50,9 @@ class TestUrgeTaskScope:
         assert perms.has(SCOPE_URGE, "write") is False
 
     def test_warehouse_cannot_see_urge(self) -> None:
-        """仓库持 promotion:read + promotion.warehouse:write。
+        """仓库持 promotion_ship:fill / export + promotion.warehouse:write（060 起没有 promotion:read）。
 
-        两条都匹配不上 promotion.urge —— ``promotion:read`` 不是通配形式，
+        都匹配不上 promotion.urge —— ``promotion_ship`` 是另一个一级域，
         ``promotion.warehouse:write`` 是另一个具体 scope。
         """
         perms = _perms_for("warehouse")

@@ -205,7 +205,7 @@ class TestSubmitAndReview:
                 await session.execute(
                     sa_text(
                         "SELECT pr_id, cooperation_mode, platform, scheduled_publish_date,"
-                        " cooperation_date, cost_snapshot"
+                        " cooperation_date, cost_snapshot, ship_status"
                         " FROM promotion WHERE id = :pid"
                     ),
                     {"pid": approved.promotion_id},
@@ -218,6 +218,8 @@ class TestSubmitAndReview:
             assert row[4] == get_today()
             # 寄拍样品成本恒为 0
             assert row[5] == Decimal("0.00")
+            # 过渡期（流程线 PR-2，S1）：谈款审核通过建的单直接进待发货，等主管确认推送仓库
+            assert row[6] == "待发货"
         finally:
             tenant_id_ctx.reset(token)
 

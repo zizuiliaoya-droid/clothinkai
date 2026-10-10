@@ -76,6 +76,26 @@ class InvalidGoodsReferenceError(ValidationError):
     code = "INVALID_GOODS_REFERENCE"
 
 
+class InvalidReceiverPhoneError(ValidationError):
+    """收件电话格式不对（流程线 7.1）。
+
+    规则只有 ``receiver.normalize_receiver_phone`` 一处：推广单 PATCH / ``POST /`` / 推送仓库补填，
+    以及谈款确认收货信息（N9）共用。
+    """
+
+    code = "INVALID_RECEIVER_PHONE"
+
+
+class SourceExtraKeyRetiredError(ValidationError):
+    """``source_extra`` 带了已退役的键（流程线 7.1）。
+
+    「打单地址」「发货单号」M1（060）起是 typed 列（``receiver_address`` / ``ship_waybill``）；
+    再从 JSONB 写进来，仓库页与发货状态都看不到，等于两份数据。``details.keys`` 列出带了的退役键。
+    """
+
+    code = "SOURCE_EXTRA_KEY_RETIRED"
+
+
 class InvalidPaymentQrAttachmentError(ValidationError):
     """收款码附件不存在、跨租户或属性不符合要求。"""
 
@@ -212,6 +232,21 @@ class RetroContentMissingError(ValidationError):
     code = "RETRO_CONTENT_MISSING"
 
 
+class ShippedAtInFutureError(ValidationError):
+    """仓库回填的发货时间晚于现在（流程线 3.3 S5 / S6）。"""
+
+    code = "SHIPPED_AT_IN_FUTURE"
+
+
+class ExportTooManyRowsError(ValidationError):
+    """导出超过上限（仓库待打单导出 5,000 张单，11-26）：提示缩小范围。
+
+    ``details``：``{"total": 命中张数, "limit": 上限}``。
+    """
+
+    code = "EXPORT_TOO_MANY_ROWS"
+
+
 # ---------------------------------------------------------------------------
 # 状态机冲突
 # ---------------------------------------------------------------------------
@@ -249,11 +284,13 @@ __all__ = [
     "CancelReasonRequiredError",
     "CooperationModeImmutableError",
     "CooperationModeRequiredError",
+    "ExportTooManyRowsError",
     "FieldPermissionDenied",  # re-exported from modules/product/exceptions
     "RejectReasonCategoryRequiredError",
     "ReturnWaybillRequiredError",
     "InvalidBloggerReferenceError",
     "InvalidPaymentQrAttachmentError",
+    "InvalidReceiverPhoneError",
     "InvalidSkuReferenceError",
     "InvalidStyleReferenceError",
     "MetricsScreenshotRequiredError",
@@ -267,5 +304,7 @@ __all__ = [
     "SelfReviewForbiddenError",
     "SequenceOverflowError",
     "SettlementNotPaidError",
+    "ShippedAtInFutureError",
+    "SourceExtraKeyRetiredError",
     "StateTransitionConflictError",
 ]
