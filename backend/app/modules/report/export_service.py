@@ -35,6 +35,17 @@ _READ_PERMISSION: dict[str, tuple[str, str]] = {
 _REPORT_TYPES = set(_READ_PERMISSION)
 _GRANULARITIES = {"day", "week", "month", "year"}
 
+
+def exportable_report_types(perms: EffectivePermissions) -> list[str]:
+    """当前用户能导出的报表类型（capabilities 用）：持 ``report.export:read`` 且有该报表读权限。
+
+    与 :meth:`ReportExportService.export` 的两道判断同一份 ``_READ_PERMISSION``，按其顺序返回。
+    """
+    if not perms.has("report.export", "read"):
+        return []
+    return [t for t, (scope, action) in _READ_PERMISSION.items() if perms.has(scope, action)]
+
+
 _WORK_HEADERS = [
     "PR",
     "约篇量",
@@ -261,4 +272,4 @@ class ReportExportService:
         return _WORK_HEADERS, rows
 
 
-__all__ = ["ReportExportService"]
+__all__ = ["ReportExportService", "exportable_report_types"]

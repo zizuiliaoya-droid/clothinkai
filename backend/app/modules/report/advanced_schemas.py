@@ -195,6 +195,27 @@ class ReportFreshnessOut(BaseModel):
     can_refresh: bool
 
 
+# --------------------------- 报表能力（7e R1） --------------------------- #
+
+
+class ReportCapabilities(BaseModel):
+    """当前用户在报表侧能看 / 能做什么（报表视图设计第 4 节「能力端点」）。
+
+    ``/me`` 只返回角色，前端算不了 scope：菜单、导出 / 刷新按钮、BI 渲染哪一版都看它。
+    ``all`` / ``full`` = 看全部，``own`` / ``personal`` = 只看本人，``None`` = 无权。
+    """
+
+    work_progress: Literal["all", "own"] | None
+    publish_progress: Literal["all", "own"] | None
+    bi: Literal["full", "personal"] | None
+    production: bool
+    store_read: bool
+    store_write: bool
+    export: list[str]
+    """能导出的报表类型（``/api/reports/{type}/export`` 的 type）：持导出权且有该报表读权限。"""
+    refresh: bool
+
+
 # ----------------------------- BI 看板 ----------------------------- #
 
 
@@ -295,6 +316,7 @@ __all__ = [
     "ProductionRow",
     "ProductionTrend",
     "ProductionTrendPoint",
+    "ReportCapabilities",
     "ReportFreshnessOut",
     "StoreDailyManualUpdate",
     "StoreDailyRow",

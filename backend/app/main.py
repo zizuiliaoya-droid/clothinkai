@@ -66,6 +66,7 @@ from app.modules.promotion.shipping_api import router as promotion_shipping_rout
 from app.modules.report.advanced_api import router as report_advanced_router
 from app.modules.report.api import router as report_router
 from app.modules.report.bi_api import router as bi_router
+from app.modules.report.capabilities_api import router as report_capabilities_router
 from app.modules.report.drill_api import router as report_drill_router
 from app.modules.report.export_api import router as report_export_router
 from app.modules.report.preference_api import router as preference_router
@@ -465,6 +466,7 @@ def create_app() -> FastAPI:
     )  # U14 报表进阶 /api/reports/{work-progress,targets,store-daily,production}
     app.include_router(bi_router)  # U17 BI 看板 /api/reports/bi
     app.include_router(report_drill_router)  # 7e R1 报表下钻 /api/reports/drill/promotions
+    app.include_router(report_capabilities_router)  # 7e R1 报表能力 /api/reports/capabilities
     app.include_router(report_export_router)  # U17 报表导出 /api/reports/{type}/export
     app.include_router(ai_router)  # U18 AI 决策建议 /api/ai
     app.include_router(design_router)  # U10a 设计制版 /api/designs

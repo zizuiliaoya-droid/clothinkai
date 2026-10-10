@@ -9,6 +9,7 @@
   本人的单（``PrScope`` 下推到 SQL，摘要 / 卡片 total 也只数本人）
 - BI 三个端点挂 ``report.bi:read``（不再挂 ``report.production:read``）；推广汇总 4 个金额过 F3
 - 导出：路由仍要 ``report.export:read``，service 再按报表类型判对应读权限（缺 → 403）
+- ``GET /api/reports/capabilities``：只要登录，6 个真实角色逐字段期望
 """
 
 from __future__ import annotations
@@ -433,3 +434,114 @@ class TestExport:
         resp = await _call(session, getattr(flow_users, role), "GET", _export("work-progress"))
         assert (resp.status_code, resp.json()["code"]) == (403, "PERMISSION_DENIED")
         assert resp.json()["details"]["required_scope"] == "report.export"
+
+
+_CAPS = "/api/reports/capabilities"
+_ALL_EXPORTS = ["work-progress", "production", "store-daily"]
+
+# 6 个真实角色逐字段期望（报表视图设计第 4 节「能力端点」）
+_CAPS_EXPECTED: dict[str, dict[str, Any]] = {
+    "pr": {
+        "work_progress": "own",
+        "publish_progress": "own",
+        "bi": "personal",
+        "production": False,
+        "store_read": False,
+        "store_write": False,
+        "export": [],
+        "refresh": False,
+    },
+    "pr_manager": {
+        "work_progress": "all",
+        "publish_progress": "all",
+        "bi": "full",
+        "production": True,
+        "store_read": True,
+        "store_write": False,
+        "export": _ALL_EXPORTS,
+        "refresh": True,
+    },
+    "admin": {
+        "work_progress": "all",
+        "publish_progress": "all",
+        "bi": "full",
+        "production": True,
+        "store_read": True,
+        "store_write": True,
+        "export": _ALL_EXPORTS,
+        "refresh": True,
+    },
+    "finance": {
+        "work_progress": "all",
+        "publish_progress": None,
+        "bi": "full",
+        "production": False,
+        "store_read": False,
+        "store_write": False,
+        "export": ["work-progress"],
+        "refresh": False,
+    },
+    "operations": {
+        "work_progress": "all",
+        "publish_progress": "all",
+        "bi": "full",
+        "production": True,
+        "store_read": True,
+        "store_write": True,
+        "export": _ALL_EXPORTS,
+        "refresh": True,
+    },
+    "warehouse": {
+        "work_progress": None,
+        "publish_progress": None,
+        "bi": None,
+        "production": False,
+        "store_read": False,
+        "store_write": False,
+        "export": [],
+        "refresh": False,
+    },
+}
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+class TestCapabilities:
+    @pytest.mark.parametrize("role", sorted(_CAPS_EXPECTED))
+    async def test_real_roles(self, session: AsyncSession, flow_users: Any, role: str) -> None:
+        resp = await _call(session, getattr(flow_users, role), "GET", _CAPS)
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == _CAPS_EXPECTED[role]
+
+    async def test_table_is_effective(self) -> None:
+        """场景有效性：期望表里每个字段至少出现两种值（不是全 null / 全 False 的空转）。"""
+        for field in _CAPS_EXPECTED["pr"]:
+            values = {repr(caps[field]) for caps in _CAPS_EXPECTED.values()}
+            assert len(values) >= 2, field
+        assert {c["work_progress"] for c in _CAPS_EXPECTED.values()} == {"all", "own", None}
+        assert {c["bi"] for c in _CAPS_EXPECTED.values()} == {"full", "personal", None}
+
+    async def test_export_follows_read_permission(
+        self, session: AsyncSession, flow_users: Any
+    ) -> None:
+        """导出能力 = 持 ``report.export:read`` 且有该报表读权限：财务授予投产读后多出 production。"""
+        fin = flow_users.finance
+        await _override(session, fin, "report.production:read", "grant")
+        resp = await _call(session, fin, "GET", _CAPS)
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["export"] == ["work-progress", "production"]
+        assert resp.json()["production"] is True
+
+    async def test_requires_login(self, session: AsyncSession) -> None:
+        from app.core.db import get_session
+        from app.main import app
+
+        async def _session_override() -> AsyncIterator[AsyncSession]:
+            yield session
+
+        app.dependency_overrides[get_session] = _session_override
+        try:
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+                resp = await c.get(_CAPS)
+        finally:
+            app.dependency_overrides.pop(get_session, None)
+        assert resp.status_code == 401
