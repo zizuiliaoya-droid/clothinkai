@@ -17,6 +17,14 @@ class ReportInvalidTimeRangeError(AppException):
     message = "自定义时间范围非法（需 date_from ≤ date_to 且跨度 ≤ 366 天）"
 
 
+class ReportRangeTooLongError(AppException):
+    """下钻等按合作日期取明细的接口：区间跨度超过 366 天（7e R1，报表视图设计 2.1）。"""
+
+    code = "REPORT_RANGE_TOO_LONG"
+    status_code = 422
+    message = "时间区间跨度不能超过 366 天"
+
+
 class ReportStyleNotFoundError(AppException):
     code = "REPORT_STYLE_NOT_FOUND"
     status_code = 404
@@ -47,6 +55,7 @@ __all__ = [
     "ReportExportTypeInvalidError",
     "ReportInvalidTimePresetError",
     "ReportInvalidTimeRangeError",
+    "ReportRangeTooLongError",
     "ReportStyleNotFoundError",
     "SummaryRefreshBusyError",
 ]

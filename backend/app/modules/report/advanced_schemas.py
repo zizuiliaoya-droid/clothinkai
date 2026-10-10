@@ -39,6 +39,42 @@ class PrWorkProgress(BaseModel):
     cpl: Decimal | None = None
 
 
+# ----------------------------- 下钻单据 ----------------------------- #
+
+
+class DrillPromotionRow(BaseModel):
+    """报表下钻的一张推广单（7e R1，报表视图设计 2.1）。
+
+    字段是白名单：**不返回**收件信息、收款码、备注、``source_extra``。
+    金额按 F2 逐行裁剪（``report/field_mask.promotion_amounts_visible``），读不到给 null。
+    """
+
+    id: UUID
+    internal_code: str
+    cooperation_date: date
+    scheduled_publish_date: date | None
+    actual_publish_date: date | None
+    pr_id: UUID | None
+    pr_name: str
+    blogger_nickname: str
+    platform: str
+    display_short_name: str
+    publish_status: str
+    recall_status: str
+    quote_amount: Decimal | None
+    total_promo_cost: Decimal | None
+    like_count: int | None
+    # R1 ~ R7 恒 null（详情抽屉随流程线 PR-4，R8 补）
+    detail_url: str | None = None
+
+
+class DrillPromotionPage(BaseModel):
+    items: list[DrillPromotionRow]
+    total: int
+    page: int
+    page_size: int
+
+
 # ----------------------------- 爆款约篇 ----------------------------- #
 
 
@@ -251,6 +287,8 @@ __all__ = [
     "BiStylePerformance",
     "BiTrendPoint",
     "BiWorkloadRow",
+    "DrillPromotionPage",
+    "DrillPromotionRow",
     "PrWorkProgress",
     "ProductionReport",
     "ProductionRow",
