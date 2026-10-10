@@ -98,6 +98,17 @@ PROMOTION_SHIP_FILL = "promotion_ship:fill"  # 回填快递信息、改单号：
 PROMOTION_SHIP_EXPORT = "promotion_ship:export"  # 导出待打单（业务方要求单独授权）：仓库
 # 旧回填 scope。060 起回填接口改挂 promotion_ship:fill，已停用，仅为回滚保留
 PROMOTION_WAREHOUSE_WRITE_LEGACY = "promotion.warehouse:write"
+# 7e R1 报表视图（迁移 061，报表视图设计第 4 节）。read_own 是「只看本人」：
+# report.*:read 通配按 action 精确匹配，捞不到它，持 read 的主管 / 运营照旧看全部。
+# report.bi:read 从 report.production:read 拆出：给财务 BI 不连带放开投产页；report.*:read 覆盖它。
+REPORT_WORK_PROGRESS_READ = "report.work_progress:read"
+REPORT_WORK_PROGRESS_READ_OWN = "report.work_progress:read_own"
+REPORT_PUBLISH_PROGRESS_READ_OWN = "report.publish_progress:read_own"
+REPORT_BI_READ = "report.bi:read"
+REPORT_BI_READ_OWN = "report.bi:read_own"
+REPORT_EXPORT_READ = "report.export:read"
+REPORT_STORE_DAILY_WRITE = "report.store_daily:write"
+REPORT_SUMMARY_REFRESH = "report.summary:refresh"
 
 
 # ---------------------------------------------------------------------------
@@ -109,7 +120,8 @@ DEFAULT_ROLES: tuple[RoleSpec, ...] = (
         code="admin",
         name="管理员",
         description="系统超级管理员，拥有所有权限",
-        permissions=(SCOPE_ALL,),
+        # report.summary:refresh 已被 * 覆盖；052 给库里显式授过，这里照写（代码追平生产）
+        permissions=(SCOPE_ALL, REPORT_SUMMARY_REFRESH),
     ),
     RoleSpec(
         code="platform_admin",
@@ -164,7 +176,10 @@ DEFAULT_ROLES: tuple[RoleSpec, ...] = (
             NEGOTIATION_READ,
             NEGOTIATION_WRITE,
             PRODUCT_STYLE_READ,
-            "report.publish_progress:read",
+            # 061 起报表只看本人（收回 report.publish_progress:read）
+            REPORT_WORK_PROGRESS_READ_OWN,
+            REPORT_PUBLISH_PROGRESS_READ_OWN,
+            REPORT_BI_READ_OWN,
             IMPORTER_BATCH_READ,
             IMPORTER_BATCH_WRITE,
             WECOM_BIND_WRITE,
@@ -200,6 +215,8 @@ DEFAULT_ROLES: tuple[RoleSpec, ...] = (
             "settlement:write",
             "settlement.review:approve",
             REPORT_READ,
+            REPORT_EXPORT_READ,  # 021 授
+            REPORT_SUMMARY_REFRESH,  # 061（默 22）
             IMPORTER_BATCH_READ,
             IMPORTER_BATCH_WRITE,
             IMPORTER_MAPPING_WRITE,
@@ -226,6 +243,10 @@ DEFAULT_ROLES: tuple[RoleSpec, ...] = (
             "settlement:write",
             "settlement.review:approve",
             "settlement.pay:upload_proof",
+            # 061（Q16）：看工作进度与 BI、能导出工作进度；投产 / 店铺不给
+            REPORT_WORK_PROGRESS_READ,
+            REPORT_EXPORT_READ,
+            REPORT_BI_READ,
         ),
     ),
     RoleSpec(
@@ -234,6 +255,9 @@ DEFAULT_ROLES: tuple[RoleSpec, ...] = (
         description="看报表与店铺数据，维护平台链接与商品资料（商品 / 套装 / 款式 / 成本表）",
         permissions=(
             REPORT_READ,
+            REPORT_EXPORT_READ,  # 021 授
+            REPORT_STORE_DAILY_WRITE,  # 018 授（默 14 运营录仅退款）
+            REPORT_SUMMARY_REFRESH,  # 061（默 22）
             PROMOTION_READ,
             BLOGGER_READ,
             PRODUCT_READ,

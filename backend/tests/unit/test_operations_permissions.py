@@ -72,6 +72,13 @@ _IN_CODE_CHECKS: tuple[tuple[str, str], ...] = (
 )
 
 
+# 061（7e R1）有意给运营的 report scope：store_daily:write（018 已授、代码追平）、
+# export:read（021 已授、代码追平）、summary:refresh（新授，默 22）。不算「商品域外的外溢」
+_OPS_061_ADDED: frozenset[str] = frozenset(
+    {"report.store_daily:write", "report.export:read", "report.summary:refresh"}
+)
+
+
 def _ops_now() -> tuple[str, ...]:
     return next(r for r in DEFAULT_ROLES if r.code == "operations").permissions
 
@@ -110,7 +117,7 @@ class TestOperationsRoleSpec:
         perms = _ops_now()
         assert "product.*:*" in perms
         assert "product.*:read" in perms
-        assert set(perms) - set(_OPS_BASELINE_DEFAULT) == {"product.*:*"}
+        assert set(perms) - set(_OPS_BASELINE_DEFAULT) == {"product.*:*"} | _OPS_061_ADDED
         assert set(_OPS_BASELINE_DEFAULT) <= set(perms)
 
     def test_description(self) -> None:
@@ -189,7 +196,10 @@ class TestNoSpillOutsideProduct:
         checks = _route_scopes() | set(_IN_CODE_CHECKS)
         changed = {(s, a) for s, a in checks if old.has(s, a) != new.has(s, a)}
         assert changed, "运营应该多了商品写权限"
-        outside = {(s, a) for s, a in changed if s.split(".", 1)[0] != "product"}
+        allowed = {tuple(p.split(":", 1)) for p in _OPS_061_ADDED}
+        outside = {
+            (s, a) for s, a in changed if s.split(".", 1)[0] != "product" and (s, a) not in allowed
+        }
         assert outside == set()
         # 只会多、不会少
         assert all(new.has(s, a) and not old.has(s, a) for s, a in changed)
