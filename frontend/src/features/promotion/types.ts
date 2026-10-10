@@ -1,5 +1,7 @@
 // U04 promotion feature 类型定义。
 
+import type { UiState } from "@/features/flow/keys";
+
 export type PublishStatus =
   | "未发布"
   | "已发布"
@@ -26,6 +28,40 @@ export type ReviewAction = "approve" | "reject";
 export type RetroStatus = "未开始" | "待复盘" | "待确认" | "已完成";
 
 export type { Platform } from "@/features/common/platforms";
+
+/** 发货 3 态（流程线 3.3）。null = 历史单，没进系统的发货流程。 */
+export type ShipStatus = "待发货" | "待打单" | "已发货";
+
+/** 推广列表「发货」筛选：none = 未进发货流程（历史单）；待发货只回阶段「待推送仓库」那批。 */
+export type ShipStatusFilter = ShipStatus | "none";
+
+/** 商品明细一行（颜色尺码，流程线 7.3）。颜色尺码实时读 SKU；界面不显示 SKU 编码（规-1）。 */
+export interface PromotionItem {
+  style_id: string;
+  /** 款式简称，没填回落款式名。 */
+  display_short_name: string;
+  /** 款式全称（悬停显示）。 */
+  goods_title: string;
+  sku_id: string;
+  color: string;
+  size: string;
+  style_main_image_url: string | null;
+}
+
+/** 明细应有的一个成员款式：套装 = 启用成员（按顺序），单品或没有归属 = 自身。弹窗按它每个成员出一行。 */
+export interface GoodsMember {
+  style_id: string;
+  /** 款式简称，没填回落款式名。 */
+  display_short_name: string;
+  /** 款式全称（悬停显示）。 */
+  goods_title: string;
+}
+
+/** 写入明细的一行：推广单入口每行都要有 sku_id，款式集合 = 归属商品的启用成员（后端校验）。 */
+export interface GoodsItemIn {
+  style_id: string;
+  sku_id: string;
+}
 
 export type UrgeStatus =
   | "已取消"
@@ -137,6 +173,25 @@ export interface Promotion {
   payment_qr_signed_url: string | null;
   settlement_payment_proof_signed_url: string | null;
   duplicate_warnings: PromotionDuplicateWarning[];
+  // 收件三项（流程线 M1）：读不到的角色（财务、运营）后端给 null
+  receiver_name: string | null;
+  receiver_phone: string | null;
+  receiver_address: string | null;
+  // 发货（流程线 3.3）
+  ship_status: ShipStatus | null;
+  ship_pushed_at: string | null;
+  ship_pushed_by_name: string | null;
+  ship_courier: string | null;
+  ship_waybill: string | null;
+  shipped_at: string | null;
+  /** 商品明细：单品 1 行、套装每个成员 1 行；没选过颜色尺码的单为空数组。 */
+  items: PromotionItem[];
+  /** 没有明细的旧单：「录入信息」里的颜色及规格原文；有明细时为 null。 */
+  legacy_color_spec: string | null;
+  /** 明细应有的成员款式（没有明细时弹窗靠它出空行）。 */
+  goods_members: GoodsMember[];
+  /** 流程线矩阵（7.1）：列表行 = actions + edits，详情 / 动作返回 = actions + fields。 */
+  ui: UiState | null;
 }
 
 export interface PromotionDuplicateWarning {
@@ -162,6 +217,13 @@ export interface PromotionCreate {
   return_shipping_fee?: string | null;
   note_title?: string | null;
   remark?: string | null;
+  receiver_name?: string | null;
+  receiver_phone?: string | null;
+  receiver_address?: string | null;
+  /** 商品明细。不传 = 先不选、推送时补；传了就每行都要有 sku。 */
+  items?: GoodsItemIn[] | null;
+  /** 需要仓库发货（11-58）。默认 false：补录历史单不进待推送仓库。 */
+  need_shipping?: boolean;
 }
 
 export interface PromotionUpdate {
@@ -185,8 +247,26 @@ export interface PromotionUpdate {
   /**
    * 按键合并（7a-5）：值为 null 或空串 = 删这个键，没出现的键不动。
    * 只交改过的键，见 `buildSourceExtraPatch`。
+   * 「打单地址」「发货单号」已搬到 typed 列，带了后端 422 SOURCE_EXTRA_KEY_RETIRED。
    */
   source_extra?: Record<string, string | null>;
+  /** 收件三项：传了才改，null 或空串 = 清空。能不能改看 `ui.edits` 是否含 receiver。 */
+  receiver_name?: string | null;
+  receiver_phone?: string | null;
+  receiver_address?: string | null;
+}
+
+/** 确认推送仓库：弹窗里补的颜色尺码（整组替换）与收件信息（传了才改），与推送同一事务。 */
+export interface PromotionShipPushRequest {
+  items?: GoodsItemIn[] | null;
+  receiver_name?: string | null;
+  receiver_phone?: string | null;
+  receiver_address?: string | null;
+}
+
+/** 撤回推送：原因必填，1 ~ 500 字。 */
+export interface PromotionShipWithdrawRequest {
+  reason: string;
 }
 
 export interface PromotionPublishRequest {
@@ -276,8 +356,6 @@ export interface PromotionListFilters {
   is_active?: boolean;
   only_dual_platform?: boolean;
   is_hit?: boolean;
-  /** source_extra['打单地址'] 是否已填（仓库打单用，服务端筛选）。 */
-  has_print_address?: boolean;
-  /** source_extra['发货单号'] 是否已填（已打单 / 待打单，服务端筛选）。 */
-  has_waybill?: boolean;
+  /** 发货筛选（流程线 7.3）。 */
+  ship_status?: ShipStatusFilter;
 }

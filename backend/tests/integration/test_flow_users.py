@@ -66,7 +66,11 @@ class TestFlowUsers:
 
     async def test_warehouse_scopes_exact(self, session: AsyncSession, flow_users: Any) -> None:
         perms = await _perms(session, flow_users.warehouse)
-        assert perms.scopes == frozenset({"promotion:read", "promotion.warehouse:write"})
+        # 060 收回 promotion:read；promotion.warehouse:write 仅为回滚保留
+        assert perms.scopes == frozenset(
+            {"promotion_ship:fill", "promotion_ship:export", "promotion.warehouse:write"}
+        )
+        assert not perms.has("promotion", "read")
 
     async def test_seven_distinct_accounts_same_tenant(self, flow_users: Any) -> None:
         users = [

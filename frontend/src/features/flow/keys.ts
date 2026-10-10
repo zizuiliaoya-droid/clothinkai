@@ -1,7 +1,8 @@
 // 流程线矩阵的键与接口 `ui` 的类型（流程线设计 7.1、8.1）。
 //
 // 键名是前后端契约，照抄后端 backend/app/modules/flow/matrix.py 的 ACTION_KEYS / PAGE_ACTION_KEYS / FIELD_KEYS，
-// 顺序也一样（= 操作菜单的顺序）。改这里必须同步改后端。
+// 顺序也一样（= 操作菜单的顺序）。改这里必须同步改后端；keys.snapshot.test.ts 拿后端导出的
+// flow_keys.snapshot.json 逐项比，对不上 CI 就红。
 // 接口里的键一律按 string 收：前端不认识的键直接忽略（按钮不出现，偏安全）。
 
 export const FLOW_KINDS = ["negotiation", "promotion", "warehouse", "settlement", "freight"] as const;

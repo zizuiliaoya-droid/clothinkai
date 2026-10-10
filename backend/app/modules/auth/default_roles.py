@@ -90,6 +90,14 @@ PRODUCT_STYLE_READ = "product.style:read"
 # 刻意不叫 blogger.tag:write —— has() 的前缀通配只看第一段，PR / 主管的 blogger.*:*
 # 会命中它，PR 就能改字典了。读字典用现有的 blogger:read。迁移 059 同步授予现存库。
 BLOGGER_TAG_WRITE = "blogger_tag:write"
+# 流程线 PR-2 发货（迁移 060）。独立一级域 promotion_ship，刻意不叫 promotion.ship:* ——
+# PR / 主管的 promotion.*:* 会命中它：推送仓库要「管理员或 PR 主管确认，不是 PR」，
+# 待打单阶段 PR 只读、不能回填。管理员靠 *。
+PROMOTION_SHIP_PUSH = "promotion_ship:push"  # 纳入发货 / 确认推送仓库 / 撤回推送：主管
+PROMOTION_SHIP_FILL = "promotion_ship:fill"  # 回填快递信息、改单号：仓库
+PROMOTION_SHIP_EXPORT = "promotion_ship:export"  # 导出待打单（业务方要求单独授权）：仓库
+# 旧回填 scope。060 起回填接口改挂 promotion_ship:fill，已停用，仅为回滚保留
+PROMOTION_WAREHOUSE_WRITE_LEGACY = "promotion.warehouse:write"
 
 
 # ---------------------------------------------------------------------------
@@ -173,6 +181,7 @@ DEFAULT_ROLES: tuple[RoleSpec, ...] = (
             BLOGGER_ALL,
             PROMOTION_REVIEW,
             BLOGGER_TAG_WRITE,
+            PROMOTION_SHIP_PUSH,
             # 谈款：主管是唯一能审的角色
             NEGOTIATION_READ,
             NEGOTIATION_WRITE,
@@ -245,9 +254,11 @@ DEFAULT_ROLES: tuple[RoleSpec, ...] = (
         name="仓库",
         description="仓库打单：仅能查看待打单推广单并回传发货单号",
         permissions=(
-            # 仓库仅允许专用接口回传发货单号；不可通用编辑/发布推广
-            "promotion:read",
-            "promotion.warehouse:write",
+            # 060 起仓库只走专用接口（/api/warehouse/shipments 与回填），收回 promotion:read：
+            # 不收回的话仓库直接调推广列表仍能看到博主、发布链接等矩阵里「隐」的字段
+            PROMOTION_SHIP_FILL,
+            PROMOTION_SHIP_EXPORT,
+            PROMOTION_WAREHOUSE_WRITE_LEGACY,
         ),
     ),
 )

@@ -98,7 +98,16 @@ class TestListProjection:
                       reviewed_at = NOW(),
                       review_action = 'approve',
                       review_reason = '审核说明',
-                      source_extra = '{"打单地址": "xx"}'::jsonb
+                      receiver_name = '收件人',
+                      receiver_phone = '13800138000',
+                      receiver_address = '上海市某区某路 1 号',
+                      ship_status = '已发货',
+                      ship_pushed_at = NOW(),
+                      ship_pushed_by = :uid,
+                      ship_courier = '顺丰',
+                      ship_waybill = 'SF000111',
+                      shipped_at = NOW(),
+                      source_extra = '{"订单号": "xx"}'::jsonb
                     WHERE id = :pid
                     """
                 ),

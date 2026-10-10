@@ -1,0 +1,160 @@
+{
+  "KINDS": [
+    "negotiation",
+    "promotion",
+    "warehouse",
+    "settlement",
+    "freight"
+  ],
+  "ACTION_KEYS": {
+    "negotiation": [
+      "edit",
+      "submit",
+      "manager_review",
+      "final_review",
+      "receiver_save",
+      "receiver_confirm",
+      "copy",
+      "comment"
+    ],
+    "promotion": [
+      "ship_include",
+      "ship_push",
+      "ship_withdraw",
+      "publish",
+      "cancel",
+      "recall_start",
+      "recall_waybill",
+      "recall_result",
+      "urge",
+      "urge_complete",
+      "review",
+      "resubmit",
+      "settlement_resubmit",
+      "settlement_chat",
+      "metrics",
+      "retro_write",
+      "retro_revise",
+      "freight_submit",
+      "comment",
+      "deactivate"
+    ],
+    "warehouse": [
+      "ship_fill"
+    ],
+    "settlement": [
+      "legacy_approve",
+      "reject",
+      "extra_item",
+      "fill_payment",
+      "upload_proof"
+    ],
+    "freight": [
+      "freight_review",
+      "freight_pay",
+      "freight_reject_payment",
+      "freight_resubmit"
+    ]
+  },
+  "PAGE_ACTION_KEYS": {
+    "negotiation": [
+      "create"
+    ],
+    "promotion": [
+      "create",
+      "import"
+    ],
+    "warehouse": [
+      "export"
+    ],
+    "settlement": [
+      "import"
+    ],
+    "freight": []
+  },
+  "FIELD_KEYS": {
+    "negotiation": [
+      "basic",
+      "quote_amount",
+      "manager_opinion",
+      "final_opinion",
+      "receiver",
+      "timeline",
+      "overdue_badge",
+      "others_in_progress"
+    ],
+    "promotion": [
+      "goods",
+      "goods_items",
+      "cooperation",
+      "cooperation_mode",
+      "quote_amount",
+      "receiver",
+      "shipping",
+      "publish_info",
+      "platform_posts",
+      "metrics",
+      "payment_qr",
+      "return_waybill",
+      "recall_info",
+      "review_result",
+      "settlement",
+      "settlement_chat",
+      "retro",
+      "freight_payment",
+      "other_info",
+      "timeline"
+    ],
+    "warehouse": [],
+    "settlement": [],
+    "freight": []
+  },
+  "PROMOTION_STAGES": [
+    "待推送仓库",
+    "待仓库发货",
+    "档期内",
+    "催发",
+    "重要催发",
+    "超时",
+    "未排期",
+    "待主管审核",
+    "推广驳回 · 待重提",
+    "待财务付款",
+    "结款驳回 · 待重提",
+    "待传结款截图",
+    "待满 7 天",
+    "待录 7 天数据",
+    "待复盘",
+    "召回中",
+    "已完结",
+    "已完结 · 召回",
+    "已完结 · 不合作",
+    "已停用",
+    "已删除",
+    "状态异常"
+  ],
+  "STAGE_COLUMN": {
+    "待推送仓库": "A",
+    "待仓库发货": "B",
+    "档期内": "C",
+    "催发": "C",
+    "重要催发": "C",
+    "超时": "C",
+    "未排期": "C",
+    "待主管审核": "D",
+    "推广驳回 · 待重提": "D",
+    "待财务付款": "E",
+    "结款驳回 · 待重提": "E",
+    "待传结款截图": "E",
+    "待满 7 天": "F",
+    "待录 7 天数据": "F",
+    "待复盘": "F",
+    "召回中": "G",
+    "已完结": "H",
+    "已完结 · 召回": "H",
+    "已完结 · 不合作": "H",
+    "已停用": "H",
+    "已删除": "H",
+    "状态异常": "H"
+  }
+}

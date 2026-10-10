@@ -18,10 +18,11 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Annotated
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from pydantic import (
+    AwareDatetime,
     BaseModel,
     ConfigDict,
     Field,
@@ -36,6 +37,7 @@ from app.modules.promotion.enums import (
     RejectReasonCategory,
     ReviewAction,
     SettlementStatus,
+    ShipCourier,
 )
 
 _QuoteField = Annotated[
@@ -92,6 +94,25 @@ class PromotionBase(BaseModel):
     source_extra: dict = Field(default_factory=dict)
 
 
+# 收件三项（流程线 M1）。长度按列宽；电话的格式与规范化在 service 里走 receiver.normalize_receiver_phone
+# （422 要报 INVALID_RECEIVER_PHONE，schema 的 ValueError 只会是通用 VALIDATION_ERROR）。
+# 去空白后是空串 = 清空。
+_ReceiverNameField = Annotated[str | None, Field(max_length=32)]
+_ReceiverPhoneField = Annotated[str | None, Field(max_length=32)]
+_ReceiverAddressField = Annotated[str | None, Field(max_length=255)]
+
+
+class GoodsItemIn(BaseModel):
+    """商品明细一行（颜色尺码），谈款与推广单共用（流程线 7.3）。
+
+    ``sku_id`` 谈款草稿可空；推广单的入口（``POST /``、``PUT /{id}/items``、推送）要求每行都有，
+    且 sku 属于该行款式、未删除。款式集合 = 归属商品的启用成员，都在 service 校验。
+    """
+
+    style_id: UUID
+    sku_id: UUID | None = None
+
+
 class PromotionCreate(PromotionBase):
     """创建入参。"""
 
@@ -101,6 +122,18 @@ class PromotionCreate(PromotionBase):
 
     return_shipping_fee: _FeeField | None = None
     """寄回运费。一般在召回时才录，建单时通常为空。"""
+
+    receiver_name: _ReceiverNameField = None
+    receiver_phone: _ReceiverPhoneField = None
+    receiver_address: _ReceiverAddressField = None
+
+    items: list[GoodsItemIn] | None = Field(default=None, max_length=10)
+    """商品明细（颜色尺码）。不传 = 先不选、推送时补；传了就每行都要有 sku，款式集合 = 归属商品的启用成员
+    （单品 1 行、套装每个成员 1 行），``promotion.sku_id`` 取主款式那一行。"""
+
+    need_shipping: bool = False
+    """需要仓库发货（流程线 S1，11-58）。默认不勾：直接新建是补录历史用，与导入一样 ``ship_status`` = NULL、
+    不进待推送队列；勾了才写「待发货」。事后要发货走「纳入发货」。"""
 
 
 class PromotionUpdate(BaseModel):
@@ -133,7 +166,12 @@ class PromotionUpdate(BaseModel):
 
     不再整包覆盖：整包会删掉表单上没有的键，也会让弹窗开着期间仓库回填的发货单号
     被旧快照冲掉。合并规则在 ``domain.merge_source_extra``。
+    「打单地址」「发货单号」M1 起是 typed 列，带了就 422 ``SOURCE_EXTRA_KEY_RETIRED``。
     """
+    receiver_name: _ReceiverNameField = None
+    receiver_phone: _ReceiverPhoneField = None
+    receiver_address: _ReceiverAddressField = None
+    """收件三项：传了才改（``model_fields_set``），null 或去空白后是空串 = 清空。"""
 
 
 class PromotionPaymentQrUploadInitRequest(BaseModel):
@@ -157,7 +195,43 @@ class PromotionPaymentQrBindRequest(BaseModel):
 
 
 class PromotionWarehouseWaybillRequest(BaseModel):
+    """仓库回填 / 改快递信息（流程线 S5 / S6）。旧 body 只传 ``waybill`` 会 422（前后端同一个 PR 上线）。
+
+    ``shipped_at`` 不传 = 现在；要带时区（不带的无法判断「不晚于现在」），晚于现在在 service 里 422。
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    courier: ShipCourier
     waybill: str = Field(min_length=1, max_length=128)
+    shipped_at: AwareDatetime | None = None
+
+
+# ---------------------------------------------------------------------------
+# 发货（流程线 3.3）
+# ---------------------------------------------------------------------------
+
+
+class PromotionShipPushRequest(BaseModel):
+    """确认推送仓库（S3）。推送弹窗里补选的颜色尺码、补填的收件信息，与推送同一事务写入，写完再判 ★。
+
+    都不传 = 只推送；``items`` 传了就整组替换（规则同 ``PUT /{id}/items``），收件三项传了才改（``model_fields_set``）。
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    items: list[GoodsItemIn] | None = Field(default=None, max_length=10)
+    receiver_name: _ReceiverNameField = None
+    receiver_phone: _ReceiverPhoneField = None
+    receiver_address: _ReceiverAddressField = None
+
+
+class PromotionShipWithdrawRequest(BaseModel):
+    """撤回推送（S4）：原因必填，1 ~ 500 字（7.1 文本长度），进 audit_log。"""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    reason: str = Field(min_length=1, max_length=500)
 
 
 # ---------------------------------------------------------------------------
@@ -384,6 +458,34 @@ class PromotionDuplicateWarning(BaseModel):
     cooperation_date: date
 
 
+class PromotionItemResponse(BaseModel):
+    """推广单商品明细一行（流程线 7.3）。颜色尺码实时读 SKU，不做快照。"""
+
+    style_id: UUID
+    display_short_name: str
+    """款式简称，没填（或全空白）回落款式名。"""
+    goods_title: str
+    """款式全称（悬停显示）。"""
+    sku_id: UUID
+    color: str
+    size: str
+    style_main_image_url: str | None = None
+    """该行款式主图的签名 URL；没有图或签名失败为 null。"""
+
+
+class GoodsMemberResponse(BaseModel):
+    """明细应有的一个成员款式（口径同 ``PromotionItemRepository.members_of``）。
+
+    推送 / 改颜色尺码弹窗按它给每个成员出一行；不带任何编码（规-1）。
+    """
+
+    style_id: UUID
+    display_short_name: str
+    """款式简称，没填（或全空白）回落款式名。"""
+    goods_title: str
+    """款式全称（悬停显示）。"""
+
+
 class PromotionResponse(BaseModel):
     """推广响应。
 
@@ -503,6 +605,25 @@ class PromotionResponse(BaseModel):
     # 人工源列扩展（对齐 final.xlsx 站外推广源列）
     source_extra: dict = Field(default_factory=dict)
 
+    # 收件三项（流程线 M1）：字段规则 promotion.receiver_*，读不到的（财务、运营）投影成 None
+    receiver_name: str | None = None
+    receiver_phone: str | None = None
+    receiver_address: str | None = None
+
+    # 发货（流程线 3.3）：NULL = 历史单（没进系统的发货流程）；推送人名字列表一页一次批量查
+    ship_status: str | None = None
+    ship_pushed_at: datetime | None = None
+    ship_pushed_by_name: str | None = None
+    ship_courier: str | None = None
+    ship_waybill: str | None = None
+    shipped_at: datetime | None = None
+
+    # 商品明细（流程线 M1）：列表一页一次批量查；没有明细的旧单回落 source_extra['颜色及规格'] 原文
+    items: list[PromotionItemResponse] = Field(default_factory=list)
+    legacy_color_spec: str | None = None
+    # 明细应有的成员款式：套装 = 启用成员按 sort_order；单品或没有归属 = [style_id]
+    goods_members: list[GoodsMemberResponse] = Field(default_factory=list)
+
     # 结款附件（仅 PR/PR主管/管理员可见；warehouse 始终为 null）
     payment_qr_attachment_id: UUID | None = None
     payment_qr_signed_url: str | None = None
@@ -510,6 +631,10 @@ class PromotionResponse(BaseModel):
 
     # 重复警告（仅 create / detail 视图填入）
     duplicate_warnings: list[PromotionDuplicateWarning] = Field(default_factory=list)
+
+    # 流程线矩阵（7.1）：列表行 = column + actions + edits，详情 / 各动作的返回 = column + actions + fields。
+    # 形状由 flow.matrix.UiState.to_dict 定，键名常量见 flow/matrix.py
+    ui: dict[str, Any] | None = None
 
 
 class PromotionPage(BaseModel):
@@ -522,6 +647,10 @@ class PromotionPage(BaseModel):
 # ---------------------------------------------------------------------------
 # 列表 filter
 # ---------------------------------------------------------------------------
+
+
+ShipStatusFilter = Literal["待发货", "待打单", "已发货", "none"]
+"""推广列表「发货」筛选（7.3）：``none`` = 历史单（NULL）；``待发货`` 只回阶段「待推送仓库」那批（被取消的不算）。"""
 
 
 class PromotionListFilters(BaseModel):
@@ -544,8 +673,66 @@ class PromotionListFilters(BaseModel):
     is_active: bool | None = True
     only_dual_platform: bool = False
     is_hit: bool | None = None
-    has_print_address: bool | None = None
-    has_waybill: bool | None = None
+    ship_status: ShipStatusFilter | None = None
+
+
+# ---------------------------------------------------------------------------
+# 仓库页 /api/warehouse（流程线 7.4）
+# ---------------------------------------------------------------------------
+
+
+WarehouseBucket = Literal["待打单", "已发货", "全部"]
+"""仓库页分桶：``全部`` = 待打单 + 已发货（不含待发货与历史单）。"""
+
+
+class WarehouseShipmentItem(BaseModel):
+    """仓库行的一个商品明细：只给对单要用的品名与颜色尺码（编码只进导出）。"""
+
+    display_short_name: str
+    color: str
+    size: str
+
+
+class WarehouseShipmentRow(BaseModel):
+    """仓库行投影（7.4）：仓库从任何接口都拿不到整张推广单。
+
+    没有博主、平台、发布链接、金额、收款码、``source_extra``（矩阵里对仓库都是「隐」）；
+    收件三项也过字段规则。列表与回填（``PATCH /{id}/warehouse-waybill``）都只回它。
+    """
+
+    id: UUID
+    internal_code: str
+    style_code: str
+    display_short_name: str
+    goods_title: str | None = None
+    items: list[WarehouseShipmentItem]
+    legacy_color_spec: str | None = None
+    """没有明细的旧单：「录入信息」里的颜色及规格原文。"""
+    receiver_name: str | None = None
+    receiver_phone: str | None = None
+    receiver_address: str | None = None
+    receiver_updated_after_push: bool = False
+    items_updated_after_push: bool = False
+    """推送后改过地址 / 明细。从事件推出，事件表随 M2（PR-4）上线，这之前恒为 false。"""
+    ship_status: str
+    ship_pushed_at: datetime | None = None
+    ship_pushed_by_name: str | None = None
+    ship_courier: str | None = None
+    ship_waybill: str | None = None
+    shipped_at: datetime | None = None
+    ui: dict[str, Any]
+    """``{"actions": {"ship_fill": …}}``：仓库行只有回填一个动作（``MATRICES["warehouse"]``）。"""
+
+
+class WarehouseShipmentPage(BaseModel):
+    items: list[WarehouseShipmentRow]
+    total: int
+    page: int
+    page_size: int
+    couriers: list[str]
+    """快递公司枚举（``ShipCourier``），前端不再写一份常量。"""
+    ui: dict[str, Any]
+    """页级动作：持 ``promotion_ship:export`` 才有 ``actions.export``（不进矩阵）。"""
 
 
 __all__ = [
@@ -567,10 +754,16 @@ __all__ = [
     "PromotionResponse",
     "PromotionResubmitRequest",
     "PromotionReviewRequest",
+    "PromotionShipPushRequest",
+    "PromotionShipWithdrawRequest",
     "PromotionUpdate",
     "PromotionUpdateLikeRequest",
     "PromotionWarehouseWaybillRequest",
     "RetrospectiveConfirmRequest",
     "RetrospectiveResponse",
     "RetrospectiveSubmitRequest",
+    "WarehouseBucket",
+    "WarehouseShipmentItem",
+    "WarehouseShipmentPage",
+    "WarehouseShipmentRow",
 ]

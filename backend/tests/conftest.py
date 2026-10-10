@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterable
 from dataclasses import dataclass
 from typing import Any, ClassVar
 from uuid import UUID, uuid4
@@ -525,6 +525,34 @@ async def _clear_event_handlers() -> AsyncIterator[None]:
     clear_handlers()
 
 
+# purge_promotions 的删除顺序：子表在前、promotion 最后。子表外键都是 RESTRICT；
+# negotiation 是 SET NULL，不先删的话已通过的谈款被置空，撞「审核通过 ⇔ 有推广单」CHECK。
+# 每加一张指向 promotion 的子表就加进来（流程线设计 9.2）。
+_PURGE_PROMOTION_STEPS: tuple[str, ...] = (
+    "DELETE FROM negotiation WHERE promotion_id = ANY(CAST(:ids AS uuid[]))",
+    "DELETE FROM promotion_item WHERE promotion_id = ANY(CAST(:ids AS uuid[]))",
+    "DELETE FROM settlement_extra_item WHERE settlement_id IN "
+    "(SELECT id FROM settlement WHERE promotion_id = ANY(CAST(:ids AS uuid[])))",
+    "DELETE FROM settlement WHERE promotion_id = ANY(CAST(:ids AS uuid[]))",
+    "DELETE FROM promotion_amount_log WHERE promotion_id = ANY(CAST(:ids AS uuid[]))",
+    "DELETE FROM urge_record WHERE promotion_id = ANY(CAST(:ids AS uuid[]))",
+    "DELETE FROM urge_task WHERE promotion_id = ANY(CAST(:ids AS uuid[]))",
+    "DELETE FROM blogger_retrospective WHERE promotion_id = ANY(CAST(:ids AS uuid[]))",
+    "DELETE FROM promotion WHERE id = ANY(CAST(:ids AS uuid[]))",
+)
+
+
+async def purge_promotions(session: AsyncSession, ids: Iterable[UUID]) -> None:
+    """删掉这些推广单及其子表行（提交式测试的 finally 用；不提交，调用方自己 commit）。"""
+    from sqlalchemy import text as sa_text
+
+    id_list = list(ids)
+    if not id_list:
+        return
+    for sql in _PURGE_PROMOTION_STEPS:
+        await session.execute(sa_text(sql), {"ids": id_list})
+
+
 @pytest_asyncio.fixture
 async def promotion_factory(session: AsyncSession, tenant_a: Any) -> Any:
     """U04 测试数据工厂."""
@@ -539,7 +567,7 @@ async def promotion_factory(session: AsyncSession, tenant_a: Any) -> Any:
         RecallStatus,
         SettlementStatus,
     )
-    from app.modules.promotion.models import Promotion
+    from app.modules.promotion.models import Promotion, PromotionItem
 
     class PromotionFactory:
         # promotion() 认的 kwarg（brand_comment 是开关，不是列）；加 kw.get 时同步改这里
@@ -579,6 +607,18 @@ async def promotion_factory(session: AsyncSession, tenant_a: Any) -> Any:
                     "resubmit_note",
                     "resubmitted_at",
                     "brand_comment",
+                    # 流程线 M1（060）收件 / 发货
+                    "ship_status",
+                    "receiver_name",
+                    "receiver_phone",
+                    "receiver_address",
+                    "ship_courier",
+                    "ship_waybill",
+                    "shipped_at",
+                    "ship_pushed_at",
+                    "ship_pushed_by",
+                    # [(style, sku), …]：按顺序插 promotion_item（不校验成员 / 归属，造数用）
+                    "items",
                 }
             ),
         }
@@ -654,9 +694,31 @@ async def promotion_factory(session: AsyncSession, tenant_a: Any) -> Any:
                     review_reason_category=kw.get("review_reason_category"),
                     resubmit_note=kw.get("resubmit_note"),
                     resubmitted_at=kw.get("resubmitted_at"),
+                    # 流程线 M1（060）收件 / 发货
+                    ship_status=kw.get("ship_status"),
+                    receiver_name=kw.get("receiver_name"),
+                    receiver_phone=kw.get("receiver_phone"),
+                    receiver_address=kw.get("receiver_address"),
+                    ship_courier=kw.get("ship_courier"),
+                    ship_waybill=kw.get("ship_waybill"),
+                    shipped_at=kw.get("shipped_at"),
+                    ship_pushed_at=kw.get("ship_pushed_at"),
+                    ship_pushed_by=kw.get("ship_pushed_by"),
                 )
                 session.add(p)
                 await session.flush()
+                for order, (item_style, item_sku) in enumerate(kw.get("items") or []):
+                    session.add(
+                        PromotionItem(
+                            tenant_id=t.id,
+                            promotion_id=p.id,
+                            style_id=item_style.id,
+                            sku_id=item_sku.id,
+                            sort_order=order,
+                        )
+                    )
+                if kw.get("items"):
+                    await session.flush()
                 # PRD 改动 5：publish 要求品牌词评论截图。要测发布流程的用例传
                 # brand_comment=True，省得每处自己造 attachment 行。
                 # 这里直接插 attachment 不走 R2 —— 只为满足 FK 与「传过了」这个事实。

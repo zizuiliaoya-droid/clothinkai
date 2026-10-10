@@ -129,7 +129,8 @@ async def _seed(
             internal_code=internal_code,
             style_short_name_snapshot=_SNAPSHOT[internal_code],
             goods_main_id=goods.id if goods else None,
-            source_extra={"打单地址": f"{internal_code} 的收件地址"},
+            ship_status="待打单",
+            receiver_address=f"{internal_code} 的收件地址",
             # A、C 排在 5 天后 → 进企微催发候选；B、B2 不排期，不进候选
             scheduled_publish_date=(
                 today + timedelta(days=5) if internal_code in ("DN-A-INT", "DN-C-INT") else None
@@ -240,7 +241,7 @@ class TestPromotionDisplayShortName:
         blogger_factory: Any,
         promotion_factory: Any,
     ) -> None:
-        """③ 仓库打单（has_print_address=True）走同一条列表 SQL，结果一样。"""
+        """③ 带发货筛选（ship_status=待打单）走同一条列表 SQL，结果一样。"""
         token = tenant_id_ctx.set(tenant_a.id)
         try:
             seed = await _seed(
@@ -252,7 +253,7 @@ class TestPromotionDisplayShortName:
                 blogger_factory,
                 promotion_factory,
             )
-            listed = await _list(session, seed.user, has_print_address=True)
+            listed = await _list(session, seed.user, ship_status="待打单")
             assert set(listed) == set(_EXPECTED)
             for code, expected in _EXPECTED.items():
                 assert _names(listed[code]) == expected, code

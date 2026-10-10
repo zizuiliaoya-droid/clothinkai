@@ -1,18 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { buildSourceExtraPatch } from "./sourceExtra";
 
-const FIELDS = ["颜色及规格", "打单地址", "发货单号", "订单号", "合作形式", "负责PR"] as const;
+const FIELDS = ["订单号", "合作形式", "负责PR"] as const;
 
 describe("buildSourceExtraPatch", () => {
   it("只含改过的键", () => {
-    const initial = { 打单地址: "杭州", 订单号: "", 负责PR: "小王" };
-    const values = { 打单地址: "杭州", 订单号: "TB001", 负责PR: "小王" };
+    const initial = { 合作形式: "线下", 订单号: "", 负责PR: "小王" };
+    const values = { 合作形式: "线下", 订单号: "TB001", 负责PR: "小王" };
     expect(buildSourceExtraPatch(initial, values, FIELDS)).toEqual({ 订单号: "TB001" });
   });
 
   it("没碰过的空字段不提交（含表单给的 undefined）", () => {
-    const initial = { 颜色及规格: "", 发货单号: "" };
-    const values = { 颜色及规格: undefined, 发货单号: "" };
+    const initial = { 合作形式: "", 负责PR: "" };
+    const values = { 合作形式: undefined, 负责PR: "" };
     expect(buildSourceExtraPatch(initial, values, FIELDS)).toEqual({});
   });
 
