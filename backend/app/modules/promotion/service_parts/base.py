@@ -741,6 +741,7 @@ class PromotionServiceBase:
             goods_main_id=promotion.goods_main_id,
             blogger_id=promotion.blogger_id,
             pr_id=promotion.pr_id,
+            line_id=promotion.line_id,
             style_code_snapshot=promotion.style_code_snapshot,
             style_short_name_snapshot=promotion.style_short_name_snapshot,
             display_short_name=resolved_display_short_name,

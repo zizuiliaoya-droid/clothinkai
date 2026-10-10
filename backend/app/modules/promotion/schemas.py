@@ -504,6 +504,8 @@ class PromotionResponse(BaseModel):
     goods_main_id: UUID | None = None
     blogger_id: UUID
     pr_id: UUID | None = None
+    line_id: UUID | None = None
+    """主线号（流程线 6.2）：只由系统写，任何更新接口都不接受；前端靠它开时间线抽屉（PR-4）。"""
 
     # 快照字段
     style_code_snapshot: str

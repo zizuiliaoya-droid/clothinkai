@@ -221,6 +221,27 @@ class TestSubmitAndReview:
             assert row[5] == Decimal("0.00")
             # 过渡期（流程线 PR-2，S1）：谈款审核通过建的单直接进待发货，等主管确认推送仓库
             assert row[6] == "待发货"
+            # 流程线 PR-3 S3：推广单继承谈款的主线号，promotion.created 记来源 = 谈款定稿、动作人 = 审核人
+            lines = (
+                await session.execute(
+                    sa_text(
+                        "SELECT n.line_id, p.line_id, e.payload, e.actor_id"
+                        " FROM negotiation n JOIN promotion p ON p.id = n.promotion_id"
+                        " JOIN line_event e ON e.promotion_id = p.id"
+                        "  AND e.event_type = 'promotion.created'"
+                        " WHERE n.id = :nid"
+                    ),
+                    {"nid": created.id},
+                )
+            ).all()
+            assert lines == [
+                (
+                    lines[0][0],
+                    lines[0][0],
+                    {"source": "谈款定稿", "negotiation_id": str(created.id)},
+                    manager.id,
+                )
+            ]
         finally:
             tenant_id_ctx.reset(token)
 

@@ -1,4 +1,4 @@
-"""流程线矩阵的两个错误码（流程线设计 7.1 错误码表）。
+"""流程线矩阵的两个错误码（流程线设计 7.1 错误码表），外加事件 payload 超限（6.3）。
 
 - ``FLOW_ACTION_FORBIDDEN``（403）：端点 scope 够、service 规则（本人 / 自审 / 不持 ``*`` / ≠ 本轮主管……）不满足；
   ``details.rule`` ∈ ``FLOW_RULES``，``details.reason`` 与按钮悬停文案是同一份
@@ -52,3 +52,17 @@ class FlowGateMissingError(AppException):
             details={"missing": items},
         )
         self.missing = tuple(missing)
+
+
+class LineEventPayloadTooLargeError(AppException):
+    """事件 payload 超过单条上限（设计 6.3「单条上限 8 KB」）：整个动作跟着失败（6.4，不吞异常）。"""
+
+    code = "LINE_EVENT_PAYLOAD_TOO_LARGE"
+    status_code = 422
+    message = "时间线记录内容过长"
+
+    def __init__(self, *, event_type: str, size: int, limit: int) -> None:
+        super().__init__(
+            f"时间线记录内容过长（{size} 字节，上限 {limit}）",
+            details={"event_type": event_type, "size": size, "limit": limit},
+        )

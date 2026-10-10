@@ -350,6 +350,10 @@ class NegotiationService:
             pr_user,
             autocommit=False,
             ship_status=ShipStatus.PENDING,
+            # 推广单继承谈款的主线号，promotion.created 记来源 = 谈款定稿（流程线 6.2）
+            line_id=negotiation.line_id,
+            negotiation_id=negotiation.id,
+            actor_id=user.id,
         )
 
         negotiation.status = NegotiationStatus.APPROVED.value
