@@ -16,6 +16,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.security.field_permissions import FieldPermissionContext
 from app.core.tenancy import tenant_id_ctx
 from app.modules.collect.models import AdDaily, QianniuDaily
 from app.modules.finance.order_adjustment_models import OrderAdjustment
@@ -23,15 +24,26 @@ from app.modules.product.goods_models import GoodsMain, GoodsStyleItem
 from app.modules.product.platform_product_models import PlatformProduct
 from app.modules.report.advanced_repository import ProductionRepository
 from app.modules.report.advanced_schemas import (
+    PrWorkProgress,
     StoreDailyManualUpdate,
     TargetCreate,
 )
+from app.modules.report.pr_scope import PR_SCOPE_ALL
 from app.modules.report.production_service import ProductionService
 from app.modules.report.store_daily_service import StoreDailyService
 from app.modules.report.target_planning_service import TargetPlanningService
-from app.modules.report.work_progress_service import WorkProgressService
+from app.modules.report.work_progress_service import WorkProgressService, _month_range
 
 pytestmark = pytest.mark.asyncio
+
+_SUPER_CTX = FieldPermissionContext(frozenset(), frozenset(), frozenset(), is_superuser=True)
+
+
+async def _wp_month(session: AsyncSession, tenant_id: Any, month: str) -> list[PrWorkProgress]:
+    """整月 × 全部 PR（``month`` 参数的换算与路由同一个 ``_month_range``）。"""
+    return await WorkProgressService(session).get_for_range(
+        tenant_id, *_month_range(month), scope=PR_SCOPE_ALL, field_ctx=_SUPER_CTX
+    )
 
 
 async def _goods(
@@ -181,7 +193,7 @@ class TestWorkProgress:
             )
             await session.commit()
 
-            rows = await WorkProgressService(session).get_for_month(tenant_a.id, "2026-05")
+            rows = await _wp_month(session, tenant_a.id, "2026-05")
             mine = [r for r in rows if r.pr_id == pr.id]
             assert len(mine) == 1
             row = mine[0]
@@ -236,7 +248,7 @@ class TestWorkProgress:
             )
             await session.commit()
 
-            rows = await WorkProgressService(session).get_for_month(tenant_a.id, "2026-06")
+            rows = await _wp_month(session, tenant_a.id, "2026-06")
             row = next(r for r in rows if r.pr_id == pr.id)
 
             assert row.quote_count == 5
@@ -274,7 +286,7 @@ class TestWorkProgress:
             )
             await session.commit()
 
-            rows = await WorkProgressService(session).get_for_month(tenant_a.id, "2026-07")
+            rows = await _wp_month(session, tenant_a.id, "2026-07")
             row = next(r for r in rows if r.pr_id == pr.id)
             assert row.quote_count == 1
             assert row.effective_quote_count == 0
@@ -287,7 +299,7 @@ class TestWorkProgress:
         from app.modules.report.exceptions import ReportInvalidTimeRangeError
 
         with pytest.raises(ReportInvalidTimeRangeError):
-            await WorkProgressService(session).get_for_month(tenant_a.id, "2026-13")
+            await _wp_month(session, tenant_a.id, "2026-13")
 
 
 class TestTargetPlanning:
@@ -922,7 +934,7 @@ class TestRls:
             )
             await session.commit()
             # 查 tenant_a 的工作进度 → 不含 tenant_b 数据
-            rows_a = await WorkProgressService(session).get_for_month(tenant_a.id, "2026-05")
+            rows_a = await _wp_month(session, tenant_a.id, "2026-05")
             assert all(r.pr_id != pr_b.id for r in rows_a)
         finally:
             tenant_id_ctx.reset(tok)

@@ -15,12 +15,15 @@ import pytest
 from openpyxl import load_workbook
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.security.field_permissions import FieldPermissionContext
 from app.core.tenancy import tenant_id_ctx
 from app.modules.report.bi_service import DEFAULT_BI_LAYOUT
 from app.modules.report.export_service import ReportExportService
 from app.modules.report.user_preference_service import UserPreferenceService
 
 pytestmark = pytest.mark.asyncio
+
+_SUPER_CTX = FieldPermissionContext(frozenset(), frozenset(), frozenset(), is_superuser=True)
 
 
 class TestUserPreference:
@@ -55,7 +58,10 @@ class TestExport:
         tok = tenant_id_ctx.set(tenant_a.id)
         try:
             resp = await ReportExportService(session).export(
-                tenant_a.id, "production", (date(2026, 6, 1), date(2026, 6, 30))
+                tenant_a.id,
+                "production",
+                (date(2026, 6, 1), date(2026, 6, 30)),
+                field_ctx=_SUPER_CTX,
             )
             body = b"".join([chunk async for chunk in resp.body_iterator])
             wb = load_workbook(io.BytesIO(body))
@@ -76,7 +82,10 @@ class TestExport:
         try:
             with pytest.raises(ReportExportTypeInvalidError):
                 await ReportExportService(session).export(
-                    tenant_a.id, "unknown", (date(2026, 6, 1), date(2026, 6, 30))
+                    tenant_a.id,
+                    "unknown",
+                    (date(2026, 6, 1), date(2026, 6, 30)),
+                    field_ctx=_SUPER_CTX,
                 )
         finally:
             tenant_id_ctx.reset(tok)

@@ -12,11 +12,13 @@ from app.modules.auth.deps import (
     CurrentActiveUser,
     CurrentPerms,
     SessionDep,
+    require_any_permission,
     require_permission,
 )
 from app.modules.product.goods_schemas import SeasonOptionsResponse
 from app.modules.product.season_options import list_season_options
 from app.modules.promotion.urge_calculator import get_today
+from app.modules.report.advanced_permissions import REPORT_WORK_PROGRESS_READ_OWN
 from app.modules.report.advanced_schemas import (
     ProductionReport,
     ProductionTrend,
@@ -35,9 +37,14 @@ from app.modules.report.deps import (
     WorkProgressServiceDep,
 )
 from app.modules.report.domain import resolve_time_range
+from app.modules.report.field_mask import build_field_perm_context
+from app.modules.report.pr_scope import resolve_pr_scope
 from app.modules.report.summary_read import SummaryReadRepository
+from app.modules.report.work_progress_service import _month_range
 
 router = APIRouter(prefix="/api/reports", tags=["report"])
+
+_WP_READ = ("report.work_progress", "read")
 
 _MonthQ = Annotated[str, Query(pattern=r"^\d{4}-\d{2}$")]
 _PresetQ = Annotated[str, Query(description="last_7d/last_30d/this_month/last_month/custom")]
@@ -51,14 +58,36 @@ _ToQ = Annotated[date | None, Query()]
 @router.get(
     "/work-progress",
     response_model=list[PrWorkProgress],
-    dependencies=[require_permission("report.work_progress", "read")],
+    dependencies=[require_any_permission(_WP_READ, REPORT_WORK_PROGRESS_READ_OWN)],
 )
 async def get_work_progress(
     user: CurrentActiveUser,
+    perms: CurrentPerms,
+    session: SessionDep,
     service: WorkProgressServiceDep,
-    month: _MonthQ,
+    month: Annotated[
+        str | None, Query(pattern=r"^\d{4}-\d{2}$", description="旧参数：整月（留一个版本）")
+    ] = None,
+    preset: _PresetQ = "this_month",
+    date_from: _FromQ = None,
+    date_to: _ToQ = None,
 ) -> list[PrWorkProgress]:
-    return await service.get_for_month(user.tenant_id, month)
+    """工作进度（区间 × PR）。传了 ``month`` 就按整月，否则按 ``preset`` / 自定义区间。
+
+    只持 ``read_own`` 的 PR 只看到本人那一行（service 层过滤，``resolve_pr_scope``）。
+    """
+    if month is not None:
+        lo, hi = _month_range(month)
+    else:
+        lo, hi = resolve_time_range(preset, date_from, date_to)
+    scope = resolve_pr_scope(perms, user.id, None, _WP_READ[0])
+    return await service.get_for_range(
+        user.tenant_id,
+        lo,
+        hi,
+        scope=scope,
+        field_ctx=await build_field_perm_context(user.id, session),
+    )
 
 
 # ----------------------------- 爆款约篇 ----------------------------- #

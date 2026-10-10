@@ -34,7 +34,8 @@ class PrWorkProgress(BaseModel):
     hit_count: int
     hit_rate: Decimal | None = None
     like_count: int
-    cost: Decimal
+    # F3 聚合金额：读不到时为 null（R1 恒给，见 report/field_mask.py）
+    cost: Decimal | None
     cpl: Decimal | None = None
 
 

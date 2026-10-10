@@ -14,7 +14,9 @@ from openpyxl import Workbook
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.metrics import report_export_total
+from app.core.security.field_permissions import FieldPermissionContext
 from app.modules.report.exceptions import ReportExportTypeInvalidError
+from app.modules.report.pr_scope import PR_SCOPE_ALL
 from app.modules.report.production_service import ProductionService
 from app.modules.report.store_daily_service import StoreDailyService
 from app.modules.report.work_progress_service import WorkProgressService
@@ -108,6 +110,7 @@ class ReportExportService:
         exclude_brushing: bool = True,
         seasons: Sequence[str] | None = None,
         granularity: str = "day",
+        field_ctx: FieldPermissionContext,
     ) -> StreamingResponse:
         if report_type not in _REPORT_TYPES:
             report_export_total.labels(report_type=report_type, result="invalid").inc()
@@ -121,6 +124,7 @@ class ReportExportService:
             exclude_brushing=exclude_brushing,
             seasons=seasons,
             granularity=granularity,
+            field_ctx=field_ctx,
         )
         wb = Workbook(write_only=True)
         ws = wb.create_sheet(report_type)
@@ -147,6 +151,7 @@ class ReportExportService:
         exclude_brushing: bool,
         seasons: Sequence[str] | None,
         granularity: str,
+        field_ctx: FieldPermissionContext,
     ) -> tuple[list[str], list[list[Any]]]:
         if report_type == "production":
             report = await ProductionService(self._s).get_report(
@@ -202,8 +207,10 @@ class ReportExportService:
             ]
             return [*_STORE_HEADERS, *extra_keys], rows
 
-        month = f"{time_range[0]:%Y-%m}"
-        work_rows = await WorkProgressService(self._s).get_for_month(tenant_id, month)
+        # 按请求区间导（原来取起日所在整月）；导出要 report.export:read，看全部 PR
+        work_rows = await WorkProgressService(self._s).get_for_range(
+            tenant_id, *time_range, scope=PR_SCOPE_ALL, field_ctx=field_ctx
+        )
         rows = [
             [
                 row.pr_name,
