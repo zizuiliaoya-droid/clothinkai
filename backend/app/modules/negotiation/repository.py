@@ -135,8 +135,8 @@ class NegotiationRepository:
                     {_JOINS}
                     WHERE {where}
                     ORDER BY
-                      -- 待审核的排最前：主管打开页面就该先看到要处理的
-                      CASE n.status WHEN '待审核' THEN 0 WHEN '草稿' THEN 1
+                      -- 主管待审的排最前：主管打开页面就该先看到要处理的
+                      CASE n.status WHEN '主管待审' THEN 0 WHEN '草稿' THEN 1
                                     WHEN '审核驳回' THEN 2 ELSE 3 END,
                       n.created_at DESC
                     OFFSET :offset LIMIT :limit
@@ -234,7 +234,7 @@ class NegotiationRepository:
     async def exists_pending_duplicate(
         self, *, tenant_id: UUID, blogger_id: UUID, style_id: UUID, exclude_id: UUID | None = None
     ) -> bool:
-        """同博主 + 同款式是否已有在途谈款单（草稿 / 待审核）。
+        """同博主 + 同款式是否已有在途谈款单（草稿 / 主管待审）。
 
         不阻塞，只给前端一个提示 —— 同一个博主推同一款两次是合理的（比如补发），
         但大概率是重复录入。
@@ -243,7 +243,7 @@ class NegotiationRepository:
             Negotiation.tenant_id == tenant_id,
             Negotiation.blogger_id == blogger_id,
             Negotiation.style_id == style_id,
-            Negotiation.status.in_(("草稿", "待审核")),
+            Negotiation.status.in_(("草稿", "主管待审")),
         )
         if exclude_id is not None:
             stmt = stmt.where(Negotiation.id != exclude_id)

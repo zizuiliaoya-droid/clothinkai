@@ -993,6 +993,7 @@ async def cross_unit_event_bus() -> AsyncIterator[Any]:
 import app.modules.ai.models  # noqa: E402  (U18 ai_advice_log)
 import app.modules.collect.models  # noqa: E402  (U13 采集 5 表)
 import app.modules.credential.models  # noqa: E402  (U12 credential)
+import app.modules.flow.models  # noqa: E402  (流程线 line_event)
 import app.modules.importer.models  # noqa: E402
 import app.modules.negotiation.models  # noqa: E402  (谈款审核)
 import app.modules.product.goods_models  # noqa: E402  (goods_main/goods_style_item)

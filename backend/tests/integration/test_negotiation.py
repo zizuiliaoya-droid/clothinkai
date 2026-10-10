@@ -188,7 +188,7 @@ class TestSubmitAndReview:
                 pr,
             )
             submitted = await svc.submit(created.id, pr)
-            assert submitted.status == "待审核"
+            assert submitted.status == "主管待审"
             assert submitted.submitted_at is not None
 
             approved = await svc.review(
@@ -196,7 +196,8 @@ class TestSubmitAndReview:
                 NegotiationReviewRequest(action=NegotiationReviewAction.APPROVE),
                 manager,
             )
-            assert approved.status == "审核通过"
+            # 过渡期（流程线 PR-3 S1）：旧 service 通过即建单，写 7 态里的「已定稿」
+            assert approved.status == "已定稿"
             assert approved.promotion_id is not None
             assert approved.promotion_internal_code is not None
             assert approved.reviewed_by == manager.id
@@ -271,7 +272,7 @@ class TestSubmitAndReview:
 
             # 重新提交会清掉上一轮的驳回意见
             resubmitted = await svc.submit(created.id, pr)
-            assert resubmitted.status == "待审核"
+            assert resubmitted.status == "主管待审"
             assert resubmitted.review_opinion is None
             assert resubmitted.reviewed_by is None
         finally:
@@ -439,12 +440,12 @@ class TestListAndHistory:
 
             items, total = await svc.list_negotiations(user=pr, filters=NegotiationListFilters())
             assert total == 2
-            assert items[0].status == "待审核"
+            assert items[0].status == "主管待审"
             assert items[1].status == "草稿"
 
             counts = await svc.status_counts(pr)
             assert counts["草稿"] == 1
-            assert counts["待审核"] == 1
+            assert counts["主管待审"] == 1
         finally:
             tenant_id_ctx.reset(token)
 

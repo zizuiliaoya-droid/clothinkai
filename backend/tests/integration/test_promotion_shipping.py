@@ -1145,7 +1145,7 @@ class TestFlowUi:
                 pr_id=flow_users.pr2.id,
                 promotion_id=negotiated.id,
                 cooperation_mode="送拍",
-                status="审核通过",
+                status="已定稿",
             )
         )
         await session.flush()

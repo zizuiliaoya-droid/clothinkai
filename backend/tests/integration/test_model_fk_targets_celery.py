@@ -49,6 +49,22 @@ _SCRIPT = textwrap.dedent(
         id=uuid4(), tenant_id=uuid4(), goods_main_id=uuid4(), style_id=uuid4(),
     ).compile(dialect=postgresql.dialect())
     print("GOODS_FK_TARGETS=" + ",".join(goods_targets) + ";" + ",".join(item_targets))
+
+    # 流程线 M2（061）：谈款商品明细与事件表。各自的模块显式 import 了全部 FK 目标表
+    from app.modules.flow.models import LineEvent
+    from app.modules.negotiation.models import NegotiationItem
+
+    ni_targets = sorted(fk.column.table.name for fk in NegotiationItem.__table__.foreign_keys)
+    insert(NegotiationItem).values(
+        id=uuid4(), tenant_id=uuid4(), negotiation_id=uuid4(), style_id=uuid4(), sku_id=uuid4(),
+    ).compile(dialect=postgresql.dialect())
+    le_targets = sorted(fk.column.table.name for fk in LineEvent.__table__.foreign_keys)
+    insert(LineEvent).values(
+        id=uuid4(), tenant_id=uuid4(), line_id=uuid4(), negotiation_id=uuid4(),
+        promotion_id=uuid4(), event_type="negotiation.created", attachment_id=uuid4(),
+        actor_id=uuid4(),
+    ).compile(dialect=postgresql.dialect())
+    print("FLOW_FK_TARGETS=" + ",".join(ni_targets) + ";" + ",".join(le_targets))
     """
 )
 
@@ -69,3 +85,8 @@ def test_import_conflict_fk_targets_resolve_in_celery_path() -> None:
     assert line == "FK_TARGETS=import_batch,tenant,user,user"
     goods = next(ln for ln in proc.stdout.splitlines() if ln.startswith("GOODS_FK_TARGETS="))
     assert goods == "GOODS_FK_TARGETS=brand,tenant,user;goods_main,style,tenant"
+    flow = next(ln for ln in proc.stdout.splitlines() if ln.startswith("FLOW_FK_TARGETS="))
+    assert flow == (
+        "FLOW_FK_TARGETS=negotiation,sku,style,tenant;"
+        "attachment,negotiation,promotion,tenant,user"
+    )

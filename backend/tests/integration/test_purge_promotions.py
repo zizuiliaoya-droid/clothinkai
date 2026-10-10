@@ -95,7 +95,7 @@ async def _with_children(
         (
             "INSERT INTO negotiation (id, tenant_id, blogger_id, style_id, pr_id, "
             "cooperation_mode, status, promotion_id) "
-            "VALUES (gen_random_uuid(), :t, :b, :st, :pr, '寄拍', '审核通过', :p)",
+            "VALUES (gen_random_uuid(), :t, :b, :st, :pr, '寄拍', '已定稿', :p)",
             {},
         ),
     ]:
