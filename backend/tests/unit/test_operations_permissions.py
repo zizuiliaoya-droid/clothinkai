@@ -94,8 +94,20 @@ def _walk(dependant: Dependant) -> Iterator[Dependant]:
         yield from _walk(sub)
 
 
+def _declared_pairs(call: object) -> set[tuple[str, str]]:
+    """一个依赖闭包声明的 (scope, action)：require_permission 一对、require_any_permission 全部。"""
+    qualname = getattr(call, "__qualname__", "")
+    if qualname == "require_permission.<locals>._checker":
+        nonlocals = inspect.getclosurevars(call).nonlocals  # type: ignore[arg-type]
+        return {(nonlocals["scope"], nonlocals["action"])}
+    if qualname == "require_any_permission.<locals>._checker":
+        nonlocals = inspect.getclosurevars(call).nonlocals  # type: ignore[arg-type]
+        return set(nonlocals["pairs"])
+    return set()
+
+
 def _route_scopes() -> set[tuple[str, str]]:
-    """所有路由（含嵌套依赖）上 require_permission 声明的 (scope, action)。"""
+    """所有路由（含嵌套依赖）上 require_permission / require_any_permission 声明的 (scope, action)。"""
     from app.main import app
 
     found: set[tuple[str, str]] = set()
@@ -103,11 +115,7 @@ def _route_scopes() -> set[tuple[str, str]]:
         if not isinstance(route, APIRoute):
             continue
         for dep in _walk(route.dependant):
-            call = dep.call
-            if getattr(call, "__qualname__", "") != "require_permission.<locals>._checker":
-                continue
-            nonlocals = inspect.getclosurevars(call).nonlocals  # type: ignore[arg-type]
-            found.add((nonlocals["scope"], nonlocals["action"]))
+            found |= _declared_pairs(dep.call)
     return found
 
 
@@ -179,6 +187,19 @@ class TestNoSpillOutsideProduct:
         assert len(scopes) > 50
         assert ("product", "write") in scopes
         assert ("ops.platform_link", "write") in scopes
+
+    def test_declared_pairs_reads_both_checkers(self) -> None:
+        from app.modules.auth.deps import require_any_permission, require_permission
+
+        one = require_permission("report.bi", "read").dependency
+        many = require_any_permission(
+            ("report.work_progress", "read"), ("report.work_progress", "read_own")
+        ).dependency
+        assert _declared_pairs(one) == {("report.bi", "read")}
+        assert _declared_pairs(many) == {
+            ("report.work_progress", "read"),
+            ("report.work_progress", "read_own"),
+        }
 
     @pytest.mark.parametrize(
         ("baseline", "now"),
