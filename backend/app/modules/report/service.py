@@ -2,6 +2,9 @@
 
 按 P-U08-01/03：解析 TimeRange → repo 聚合 → safe_div 组装读模型 + level 着色。
 纯读，无写/无事务/不触发事件。
+
+4 个方法都收必填 ``pr_scope``（7e R1：只持 ``read_own`` 的 PR 只看本人，路由层按
+``resolve_pr_scope`` 算好传进来），原样下推给 repo。
 """
 
 from __future__ import annotations
@@ -19,6 +22,7 @@ from app.modules.report.domain import (
     level_publish_rate,
 )
 from app.modules.report.exceptions import ReportStyleNotFoundError
+from app.modules.report.pr_scope import PrScope
 from app.modules.report.repository import PublishProgressRepository
 from app.modules.report.schemas import (
     PrDetail,
@@ -49,8 +53,12 @@ class PublishProgressService:
             **thresholds.sql_params(),
         }
 
-    async def get_summary(self, tenant_id: UUID, time_range: tuple) -> ProgressSummary:
-        row = await self._repo.aggregate_summary(**(await self._common(tenant_id, time_range)))
+    async def get_summary(
+        self, tenant_id: UUID, time_range: tuple, *, pr_scope: PrScope
+    ) -> ProgressSummary:
+        row = await self._repo.aggregate_summary(
+            **(await self._common(tenant_id, time_range)), pr_scope=pr_scope
+        )
         quote = int(row["quote_count"])
         publish_rate = safe_div(row["publish_count"], quote, quantize=_Q4)
         overdue_rate = safe_div(row["overdue_count"], quote, quantize=_Q4)
@@ -71,10 +79,19 @@ class PublishProgressService:
         )
 
     async def get_cards(
-        self, tenant_id: UUID, time_range: tuple, *, page: int, page_size: int
+        self,
+        tenant_id: UUID,
+        time_range: tuple,
+        *,
+        page: int,
+        page_size: int,
+        pr_scope: PrScope,
     ) -> StyleCardPage:
         rows, total = await self._repo.aggregate_cards(
-            **(await self._common(tenant_id, time_range)), page=page, page_size=page_size
+            **(await self._common(tenant_id, time_range)),
+            page=page,
+            page_size=page_size,
+            pr_scope=pr_scope,
         )
         return StyleCardPage(
             items=[self._to_card(r) for r in rows],
@@ -104,12 +121,12 @@ class PublishProgressService:
         )
 
     async def get_detail_by_pr(
-        self, tenant_id: UUID, style_id: UUID, time_range: tuple
+        self, tenant_id: UUID, style_id: UUID, time_range: tuple, *, pr_scope: PrScope
     ) -> list[PrDetail]:
         if not await self._repo.style_exists(tenant_id, style_id):
             raise ReportStyleNotFoundError()
         rows = await self._repo.aggregate_by_pr(
-            style_id=style_id, **(await self._common(tenant_id, time_range))
+            style_id=style_id, **(await self._common(tenant_id, time_range)), pr_scope=pr_scope
         )
         return [
             PrDetail(
@@ -125,7 +142,7 @@ class PublishProgressService:
         ]
 
     async def get_detail_by_time(
-        self, tenant_id: UUID, style_id: UUID, time_range: tuple
+        self, tenant_id: UUID, style_id: UUID, time_range: tuple, *, pr_scope: PrScope
     ) -> list[TimeSeriesPoint]:
         if not await self._repo.style_exists(tenant_id, style_id):
             raise ReportStyleNotFoundError()
@@ -134,6 +151,7 @@ class PublishProgressService:
             style_id=style_id,
             date_from=time_range[0],
             date_to=time_range[1],
+            pr_scope=pr_scope,
         )
         return [
             TimeSeriesPoint(

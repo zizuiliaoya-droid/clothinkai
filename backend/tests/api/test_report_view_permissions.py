@@ -5,6 +5,8 @@
 - 工作进度：``require_any_permission(read, read_own)``；只持 ``read_own`` 的 PR 只看到本人那一行
   （service 层 ``resolve_pr_scope`` 强制）；区间参数 ``preset`` / ``date_from`` / ``date_to``，
   旧参数 ``month`` 换算成整月；F3 聚合金额运营与管理员相同
+- 发文进度 4 个接口：``require_any_permission(read, read_own)``；只持 ``read_own`` 的 PR 只看到
+  本人的单（``PrScope`` 下推到 SQL，摘要 / 卡片 total 也只数本人）
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ from uuid import uuid4
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.tenancy import tenant_id_ctx
@@ -161,3 +164,120 @@ class TestWorkProgress:
             f"{_WP}?preset=custom&date_from={_M_LO}&date_to={hi}",
         )
         assert resp.status_code == 200, resp.text
+
+
+_PP = "/api/reports/publish-progress"
+_PP_RANGE = f"preset=custom&date_from={_M_LO}&date_to={_M_HI}"
+
+
+@pytest.fixture
+async def pp_seeded(
+    flow_users: Any, product_factory: Any, blogger_factory: Any, promotion_factory: Any
+) -> Any:
+    """上个月：款 A 上 pr 两单（一单已发布）、pr2 一单、未分配一单；款 B 只有 pr2 一单。
+
+    返回 ``(users, style_a, style_b, 非 pr 的单 id)``。
+    """
+    style_a = await product_factory.style(style_code=f"PA{uuid4().hex[:8]}")
+    style_b = await product_factory.style(style_code=f"PB{uuid4().hex[:8]}")
+    blogger = await blogger_factory.blogger()
+
+    async def promo(style: Any, day: int, **kw: Any) -> Any:
+        return await promotion_factory.promotion(
+            style=style,
+            blogger=blogger,
+            internal_code=f"PP{uuid4().hex[:10].upper()}",
+            cooperation_date=_M_LO + timedelta(days=day),
+            **kw,
+        )
+
+    pr = flow_users.pr
+    await promo(
+        style_a,
+        2,
+        pr=pr,
+        quote_amount=Decimal("300.00"),
+        publish_status="已发布",
+        like_count=120,
+    )
+    await promo(style_a, 20, pr=pr, quote_amount=Decimal("150.00"))
+    others = [
+        await promo(
+            style_a,
+            3,
+            pr=flow_users.pr2,
+            quote_amount=Decimal("500.00"),
+            publish_status="已发布",
+            like_count=900,
+        ),
+        await promo(style_a, 21, quote_amount=Decimal("80.00")),
+        await promo(style_b, 4, pr=flow_users.pr2, quote_amount=Decimal("60.00")),
+    ]
+    return flow_users, style_a, style_b, [p.id for p in others]
+
+
+def _pp_paths(style_a: Any, style_b: Any) -> dict[str, str]:
+    return {
+        "summary": f"{_PP}/summary?{_PP_RANGE}",
+        "cards": f"{_PP}/cards?{_PP_RANGE}",
+        "by_pr_a": f"{_PP}/styles/{style_a.id}/by-pr?{_PP_RANGE}",
+        "by_pr_b": f"{_PP}/styles/{style_b.id}/by-pr?{_PP_RANGE}",
+        "by_time_a": f"{_PP}/styles/{style_a.id}/by-time?{_PP_RANGE}",
+    }
+
+
+async def _pp_all(session: AsyncSession, user: Any, paths: dict[str, str]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for name, path in paths.items():
+        resp = await _call(session, user, "GET", path)
+        assert resp.status_code == 200, (name, resp.text)
+        out[name] = resp.json()
+    return out
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+class TestPublishProgress:
+    async def test_pr_sees_only_self(self, session: AsyncSession, pp_seeded: Any) -> None:
+        """pr 的 4 个接口 = 只有 pr 的单时主管看到的数字（逐字相等）。"""
+        users, style_a, style_b, others = pp_seeded
+        paths = _pp_paths(style_a, style_b)
+        mine = await _pp_all(session, users.pr, paths)
+        full = await _pp_all(session, users.pr_manager, paths)
+
+        # 场景有效性：主管看到的比 pr 多（别人的单确实在区间里）
+        assert full["summary"]["quote_count"] == 5
+        assert full["cards"]["total"] == 2
+        assert len(full["by_pr_a"]) == 3
+        assert sum(p["quote_count"] for p in full["by_time_a"]) == 4
+
+        # pr 只剩本人：数字非零，且只有本人那一行
+        assert mine["summary"]["quote_count"] == 2
+        assert mine["summary"]["publish_count"] == 1
+        assert mine["summary"]["quote_amount"] == "450.00"
+        assert mine["summary"]["like_count"] > 0
+        assert mine["cards"]["total"] == 1
+        assert [c["style_id"] for c in mine["cards"]["items"]] == [str(style_a.id)]
+        assert [r["pr_id"] for r in mine["by_pr_a"]] == [str(users.pr.id)]
+        assert mine["by_pr_b"] == []
+        assert sum(p["quote_count"] for p in mine["by_time_a"]) == 2
+
+        # 停用别人的单后，主管看到的 = pr 之前看到的
+        await session.execute(
+            text("UPDATE promotion SET is_active = false WHERE id = ANY(CAST(:ids AS uuid[]))"),
+            {"ids": others},
+        )
+        only_mine = await _pp_all(session, users.pr_manager, paths)
+        assert only_mine == mine
+
+    async def test_admin_sees_all(self, session: AsyncSession, pp_seeded: Any) -> None:
+        users, style_a, _, _ = pp_seeded
+        resp = await _call(session, users.admin, "GET", f"{_PP}/summary?{_PP_RANGE}")
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["quote_count"] == 5
+
+    @pytest.mark.parametrize("role", ["finance", "warehouse"])
+    async def test_forbidden(self, session: AsyncSession, pp_seeded: Any, role: str) -> None:
+        users, style_a, style_b, _ = pp_seeded
+        for path in _pp_paths(style_a, style_b).values():
+            resp = await _call(session, getattr(users, role), "GET", path)
+            assert (resp.status_code, resp.json()["code"]) == (403, "PERMISSION_DENIED"), path

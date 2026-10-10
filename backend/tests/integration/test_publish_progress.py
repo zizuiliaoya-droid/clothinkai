@@ -15,6 +15,7 @@ import pytest
 from app.core.tenancy import tenant_id_ctx
 from app.modules.promotion.urge_calculator import get_today
 from app.modules.report.domain import resolve_time_range
+from app.modules.report.pr_scope import PR_SCOPE_ALL
 from app.modules.report.service import PublishProgressService
 
 
@@ -79,7 +80,9 @@ class TestPublishProgress:
                 tenant_a,
             )
             tr = resolve_time_range("last_30d")
-            summary = await PublishProgressService(session).get_summary(tenant_a.id, tr)
+            summary = await PublishProgressService(session).get_summary(
+                tenant_a.id, tr, pr_scope=PR_SCOPE_ALL
+            )
             assert summary.quote_count == 4
             assert summary.quote_amount == Decimal("3800.00")
             assert summary.cooperation_amount == Decimal("3000.00")
@@ -109,7 +112,7 @@ class TestPublishProgress:
             )
             tr = resolve_time_range("last_30d")
             page = await PublishProgressService(session).get_cards(
-                tenant_a.id, tr, page=1, page_size=20
+                tenant_a.id, tr, page=1, page_size=20, pr_scope=PR_SCOPE_ALL
             )
             assert page.total == 1
             card = page.items[0]
@@ -135,11 +138,11 @@ class TestPublishProgress:
             )
             tr = resolve_time_range("last_30d")
             svc = PublishProgressService(session)
-            by_pr = await svc.get_detail_by_pr(tenant_a.id, style.id, tr)
+            by_pr = await svc.get_detail_by_pr(tenant_a.id, style.id, tr, pr_scope=PR_SCOPE_ALL)
             assert len(by_pr) == 1
             assert by_pr[0].quote_count == 4
             assert by_pr[0].publish_count == 2
-            by_time = await svc.get_detail_by_time(tenant_a.id, style.id, tr)
+            by_time = await svc.get_detail_by_time(tenant_a.id, style.id, tr, pr_scope=PR_SCOPE_ALL)
             assert len(by_time) >= 1
             assert sum(p.quote_count for p in by_time) == 4
         finally:
@@ -149,7 +152,9 @@ class TestPublishProgress:
         tok = tenant_id_ctx.set(tenant_a.id)
         try:
             tr = resolve_time_range("last_7d")
-            summary = await PublishProgressService(session).get_summary(tenant_a.id, tr)
+            summary = await PublishProgressService(session).get_summary(
+                tenant_a.id, tr, pr_scope=PR_SCOPE_ALL
+            )
             assert summary.quote_count == 0
             assert summary.publish_rate is None
             assert summary.publish_rate_level is None
@@ -180,5 +185,7 @@ class TestPublishProgress:
             tenant_id_ctx.reset(tok)
         # 用 tenant_b 视角查询 → 不含 tenant_a 数据
         tr = resolve_time_range("last_30d")
-        summary = await PublishProgressService(session).get_summary(tenant_b.id, tr)
+        summary = await PublishProgressService(session).get_summary(
+            tenant_b.id, tr, pr_scope=PR_SCOPE_ALL
+        )
         assert summary.quote_count == 0
