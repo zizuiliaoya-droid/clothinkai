@@ -1,9 +1,15 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { Button, Card, Select, Space, Table, message } from "antd";
 import { DownloadOutlined } from "@ant-design/icons";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import type { ColumnsType } from "antd/es/table";
 import { exportReport, getStoreDaily } from "@/features/report/api";
+import { TIME_PRESETS, type ReportFilterSchema } from "@/features/report/reportFilters";
+import {
+  fromDateRange,
+  toDateRange,
+  useReportFilters,
+} from "@/features/report/useReportFilters";
 import type { StoreDailyRow, TimeGranularity, TimePreset } from "@/features/report/types";
 import { extractErrorMessage } from "@/services/apiClient";
 import {
@@ -12,7 +18,6 @@ import {
 } from "@/components/ReportFreshness/ReportFreshness";
 import {
   ReportTimeRangeFilter,
-  type ReportDateRange,
   useReportTimeRange,
 } from "@/components/ReportTimeRangeFilter/ReportTimeRangeFilter";
 
@@ -31,14 +36,41 @@ function bucketLabel(value: string, granularity: TimeGranularity): string {
   return value;
 }
 
+/** 筛选状态：preset / granularity 记忆；日期区间只从 URL 带入、不记；granularity 不在 URL 白名单里，只走记忆。 */
+interface StoreDailyFilters {
+  preset: TimePreset;
+  date_from?: string;
+  date_to?: string;
+  granularity: TimeGranularity;
+}
+
+const STORE_FILTER_SCHEMA: ReportFilterSchema<StoreDailyFilters> = {
+  preset: { kind: "enum", values: TIME_PRESETS, url: true, memory: true },
+  date_from: { kind: "date", url: true, memory: false },
+  date_to: { kind: "date", url: true, memory: false },
+  granularity: {
+    kind: "enum",
+    values: GRANULARITY.map((o) => o.value),
+    url: false,
+    memory: true,
+  },
+};
+
+const STORE_FILTER_DEFAULTS: StoreDailyFilters = { preset: "last_30d", granularity: "day" };
+
 export function StoreDailyPage() {
-  const [preset, setPreset] = useState<TimePreset>("last_30d");
-  const [range, setRange] = useState<ReportDateRange>(null);
-  const [granularity, setGranularity] = useState<TimeGranularity>("day");
+  const { filters, ready, setFilters } = useReportFilters(
+    "store_daily",
+    STORE_FILTER_SCHEMA,
+    STORE_FILTER_DEFAULTS
+  );
+  const { preset, granularity } = filters;
+  const range = toDateRange(filters.date_from, filters.date_to);
   const { dateFrom: df, dateTo: dt, enabled } = useReportTimeRange(preset, range);
   const { data: raw, isLoading } = useQuery({
     queryKey: ["store-daily", preset, df, dt, granularity],
-    enabled,
+    // 等偏好回填完再查，避免先用默认值查一次、回填后又查一次。
+    enabled: enabled && ready,
     queryFn: () =>
       getStoreDaily({ preset, date_from: df, date_to: dt, granularity }),
   });
@@ -101,7 +133,12 @@ export function StoreDailyPage() {
         <ReportCardTitle
           title="店铺数据"
           freshness={
-            <ReportFreshness preset={preset} dateFrom={df} dateTo={dt} enabled={enabled} />
+            <ReportFreshness
+              preset={preset}
+              dateFrom={df}
+              dateTo={dt}
+              enabled={enabled && ready}
+            />
           }
         />
       }
@@ -109,9 +146,9 @@ export function StoreDailyPage() {
       <Space style={{ marginBottom: 16 }} wrap>
         <ReportTimeRangeFilter
           preset={preset}
-          onPresetChange={setPreset}
+          onPresetChange={(v) => setFilters({ preset: v })}
           range={range}
-          onRangeChange={setRange}
+          onRangeChange={(v) => setFilters(fromDateRange(v))}
         />
         <span style={{ marginLeft: 12 }}>统计单位：</span>
         <Select<TimeGranularity>
@@ -119,7 +156,7 @@ export function StoreDailyPage() {
           value={granularity}
           style={{ width: 110 }}
           options={GRANULARITY}
-          onChange={setGranularity}
+          onChange={(v) => setFilters({ granularity: v })}
         />
         <Button
           icon={<DownloadOutlined />}

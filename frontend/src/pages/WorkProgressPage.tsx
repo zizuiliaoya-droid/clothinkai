@@ -1,4 +1,3 @@
-import { useEffect, useRef, useState } from "react";
 import { Button, Card, DatePicker, Space, Table, message } from "antd";
 import { DownloadOutlined } from "@ant-design/icons";
 import { useMutation, useQuery } from "@tanstack/react-query";
@@ -8,48 +7,66 @@ import {
   ReportCardTitle,
   ReportFreshness,
 } from "@/components/ReportFreshness/ReportFreshness";
-import { useFilterMemory } from "@/features/preference/useFilterMemory";
+import { useReportTimeRange } from "@/components/ReportTimeRangeFilter/ReportTimeRangeFilter";
 import { exportReport, getWorkProgress } from "@/features/report/api";
-import type { PrWorkProgress } from "@/features/report/types";
+import { TIME_PRESETS, type ReportFilterSchema } from "@/features/report/reportFilters";
+import type { PrWorkProgress, TimePreset } from "@/features/report/types";
+import { toDateRange, useReportFilters } from "@/features/report/useReportFilters";
 import { extractErrorMessage } from "@/services/apiClient";
 
 const pct = (v: string | null) =>
   v == null ? "—" : `${(Number(v) * 100).toFixed(1)}%`;
 
+/**
+ * 筛选状态（7e R1）：区间 = preset + 起止日期，记忆里连日期一起记（选过的月份下次还在）；
+ * 旧记忆 `{month}` 不再认，回落默认本月。
+ */
+interface WorkProgressFilters {
+  preset: TimePreset;
+  date_from?: string;
+  date_to?: string;
+}
+
+const WORK_PROGRESS_FILTER_SCHEMA: ReportFilterSchema<WorkProgressFilters> = {
+  preset: { kind: "enum", values: TIME_PRESETS, url: true, memory: true },
+  date_from: { kind: "date", url: true, memory: true },
+  date_to: { kind: "date", url: true, memory: true },
+};
+
+const WORK_PROGRESS_FILTER_DEFAULTS: WorkProgressFilters = { preset: "this_month" };
+
 export function WorkProgressPage() {
-  const [month, setMonth] = useState(dayjs().format("YYYY-MM"));
-
-  const memory = useFilterMemory<{ month: string }>("pr_work_progress");
-  const restoredRef = useRef(false);
-  useEffect(() => {
-    if (!memory.ready || restoredRef.current) return;
-    restoredRef.current = true;
-    if (memory.restored?.month) setMonth(memory.restored.month);
-  }, [memory.ready, memory.restored]);
-
-  useEffect(() => {
-    if (!restoredRef.current) return;
-    memory.persist({ month });
-    // persist 每次渲染都是新函数，不进依赖，否则每次渲染都会触发保存。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [month]);
+  const { filters, ready, setFilters } = useReportFilters(
+    "pr_work_progress",
+    WORK_PROGRESS_FILTER_SCHEMA,
+    WORK_PROGRESS_FILTER_DEFAULTS
+  );
+  const { preset } = filters;
+  const { dateFrom, dateTo, enabled } = useReportTimeRange(
+    preset,
+    toDateRange(filters.date_from, filters.date_to)
+  );
+  // 月份选择器：选某月 = 该月整月的自定义区间；上月 / 其他预设显示对应月份（区间筛选控件随后替换它）
+  const pickerMonth =
+    preset === "custom" && dateFrom
+      ? dayjs(dateFrom)
+      : preset === "last_month"
+        ? dayjs().subtract(1, "month")
+        : dayjs();
 
   const { data, isLoading } = useQuery({
-    queryKey: ["work-progress", month],
+    queryKey: ["work-progress", preset, dateFrom, dateTo],
     // 等偏好回填完再查，避免先用当月查一次、回填后又查一次。
-    enabled: memory.ready,
-    queryFn: () => getWorkProgress(month),
+    enabled: enabled && ready,
+    queryFn: () => getWorkProgress({ preset, date_from: dateFrom, date_to: dateTo }),
   });
-  // 工作进度按整月统计：导出与数据新鲜度都用这同一对日期
-  const selectedMonth = dayjs(`${month}-01`);
-  const monthFrom = selectedMonth.startOf("month").format("YYYY-MM-DD");
-  const monthTo = selectedMonth.endOf("month").format("YYYY-MM-DD");
+  // 导出与数据新鲜度都用这同一个区间
   const exportMutation = useMutation({
     mutationFn: () =>
       exportReport("work-progress", {
-        preset: "custom",
-        date_from: monthFrom,
-        date_to: monthTo,
+        preset,
+        date_from: dateFrom,
+        date_to: dateTo,
       }),
     onSuccess: (filename) => message.success(`已导出 ${filename}`),
     onError: (error) => message.error(extractErrorMessage(error, "导出失败")),
@@ -98,13 +115,13 @@ export function WorkProgressPage() {
       title={
         <ReportCardTitle
           title="工作进度表"
-          // 当月包含还没到的日子，汇总表覆盖不全，这里会显示「实时数据」；往月读汇总表
+          // 区间每天都有汇总覆盖才读汇总表，否则（如含还没到的日子）显示「实时数据」
           freshness={
             <ReportFreshness
-              preset="custom"
-              dateFrom={monthFrom}
-              dateTo={monthTo}
-              enabled={memory.ready}
+              preset={preset}
+              dateFrom={dateFrom}
+              dateTo={dateTo}
+              enabled={enabled && ready}
             />
           }
         />
@@ -115,13 +132,21 @@ export function WorkProgressPage() {
         <DatePicker
           picker="month"
           aria-label="工作进度月份"
-          value={dayjs(month)}
-          onChange={(d) => d && setMonth(d.format("YYYY-MM"))}
+          value={pickerMonth}
+          onChange={(d) =>
+            d &&
+            setFilters({
+              preset: "custom",
+              date_from: d.startOf("month").format("YYYY-MM-DD"),
+              date_to: d.endOf("month").format("YYYY-MM-DD"),
+            })
+          }
           allowClear={false}
         />
         <Button
           icon={<DownloadOutlined />}
           loading={exportMutation.isPending}
+          disabled={!enabled}
           onClick={() => exportMutation.mutate()}
         >
           导出

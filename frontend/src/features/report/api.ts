@@ -15,12 +15,13 @@ import type {
   TimeGranularity,
 } from "./types";
 
+/** 工作进度按区间统计（7e R1）；只持 read_own 时后端只返回本人那一行。 */
 export async function getWorkProgress(
-  month: string
+  params: { preset?: string; date_from?: string; date_to?: string } = {}
 ): Promise<PrWorkProgress[]> {
   const resp = await apiClient.get<PrWorkProgress[]>(
     "/api/reports/work-progress",
-    { params: { month } }
+    { params }
   );
   return resp.data;
 }

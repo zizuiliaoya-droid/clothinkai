@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import {
   Button,
   Card,
@@ -21,15 +21,15 @@ import {
   getReportSeasonOptions,
 } from "@/features/report/api";
 import {
-  restoreProductionFilters,
-  toProductionMemory,
-  type ProductionFilterMemory,
+  PRODUCTION_FILTER_DEFAULTS,
+  PRODUCTION_FILTER_SCHEMA,
 } from "@/features/report/productionFilters";
-import type {
-  ProductionRow,
-  TimeGranularity,
-  TimePreset,
-} from "@/features/report/types";
+import {
+  fromDateRange,
+  toDateRange,
+  useReportFilters,
+} from "@/features/report/useReportFilters";
+import type { ProductionRow, TimeGranularity } from "@/features/report/types";
 import { goodsDisplayName } from "@/features/product/api";
 import { GoodsNameCell } from "@/components/GoodsNameCell/GoodsNameCell";
 import { MiniLineChart } from "@/components/MiniLineChart/MiniLineChart";
@@ -40,10 +40,8 @@ import {
 import { StyleImageThumbnail } from "@/components/StyleImageThumbnail/StyleImageThumbnail";
 import {
   ReportTimeRangeFilter,
-  type ReportDateRange,
   useReportTimeRange,
 } from "@/components/ReportTimeRangeFilter/ReportTimeRangeFilter";
-import { useFilterMemory } from "@/features/preference/useFilterMemory";
 import { extractErrorMessage } from "@/services/apiClient";
 
 const money = (v: string | null) => (v == null ? "—" : `¥${v}`);
@@ -63,10 +61,14 @@ function trendLabel(value: string, granularity: TimeGranularity): string {
 }
 
 export function ProductionPage() {
-  const [preset, setPreset] = useState<TimePreset>("last_30d");
-  const [range, setRange] = useState<ReportDateRange>(null);
-  const [excludeBrushing, setExcludeBrushing] = useState(true);
-  const [season, setSeason] = useState<string[]>([]);
+  // 筛选：URL（下钻 / 分享链接）→ 记忆 → 默认；手动改才写记忆（节流）
+  const { filters, ready, setFilters } = useReportFilters(
+    "product_roi",
+    PRODUCTION_FILTER_SCHEMA,
+    PRODUCTION_FILTER_DEFAULTS
+  );
+  const { preset, season, exclude_brushing: excludeBrushing } = filters;
+  const range = toDateRange(filters.date_from, filters.date_to);
   const [trendGoods, setTrendGoods] = useState<ProductionRow | null>(null);
   const [trendGranularity, setTrendGranularity] = useState<TimeGranularity>("day");
 
@@ -76,29 +78,6 @@ export function ProductionPage() {
     queryFn: getReportSeasonOptions,
   });
   const seasonOptions = (seasons ?? []).map((s) => ({ label: s, value: s }));
-
-  // 筛选记忆：回填上次的选择，之后变更自动保存（节流）。
-  const memory = useFilterMemory<ProductionFilterMemory>("product_roi");
-  const restoredRef = useRef(false);
-  useEffect(() => {
-    if (!memory.ready || restoredRef.current) return;
-    restoredRef.current = true;
-    // 旧记录里的 category 与类型不对的值在这里被丢掉（后端读写也会剔 category）
-    const saved = restoreProductionFilters(memory.restored);
-    if (saved.preset) setPreset(saved.preset);
-    if (saved.season) setSeason(saved.season);
-    if (saved.exclude_brushing !== undefined) setExcludeBrushing(saved.exclude_brushing);
-  }, [memory.ready, memory.restored]);
-
-  useEffect(() => {
-    // 回填完成前不要把默认值写回去，否则会把用户存的偏好冲掉。
-    if (!restoredRef.current) return;
-    memory.persist(
-      toProductionMemory({ preset, season, exclude_brushing: excludeBrushing })
-    );
-    // memory.persist 每次渲染都是新函数，不进依赖，否则每次渲染都会触发保存。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [preset, season, excludeBrushing]);
 
   const { dateFrom: df, dateTo: dt, enabled } = useReportTimeRange(preset, range);
 
@@ -126,7 +105,7 @@ export function ProductionPage() {
   const { data, isLoading } = useQuery({
     queryKey: ["production", preset, df, dt, excludeBrushing, season],
     // 等偏好回填完再查，避免先用默认值查一次、回填后又查一次。
-    enabled: enabled && memory.ready,
+    enabled: enabled && ready,
     queryFn: () =>
       getProduction({
         preset,
@@ -244,7 +223,7 @@ export function ProductionPage() {
               preset={preset}
               dateFrom={df}
               dateTo={dt}
-              enabled={enabled && memory.ready}
+              enabled={enabled && ready}
             />
           }
         />
@@ -253,9 +232,9 @@ export function ProductionPage() {
       <Space style={{ marginBottom: 16 }} wrap>
         <ReportTimeRangeFilter
           preset={preset}
-          onPresetChange={setPreset}
+          onPresetChange={(v) => setFilters({ preset: v })}
           range={range}
-          onRangeChange={setRange}
+          onRangeChange={(v) => setFilters(fromDateRange(v))}
         />
         <span style={{ marginLeft: 12 }}>季节/系列：</span>
         <Select
@@ -267,13 +246,13 @@ export function ProductionPage() {
           allowClear
           maxTagCount="responsive"
           options={seasonOptions}
-          onChange={(v: string[]) => setSeason(v)}
+          onChange={(v: string[]) => setFilters({ season: v })}
         />
         <span style={{ marginLeft: 12 }}>剔除刷单：</span>
         <Switch
           aria-label="剔除刷单"
           checked={excludeBrushing}
-          onChange={setExcludeBrushing}
+          onChange={(v) => setFilters({ exclude_brushing: v })}
         />
         <Button
           icon={<DownloadOutlined />}
