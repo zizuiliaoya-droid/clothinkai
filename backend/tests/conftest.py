@@ -526,9 +526,16 @@ async def _clear_event_handlers() -> AsyncIterator[None]:
 
 
 # purge_promotions 的删除顺序：子表在前、promotion 最后。子表外键都是 RESTRICT；
-# negotiation 是 SET NULL，不先删的话已通过的谈款被置空，撞「审核通过 ⇔ 有推广单」CHECK。
+# negotiation 是 SET NULL，不先删的话已定稿的谈款被置空，撞「已定稿 ⇔ 有推广单」CHECK。
+# line_event、negotiation_item 对谈款也是 RESTRICT，要在删谈款之前删。
 # 每加一张指向 promotion 的子表就加进来（流程线设计 9.2）。
+_NEGOTIATIONS_OF_PROMOTIONS = (
+    "(SELECT id FROM negotiation WHERE promotion_id = ANY(CAST(:ids AS uuid[])))"
+)
 _PURGE_PROMOTION_STEPS: tuple[str, ...] = (
+    "DELETE FROM line_event WHERE promotion_id = ANY(CAST(:ids AS uuid[])) "
+    f"OR negotiation_id IN {_NEGOTIATIONS_OF_PROMOTIONS}",
+    f"DELETE FROM negotiation_item WHERE negotiation_id IN {_NEGOTIATIONS_OF_PROMOTIONS}",
     "DELETE FROM negotiation WHERE promotion_id = ANY(CAST(:ids AS uuid[]))",
     "DELETE FROM promotion_item WHERE promotion_id = ANY(CAST(:ids AS uuid[]))",
     "DELETE FROM settlement_extra_item WHERE settlement_id IN "
@@ -550,6 +557,40 @@ async def purge_promotions(session: AsyncSession, ids: Iterable[UUID]) -> None:
     if not id_list:
         return
     for sql in _PURGE_PROMOTION_STEPS:
+        await session.execute(sa_text(sql), {"ids": id_list})
+
+
+# purge_negotiations：先按 purge_promotions 删掉这些谈款定稿建的推广单（连带谈款本身），
+# 再删没定稿的谈款的事件、明细与谈款。copied_from_id 是 SET NULL，不用管复制关系。
+_PURGE_NEGOTIATION_STEPS: tuple[str, ...] = (
+    "DELETE FROM line_event WHERE negotiation_id = ANY(CAST(:ids AS uuid[]))",
+    "DELETE FROM negotiation_item WHERE negotiation_id = ANY(CAST(:ids AS uuid[]))",
+    "DELETE FROM negotiation WHERE id = ANY(CAST(:ids AS uuid[]))",
+)
+
+
+async def purge_negotiations(session: AsyncSession, ids: Iterable[UUID]) -> None:
+    """删掉这些谈款、它们的事件与明细，以及定稿建出的推广单及其子表（提交式测试的 finally 用；不提交）。"""
+    from sqlalchemy import text as sa_text
+
+    id_list = list(ids)
+    if not id_list:
+        return
+    promotion_ids = (
+        (
+            await session.execute(
+                sa_text(
+                    "SELECT promotion_id FROM negotiation "
+                    "WHERE id = ANY(CAST(:ids AS uuid[])) AND promotion_id IS NOT NULL"
+                ),
+                {"ids": id_list},
+            )
+        )
+        .scalars()
+        .all()
+    )
+    await purge_promotions(session, promotion_ids)
+    for sql in _PURGE_NEGOTIATION_STEPS:
         await session.execute(sa_text(sql), {"ids": id_list})
 
 
@@ -617,6 +658,8 @@ async def promotion_factory(session: AsyncSession, tenant_a: Any) -> Any:
                     "shipped_at",
                     "ship_pushed_at",
                     "ship_pushed_by",
+                    # 流程线 M2（061）主线号；不传由库发号
+                    "line_id",
                     # [(style, sku), …]：按顺序插 promotion_item（不校验成员 / 归属，造数用）
                     "items",
                 }
@@ -704,6 +747,8 @@ async def promotion_factory(session: AsyncSession, tenant_a: Any) -> Any:
                     shipped_at=kw.get("shipped_at"),
                     ship_pushed_at=kw.get("ship_pushed_at"),
                     ship_pushed_by=kw.get("ship_pushed_by"),
+                    # 显式 None 会插 NULL（NOT NULL）：只在传了时给，否则走库默认
+                    **({"line_id": kw["line_id"]} if "line_id" in kw else {}),
                 )
                 session.add(p)
                 await session.flush()
@@ -744,6 +789,108 @@ async def promotion_factory(session: AsyncSession, tenant_a: Any) -> Any:
                 tenant_id_ctx.reset(tok)
 
     return PromotionFactory(tenant_a)
+
+
+# negotiation_factory 不经 service 直插的列：tenant_id / style_id / blogger_id 由参数给，其余列都能当 kwarg 传
+_NEGOTIATION_ARG_COLUMNS = frozenset({"tenant_id", "style_id", "blogger_id"})
+
+
+@pytest_asyncio.fixture
+async def negotiation_factory(session: AsyncSession, tenant_a: Any) -> Any:
+    """谈款工厂（流程线设计 9.2）：直插任意状态，带 items、收件信息，不用从草稿一路走到目标状态。
+
+    不校验状态机、审核人规则与成员关系（造数用）；库里的 CHECK 照样生效：
+    「已定稿」要自己传 ``promotion_id``，其余状态不能带。
+    """
+    from decimal import Decimal
+
+    from app.core.tenancy import tenant_id_ctx
+    from app.modules.negotiation.models import Negotiation, NegotiationItem
+
+    class NegotiationFactory:
+        # negotiation() 认的 kwarg = 表的列（去掉参数给的三列）+ items；
+        # test_factory_kwargs 断言它与 Negotiation.__table__.columns 一致，加列漏补会红
+        _KNOWN_KWARGS: ClassVar[dict[str, frozenset[str]]] = {
+            "negotiation": frozenset(
+                {
+                    "id",
+                    "created_at",
+                    "updated_at",
+                    "goods_main_id",
+                    "pr_id",
+                    "promotion_id",
+                    "line_id",
+                    "copied_from_id",
+                    "cooperation_mode",
+                    "platform",
+                    "scheduled_publish_date",
+                    "quote_amount",
+                    "remark",
+                    "status",
+                    "submitted_at",
+                    "reviewed_by",
+                    "reviewed_at",
+                    "review_opinion",
+                    "final_reviewed_by",
+                    "final_reviewed_at",
+                    "final_review_opinion",
+                    "receiver_name",
+                    "receiver_phone",
+                    "receiver_address",
+                    "receiver_confirmed_at",
+                    "receiver_confirmed_by",
+                    # [(style, sku | None), …]：按顺序插 negotiation_item（不校验成员，造数用）
+                    "items",
+                }
+            ),
+        }
+
+        def __init__(self, default_tenant: Any) -> None:
+            self.default_tenant = default_tenant
+
+        async def negotiation(
+            self,
+            *,
+            style: Any,
+            blogger: Any,
+            pr: Any | None = None,
+            tenant: Any | None = None,
+            **kw: Any,
+        ) -> Negotiation:
+            _reject_unknown(
+                "negotiation_factory.negotiation", kw, self._KNOWN_KWARGS["negotiation"]
+            )
+            t = tenant or self.default_tenant
+            columns = {k: v for k, v in kw.items() if k != "items"}
+            columns.setdefault("pr_id", pr.id if pr else None)
+            if columns["pr_id"] is None:
+                raise TypeError("negotiation_factory.negotiation 要传 pr 或 pr_id")
+            columns.setdefault("cooperation_mode", "寄拍")
+            columns.setdefault("platform", "小红书")
+            columns.setdefault("quote_amount", Decimal("500.00"))
+            columns.setdefault("status", "草稿")
+            tok = tenant_id_ctx.set(t.id)
+            try:
+                n = Negotiation(tenant_id=t.id, style_id=style.id, blogger_id=blogger.id, **columns)
+                session.add(n)
+                await session.flush()
+                for order, (item_style, item_sku) in enumerate(kw.get("items") or []):
+                    session.add(
+                        NegotiationItem(
+                            tenant_id=t.id,
+                            negotiation_id=n.id,
+                            style_id=item_style.id,
+                            sku_id=item_sku.id if item_sku is not None else None,
+                            sort_order=order,
+                        )
+                    )
+                if kw.get("items"):
+                    await session.flush()
+                return n
+            finally:
+                tenant_id_ctx.reset(tok)
+
+    return NegotiationFactory(tenant_a)
 
 
 @pytest_asyncio.fixture
