@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from app.core.exceptions import (
     AppException,
+    IllegalStateTransitionError,
     ResourceNotFoundError,
     ValidationError,
 )
@@ -13,22 +14,15 @@ class NegotiationNotFoundError(ResourceNotFoundError):
     code = "NEGOTIATION_NOT_FOUND"
 
 
-class NegotiationNotEditableError(AppException):
-    """只有草稿和被驳回的单据能改。
+class NegotiationStateConflictError(IllegalStateTransitionError):
+    """条件 UPDATE 影响 0 行：别人刚处理过（流程线 7.1，409）。
 
-    提交审核后 PR 不该再动内容（否则主管看到的和审的不是一回事）；
-    审核通过后推广单已经建出来了，改谈款信息也同步不过去。
+    状态机不允许仍是父类的 422 ``ILLEGAL_STATE_TRANSITION``；测试比 ``exc.code``，不只比异常类型。
     """
 
-    code = "NEGOTIATION_NOT_EDITABLE"
+    code = "NEGOTIATION_STATE_CONFLICT"
     status_code = 409
-
-
-class NegotiationNotSubmittableError(AppException):
-    """只有草稿和被驳回的单据能提交审核。"""
-
-    code = "NEGOTIATION_NOT_SUBMITTABLE"
-    status_code = 409
+    message = "谈款单刚被别人处理过，请刷新后再试"
 
 
 class NegotiationNotReviewableError(AppException):
@@ -70,10 +64,9 @@ __all__ = [
     "InvalidNegotiationBloggerError",
     "InvalidNegotiationGoodsError",
     "InvalidNegotiationStyleError",
-    "NegotiationNotEditableError",
     "NegotiationNotFoundError",
     "NegotiationNotReviewableError",
-    "NegotiationNotSubmittableError",
     "NegotiationReviewOpinionRequiredError",
     "NegotiationSelfReviewForbiddenError",
+    "NegotiationStateConflictError",
 ]

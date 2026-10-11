@@ -16,6 +16,7 @@ from app.modules.negotiation.enums import NegotiationStatus
 from app.modules.negotiation.schemas import (
     BloggerCooperationHistory,
     NegotiationCreate,
+    NegotiationGoodsMembers,
     NegotiationListFilters,
     NegotiationListResponse,
     NegotiationResponse,
@@ -46,7 +47,9 @@ async def create_negotiation(
     session: SessionDep,
     user: CurrentActiveUser,
 ) -> NegotiationResponse:
-    """新建谈款单（落草稿）。置换模式的博主服务费会被强制为 0。"""
+    """新建谈款单（N1，落草稿）。持 ``*`` → 403 ``star_create``；不传商品按现有规则推定并写回；
+    按商品成员建颜色尺码明细。置换模式的博主服务费会被强制为 0。响应带 ``others_in_progress``（只提示不拦）。
+    """
     return await _svc(session).create(payload, user)
 
 
@@ -120,6 +123,23 @@ async def blogger_cooperation_history(
 
 
 @router.get(
+    "/goods-members",
+    response_model=NegotiationGoodsMembers,
+    dependencies=[require_permission(SCOPE, "write")],
+)
+async def negotiation_goods_members(
+    session: SessionDep,
+    style_id: UUID,
+    goods_main_id: UUID | None = None,
+) -> NegotiationGoodsMembers:
+    """新建 / 换商品时明细该有哪几行（偏差 3）：不传 ``goods_main_id`` 按 N1 推定，套装按启用成员。
+
+    PR 没有 ``product.goods:read``，套装成员从这里拿；只读、不带编码。
+    """
+    return await _svc(session).goods_members(style_id=style_id, goods_main_id=goods_main_id)
+
+
+@router.get(
     "/{negotiation_id}",
     response_model=NegotiationResponse,
     dependencies=[require_permission(SCOPE, "read")],
@@ -143,7 +163,7 @@ async def update_negotiation(
     session: SessionDep,
     user: CurrentActiveUser,
 ) -> NegotiationResponse:
-    """编辑草稿。只有草稿与被驳回的单据能改；改完被驳回的单会回到草稿。"""
+    """编辑（N2）：只在草稿 / 老板退回、本人；改完状态不变，重提走提交。换商品时明细整组重建。"""
     return await _svc(session).update(negotiation_id, payload, user)
 
 
@@ -157,7 +177,9 @@ async def submit_negotiation(
     session: SessionDep,
     user: CurrentActiveUser,
 ) -> NegotiationResponse:
-    """提交审核。会清掉上一轮的审核痕迹，避免界面上留着旧的驳回意见。"""
+    """提交（N3）：草稿 / 老板退回 → 主管待审。缺项一次全报（``FLOW_GATE_MISSING``）；
+    清空本轮两级审核（旧意见留在时间线事件里）。响应带 ``others_in_progress``（只提示不拦）。
+    """
     return await _svc(session).submit(negotiation_id, user)
 
 

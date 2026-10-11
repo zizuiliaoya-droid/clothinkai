@@ -1,19 +1,17 @@
-"""谈款审核服务层（PRD V1.4 模块一）。
+"""谈款服务层（PRD V1.4 模块一；流程线 PR-3 起 7 态两级审核，设计 3.2）。
 
-状态流转：
+状态流转（转移表 N1 ~ N12，状态机在 ``flow_doc.TRANSITIONS``，谁能动在 ``flow_matrix``）：
 
-    草稿 --submit--> 待审核 --approve--> 审核通过（生成推广单，终态）
-                        |
-                        \\--reject--> 审核驳回 --submit--> 待审核
-                                          |
-                                          \\--update--> 草稿
+    草稿 --提交--> 主管待审 --主管通过--> 待老板审核 --老板定稿--> 待补收货地址 --确认收货--> 已定稿
+                       \\--主管驳回--> 审核驳回（终态，重谈用「复制为新谈款」）
+                                              \\--老板退回--> 老板退回 --PR 改完重提--> 主管待审
 
 几条规则刻意放在 service 而不是只靠前端：
 
+- 每个动作的顺序固定（7.1）：取单，看不到 → 404；``flow.matrix.require`` 判状态机 422 → 规则 403 → ★ 422；
+  条件 UPDATE 0 行 → 409 ``NEGOTIATION_STATE_CONFLICT``。事件与业务写入同一事务
 - 置换模式博主服务费强制 0（PRD：接口也要校验防止绕过前端传值）
-- 只有草稿与被驳回的单据能改、能提交
-- 禁止审核自己提交的单
-- 审核通过与生成推广单必须同一个事务 —— 否则会出现「审核通过但没有推广单」
+- 持 ``*`` 的账号不能建谈款（管理员自己建的谈款没人能定稿，11-1）
 """
 
 from __future__ import annotations
@@ -24,28 +22,30 @@ from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import AuditService
+from app.core.exceptions import ValidationError
 from app.core.security.field_permissions import build_field_perm_context, can_read_field
 from app.modules.auth.models import User
 from app.modules.auth.repository import PermissionRepository, RoleRepository
 from app.modules.blogger.repository import BloggerRepository
 from app.modules.flow.actor import load_flow_actor
-from app.modules.flow.matrix import FlowActor, Level, View, cell_level, ui_for
+from app.modules.flow.exceptions import FlowActionForbiddenError
+from app.modules.flow.line_events import LineEventRepository, LineEventType
+from app.modules.flow.matrix import FlowActor, Level, View, cell_level, require, ui_for
 from app.modules.negotiation.enums import NegotiationReviewAction, NegotiationStatus
 from app.modules.negotiation.exceptions import (
     InvalidNegotiationBloggerError,
     InvalidNegotiationGoodsError,
     InvalidNegotiationStyleError,
-    NegotiationNotEditableError,
     NegotiationNotFoundError,
     NegotiationNotReviewableError,
-    NegotiationNotSubmittableError,
     NegotiationReviewOpinionRequiredError,
     NegotiationSelfReviewForbiddenError,
+    NegotiationStateConflictError,
 )
 from app.modules.negotiation.flow_doc import build_negotiation_doc
 from app.modules.negotiation.models import Negotiation
@@ -55,30 +55,34 @@ from app.modules.negotiation.schemas import (
     BloggerCooperationHistory,
     BloggerCooperationItem,
     NegotiationCreate,
+    NegotiationGoodsMembers,
     NegotiationItemResponse,
     NegotiationListFilters,
     NegotiationListResponse,
     NegotiationResponse,
     NegotiationReviewRequest,
     NegotiationUpdate,
+    OthersInProgressItem,
     ReceiverSuggestion,
 )
 from app.modules.promotion.display_name import normalize_goods_short_name
 from app.modules.promotion.enums import CooperationMode, ShipStatus
+from app.modules.promotion.exceptions import InvalidSkuReferenceError
 from app.modules.promotion.flow_doc import goods_items_complete
 from app.modules.promotion.metrics_calculator import (
     calculate_cpl,
     calculate_effective_like_count,
 )
 from app.modules.promotion.receiver import RECEIVER_FIELDS
-from app.modules.promotion.repository import PromotionItemRepository
-from app.modules.promotion.schemas import PromotionCreate
+from app.modules.promotion.repository import PromotionItemRepository, PromotionRepository
+from app.modules.promotion.schemas import GoodsItemIn, GoodsMemberResponse, PromotionCreate
 from app.modules.promotion.service import PromotionService
 from app.modules.promotion.urge_calculator import DEFAULT_TENANT_TZ
 
 log = logging.getLogger("app.modules.negotiation.service")
 
-_EDITABLE_STATUSES = (NegotiationStatus.DRAFT.value, NegotiationStatus.REJECTED.value)
+# 能编辑 / 提交的状态（N2、N3）：草稿、老板退回。状态机本身在 flow_doc.TRANSITIONS，这里只给条件 UPDATE 用
+_OWNER_EDITABLE = (NegotiationStatus.DRAFT.value, NegotiationStatus.FINAL_RETURNED.value)
 
 OVERDUE_AFTER = timedelta(hours=36)
 """主管待审超过这么久算超时（7c-6，按实际时长比）。"""
@@ -170,6 +174,41 @@ def _item_responses(
     return responses
 
 
+def _submit_snapshot(
+    negotiation: Negotiation, views: builtins.list[NegotiationItemView]
+) -> dict[str, Any]:
+    """``negotiation.submitted`` 的 ``snapshot``（6.3）：博主、商品、颜色尺码、模式、平台、约定发布时间、服务费。
+
+    只放 id 与值（显示名读时再取）；金额存字符串、固定两位，免得 JSON 浮点误差与 ``0`` / ``0.00`` 假差异。
+    """
+    quote = negotiation.quote_amount
+    return {
+        "blogger_id": str(negotiation.blogger_id),
+        "style_id": str(negotiation.style_id),
+        "goods_main_id": str(negotiation.goods_main_id) if negotiation.goods_main_id else None,
+        "goods_items": [
+            [str(v.style_id), str(v.sku_id) if v.sku_id is not None else None] for v in views
+        ],
+        "cooperation_mode": negotiation.cooperation_mode,
+        "platform": negotiation.platform,
+        "scheduled_publish_date": (
+            negotiation.scheduled_publish_date.isoformat()
+            if negotiation.scheduled_publish_date
+            else None
+        ),
+        "quote_amount": str(quote.quantize(Decimal("0.01"))) if quote is not None else None,
+    }
+
+
+def _snapshot_diff(before: Mapping[str, Any], after: Mapping[str, Any]) -> dict[str, Any]:
+    """只列改了的键，形状同审计 diff：``{键: {"before": 旧, "after": 新}}``。"""
+    return {
+        key: {"before": before.get(key), "after": value}
+        for key, value in after.items()
+        if before.get(key) != value
+    }
+
+
 def _suggestion_label(row: Mapping[str, Any]) -> str:
     day = row["at"].astimezone(DEFAULT_TENANT_TZ).strftime("%m-%d")
     if row["source"] == "promotion":
@@ -185,6 +224,8 @@ class NegotiationService:
         self._roles = RoleRepository(session)
         self._perms = PermissionRepository(session)
         self._items_repo = PromotionItemRepository(session)
+        self._promotion_repo = PromotionRepository(session)
+        self._events = LineEventRepository(session)
         self._audit = AuditService(session)
 
     # ------------------------------------------------------------------ #
@@ -298,25 +339,161 @@ class NegotiationService:
         )
 
     # ------------------------------------------------------------------ #
-    # create / update
+    # 商品与明细（N1、N2）
+    # ------------------------------------------------------------------ #
+
+    async def _resolve_goods(
+        self, *, style_id: UUID, goods_main_id: UUID | None, explicit: bool
+    ) -> UUID | None:
+        """``goods_main_id``：显式传了（含传 null）用传的；没传按现有规则推定主商品（非套装优先），之后以写回的值为准。"""
+        if explicit:
+            return goods_main_id
+        return await self._promotion_repo.resolve_owner_goods_id(style_id)
+
+    async def _item_rows(
+        self,
+        *,
+        goods_main_id: UUID | None,
+        style_id: UUID,
+        items: builtins.list[GoodsItemIn] | None,
+    ) -> builtins.list[tuple[UUID, UUID | None]]:
+        """明细应有的行（7.2）：不传 = 按商品成员建空行；传了款式集合要与成员完全相同，``sku_id`` 可空。
+
+        顺序：同一款式两次 → 款式集合 ≠ 成员（多出 / 缺少都列出）→ 422 ``VALIDATION_ERROR``；
+        给了的 sku 不存在、已删或不属于该行款式 → 422 ``INVALID_SKU_REFERENCE``（与推广单入口同一口径）。
+        """
+        members = await self._items_repo.members_of(goods_main_id=goods_main_id, style_id=style_id)
+        if items is None:
+            return [(member, None) for member in members]
+        given = [item.style_id for item in items]
+        duplicates = [s for s in dict.fromkeys(given) if given.count(s) > 1]
+        if duplicates:
+            raise ValidationError(
+                "同一款式只能有一行颜色尺码",
+                details={"duplicate_style_ids": [str(s) for s in duplicates]},
+            )
+        missing = [s for s in members if s not in given]
+        extra = [s for s in given if s not in members]
+        if missing or extra:
+            raise ValidationError(
+                "颜色尺码明细要与商品的成员款式一一对应",
+                details={
+                    "missing_style_ids": [str(s) for s in missing],
+                    "extra_style_ids": [str(s) for s in extra],
+                },
+            )
+        skus = await self._items_repo.skus_by_ids(
+            [item.sku_id for item in items if item.sku_id is not None]
+        )
+        for item in items:
+            if item.sku_id is None:
+                continue
+            sku = skus.get(item.sku_id)
+            if sku is None or sku.is_deleted or sku.style_id != item.style_id:
+                raise InvalidSkuReferenceError(
+                    f"SKU {item.sku_id} 不存在、已删除或不属于款式 {item.style_id}",
+                    details={"style_id": str(item.style_id), "sku_id": str(item.sku_id)},
+                )
+        return [(item.style_id, item.sku_id) for item in items]
+
+    async def goods_members(
+        self, *, style_id: UUID, goods_main_id: UUID | None
+    ) -> NegotiationGoodsMembers:
+        """``GET /goods-members``（偏差 3）：新建 / 换商品时明细该有哪几行，口径 = N1 推定 + ``members_of``。
+
+        PR 没有 ``product.goods:read``，拿不到套装成员，所以由谈款自己的接口给（同 PR-2 偏差 11）。
+        """
+        if not await self._repo.style_exists(style_id):
+            raise InvalidNegotiationStyleError(
+                "款式不存在或已删除", details={"style_id": str(style_id)}
+            )
+        goods_id = await self._resolve_goods(
+            style_id=style_id, goods_main_id=goods_main_id, explicit=goods_main_id is not None
+        )
+        if goods_id is not None and not await self._repo.goods_contains_style(
+            goods_main_id=goods_id, style_id=style_id
+        ):
+            raise InvalidNegotiationGoodsError(
+                "该商品不包含这个款式",
+                details={"goods_main_id": str(goods_id), "style_id": str(style_id)},
+            )
+        members = await self._items_repo.members_of(goods_main_id=goods_id, style_id=style_id)
+        names = await self._items_repo.style_names(members)
+        return NegotiationGoodsMembers(
+            goods_main_id=goods_id,
+            members=[
+                GoodsMemberResponse(
+                    style_id=member,
+                    display_short_name=normalize_goods_short_name(names[member][1])
+                    or names[member][0],
+                    goods_title=names[member][0],
+                )
+                for member in members
+            ],
+        )
+
+    async def _others_in_progress(
+        self, *, tenant_id: UUID, blogger_id: UUID, viewer_id: UUID
+    ) -> builtins.list[OthersInProgressItem]:
+        rows = await self._repo.others_in_progress(
+            tenant_id=tenant_id, blogger_id=blogger_id, viewer_id=viewer_id
+        )
+        return [OthersInProgressItem(**r) for r in rows]
+
+    async def _load_for_action(
+        self, negotiation_id: UUID, user: User
+    ) -> tuple[FlowActor, Negotiation, builtins.list[NegotiationItemView], builtins.list[UUID]]:
+        """写动作的第一步：取单，看不到（别人的草稿、没有看全部时别人的单）→ 404；连同明细与成员（组快照用）。"""
+        actor = await self._flow_actor(user)
+        negotiation = await self._repo.get_by_id(negotiation_id)
+        if (
+            negotiation is None
+            or negotiation.tenant_id != user.tenant_id
+            or not can_see_negotiation(actor, pr_id=negotiation.pr_id, status=negotiation.status)
+        ):
+            raise NegotiationNotFoundError("谈款单不存在")
+        views = (await self._repo.list_items([negotiation.id])).get(negotiation.id, [])
+        members = await self._items_repo.members_of(
+            goods_main_id=negotiation.goods_main_id, style_id=negotiation.style_id
+        )
+        return actor, negotiation, views, members
+
+    # ------------------------------------------------------------------ #
+    # N1 新建 / N2 编辑
     # ------------------------------------------------------------------ #
 
     async def create(self, payload: NegotiationCreate, user: User) -> NegotiationResponse:
-        await self._validate_refs(
-            blogger_id=payload.blogger_id,
+        """N1：落草稿。持 ``*`` → 403 ``star_create``；发 ``line_id``；不传商品就推定并写回；按商品建明细。"""
+        actor = await self._flow_actor(user)
+        if actor.is_star:
+            raise FlowActionForbiddenError(rule="star_create", reason=STAR_CREATE_REASON)
+        if not await self._repo.style_exists(payload.style_id):
+            raise InvalidNegotiationStyleError(
+                "款式不存在或已删除", details={"style_id": str(payload.style_id)}
+            )
+        goods_main_id = await self._resolve_goods(
             style_id=payload.style_id,
             goods_main_id=payload.goods_main_id,
+            explicit="goods_main_id" in payload.model_fields_set,
+        )
+        await self._validate_refs(
+            blogger_id=payload.blogger_id, style_id=payload.style_id, goods_main_id=goods_main_id
+        )
+        rows = await self._item_rows(
+            goods_main_id=goods_main_id, style_id=payload.style_id, items=payload.items
         )
         quote = await self._resolve_quote(
             mode=payload.cooperation_mode,
             quote_amount=payload.quote_amount,
             blogger_id=payload.blogger_id,
         )
+        # line_id 显式发号：同一事务马上要写事件，不等库默认值回读（6.2）
         negotiation = Negotiation(
             tenant_id=user.tenant_id,
+            line_id=uuid4(),
             blogger_id=payload.blogger_id,
             style_id=payload.style_id,
-            goods_main_id=payload.goods_main_id,
+            goods_main_id=goods_main_id,
             pr_id=user.id,
             cooperation_mode=payload.cooperation_mode.value,
             platform=payload.platform,
@@ -327,6 +504,17 @@ class NegotiationService:
         )
         self._repo.add(negotiation)
         await self._session.flush()
+        await self._repo.replace_items(
+            tenant_id=user.tenant_id, negotiation_id=negotiation.id, rows=rows
+        )
+        await self._events.append(
+            tenant_id=user.tenant_id,
+            line_id=negotiation.line_id,
+            event_type=LineEventType.NEGOTIATION_CREATED,
+            actor_id=user.id,
+            negotiation_id=negotiation.id,
+            to_state=NegotiationStatus.DRAFT.value,
+        )
         await self._audit.log(
             action="negotiation.create",
             resource="negotiation",
@@ -339,107 +527,192 @@ class NegotiationService:
             },
             user_id=user.id,
         )
+        negotiation_id, blogger_id = negotiation.id, negotiation.blogger_id
         await self._session.commit()
-        return await self.get(negotiation.id, user)
+        response = await self.get(negotiation_id, user)
+        response.others_in_progress = await self._others_in_progress(
+            tenant_id=user.tenant_id, blogger_id=blogger_id, viewer_id=user.id
+        )
+        return response
 
     async def update(
         self, negotiation_id: UUID, payload: NegotiationUpdate, user: User
     ) -> NegotiationResponse:
-        negotiation = await self._repo.get_by_id(negotiation_id)
-        if negotiation is None:
-            raise NegotiationNotFoundError("谈款单不存在")
-        if negotiation.status not in _EDITABLE_STATUSES:
-            raise NegotiationNotEditableError(
-                f"{negotiation.status}的谈款单不能修改",
-                details={"status": negotiation.status},
-            )
+        """N2：只在草稿 / 老板退回、本人；状态不变（老板退回改完仍是老板退回，重提走 N3）。
 
-        before = {
-            "cooperation_mode": negotiation.cooperation_mode,
-            "status": negotiation.status,
-        }
-        fields = payload.model_fields_set
-        if "blogger_id" in fields and payload.blogger_id is not None:
-            negotiation.blogger_id = payload.blogger_id
-        if "style_id" in fields and payload.style_id is not None:
-            negotiation.style_id = payload.style_id
-        if "goods_main_id" in fields:
-            negotiation.goods_main_id = payload.goods_main_id
-        await self._validate_refs(
-            blogger_id=negotiation.blogger_id,
-            style_id=negotiation.style_id,
-            goods_main_id=negotiation.goods_main_id,
+        换款式 / 商品时同 N1 推定并写回，明细整组重建（新行 sku 为空）；传了 ``items`` 就按传的整组替换。
+        条件 UPDATE 带 ``status IN (草稿, 老板退回) AND pr_id = 我``，0 行 → 409。
+        """
+        actor, negotiation, _views, _members = await self._load_for_action(negotiation_id, user)
+        require(
+            actor, build_negotiation_doc(negotiation, items_complete=False), "edit", gates=False
         )
-        if "cooperation_mode" in fields and payload.cooperation_mode is not None:
-            negotiation.cooperation_mode = payload.cooperation_mode.value
-        if "platform" in fields and payload.platform is not None:
-            negotiation.platform = payload.platform
-        if "scheduled_publish_date" in fields:
-            negotiation.scheduled_publish_date = payload.scheduled_publish_date
-        if "remark" in fields:
-            negotiation.remark = payload.remark
-        if "quote_amount" in fields:
-            negotiation.quote_amount = await self._resolve_quote(
-                mode=CooperationMode(negotiation.cooperation_mode),
-                quote_amount=payload.quote_amount,
-                blogger_id=negotiation.blogger_id,
+
+        fields = payload.model_fields_set
+        blogger_id = (
+            payload.blogger_id if payload.blogger_id is not None else negotiation.blogger_id
+        )
+        style_id = payload.style_id if payload.style_id is not None else negotiation.style_id
+        if not await self._repo.style_exists(style_id):
+            raise InvalidNegotiationStyleError(
+                "款式不存在或已删除", details={"style_id": str(style_id)}
+            )
+        if "goods_main_id" in fields or style_id != negotiation.style_id:
+            goods_main_id = await self._resolve_goods(
+                style_id=style_id,
+                goods_main_id=payload.goods_main_id,
+                explicit="goods_main_id" in fields,
             )
         else:
-            # 模式可能刚被改成置换，服务费要跟着归零
-            negotiation.quote_amount = await self._resolve_quote(
-                mode=CooperationMode(negotiation.cooperation_mode),
-                quote_amount=negotiation.quote_amount,
-                blogger_id=negotiation.blogger_id,
+            goods_main_id = negotiation.goods_main_id
+        await self._validate_refs(
+            blogger_id=blogger_id, style_id=style_id, goods_main_id=goods_main_id
+        )
+        goods_changed = (style_id, goods_main_id) != (
+            negotiation.style_id,
+            negotiation.goods_main_id,
+        )
+        rows: builtins.list[tuple[UUID, UUID | None]] | None = None
+        if payload.items is not None or goods_changed:
+            rows = await self._item_rows(
+                goods_main_id=goods_main_id, style_id=style_id, items=payload.items
             )
 
-        # 被驳回的单据改完回到草稿，重新走一遍提交
-        if negotiation.status == NegotiationStatus.REJECTED.value:
-            negotiation.status = NegotiationStatus.DRAFT.value
+        mode = (
+            payload.cooperation_mode
+            if payload.cooperation_mode is not None
+            else CooperationMode(negotiation.cooperation_mode)
+        )
+        # 没传服务费时也重算一次：模式可能刚被改成置换，服务费要跟着归零
+        quote = await self._resolve_quote(
+            mode=mode,
+            quote_amount=(
+                payload.quote_amount if "quote_amount" in fields else negotiation.quote_amount
+            ),
+            blogger_id=blogger_id,
+        )
+        values: dict[str, Any] = {
+            "blogger_id": blogger_id,
+            "style_id": style_id,
+            "goods_main_id": goods_main_id,
+            "cooperation_mode": mode.value,
+            "quote_amount": quote,
+        }
+        if "platform" in fields and payload.platform is not None:
+            values["platform"] = payload.platform
+        if "scheduled_publish_date" in fields:
+            values["scheduled_publish_date"] = payload.scheduled_publish_date
+        if "remark" in fields:
+            values["remark"] = payload.remark
 
-        await self._session.flush()
+        before = {"cooperation_mode": negotiation.cooperation_mode, "status": negotiation.status}
+        tenant_id = negotiation.tenant_id
+        updated = await self._repo.update_state(
+            negotiation_id=negotiation_id,
+            tenant_id=tenant_id,
+            from_statuses=_OWNER_EDITABLE,
+            values=values,
+            pr_id=user.id,
+        )
+        if updated is None:
+            raise NegotiationStateConflictError(details={"negotiation_id": str(negotiation_id)})
+        # 条件 UPDATE 先过、再动明细：输了并发的请求在这里就停下（同推送 A8）
+        if rows is not None:
+            await self._repo.replace_items(
+                tenant_id=tenant_id, negotiation_id=negotiation_id, rows=rows
+            )
         await self._audit.log(
             action="negotiation.update",
             resource="negotiation",
-            resource_id=negotiation.id,
+            resource_id=negotiation_id,
             before=before,
-            after={
-                "cooperation_mode": negotiation.cooperation_mode,
-                "status": negotiation.status,
-            },
+            after={"cooperation_mode": updated.cooperation_mode, "status": updated.status},
             user_id=user.id,
         )
         await self._session.commit()
-        return await self.get(negotiation.id, user)
+        return await self.get(negotiation_id, user)
 
     # ------------------------------------------------------------------ #
-    # 提交审核
+    # N3 提交
     # ------------------------------------------------------------------ #
+
+    async def _last_submit_snapshot(
+        self, *, tenant_id: UUID, line_id: UUID, negotiation_id: UUID
+    ) -> dict[str, Any] | None:
+        """这张谈款上一次 ``negotiation.submitted`` 的快照（没有提交过为 None）。"""
+        events = await self._events.list_by_line(tenant_id=tenant_id, line_id=line_id)
+        for event in reversed(events):
+            if (
+                event.event_type == LineEventType.NEGOTIATION_SUBMITTED.value
+                and event.negotiation_id == negotiation_id
+            ):
+                snapshot = (event.payload or {}).get("snapshot")
+                return dict(snapshot) if isinstance(snapshot, Mapping) else None
+        return None
 
     async def submit(self, negotiation_id: UUID, user: User) -> NegotiationResponse:
-        negotiation = await self._repo.get_by_id(negotiation_id)
-        if negotiation is None:
-            raise NegotiationNotFoundError("谈款单不存在")
-        if negotiation.status not in _EDITABLE_STATUSES:
-            raise NegotiationNotSubmittableError(
-                f"{negotiation.status}的谈款单不能提交审核",
-                details={"status": negotiation.status},
-            )
-        negotiation.status = NegotiationStatus.PENDING.value
-        negotiation.submitted_at = _utcnow()
-        # 重新提交时清掉上一轮的审核痕迹，避免界面上显示旧的驳回意见
-        negotiation.reviewed_by = None
-        negotiation.reviewed_at = None
-        negotiation.review_opinion = None
-        await self._session.flush()
+        """N3：草稿 / 老板退回 → 主管待审，本人；★¹ 缺项一次全报（``FLOW_GATE_MISSING``）。
+
+        写 ``submitted_at``、清空本轮两级审核（旧值已在事件里）；事件带本次快照与上次提交的 ``diff``。
+        """
+        actor, negotiation, views, members = await self._load_for_action(negotiation_id, user)
+        require(
+            actor,
+            build_negotiation_doc(negotiation, items_complete=_items_complete(views, members)),
+            "submit",
+        )
+        from_status = negotiation.status
+        tenant_id, line_id = negotiation.tenant_id, negotiation.line_id
+        blogger_id = negotiation.blogger_id
+        snapshot = _submit_snapshot(negotiation, views)
+        previous = await self._last_submit_snapshot(
+            tenant_id=tenant_id, line_id=line_id, negotiation_id=negotiation_id
+        )
+        updated = await self._repo.update_state(
+            negotiation_id=negotiation_id,
+            tenant_id=tenant_id,
+            from_statuses=(from_status,),
+            to_status=NegotiationStatus.PENDING.value,
+            values={
+                "submitted_at": _utcnow(),
+                "reviewed_by": None,
+                "reviewed_at": None,
+                "review_opinion": None,
+                "final_reviewed_by": None,
+                "final_reviewed_at": None,
+                "final_review_opinion": None,
+            },
+            pr_id=user.id,
+        )
+        if updated is None:
+            raise NegotiationStateConflictError(details={"negotiation_id": str(negotiation_id)})
+        payload: dict[str, Any] = {"snapshot": snapshot}
+        if previous is not None:
+            payload["diff"] = _snapshot_diff(previous, snapshot)
+        await self._events.append(
+            tenant_id=tenant_id,
+            line_id=line_id,
+            event_type=LineEventType.NEGOTIATION_SUBMITTED,
+            actor_id=user.id,
+            negotiation_id=negotiation_id,
+            from_state=from_status,
+            to_state=NegotiationStatus.PENDING.value,
+            payload=payload,
+        )
         await self._audit.log(
             action="negotiation.submit",
             resource="negotiation",
-            resource_id=negotiation.id,
-            after={"status": negotiation.status},
+            resource_id=negotiation_id,
+            before={"status": from_status},
+            after={"status": NegotiationStatus.PENDING.value},
             user_id=user.id,
         )
         await self._session.commit()
-        return await self.get(negotiation.id, user)
+        response = await self.get(negotiation_id, user)
+        response.others_in_progress = await self._others_in_progress(
+            tenant_id=tenant_id, blogger_id=blogger_id, viewer_id=user.id
+        )
+        return response
 
     # ------------------------------------------------------------------ #
     # 审核

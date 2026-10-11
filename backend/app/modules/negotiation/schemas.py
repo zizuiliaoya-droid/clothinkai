@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.modules.negotiation.enums import NegotiationReviewAction, NegotiationStatus
 from app.modules.promotion.enums import CooperationMode
+from app.modules.promotion.schemas import GoodsItemIn, GoodsMemberResponse
 
 _QuoteField = Annotated[
     Decimal,
@@ -26,7 +27,8 @@ class NegotiationCreate(BaseModel):
     blogger_id: UUID
     style_id: UUID
     goods_main_id: UUID | None = None
-    """谈的是哪个商品。不传则生成推广单时由服务端推定主商品（非套装优先）。"""
+    """谈的是哪个商品。不传由服务端按现有规则推定主商品（非套装优先）并写回谈款（N1）；
+    款式不属于任何商品时留空、按单品建 1 行明细。款式同时属于单品与套装时由前端要求显式选。"""
 
     cooperation_mode: CooperationMode
     platform: str = Field(default="小红书", min_length=1, max_length=16)
@@ -38,10 +40,13 @@ class NegotiationCreate(BaseModel):
     """
 
     remark: str | None = None
+    items: list[GoodsItemIn] | None = Field(default=None, max_length=10)
+    """颜色尺码明细（7.2）。不传 = 按商品成员建空行（单品 1 行、套装每个启用成员 1 行）；
+    传了款式集合要与成员完全相同，``sku_id`` 可空（提交时才要求每行都有）。"""
 
 
 class NegotiationUpdate(BaseModel):
-    """编辑草稿。只有草稿与被驳回的单据能改。"""
+    """编辑（N2）：只在草稿 / 老板退回、本人；改完状态不变，重提走提交。"""
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
@@ -55,6 +60,8 @@ class NegotiationUpdate(BaseModel):
     scheduled_publish_date: date | None = None
     quote_amount: _QuoteField | None = None
     remark: str | None = None
+    items: list[GoodsItemIn] | None = Field(default=None, max_length=10)
+    """编辑时选的颜色尺码（偏差 4）。传了整组替换（款式集合 = 商品成员）；不传时只有换了款式 / 商品才按新成员重建空行。"""
 
 
 class NegotiationReviewRequest(BaseModel):
@@ -88,6 +95,24 @@ class NegotiationItemResponse(BaseModel):
     size: str | None = None
     style_main_image_url: str | None = None
     """该行款式主图的签名 URL；没有图或签名失败为 null。"""
+
+
+class OthersInProgressItem(BaseModel):
+    """同一博主有别的 PR 在谈（7c-16）：只给同事姓名、状态、更新时间，不给 id 与内容。"""
+
+    pr_name: str
+    status: str
+    updated_at: datetime
+
+
+class NegotiationGoodsMembers(BaseModel):
+    """``GET /goods-members``（偏差 3）：新建 / 换商品时明细该有哪几行。
+
+    ``goods_main_id`` = 传入的，或不传时按 N1 推定的（款式不属于任何商品为 null）；``members`` 口径同 ``members_of``。
+    """
+
+    goods_main_id: UUID | None = None
+    members: list[GoodsMemberResponse]
 
 
 class ReceiverSuggestion(BaseModel):
@@ -160,6 +185,8 @@ class NegotiationResponse(BaseModel):
     """主管待审已等待的整小时数；其余状态、看不到超时高亮的人为 null。"""
     receiver_suggestion: ReceiverSuggestion | None = None
     """只在详情、待补收货地址、当前用户能录收货信息时有。"""
+    others_in_progress: list[OthersInProgressItem] | None = None
+    """只在新建与提交的响应里：同博主别的 PR 在谈的单（只提示不拦，7.2）；其余接口为 null。"""
     ui: dict[str, Any] | None = None
     """矩阵 ``ui``（7.1）：列表行 actions + edits，详情 actions + fields。"""
 
@@ -244,11 +271,13 @@ __all__ = [
     "BloggerCooperationHistory",
     "BloggerCooperationItem",
     "NegotiationCreate",
+    "NegotiationGoodsMembers",
     "NegotiationItemResponse",
     "NegotiationListFilters",
     "NegotiationListResponse",
     "NegotiationResponse",
     "NegotiationReviewRequest",
     "NegotiationUpdate",
+    "OthersInProgressItem",
     "ReceiverSuggestion",
 ]

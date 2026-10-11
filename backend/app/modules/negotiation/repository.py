@@ -13,9 +13,10 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select, text
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.auth.models import User
 from app.modules.negotiation.models import Negotiation, NegotiationItem
 from app.modules.product.models import Sku, Style
 from app.modules.promotion.display_name import PROMOTION_DISPLAY_SHORT_NAME_SQL
@@ -57,6 +58,15 @@ _JOINS = """
 # 可见范围（3.2）：本人；或持 negotiation_all:read（管理员靠 *）看草稿之外的。草稿只有本人看得到
 _VISIBLE = (
     "(n.pr_id = CAST(:viewer_id AS uuid) OR (n.status <> '草稿' AND CAST(:see_all AS boolean)))"
+)
+
+# 「在谈」（7c-16）：草稿 / 主管待审 / 待老板审核 / 老板退回 / 待补收货地址
+IN_PROGRESS_STATUSES: tuple[str, ...] = (
+    "草稿",
+    "主管待审",
+    "待老板审核",
+    "老板退回",
+    "待补收货地址",
 )
 
 # 超 36 小时（7c-6）：截止时刻由 service 用 Python 算好传进来（按实际时长比，freeze_time 可测）
@@ -384,23 +394,92 @@ class NegotiationRepository:
         ).all()
         return {str(r[0]): int(r[1]) for r in rows}, sum(int(r[2]) for r in rows)
 
-    async def exists_pending_duplicate(
-        self, *, tenant_id: UUID, blogger_id: UUID, style_id: UUID, exclude_id: UUID | None = None
-    ) -> bool:
-        """同博主 + 同款式是否已有在途谈款单（草稿 / 主管待审）。
+    async def update_state(
+        self,
+        *,
+        negotiation_id: UUID,
+        tenant_id: UUID,
+        from_statuses: Sequence[str],
+        values: Mapping[str, Any],
+        to_status: str | None = None,
+        pr_id: UUID | None = None,
+    ) -> Negotiation | None:
+        """条件 UPDATE（3.1、D4）：``WHERE id AND tenant_id AND status = ANY(from) [AND pr_id] RETURNING``。
 
-        不阻塞，只给前端一个提示 —— 同一个博主推同一款两次是合理的（比如补发），
-        但大概率是重复录入。
+        ``to_status`` 为 None 时状态不变（N2 编辑）。0 行 → None，service 抛 409 ``NEGOTIATION_STATE_CONFLICT``。
+        RETURNING 可能命中会话里的旧实例，refresh 一次反映库里的值（同推广单 ``update_state``）。
         """
-        stmt = select(Negotiation.id).where(
+        conds = [
+            Negotiation.id == negotiation_id,
             Negotiation.tenant_id == tenant_id,
-            Negotiation.blogger_id == blogger_id,
-            Negotiation.style_id == style_id,
-            Negotiation.status.in_(("草稿", "主管待审")),
+            Negotiation.status.in_(list(from_statuses)),
+        ]
+        if pr_id is not None:
+            conds.append(Negotiation.pr_id == pr_id)
+        new_values: dict[str, Any] = dict(values)
+        if to_status is not None:
+            new_values["status"] = to_status
+        new_values["updated_at"] = func.now()
+        stmt = (
+            update(Negotiation)
+            .where(*conds)
+            .values(**new_values)
+            .returning(Negotiation)
+            .execution_options(synchronize_session=False)
         )
-        if exclude_id is not None:
-            stmt = stmt.where(Negotiation.id != exclude_id)
-        return (await self._session.execute(stmt.limit(1))).scalar_one_or_none() is not None
+        row = (await self._session.execute(stmt)).fetchone()
+        if row is None:
+            return None
+        negotiation: Negotiation = row[0]
+        await self._session.refresh(negotiation)
+        return negotiation
+
+    async def replace_items(
+        self,
+        *,
+        tenant_id: UUID,
+        negotiation_id: UUID,
+        rows: Sequence[tuple[UUID, UUID | None]],
+    ) -> None:
+        """明细整组替换：删旧行，按 ``rows`` 顺序插（``sort_order`` 从 0，``sku_id`` 可空）。不提交。"""
+        await self._session.execute(
+            delete(NegotiationItem).where(NegotiationItem.negotiation_id == negotiation_id)
+        )
+        for order, (style_id, sku_id) in enumerate(rows):
+            self._session.add(
+                NegotiationItem(
+                    tenant_id=tenant_id,
+                    negotiation_id=negotiation_id,
+                    style_id=style_id,
+                    sku_id=sku_id,
+                    sort_order=order,
+                )
+            )
+        await self._session.flush()
+
+    async def others_in_progress(
+        self, *, tenant_id: UUID, blogger_id: UUID, viewer_id: UUID
+    ) -> builtins.list[Mapping[str, Any]]:
+        """同一博主别的 PR 在谈的单（7c-16）：``pr_id`` ≠ 当前用户、状态在 ``IN_PROGRESS_STATUSES``。
+
+        不受可见范围限制，只投影同事姓名、状态、更新时间（不回 id 与内容）。
+        """
+        stmt = (
+            select(
+                func.coalesce(User.display_name, User.username).label("pr_name"),
+                Negotiation.status,
+                Negotiation.updated_at,
+            )
+            .join(User, User.id == Negotiation.pr_id)
+            .where(
+                Negotiation.tenant_id == tenant_id,
+                Negotiation.blogger_id == blogger_id,
+                Negotiation.pr_id != viewer_id,
+                Negotiation.status.in_(IN_PROGRESS_STATUSES),
+            )
+            .order_by(Negotiation.updated_at.desc(), Negotiation.id)
+        )
+        return [dict(r) for r in (await self._session.execute(stmt)).mappings().all()]
 
 
-__all__ = ["NegotiationItemView", "NegotiationRepository"]
+__all__ = ["IN_PROGRESS_STATUSES", "NegotiationItemView", "NegotiationRepository"]

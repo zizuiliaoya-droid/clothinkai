@@ -1,7 +1,8 @@
 """流程线 PR-3：谈款两级审核（设计 3.2、7.2、9.3 B 块）。
 
 本文件按条目逐步长：S5 可见范围与读接口（列表 / 计数 / 详情的可见范围、超 36 小时、``ui``、收件投影、
-``receiver_suggestion``、商品明细与品名、列表 SQL 条数不随行数涨）。
+``receiver_suggestion``、商品明细与品名、列表 SQL 条数不随行数涨）；S6 新建 / 编辑 / 提交（N1 ~ N3：
+商品推定写回与明细、``star_create``、``others_in_progress``、转移全表的编辑 / 提交两列、提交缺项、提交留痕、goods-members）。
 角色一律用 ``flow_users``（迁移 seed 的真实角色）；造数用 ``negotiation_factory`` 直插任意状态。
 """
 
@@ -18,12 +19,22 @@ from sqlalchemy import event, select
 from sqlalchemy import text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import AppException, IllegalStateTransitionError
 from app.core.tenancy import tenant_id_ctx
 from app.modules.auth.models import Permission, UserPermissionOverride
+from app.modules.flow.exceptions import FlowActionForbiddenError, FlowGateMissingError
 from app.modules.negotiation.exceptions import NegotiationNotFoundError
-from app.modules.negotiation.schemas import NegotiationListFilters
+from app.modules.negotiation.models import Negotiation
+from app.modules.negotiation.repository import NegotiationRepository
+from app.modules.negotiation.schemas import (
+    NegotiationCreate,
+    NegotiationListFilters,
+    NegotiationUpdate,
+)
 from app.modules.negotiation.service import NegotiationService
 from app.modules.product.goods_models import GoodsMain, GoodsStyleItem
+from app.modules.promotion.enums import CooperationMode
+from app.modules.promotion.schemas import GoodsItemIn
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
@@ -612,3 +623,520 @@ async def test_list_queries_do_not_grow_with_rows(
     assert page.total == 5
     assert five_rows == one_row
     assert all(len(r.items) == 1 for r in page.items)
+
+
+# ---------------------------------------------------------------------------
+# S6 新建（N1；7.2 POST /）
+# ---------------------------------------------------------------------------
+
+
+async def _events(session: AsyncSession, negotiation_id: Any) -> list[Any]:
+    return list(
+        (
+            await session.execute(
+                sa_text(
+                    "SELECT event_type, from_state, to_state, payload, actor_id, line_id"
+                    " FROM line_event WHERE negotiation_id = :n ORDER BY seq"
+                ),
+                {"n": negotiation_id},
+            )
+        ).all()
+    )
+
+
+def _create_body(world: _World, **kw: Any) -> NegotiationCreate:
+    kw.setdefault("cooperation_mode", CooperationMode.GIFT)
+    kw.setdefault("scheduled_publish_date", date(2026, 11, 1))
+    return NegotiationCreate(blogger_id=world.blogger.id, style_id=world.style.id, **kw)
+
+
+class _Suit:
+    """上衣 + 阔腿裤的套装（各带 1 个 SKU），上衣另有一个单卖的商品（N1 推定非套装优先）。"""
+
+    def __init__(self, top: Any, pants: Any, top_sku: Any, pants_sku: Any, suit: Any) -> None:
+        self.top = top
+        self.pants = pants
+        self.top_sku = top_sku
+        self.pants_sku = pants_sku
+        self.suit = suit
+
+
+@pytest.fixture
+async def suit(session: AsyncSession, tenant_a: Any, product_factory: Any) -> _Suit:
+    top = await product_factory.style(short_name="上衣", style_name="条纹上衣全称")
+    pants = await product_factory.style(short_name=None, style_name="阔腿裤")
+    top_sku = await product_factory.sku(top, color="黑色", size="M")
+    pants_sku = await product_factory.sku(pants, color="白色", size="L")
+    goods = await _goods(session, tenant_a, top, pants, is_suit=True)
+    return _Suit(top, pants, top_sku, pants_sku, goods)
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+class TestCreate:
+    async def test_single_style_without_goods(
+        self, session: AsyncSession, flow_users: Any, world: _World
+    ) -> None:
+        """款式不属于任何商品：按单品建 1 行空明细、goods_main_id 留空；发 line_id、写 negotiation.created。"""
+        resp = await NegotiationService(session).create(_create_body(world), flow_users.pr)
+        assert (resp.status, resp.goods_main_id) == ("草稿", None)
+        assert [(i.style_id, i.sku_id) for i in resp.items] == [(world.style.id, None)]
+        assert resp.others_in_progress == []
+        events = await _events(session, resp.id)
+        assert [(e[0], e[1], e[2], e[4], e[5]) for e in events] == [
+            ("negotiation.created", None, "草稿", flow_users.pr.id, resp.line_id)
+        ]
+        stored = await session.get(Negotiation, resp.id)
+        assert stored is not None and stored.line_id == resp.line_id
+
+    async def test_goods_inferred_and_written_back(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        flow_users: Any,
+        blogger_factory: Any,
+        suit: _Suit,
+    ) -> None:
+        """不传商品：款式同时单卖与进套装 → 推定非套装那个并写回；显式传套装 → 按套装成员建 2 行。"""
+        single = await _goods(session, tenant_a, suit.top, is_suit=False)
+        blogger = await blogger_factory.blogger()
+        svc = NegotiationService(session)
+        inferred = await svc.create(
+            NegotiationCreate(
+                blogger_id=blogger.id,
+                style_id=suit.top.id,
+                cooperation_mode=CooperationMode.GIFT,
+            ),
+            flow_users.pr,
+        )
+        assert inferred.goods_main_id == single.id
+        assert [(i.style_id, i.sku_id) for i in inferred.items] == [(suit.top.id, None)]
+        stored = await session.get(Negotiation, inferred.id)
+        assert stored is not None and stored.goods_main_id == single.id
+
+        explicit = await svc.create(
+            NegotiationCreate(
+                blogger_id=blogger.id,
+                style_id=suit.top.id,
+                goods_main_id=suit.suit.id,
+                cooperation_mode=CooperationMode.GIFT,
+            ),
+            flow_users.pr,
+        )
+        assert explicit.goods_main_id == suit.suit.id
+        assert [i.style_id for i in explicit.items] == [suit.top.id, suit.pants.id]
+        assert all(i.sku_id is None for i in explicit.items)
+
+    async def test_explicit_items_validated(
+        self, session: AsyncSession, flow_users: Any, world: _World, suit: _Suit
+    ) -> None:
+        svc = NegotiationService(session)
+        base = {
+            "blogger_id": world.blogger.id,
+            "style_id": suit.top.id,
+            "goods_main_id": suit.suit.id,
+            "cooperation_mode": CooperationMode.GIFT,
+        }
+        ok = await svc.create(
+            NegotiationCreate(
+                **base,
+                items=[
+                    GoodsItemIn(style_id=suit.top.id, sku_id=suit.top_sku.id),
+                    GoodsItemIn(style_id=suit.pants.id),
+                ],
+            ),
+            flow_users.pr,
+        )
+        assert [(i.style_id, i.sku_id) for i in ok.items] == [
+            (suit.top.id, suit.top_sku.id),
+            (suit.pants.id, None),
+        ]
+
+        async def _rejected(items: list[GoodsItemIn]) -> AppException:
+            with pytest.raises(AppException) as exc:
+                await svc.create(NegotiationCreate(**base, items=items), flow_users.pr)
+            return exc.value
+
+        short = await _rejected([GoodsItemIn(style_id=suit.top.id)])
+        assert (short.code, short.details["missing_style_ids"]) == (
+            "VALIDATION_ERROR",
+            [str(suit.pants.id)],
+        )
+        extra = await _rejected(
+            [
+                GoodsItemIn(style_id=suit.top.id),
+                GoodsItemIn(style_id=suit.pants.id),
+                GoodsItemIn(style_id=world.style.id),
+            ]
+        )
+        assert (extra.code, extra.details["extra_style_ids"]) == (
+            "VALIDATION_ERROR",
+            [str(world.style.id)],
+        )
+        twice = await _rejected(
+            [GoodsItemIn(style_id=suit.top.id), GoodsItemIn(style_id=suit.top.id)]
+        )
+        assert (twice.code, twice.details["duplicate_style_ids"]) == (
+            "VALIDATION_ERROR",
+            [str(suit.top.id)],
+        )
+        wrong_sku = await _rejected(
+            [
+                GoodsItemIn(style_id=suit.top.id, sku_id=suit.pants_sku.id),
+                GoodsItemIn(style_id=suit.pants.id),
+            ]
+        )
+        assert wrong_sku.code == "INVALID_SKU_REFERENCE"
+
+    async def test_admin_cannot_create(
+        self, session: AsyncSession, flow_users: Any, world: _World
+    ) -> None:
+        """持 ``*`` 建谈款 → 403 ``star_create``（11-1：管理员建的谈款没人能定稿），库里不留单。"""
+        with pytest.raises(FlowActionForbiddenError) as exc:
+            await NegotiationService(session).create(_create_body(world), flow_users.admin)
+        assert exc.value.code == "FLOW_ACTION_FORBIDDEN"
+        assert exc.value.details == {"rule": "star_create", "reason": "管理员建的谈款没人能定稿"}
+        count = (
+            await session.execute(
+                sa_text("SELECT COUNT(*) FROM negotiation WHERE pr_id = :u"),
+                {"u": flow_users.admin.id},
+            )
+        ).scalar_one()
+        assert count == 0
+        # 主管持 negotiation:write、不持 *：能建（主管自建，11-24）
+        made = await NegotiationService(session).create(_create_body(world), flow_users.pr_manager)
+        assert made.pr_id == flow_users.pr_manager.id
+
+    async def test_others_in_progress_hint(
+        self, session: AsyncSession, flow_users: Any, world: _World
+    ) -> None:
+        """同博主别的 PR 在谈（7c-16）：只提示不拦；只给姓名、状态、更新时间；不含自己的、不含终态。"""
+        theirs = await world.make(flow_users.pr2, "老板退回")
+        await world.make(flow_users.pr2, "已定稿")
+        await world.make(flow_users.pr2, "审核驳回")
+        await world.make(flow_users.pr, "主管待审")
+        resp = await NegotiationService(session).create(_create_body(world), flow_users.pr)
+        assert resp.status == "草稿"
+        assert resp.others_in_progress is not None
+        assert [o.model_dump() for o in resp.others_in_progress] == [
+            {
+                "pr_name": flow_users.pr2.display_name or flow_users.pr2.username,
+                "status": "老板退回",
+                "updated_at": theirs.updated_at,
+            }
+        ]
+        # 读接口不带这个提示
+        assert (
+            await NegotiationService(session).get(resp.id, flow_users.pr)
+        ).others_in_progress is None
+
+
+# ---------------------------------------------------------------------------
+# S6 编辑（N2；7.2 PUT /{id}）
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+class TestEdit:
+    async def test_returned_stays_returned(
+        self, session: AsyncSession, flow_users: Any, world: _World
+    ) -> None:
+        """老板退回改完状态不变（不再像旧逻辑那样回草稿），退回意见还在。"""
+        n = await world.make(
+            flow_users.pr,
+            "老板退回",
+            final_reviewed_by=flow_users.admin.id,
+            final_reviewed_at=_T0,
+            final_review_opinion="价格再压一压",
+        )
+        resp = await NegotiationService(session).update(
+            n.id,
+            NegotiationUpdate(remark="改了报价", quote_amount=Decimal("300.00")),
+            flow_users.pr,
+        )
+        assert (resp.status, resp.remark, resp.quote_amount) == (
+            "老板退回",
+            "改了报价",
+            Decimal("300.00"),
+        )
+        assert resp.final_review_opinion == "价格再压一压"
+        # 编辑不单独写事件（改了什么在提交时一次算，N2）
+        assert await _events(session, n.id) == []
+
+    async def test_only_owner_edits(
+        self, session: AsyncSession, flow_users: Any, world: _World
+    ) -> None:
+        returned = await world.make(flow_users.pr, "老板退回")
+        draft = await world.make(flow_users.pr, "草稿")
+        svc = NegotiationService(session)
+        for other in (flow_users.pr_manager, flow_users.admin):
+            with pytest.raises(FlowActionForbiddenError) as exc:
+                await svc.update(returned.id, NegotiationUpdate(remark="代改"), other)
+            assert exc.value.details["rule"] == "not_owner", other
+            # 草稿只有本人看得到：别人改 → 404
+            with pytest.raises(NegotiationNotFoundError):
+                await svc.update(draft.id, NegotiationUpdate(remark="代改"), other)
+        with pytest.raises(NegotiationNotFoundError):
+            await svc.update(returned.id, NegotiationUpdate(remark="代改"), flow_users.pr2)
+
+    async def test_change_goods_rebuilds_items(
+        self, session: AsyncSession, flow_users: Any, world: _World, suit: _Suit
+    ) -> None:
+        """换款式 / 商品：同 N1 推定并写回，明细整组重建、新行 sku 为空；只改备注明细不动。"""
+        n = await world.make(flow_users.pr, "草稿")
+        svc = NegotiationService(session)
+        same = await svc.update(n.id, NegotiationUpdate(remark="只改备注"), flow_users.pr)
+        assert [(i.style_id, i.sku_id) for i in same.items] == [(world.style.id, world.sku.id)]
+
+        moved = await svc.update(n.id, NegotiationUpdate(style_id=suit.top.id), flow_users.pr)
+        # 上衣只在套装里：推定到套装，按 2 个成员重建空行
+        assert moved.goods_main_id == suit.suit.id
+        assert [(i.style_id, i.sku_id) for i in moved.items] == [
+            (suit.top.id, None),
+            (suit.pants.id, None),
+        ]
+
+        picked = await svc.update(
+            n.id,
+            NegotiationUpdate(
+                items=[
+                    GoodsItemIn(style_id=suit.top.id, sku_id=suit.top_sku.id),
+                    GoodsItemIn(style_id=suit.pants.id, sku_id=suit.pants_sku.id),
+                ]
+            ),
+            flow_users.pr,
+        )
+        assert [i.sku_id for i in picked.items] == [suit.top_sku.id, suit.pants_sku.id]
+        assert picked.ui is not None
+        assert picked.ui["actions"]["submit"] == {"state": "enabled"}
+
+    async def test_conflict_when_state_moved(
+        self, session: AsyncSession, flow_users: Any, world: _World, monkeypatch: Any
+    ) -> None:
+        """条件 UPDATE：状态已经不在草稿 / 老板退回（或不是本人）→ 0 行；service 转 409。"""
+        n = await world.make(flow_users.pr, "主管待审")
+        repo = NegotiationRepository(session)
+        args = {
+            "negotiation_id": n.id,
+            "tenant_id": n.tenant_id,
+            "from_statuses": ("草稿", "老板退回"),
+            "values": {"remark": "x"},
+        }
+        assert await repo.update_state(**args) is None
+        draft = await world.make(flow_users.pr, "草稿")
+        args["negotiation_id"] = draft.id
+        assert await repo.update_state(**args, pr_id=flow_users.pr2.id) is None
+        assert (await repo.update_state(**args, pr_id=flow_users.pr.id)) is not None
+
+        async def _lost(*_a: Any, **_k: Any) -> None:
+            return None
+
+        monkeypatch.setattr(NegotiationRepository, "update_state", _lost)
+        svc = NegotiationService(session)
+        for call in (
+            svc.update(draft.id, NegotiationUpdate(remark="y"), flow_users.pr),
+            svc.submit(draft.id, flow_users.pr),
+        ):
+            with pytest.raises(IllegalStateTransitionError) as exc:
+                await call
+            assert (exc.value.code, exc.value.status_code) == ("NEGOTIATION_STATE_CONFLICT", 409)
+
+
+# ---------------------------------------------------------------------------
+# S6 转移全表：编辑 / 提交两列（9.3 B「转移全表」）
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+class TestTransitions:
+    @pytest.mark.parametrize("status", _STATES)
+    async def test_edit(
+        self, session: AsyncSession, flow_users: Any, world: _World, status: str
+    ) -> None:
+        n = await world.make(flow_users.pr, status)
+        svc = NegotiationService(session)
+        if status in ("草稿", "老板退回"):
+            resp = await svc.update(n.id, NegotiationUpdate(remark="改"), flow_users.pr)
+            assert (resp.status, resp.remark) == (status, "改")
+            return
+        with pytest.raises(IllegalStateTransitionError) as exc:
+            await svc.update(n.id, NegotiationUpdate(remark="改"), flow_users.pr)
+        assert exc.value.code == "ILLEGAL_STATE_TRANSITION"
+        assert exc.value.details == {"from_state": status, "action": "edit"}
+
+    @pytest.mark.parametrize("status", _STATES)
+    async def test_submit(
+        self, session: AsyncSession, flow_users: Any, world: _World, status: str
+    ) -> None:
+        n = await world.make(flow_users.pr, status)
+        svc = NegotiationService(session)
+        if status in ("草稿", "老板退回"):
+            resp = await svc.submit(n.id, flow_users.pr)
+            assert resp.status == "主管待审"
+            return
+        with pytest.raises(IllegalStateTransitionError) as exc:
+            await svc.submit(n.id, flow_users.pr)
+        assert exc.value.code == "ILLEGAL_STATE_TRANSITION"
+        assert exc.value.details == {"from_state": status, "action": "submit"}
+
+
+# ---------------------------------------------------------------------------
+# S6 提交（N3）：缺项一次全报、留痕
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+class TestSubmit:
+    async def test_legacy_draft_without_items(
+        self, session: AsyncSession, flow_users: Any, world: _World, negotiation_factory: Any
+    ) -> None:
+        """上线前的存量草稿（直插、没有明细、没填约定发布时间）直接提交 → 422，缺项一次全报、与 ui 一致。"""
+        n = await negotiation_factory.negotiation(
+            style=world.style, blogger=world.blogger, pr=flow_users.pr
+        )
+        svc = NegotiationService(session)
+        ui_missing = [
+            m["key"]
+            for m in ((await svc.get(n.id, flow_users.pr)).ui or {})["actions"]["submit"]["missing"]
+        ]
+        with pytest.raises(FlowGateMissingError) as exc:
+            await svc.submit(n.id, flow_users.pr)
+        assert exc.value.code == "FLOW_GATE_MISSING"
+        keys = [m["key"] for m in exc.value.details["missing"]]
+        assert keys == ["goods_items", "scheduled_publish_date"]
+        assert keys == ui_missing
+        assert (await svc.get(n.id, flow_users.pr)).status == "草稿"
+
+    async def test_suit_missing_member(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        world: _World,
+        suit: _Suit,
+        negotiation_factory: Any,
+    ) -> None:
+        """套装少一个成员的明细（每行都有 sku）提交 → 422 缺颜色尺码（只查「每行有 sku」会放过它）。"""
+        n = await negotiation_factory.negotiation(
+            style=suit.top,
+            blogger=world.blogger,
+            pr=flow_users.pr,
+            goods_main_id=suit.suit.id,
+            scheduled_publish_date=date(2026, 11, 1),
+            items=[(suit.top, suit.top_sku)],
+        )
+        with pytest.raises(FlowGateMissingError) as exc:
+            await NegotiationService(session).submit(n.id, flow_users.pr)
+        assert [m["key"] for m in exc.value.details["missing"]] == ["goods_items"]
+
+    async def test_only_owner_submits(
+        self, session: AsyncSession, flow_users: Any, world: _World
+    ) -> None:
+        n = await world.make(flow_users.pr, "老板退回")
+        with pytest.raises(FlowActionForbiddenError) as exc:
+            await NegotiationService(session).submit(n.id, flow_users.pr_manager)
+        assert exc.value.details["rule"] == "not_owner"
+
+    async def test_resubmit_keeps_trail(
+        self, session: AsyncSession, flow_users: Any, world: _World
+    ) -> None:
+        """提交写 submitted_at、清本轮两级审核；事件带快照，重提再带与上次提交的 diff（9.3 B「留痕」）。"""
+        svc = NegotiationService(session)
+        created = await svc.create(
+            _create_body(world, items=[GoodsItemIn(style_id=world.style.id, sku_id=world.sku.id)]),
+            flow_users.pr,
+        )
+        with freeze_time(_T0):
+            first = await svc.submit(created.id, flow_users.pr)
+        assert (first.status, first.submitted_at) == ("主管待审", _T0)
+
+        # 主管通过、老板退回（S7 之前直接改库造这一步）
+        stored = await session.get(Negotiation, created.id)
+        assert stored is not None
+        stored.status = "老板退回"
+        stored.reviewed_by = flow_users.pr_manager.id
+        stored.reviewed_at = _T0
+        stored.review_opinion = "主管：可以"
+        stored.final_reviewed_by = flow_users.admin.id
+        stored.final_reviewed_at = _T0
+        stored.final_review_opinion = "老板：价格再压"
+        await session.flush()
+
+        await svc.update(
+            created.id, NegotiationUpdate(quote_amount=Decimal("300.00")), flow_users.pr
+        )
+        later = _T0 + timedelta(days=1)
+        with freeze_time(later):
+            second = await svc.submit(created.id, flow_users.pr)
+        assert (second.status, second.submitted_at) == ("主管待审", later)
+        assert (second.reviewed_by, second.reviewed_at, second.review_opinion) == (None, None, None)
+        assert (
+            second.final_reviewed_by,
+            second.final_reviewed_at,
+            second.final_review_opinion,
+        ) == (None, None, None)
+
+        events = await _events(session, created.id)
+        assert [(e[0], e[1], e[2]) for e in events] == [
+            ("negotiation.created", None, "草稿"),
+            ("negotiation.submitted", "草稿", "主管待审"),
+            ("negotiation.submitted", "老板退回", "主管待审"),
+        ]
+        snapshot = {
+            "blogger_id": str(world.blogger.id),
+            "style_id": str(world.style.id),
+            "goods_main_id": None,
+            "goods_items": [[str(world.style.id), str(world.sku.id)]],
+            "cooperation_mode": "送拍",
+            "platform": "小红书",
+            "scheduled_publish_date": "2026-11-01",
+            "quote_amount": "500.00",
+        }
+        assert events[1][3] == {"snapshot": snapshot}
+        assert events[2][3] == {
+            "snapshot": {**snapshot, "quote_amount": "300.00"},
+            "diff": {"quote_amount": {"before": "500.00", "after": "300.00"}},
+        }
+        assert {e[4] for e in events} == {flow_users.pr.id}
+
+    async def test_submit_response_has_others_in_progress(
+        self, session: AsyncSession, flow_users: Any, world: _World
+    ) -> None:
+        await world.make(flow_users.pr2, "主管待审")
+        n = await world.make(flow_users.pr, "草稿")
+        resp = await NegotiationService(session).submit(n.id, flow_users.pr)
+        assert resp.others_in_progress is not None
+        assert [o.status for o in resp.others_in_progress] == ["主管待审"]
+
+
+# ---------------------------------------------------------------------------
+# S6 goods-members（偏差 3）
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+class TestGoodsMembers:
+    async def test_members(
+        self, session: AsyncSession, flow_users: Any, world: _World, suit: _Suit
+    ) -> None:
+        svc = NegotiationService(session)
+        single = await svc.goods_members(style_id=world.style.id, goods_main_id=None)
+        assert single.goods_main_id is None
+        assert [m.model_dump() for m in single.members] == [
+            {
+                "style_id": world.style.id,
+                "display_short_name": "飞狐短裙",
+                "goods_title": "飞狐短裙全称",
+            }
+        ]
+        inferred = await svc.goods_members(style_id=suit.pants.id, goods_main_id=None)
+        assert inferred.goods_main_id == suit.suit.id
+        assert [(m.style_id, m.display_short_name) for m in inferred.members] == [
+            (suit.top.id, "上衣"),
+            (suit.pants.id, "阔腿裤"),
+        ]
+
+        with pytest.raises(AppException) as exc:
+            await svc.goods_members(style_id=world.style.id, goods_main_id=suit.suit.id)
+        assert exc.value.code == "INVALID_NEGOTIATION_GOODS"
+        with pytest.raises(AppException) as exc:
+            await svc.goods_members(style_id=uuid4(), goods_main_id=None)
+        assert exc.value.code == "INVALID_NEGOTIATION_STYLE"
