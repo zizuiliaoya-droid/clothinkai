@@ -57,16 +57,17 @@ class WorkProgressService:
 
         没有「当月永远实时」的特例：未来的日子刷新不到、不会有覆盖，含未来的区间照样走实时。
 
-        ``scope``（只看本人）在 SQL **之后**按行过滤，两条路径取的都是全部行，等值不受影响
-        （R2 再把过滤下推到 SQL）。``field_ctx`` 给 F3 聚合金额（``cost`` / ``cpl``）。
+        ``scope``（只看本人）下推到 SQL（7e R2）：两条路径都按 ``scope.as_param()`` 过滤。
+        ``field_ctx`` 给 F3 聚合金额（``cost`` / ``cpl``）。
         两个关键字都不给默认值：漏传直接报错，不悄悄放成「全部可见」。
         """
         fresh = await self._summary.freshness(tenant_id, date_from, date_to)
+        pr_id = scope.as_param()
         with report_query_duration_seconds.labels("work_progress").time():
             if fresh.source == "summary":
                 record_source("work_progress", "summary")
                 rows = await self._summary.work_progress_by_pr(
-                    tenant_id=tenant_id, date_from=date_from, date_to=date_to
+                    tenant_id=tenant_id, date_from=date_from, date_to=date_to, pr_id=pr_id
                 )
             else:
                 record_source("work_progress", "live")
@@ -76,9 +77,11 @@ class WorkProgressService:
                     date_to=date_to,
                     today=get_today(),
                     thresholds=await self._urge.get_urge_thresholds(tenant_id),
+                    by_goods=False,
+                    pr_id=pr_id,
                 )
         amounts = aggregate_promo_amounts_visible("work_progress", field_ctx)
-        return [self._to_row(r, amounts=amounts) for r in rows if scope.keeps(r["pr_id"])]
+        return [self._to_row(r, amounts=amounts) for r in rows]
 
     def _to_row(self, r: Mapping[str, Any], *, amounts: bool) -> PrWorkProgress:
         quote = int(r["quote_count"])

@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db import as_mapping, as_mappings
 from app.modules.promotion.display_name import display_short_name_sql
 from app.modules.promotion.urge_calculator import URGE_STATUS_SQL_EXPR, UrgeThresholds
-from app.modules.report.pr_scope import PrScope
+from app.modules.report.pr_scope import PrParam, PrScope, pr_scope_from_param
 from app.services.metric.publish_progress import like_sum_expr
 from app.services.metric.work_progress import HIT_STAT_THRESHOLD
 
@@ -305,13 +305,36 @@ class WorkProgressRepository:
         date_to: date,
         today: date,
         thresholds: UrgeThresholds,
+        by_goods: bool,
+        seasons: Sequence[str] | None = None,
+        pr_id: PrParam = None,
     ) -> list[Mapping[str, Any]]:
-        """``thresholds`` 决定档期内 / 催发 / 重要催发三档的分界，必须是租户配置。"""
+        """按 PR（``by_goods`` 时按 PR × 归属商品）聚合区间内的推广单。
+
+        - ``thresholds`` 决定档期内 / 催发 / 重要催发三档的分界，必须是租户配置
+        - ``by_goods`` 必填、不给默认值：汇总表刷新要 True（行多一列 ``goods_main_id``，
+          归属 = ``_PROMO_GOODS_LATERAL``，没归属商品的单落在 NULL 那一行），报表读取要 False
+        - ``seasons``：只统计归属商品季节命中的单（没归属商品的单不算）
+        - ``pr_id``：None 不过滤、UUID 只看该 PR、``UNASSIGNED`` 只看 ``pr_id IS NULL``
+          （7e R2 把 R1 在 service 层的「只看本人」下推到这里）
+        """
+        scope_sql, scope_params = pr_scope_from_param(pr_id).sql("p.pr_id")
+        season_sql, season_params = goods_filter_clauses(seasons)
+        # 归属 LATERAL 只在要商品维度或季节时带上，按 PR 汇总的老形态不多做一次 JOIN
+        owner_join = ""
+        if by_goods or seasons:
+            owner_join = _PROMO_GOODS_LATERAL
+        if seasons:
+            owner_join += f"\n            LEFT JOIN goods_main g ON g.id = {_PROMO_GOODS_ID}"
+        goods_select = f"{_PROMO_GOODS_ID} AS goods_main_id," if by_goods else ""
+        goods_group = f", {_PROMO_GOODS_ID}" if by_goods else ""
+        goods_order = ", goods_main_id NULLS LAST" if by_goods else ""
         sql = text(
             f"""
             SELECT
               p.pr_id AS pr_id,
               COALESCE(u.display_name, u.username, '未分配') AS pr_name,
+              {goods_select}
               COUNT(*) AS quote_count,
               COUNT(*) FILTER (WHERE ({_URGE}) = '档期内') AS in_schedule_count,
               COUNT(*) FILTER (WHERE ({_URGE}) = '催发') AS urge_count,
@@ -334,15 +357,39 @@ class WorkProgressRepository:
               COUNT(*) FILTER (WHERE p.publish_status='已发布'
                                AND p.like_count >= :hit_stat) AS hit_count,
               {_LIKE} AS like_count,
-              COALESCE(SUM(p.cost_snapshot), 0) AS cost
+              COALESCE(SUM(p.cost_snapshot), 0) AS cost,
+              -- 7e R2：服务费四分 + 推广成本 + 未发布 / 发货计数（R5 的公式用）
+              COALESCE(SUM(p.quote_amount), 0) AS quote_amount,
+              COALESCE(SUM(p.quote_amount) FILTER (WHERE p.publish_status='已发布'), 0)
+                AS published_quote_amount,
+              -- 有效约稿服务费：与 effective_quote_count 同一个 FILTER（扣取消与召回，不重复扣）
+              COALESCE(SUM(p.quote_amount) FILTER (
+                WHERE p.publish_status <> '已取消'
+                  AND p.recall_status = '未召回'
+              ), 0) AS effective_quote_amount,
+              COALESCE(SUM(p.quote_amount) FILTER (WHERE p.publish_status='未发布'), 0)
+                AS unpublished_quote_amount,
+              COALESCE(SUM(p.quote_amount) FILTER (WHERE p.publish_status='已取消'), 0)
+                AS cancelled_quote_amount,
+              -- 推广成本 = 未删除推广单的应付（服务费 + 样品 + 运费）之和，不看发布 / 召回状态：
+              -- 未发布就召回的运费、样品也算（设计默 8 / 默 17）
+              COALESCE(SUM(p.total_promo_cost), 0) AS promo_cost,
+              COUNT(*) FILTER (WHERE p.publish_status='未发布') AS unpublished_count,
+              -- 「已发货」= 流程线 PR-2 的 ship_status（060）
+              COUNT(*) FILTER (WHERE p.ship_status='已发货') AS shipped_count,
+              COUNT(*) FILTER (WHERE p.ship_status='已发货' AND p.publish_status='已发布')
+                AS shipped_published_count
             FROM promotion p
+            {owner_join}
             LEFT JOIN "user" u ON u.id = p.pr_id
             WHERE p.tenant_id = :tenant_id AND p.is_active = true
               AND p.cooperation_date BETWEEN :date_from AND :date_to
-            GROUP BY p.pr_id, u.display_name, u.username
+              {scope_sql}
+              {season_sql}
+            GROUP BY p.pr_id, u.display_name, u.username{goods_group}
             -- 约稿量相同的 PR 原来顺序不确定；加上姓名与 id 兜底，
             -- 汇总表读取（summary_read）用同一排序，两条路径才能逐行比对
-            ORDER BY quote_count DESC, pr_name, pr_id
+            ORDER BY quote_count DESC, pr_name, pr_id{goods_order}
             """
         )
         params = {
@@ -352,6 +399,8 @@ class WorkProgressRepository:
             "today": today,
             **thresholds.sql_params(),
             "hit_stat": HIT_STAT_THRESHOLD,
+            **scope_params,
+            **season_params,
         }
         return as_mappings((await self._s.execute(sql, params)).mappings().all())
 

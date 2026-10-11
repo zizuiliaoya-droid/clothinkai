@@ -72,6 +72,7 @@ from app.modules.report.advanced_repository import (
 from app.modules.report.exceptions import SummaryRefreshBusyError
 from app.modules.report.summary_invalidation import summary_lock_key
 from app.modules.report.summary_models import (
+    PR_PROGRESS_METRICS,
     ROI_METRICS,
     ProductRoiSummary,
     PrWorkProgressSummary,
@@ -87,25 +88,11 @@ from app.modules.urge.service import UrgeService
 # 清单只在 summary_models.ROI_METRICS 定义一次（062），刷新与读取共用。
 _ROI_METRICS = ROI_METRICS
 
-# pr_work_progress_summary 落盘的计数列（14 个，与 aggregate_by_pr 的输出一一对应）。
+# pr_work_progress_summary 落盘的指标列（与 aggregate_by_pr 的输出一一对应），
+# 清单只在 summary_models.PR_PROGRESS_METRICS 定义一次（062），刷新与读取共用。
 # 档期内 / 催发 / 重要催发 / 超时 4 个由 urge_status 派生、依赖「今天」，存的是
 # **刷新时刻**的状态 —— 见 _refresh_pr_progress 与 migration 054 的 docstring。
-_PR_COUNTERS = (
-    "quote_count",
-    "in_schedule_count",
-    "urge_count",
-    "important_urge_count",
-    "overdue_count",
-    "publish_count",
-    "info_complete_count",
-    "cancel_count",
-    "recall_due_count",
-    "recall_success_count",
-    "effective_quote_count",
-    "hit_count",
-    "like_count",
-    "cost",
-)
+_PR_COUNTERS = PR_PROGRESS_METRICS
 
 _SHOP_METRICS = ("visitors", "pay_amount", "pay_orders")
 
@@ -297,17 +284,24 @@ class SummaryRefreshService:
         while day <= date_to:
             # aggregate_by_pr 按区间聚合，没有「按日分组」的形态。与其给它加一个
             # granularity 参数（= 改一条 18 个 FILTER 的 SQL，风险远大于收益），
-            # 不如把区间收成一天逐日调用：落盘的 14 个计数全是可加的（每张推广单
+            # 不如把区间收成一天逐日调用：落盘的指标全是可加的（每张推广单
             # 只有一个合作日期，按天切开再加回去不重不漏），读取时 SUM 回去就是
-            # 任意区间的结果。
+            # 任意区间的结果。by_goods=True：按（PR, 归属商品）落盘（062），
+            # 读取时 SUM 掉商品维度，季节筛选 JOIN 归属商品。
             rows = await self._work.aggregate_by_pr(
-                tenant_id=tenant_id, date_from=day, date_to=day, today=today, thresholds=thresholds
+                tenant_id=tenant_id,
+                date_from=day,
+                date_to=day,
+                today=today,
+                thresholds=thresholds,
+                by_goods=True,
             )
             payload.extend(
                 {
                     "id": uuid4(),
                     "tenant_id": tenant_id,
                     "pr_id": r["pr_id"],
+                    "goods_main_id": r["goods_main_id"],
                     "stat_date": day,
                     "refreshed_at": now,
                     **{c: 0 if r[c] is None else r[c] for c in _PR_COUNTERS},

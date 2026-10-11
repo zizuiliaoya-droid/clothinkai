@@ -251,6 +251,7 @@ class TestRefreshMatchesLiveAggregation:
                 date_to=FULL_HI,
                 today=FULL_HI,
                 thresholds=await UrgeService(session).get_urge_thresholds(tenant_a.id),
+                by_goods=False,
             )
             assert live, "场景没有推广单，PR 进度对比是空跑"
 

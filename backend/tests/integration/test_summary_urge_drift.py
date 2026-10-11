@@ -103,6 +103,7 @@ async def _live_urge_counts(session: AsyncSession, tenant: Any, day: date) -> di
         date_to=day,
         today=TODAY,
         thresholds=await UrgeService(session).get_urge_thresholds(tenant.id),
+        by_goods=False,
     )
     return {c: sum(int(r[c]) for r in rows) for c in _URGE_COLS}
 

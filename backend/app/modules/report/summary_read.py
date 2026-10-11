@@ -46,6 +46,8 @@ from app.modules.report.advanced_repository import (
     goods_channel_select,
     goods_filter_clauses,
 )
+from app.modules.report.pr_scope import PrParam, pr_scope_from_param
+from app.modules.report.summary_models import PR_PROGRESS_METRICS
 
 Source = Literal["summary", "live"]
 
@@ -103,24 +105,6 @@ _URGE_DRIFT_SQL = text(
       AND p.scheduled_publish_date >= CAST(timezone(CAST(:tz AS text), c.refreshed_at) AS date)
     ORDER BY c.stat_date
     """
-)
-
-# 工作进度 14 个计数（与 aggregate_by_pr 的输出一一对应）
-_PR_SUM_COLUMNS = (
-    "quote_count",
-    "in_schedule_count",
-    "urge_count",
-    "important_urge_count",
-    "overdue_count",
-    "publish_count",
-    "info_complete_count",
-    "cancel_count",
-    "recall_due_count",
-    "recall_success_count",
-    "effective_quote_count",
-    "hit_count",
-    "like_count",
-    "cost",
 )
 
 
@@ -267,9 +251,22 @@ class SummaryReadRepository:
     # 工作进度 ⇄ WorkProgressRepository.aggregate_by_pr
     # ------------------------------------------------------------------ #
     async def work_progress_by_pr(
-        self, *, tenant_id: UUID, date_from: date, date_to: date
+        self,
+        *,
+        tenant_id: UUID,
+        date_from: date,
+        date_to: date,
+        seasons: Sequence[str] | None = None,
+        pr_id: PrParam = None,
     ) -> list[Mapping[str, Any]]:
-        sums = ",\n".join(f"COALESCE(SUM(s.{c}), 0) AS {c}" for c in _PR_SUM_COLUMNS)
+        """⇄ ``aggregate_by_pr(by_goods=False, seasons, pr_id)``：把商品维度 SUM 掉，排序同实时。
+
+        季节 = 归属商品季节命中（商品为空的行 JOIN 不上，与实时「没归属商品的单不算」一致）。
+        """
+        sums = ",\n".join(f"COALESCE(SUM(s.{c}), 0) AS {c}" for c in PR_PROGRESS_METRICS)
+        scope_sql, scope_params = pr_scope_from_param(pr_id).sql("s.pr_id")
+        season_sql, season_params = goods_filter_clauses(seasons)
+        goods_join = "LEFT JOIN goods_main g ON g.id = s.goods_main_id" if seasons else ""
         sql = text(
             f"""
             SELECT
@@ -277,14 +274,23 @@ class SummaryReadRepository:
               COALESCE(u.display_name, u.username, '未分配') AS pr_name,
               {sums}
             FROM pr_work_progress_summary s
+            {goods_join}
             LEFT JOIN "user" u ON u.id = s.pr_id
             WHERE s.tenant_id = :tenant_id
               AND s.stat_date BETWEEN :date_from AND :date_to
+              {scope_sql}
+              {season_sql}
             GROUP BY s.pr_id, u.display_name, u.username
             ORDER BY quote_count DESC, pr_name, pr_id
             """
         )
-        params = {"tenant_id": tenant_id, "date_from": date_from, "date_to": date_to}
+        params = {
+            "tenant_id": tenant_id,
+            "date_from": date_from,
+            "date_to": date_to,
+            **scope_params,
+            **season_params,
+        }
         return as_mappings((await self._s.execute(sql, params)).mappings().all())
 
     # ------------------------------------------------------------------ #

@@ -21,7 +21,7 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import text, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.modules.report.production_service as production_mod
@@ -35,15 +35,21 @@ from app.modules.finance.order_adjustment_models import OrderAdjustment
 from app.modules.product.goods_models import GoodsMain, GoodsStyleItem
 from app.modules.product.platform_product_models import PlatformProduct
 from app.modules.promotion.urge_calculator import get_today
-from app.modules.report.advanced_repository import PRODUCTION_COUNT_COLUMNS, ProductionRepository
+from app.modules.report.advanced_repository import (
+    PRODUCTION_COUNT_COLUMNS,
+    ProductionRepository,
+    WorkProgressRepository,
+)
 from app.modules.report.advanced_schemas import ProductionRow, PrWorkProgress
-from app.modules.report.pr_scope import PR_SCOPE_ALL, PrScope, PrScopeKind
+from app.modules.report.pr_scope import PR_SCOPE_ALL, UNASSIGNED, PrScope, PrScopeKind
 from app.modules.report.production_service import ProductionService
 from app.modules.report.store_daily_service import StoreDailyService
+from app.modules.report.summary_models import PR_PROGRESS_METRICS, PrWorkProgressSummary
 from app.modules.report.summary_read import SummaryReadRepository
 from app.modules.report.summary_refresh_service import SummaryRefreshService
 from app.modules.report.work_progress_models import StoreDaily
 from app.modules.report.work_progress_service import WorkProgressService
+from app.modules.urge.service import UrgeService
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
@@ -285,7 +291,15 @@ async def _seed(
     await promo(style_a, cooperation_date=D2)
 
     await session.flush()
-    return {"goods_a": goods_a, "goods_b": goods_b, "pr1": pr1, "pr2": pr2}
+    return {
+        "goods_a": goods_a,
+        "goods_b": goods_b,
+        "pr1": pr1,
+        "pr2": pr2,
+        "style_a": style_a,
+        "style_b1": style_b1,
+        "blogger": blogger,
+    }
 
 
 async def _refresh(session: AsyncSession, tenant: Any, lo: date, hi: date) -> None:
@@ -776,6 +790,105 @@ class TestProductionTrend:
             tenant_id_ctx.reset(tok)
 
 
+# 工作进度 R2 新列：金额（两位小数）与其余计数
+_WP_MONEY = frozenset(
+    {
+        "cost",
+        "quote_amount",
+        "published_quote_amount",
+        "effective_quote_amount",
+        "unpublished_quote_amount",
+        "cancelled_quote_amount",
+        "promo_cost",
+    }
+)
+
+
+async def _seed_wp_amounts(
+    session: AsyncSession,
+    tenant: Any,
+    product_factory: Any,
+    promotion_factory: Any,
+    factory: Any,
+    seeded: dict[str, Any],
+) -> Any:
+    """在 ``_seed`` 之上加一个 pr3，只放金额 / 发货 / 季节各列的手算单（不进 ``_seed``，免得动投产的数）。
+
+    goods_a = 春夏、goods_b = 秋冬（套装，含 style_b1）；orphan 款式不在任何商品里。
+    """
+    pr3 = await factory.user(tenant)
+    orphan = await product_factory.style(style_code=f"EO{uuid4().hex[:6]}")
+
+    async def promo(style: Any, **kw: Any) -> None:
+        kw.setdefault("internal_code", f"DW{uuid4().hex[:10].upper()}")
+        await promotion_factory.promotion(style=style, blogger=seeded["blogger"], pr=pr3, **kw)
+
+    # ① 款式在 goods_a，但单子显式记了 goods_b → 归属秋冬（COALESCE 先看单子自己的商品）
+    await promo(
+        seeded["style_a"],
+        goods_main_id=seeded["goods_b"].id,
+        cooperation_date=D2,
+        publish_status="已发布",
+        ship_status="已发货",
+        quote_amount=Decimal("300.00"),
+        cost_snapshot=Decimal("20.00"),
+    )
+    # ② 已发货但还没发布（推定归属 goods_a，春夏）
+    await promo(
+        seeded["style_a"],
+        cooperation_date=D3,
+        ship_status="已发货",
+        quote_amount=Decimal("150.00"),
+    )
+    # ③ 待打单不算已发货
+    await promo(
+        seeded["style_a"],
+        goods_main_id=seeded["goods_a"].id,
+        cooperation_date=D1,
+        ship_status="待打单",
+        quote_amount=Decimal("120.00"),
+    )
+    # ④ 未发布且召回成功、运费 30：推广成本照算（默 8 / 默 17）
+    await promo(
+        seeded["style_a"],
+        goods_main_id=seeded["goods_a"].id,
+        cooperation_date=D2,
+        recall_status="召回成功",
+        return_shipping_fee=Decimal("30.00"),
+        quote_amount=Decimal("100.00"),
+    )
+    # ⑤ 已取消（推定归属 goods_b，秋冬）
+    await promo(
+        seeded["style_b1"],
+        cooperation_date=D3,
+        publish_status="已取消",
+        quote_amount=Decimal("80.00"),
+    )
+    # ⑥ 没归属商品：按 PR 汇总照算，选了季节不算
+    await promo(orphan, cooperation_date=D1, quote_amount=Decimal("70.00"))
+    # ⑦ 已删除（is_active = false）：哪一列都不进
+    await promo(
+        seeded["style_a"],
+        goods_main_id=seeded["goods_a"].id,
+        cooperation_date=D1,
+        publish_status="已发布",
+        ship_status="已发货",
+        is_active=False,
+        quote_amount=Decimal("999.00"),
+    )
+    await session.flush()
+    return pr3
+
+
+def _norm_wp(row: Any) -> dict[str, Any]:
+    """仓储行 → 可逐字比的 dict：金额两位小数转字符串，其余计数转 int。"""
+    out: dict[str, Any] = {"pr_id": row["pr_id"], "pr_name": row["pr_name"]}
+    for c in PR_PROGRESS_METRICS:
+        v = row[c]
+        out[c] = str(Decimal(str(v)).quantize(Decimal("0.01"))) if c in _WP_MONEY else int(v)
+    return out
+
+
 class TestWorkProgress:
     async def test_summary_equals_live(
         self,
@@ -846,7 +959,7 @@ class TestWorkProgress:
         monkeypatch: pytest.MonkeyPatch,
         who: str,
     ) -> None:
-        """只看本人（read_own → ``PrScope(PR, 本人)``）与「未分配」：SQL 之后按行过滤，两路逐字相等。"""
+        """只看本人（read_own → ``PrScope(PR, 本人)``）与「未分配」：下推到 SQL（R2），两路逐字相等。"""
         tok = tenant_id_ctx.set(tenant_a.id)
         try:
             seeded = await _seed(
@@ -907,6 +1020,176 @@ class TestWorkProgress:
             svc = WorkProgressService(session)
             await _wp(svc, tenant_a, TODAY - timedelta(days=10), TODAY)
             assert recorder.calls == [("work_progress", "summary")]
+        finally:
+            tenant_id_ctx.reset(tok)
+
+    async def test_repo_rows_equal_live_by_season_and_pr(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        factory: Any,
+    ) -> None:
+        """仓储层：实时 ``aggregate_by_pr(by_goods=False)`` ⇄ 汇总 ``work_progress_by_pr``，
+        23 列逐行相等（季节 × pr_id 各组合，含下推的 ``UNASSIGNED``）。"""
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            seeded = await _seed(
+                session, tenant_a, product_factory, blogger_factory, promotion_factory, factory
+            )
+            pr3 = await _seed_wp_amounts(
+                session, tenant_a, product_factory, promotion_factory, factory, seeded
+            )
+            await session.commit()
+            await _refresh(session, tenant_a, M_LO, M_HI)
+
+            live_repo = WorkProgressRepository(session)
+            summary = SummaryReadRepository(session)
+            thresholds = await UrgeService(session).get_urge_thresholds(tenant_a.id)
+            for seasons in (None, ["春夏"], ["秋冬"], ["春夏", "秋冬"]):
+                for pr_id in (None, pr3.id, UNASSIGNED):
+                    live = await live_repo.aggregate_by_pr(
+                        tenant_id=tenant_a.id,
+                        date_from=M_LO,
+                        date_to=M_HI,
+                        today=TODAY,
+                        thresholds=thresholds,
+                        by_goods=False,
+                        seasons=seasons,
+                        pr_id=pr_id,
+                    )
+                    via_summary = await summary.work_progress_by_pr(
+                        tenant_id=tenant_a.id,
+                        date_from=M_LO,
+                        date_to=M_HI,
+                        seasons=seasons,
+                        pr_id=pr_id,
+                    )
+                    case = f"seasons={seasons} pr_id={pr_id}"
+                    assert [_norm_wp(r) for r in via_summary] == [_norm_wp(r) for r in live], case
+                    # 场景有效性：指定 PR / 未分配时只剩那一个 pr_id（未分配的单归属春夏）
+                    ids = [r["pr_id"] for r in live]
+                    if pr_id == pr3.id:
+                        assert ids == [pr3.id], case
+                    elif pr_id == UNASSIGNED:
+                        assert ids == ([] if seasons == ["秋冬"] else [None]), case
+                    else:
+                        assert len(live) >= 3, case
+
+                    if seasons is None and pr_id is None:
+                        # 4 行（pr1 / pr2 / pr3 / 未分配），23 列每一列都要在某一行非零
+                        assert len(live) == 4
+                        for c in PR_PROGRESS_METRICS:
+                            assert any(r[c] for r in live), f"场景没有产生非零的 {c}"
+        finally:
+            tenant_id_ctx.reset(tok)
+
+    async def test_amount_and_ship_columns_hand_computed(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        factory: Any,
+    ) -> None:
+        """pr3 的 9 个新列逐个手算；季节只算归属命中的单；刷新按（PR, 商品）落盘。"""
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            seeded = await _seed(
+                session, tenant_a, product_factory, blogger_factory, promotion_factory, factory
+            )
+            pr3 = await _seed_wp_amounts(
+                session, tenant_a, product_factory, promotion_factory, factory, seeded
+            )
+            await session.commit()
+            await _refresh(session, tenant_a, M_LO, M_HI)
+
+            repo = WorkProgressRepository(session)
+            thresholds = await UrgeService(session).get_urge_thresholds(tenant_a.id)
+
+            async def pr3_row(seasons: list[str] | None) -> dict[str, Any]:
+                rows = await repo.aggregate_by_pr(
+                    tenant_id=tenant_a.id,
+                    date_from=M_LO,
+                    date_to=M_HI,
+                    today=TODAY,
+                    thresholds=thresholds,
+                    by_goods=False,
+                    seasons=seasons,
+                    pr_id=pr3.id,
+                )
+                assert len(rows) == 1
+                return _norm_wp(rows[0])
+
+            got = await pr3_row(None)
+            expected_all = {
+                "quote_count": 6,
+                "quote_amount": "820.00",  # 300 + 150 + 120 + 100 + 80 + 70（已删除的 999 不算）
+                "published_quote_amount": "300.00",
+                "effective_quote_amount": "640.00",  # 扣召回 ④ 与取消 ⑤
+                "unpublished_quote_amount": "440.00",  # ② ③ ④ ⑥
+                "cancelled_quote_amount": "80.00",
+                # 应付 = 服务费 + 样品 + 运费，不看发布 / 召回：含 ④ 的 100 + 30
+                "promo_cost": "870.00",
+                "unpublished_count": 4,
+                "shipped_count": 2,  # ① ②（③ 待打单不算）
+                "shipped_published_count": 1,  # ①
+            }
+            assert {k: got[k] for k in expected_all} == expected_all
+
+            spring = await pr3_row(["春夏"])  # ② ③ ④
+            assert (
+                spring["quote_count"],
+                spring["quote_amount"],
+                spring["promo_cost"],
+                spring["shipped_count"],
+                spring["shipped_published_count"],
+            ) == (3, "370.00", "400.00", 1, 0)
+            autumn = await pr3_row(["秋冬"])  # ①（显式归属压过款式推定）⑤
+            assert (
+                autumn["quote_count"],
+                autumn["quote_amount"],
+                autumn["promo_cost"],
+                autumn["shipped_count"],
+                autumn["shipped_published_count"],
+                autumn["cancelled_quote_amount"],
+            ) == (2, "380.00", "400.00", 1, 1, "80.00")
+            assert (await pr3_row(["春夏", "秋冬"]))["quote_count"] == 5  # ⑥ 没归属商品不算
+
+            # by_goods=True：按（PR, 归属商品）出行，没归属商品的单落在 NULL 行、排最后
+            by_goods = await repo.aggregate_by_pr(
+                tenant_id=tenant_a.id,
+                date_from=M_LO,
+                date_to=M_HI,
+                today=TODAY,
+                thresholds=thresholds,
+                by_goods=True,
+                pr_id=pr3.id,
+            )
+            goods_a, goods_b = seeded["goods_a"].id, seeded["goods_b"].id
+            assert [(r["goods_main_id"], int(r["quote_count"])) for r in by_goods] == [
+                (goods_a, 3),
+                (goods_b, 2),
+                (None, 1),
+            ]
+            # 刷新落盘带商品维度（同一 PR 一天可能有多行）
+            stored = (
+                await session.execute(
+                    select(
+                        PrWorkProgressSummary.goods_main_id,
+                        func.sum(PrWorkProgressSummary.quote_count),
+                    )
+                    .where(
+                        PrWorkProgressSummary.tenant_id == tenant_a.id,
+                        PrWorkProgressSummary.pr_id == pr3.id,
+                    )
+                    .group_by(PrWorkProgressSummary.goods_main_id)
+                )
+            ).all()
+            assert {g: int(n) for g, n in stored} == {goods_a: 3, goods_b: 2, None: 1}
         finally:
             tenant_id_ctx.reset(tok)
 
