@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import builtins
+import dataclasses
 import logging
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
@@ -24,18 +25,31 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import AuditService
-from app.core.exceptions import ValidationError
-from app.core.security.field_permissions import build_field_perm_context, can_read_field
+from app.core.exceptions import FieldPermissionDenied, ValidationError
+from app.core.security.field_permissions import (
+    build_field_perm_context,
+    can_read_field,
+    can_write_field,
+)
 from app.modules.auth.models import User
 from app.modules.auth.repository import PermissionRepository, RoleRepository
 from app.modules.blogger.repository import BloggerRepository
 from app.modules.flow.actor import load_flow_actor
 from app.modules.flow.exceptions import FlowActionForbiddenError
 from app.modules.flow.line_events import LineEventRepository, LineEventType
-from app.modules.flow.matrix import FlowActor, Level, View, cell_level, require, ui_for
+from app.modules.flow.matrix import (
+    FlowActor,
+    Level,
+    View,
+    cell_level,
+    ensure_gates,
+    require,
+    ui_for,
+)
 from app.modules.negotiation.enums import (
     NegotiationFinalReviewAction,
     NegotiationReviewAction,
@@ -62,6 +76,8 @@ from app.modules.negotiation.schemas import (
     NegotiationItemResponse,
     NegotiationListFilters,
     NegotiationListResponse,
+    NegotiationReceiverConfirm,
+    NegotiationReceiverUpdate,
     NegotiationResponse,
     NegotiationReviewRequest,
     NegotiationUpdate,
@@ -69,16 +85,17 @@ from app.modules.negotiation.schemas import (
     ReceiverSuggestion,
 )
 from app.modules.promotion.display_name import normalize_goods_short_name
-from app.modules.promotion.enums import CooperationMode
-from app.modules.promotion.exceptions import InvalidSkuReferenceError
+from app.modules.promotion.enums import CooperationMode, ShipStatus
+from app.modules.promotion.exceptions import InvalidReceiverPhoneError, InvalidSkuReferenceError
 from app.modules.promotion.flow_doc import goods_items_complete
 from app.modules.promotion.metrics_calculator import (
     calculate_cpl,
     calculate_effective_like_count,
 )
-from app.modules.promotion.receiver import RECEIVER_FIELDS
+from app.modules.promotion.receiver import RECEIVER_FIELDS, normalize_receiver_phone
 from app.modules.promotion.repository import PromotionItemRepository, PromotionRepository
-from app.modules.promotion.schemas import GoodsItemIn, GoodsMemberResponse
+from app.modules.promotion.schemas import GoodsItemIn, GoodsMemberResponse, PromotionCreate
+from app.modules.promotion.service import PromotionService
 from app.modules.promotion.urge_calculator import DEFAULT_TENANT_TZ
 
 log = logging.getLogger("app.modules.negotiation.service")
@@ -92,6 +109,9 @@ OVERDUE_COUNT_KEY = "主管待审超时"
 """``status-counts`` 里超时数的键（7.2）。"""
 STAR_CREATE_REASON = "管理员建的谈款没人能定稿"
 """持 ``*`` 不能建谈款（N1、11-1）：页级新建按钮的禁用原因，也是 ``star_create`` 的文案。"""
+FINALIZED_CONFLICT_MESSAGE = "已定稿，推广单已生成"
+"""重复确认收货信息（N9）：已定稿，或并发里输给 ``uq_promotion_line`` 的那个请求 → 409 的文案。"""
+_PROMOTION_LINE_UQ = "uq_promotion_line"
 
 
 def _utcnow() -> datetime:
@@ -216,6 +236,31 @@ def _suggestion_label(row: Mapping[str, Any]) -> str:
     if row["source"] == "promotion":
         return f"推广单 {row['internal_code']} · {day}"
     return f"谈款定稿 · {day}"
+
+
+def _clean_receiver(field: str, value: str | None, *, strict: bool) -> str | None:
+    """收件一项入库前的值：去空白后空串 = None；电话走 ``normalize_receiver_phone``（与推广单同一个函数）。
+    ``strict=False``（确认收货）时电话格式不对原样留着，交给 ★⁴ 与另两项一起报缺项。
+    """
+    if value is None or not value.strip():
+        return None
+    if field != "receiver_phone":
+        return value.strip()
+    try:
+        return normalize_receiver_phone(value)
+    except InvalidReceiverPhoneError:
+        if strict:
+            raise
+        return value.strip()
+
+
+def _finalize_items(
+    views: builtins.list[NegotiationItemView], members: builtins.list[UUID]
+) -> builtins.list[GoodsItemIn] | None:
+    """定稿时复制给推广单的明细（偏差 5）：款式集合 = 当前成员且每行 sku 有效才复制；否则 None，推送仓库时补选。"""
+    if not _items_complete(views, members):
+        return None
+    return [GoodsItemIn(style_id=v.style_id, sku_id=v.sku_id) for v in views]
 
 
 class NegotiationService:
@@ -859,6 +904,187 @@ class NegotiationService:
         )
 
     # ------------------------------------------------------------------ #
+    # N8 保存收货信息 / N9 确认收货信息（= 定稿建推广单）
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _require_receiver_write(actor: FlowActor, fields: tuple[str, ...]) -> None:
+        """收件三项逐项过字段写权限（``promotion.receiver_*``，4.6），越权的一次列全（同推广单 ``_normalize_receiver``）。"""
+        denied = [f for f in fields if not can_write_field("promotion", f, actor.field_ctx)]
+        if denied:
+            raise FieldPermissionDenied(fields=denied, entity="promotion")
+
+    async def save_receiver(
+        self, negotiation_id: UUID, payload: NegotiationReceiverUpdate, user: User
+    ) -> NegotiationResponse:
+        """N8：待补收货地址时保存收货三项，状态不变。本人，或持 ``negotiation.review:approve`` 的人
+        （主管、临时代理人；管理员靠 ``*``）——PR 不在时有人能推进（Q4）；看得到但不是这些人 → 403 ``not_owner``。
+        只改这次传了的项；电话传了就校验并规范化；没有改动不写库、不写事件。事件 ``receiver_saved`` 带 ``diff``。
+        """
+        actor, negotiation, views, members = await self._load_for_action(negotiation_id, user)
+        require(
+            actor,
+            build_negotiation_doc(negotiation, items_complete=_items_complete(views, members)),
+            "receiver_save",
+            gates=False,
+        )
+        fields = tuple(f for f in RECEIVER_FIELDS if f in payload.model_fields_set)
+        self._require_receiver_write(actor, fields)
+        diff: dict[str, dict[str, str | None]] = {}
+        for field in fields:
+            before: str | None = getattr(negotiation, field)
+            after = _clean_receiver(field, getattr(payload, field), strict=True)
+            if before != after:
+                diff[field] = {"before": before, "after": after}
+        if not diff:
+            return await self.get(negotiation_id, user)
+        tenant_id, line_id = negotiation.tenant_id, negotiation.line_id
+        updated = await self._repo.update_state(
+            negotiation_id=negotiation_id,
+            tenant_id=tenant_id,
+            from_statuses=(NegotiationStatus.RECEIVER_PENDING.value,),
+            values={field: change["after"] for field, change in diff.items()},
+        )
+        if updated is None:
+            raise NegotiationStateConflictError(details={"negotiation_id": str(negotiation_id)})
+        await self._events.append(
+            tenant_id=tenant_id,
+            line_id=line_id,
+            event_type=LineEventType.NEGOTIATION_RECEIVER_SAVED,
+            actor_id=user.id,
+            negotiation_id=negotiation_id,
+            payload={"diff": diff},
+        )
+        # 审计只记改了哪几项，收件人 / 电话 / 地址的值不进审计（值在事件 diff 里，按字段规则读）
+        await self._audit.log(
+            action="negotiation.receiver.save",
+            resource="negotiation",
+            resource_id=negotiation_id,
+            after={"fields": list(diff)},
+            user_id=user.id,
+        )
+        await self._session.commit()
+        return await self.get(negotiation_id, user)
+
+    async def confirm_receiver(
+        self, negotiation_id: UUID, payload: NegotiationReceiverConfirm, user: User
+    ) -> NegotiationResponse:
+        """N9：确认收货信息 = 定稿，同事务建推广单（3.2「定稿建推广单与防重复建单」四步）。
+        谁能调同 N8；收货三项以 body 为准，★⁴（三项非空、电话格式）一次全报；已定稿 → 409「已定稿，推广单已生成」。
+        推广单带谈款的 8 项、``line_id``、收件三项、明细（齐了才复制，偏差 5）、``ship_status = 待发货``；
+        建单人仍是谈款 PR，``receiver_confirmed_by`` 与事件动作人记实际确认的人。
+        两人同时确认：后到的在插推广单时卡在 ``uq_promotion_line`` 上，先到的提交后报唯一冲突 → 回滚、409；
+        条件 UPDATE 0 行同样 409，推广单跟着回滚。
+        """
+        actor, negotiation, views, members = await self._load_for_action(negotiation_id, user)
+        if negotiation.status == NegotiationStatus.APPROVED.value:
+            raise NegotiationStateConflictError(
+                FINALIZED_CONFLICT_MESSAGE,
+                details={
+                    "negotiation_id": str(negotiation_id),
+                    "promotion_id": str(negotiation.promotion_id),
+                },
+            )
+        doc = build_negotiation_doc(negotiation, items_complete=_items_complete(views, members))
+        require(actor, doc, "receiver_confirm", gates=False)
+        self._require_receiver_write(actor, RECEIVER_FIELDS)
+        name = _clean_receiver("receiver_name", payload.receiver_name, strict=False)
+        phone = _clean_receiver("receiver_phone", payload.receiver_phone, strict=False)
+        address = _clean_receiver("receiver_address", payload.receiver_address, strict=False)
+        # ★⁴ 按 body 重组快照再判（以 body 为准）；过了之后电话就是规范化后的值
+        ensure_gates(
+            actor,
+            dataclasses.replace(
+                doc, receiver_name=name, receiver_phone=phone, receiver_address=address
+            ),
+            "receiver_confirm",
+        )
+        pr_user = await self._session.get(User, negotiation.pr_id)
+        if pr_user is None:  # pr_id 是 RESTRICT 外键，正常走不到；真发生了说明数据被手工动过
+            raise ValidationError(
+                "谈款的对接 PR 已不存在，无法生成推广单",
+                details={"pr_id": str(negotiation.pr_id)},
+            )
+        items = _finalize_items(views, members)
+        tenant_id, line_id = negotiation.tenant_id, negotiation.line_id
+        try:
+            # 建单人 = 谈款 PR（这单是他谈的，后续催发、结款找他）；promotion.created 的动作人 = 确认的人
+            promotion = await PromotionService(self._session).create_promotion(
+                PromotionCreate(
+                    style_id=negotiation.style_id,
+                    goods_main_id=negotiation.goods_main_id,
+                    blogger_id=negotiation.blogger_id,
+                    cooperation_mode=CooperationMode(negotiation.cooperation_mode),
+                    platform=negotiation.platform,
+                    scheduled_publish_date=negotiation.scheduled_publish_date,
+                    quote_amount=negotiation.quote_amount,
+                    remark=negotiation.remark,
+                    receiver_name=name,
+                    receiver_phone=phone,
+                    receiver_address=address,
+                    items=items,
+                ),
+                pr_user,
+                autocommit=False,
+                ship_status=ShipStatus.PENDING,
+                line_id=line_id,
+                negotiation_id=negotiation_id,
+                actor_id=user.id,
+            )
+        except IntegrityError as exc:
+            # 事务已失效：先回滚再抛；要用的 id 都是调用前取出的
+            await self._session.rollback()
+            if _PROMOTION_LINE_UQ in str(exc):
+                raise NegotiationStateConflictError(
+                    FINALIZED_CONFLICT_MESSAGE, details={"negotiation_id": str(negotiation_id)}
+                ) from exc
+            raise
+        promotion_id = promotion.id
+        updated = await self._repo.update_state(
+            negotiation_id=negotiation_id,
+            tenant_id=tenant_id,
+            from_statuses=(NegotiationStatus.RECEIVER_PENDING.value,),
+            to_status=NegotiationStatus.APPROVED.value,
+            values={
+                "receiver_name": name,
+                "receiver_phone": phone,
+                "receiver_address": address,
+                "promotion_id": promotion_id,
+                "receiver_confirmed_at": _utcnow(),
+                "receiver_confirmed_by": user.id,
+            },
+        )
+        if updated is None:
+            await self._session.rollback()
+            raise NegotiationStateConflictError(
+                FINALIZED_CONFLICT_MESSAGE, details={"negotiation_id": str(negotiation_id)}
+            )
+        await self._events.append(
+            tenant_id=tenant_id,
+            line_id=line_id,
+            event_type=LineEventType.NEGOTIATION_FINALIZED,
+            actor_id=user.id,
+            negotiation_id=negotiation_id,
+            from_state=NegotiationStatus.RECEIVER_PENDING.value,
+            to_state=NegotiationStatus.APPROVED.value,
+            payload={"promotion_id": str(promotion_id)},
+        )
+        await self._audit.log(
+            action="negotiation.receiver.confirm",
+            resource="negotiation",
+            resource_id=negotiation_id,
+            before={"status": NegotiationStatus.RECEIVER_PENDING.value},
+            after={"status": NegotiationStatus.APPROVED.value, "promotion_id": str(promotion_id)},
+            user_id=user.id,
+        )
+        if items is None:
+            log.warning(
+                "negotiation_finalize_items_not_copied",
+                extra={"negotiation_id": str(negotiation_id), "promotion_id": str(promotion_id)},
+            )
+        await self._session.commit()
+        return await self.get(negotiation_id, user)
+
+    # ------------------------------------------------------------------ #
     # 读
     # ------------------------------------------------------------------ #
 
@@ -1026,6 +1252,7 @@ class NegotiationService:
 
 __all__ = [
     "OVERDUE_AFTER",
+    "FINALIZED_CONFLICT_MESSAGE",
     "OVERDUE_COUNT_KEY",
     "STAR_CREATE_REASON",
     "NegotiationService",

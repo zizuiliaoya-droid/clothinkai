@@ -100,6 +100,35 @@ class NegotiationFinalReviewRequest(BaseModel):
         return self
 
 
+_ReceiverNameField = Annotated[str | None, Field(max_length=32)]
+_ReceiverPhoneField = Annotated[str | None, Field(max_length=32)]
+_ReceiverAddressField = Annotated[str | None, Field(max_length=255)]
+
+
+class NegotiationReceiverUpdate(BaseModel):
+    """保存收货信息（N8，``PUT /{id}/receiver``）：只改这次传了的项（``model_fields_set``）。
+    限长 32 / 32 / 255（同推广单列宽）；去空白后空串 = 清空；电话传了就校验并规范化（422 ``INVALID_RECEIVER_PHONE``）。
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    receiver_name: _ReceiverNameField = None
+    receiver_phone: _ReceiverPhoneField = None
+    receiver_address: _ReceiverAddressField = None
+
+
+class NegotiationReceiverConfirm(BaseModel):
+    """确认收货信息（N9，``POST /{id}/confirm-receiver``）：以 body 为准（与已保存的不同也行）。
+    三项非空、电话格式不在 schema 判：按矩阵 ★⁴ 一次全报（422 ``FLOW_GATE_MISSING``，键与 ``ui`` 相同）。
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    receiver_name: _ReceiverNameField = None
+    receiver_phone: _ReceiverPhoneField = None
+    receiver_address: _ReceiverAddressField = None
+
+
 class NegotiationItemResponse(BaseModel):
     """谈款商品明细一行（7.2）。颜色尺码实时读 SKU；``sku_id`` 为空 = 还没选。"""
 
@@ -297,6 +326,8 @@ __all__ = [
     "NegotiationItemResponse",
     "NegotiationListFilters",
     "NegotiationListResponse",
+    "NegotiationReceiverConfirm",
+    "NegotiationReceiverUpdate",
     "NegotiationResponse",
     "NegotiationReviewRequest",
     "NegotiationUpdate",

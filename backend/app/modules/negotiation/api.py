@@ -20,6 +20,8 @@ from app.modules.negotiation.schemas import (
     NegotiationGoodsMembers,
     NegotiationListFilters,
     NegotiationListResponse,
+    NegotiationReceiverConfirm,
+    NegotiationReceiverUpdate,
     NegotiationResponse,
     NegotiationReviewRequest,
     NegotiationUpdate,
@@ -221,6 +223,40 @@ async def final_review_negotiation(
     退回时意见必填；审核人 ≠ 谈款人、≠ 本轮主管（``same_reviewer``）。
     """
     return await _svc(session).final_review(negotiation_id, payload, user)
+
+
+@router.put(
+    "/{negotiation_id}/receiver",
+    response_model=NegotiationResponse,
+    dependencies=[require_permission(SCOPE, "write")],
+)
+async def save_negotiation_receiver(
+    negotiation_id: UUID,
+    payload: NegotiationReceiverUpdate,
+    session: SessionDep,
+    user: CurrentActiveUser,
+) -> NegotiationResponse:
+    """保存收货信息（N8）：只在待补收货地址；本人，或持 ``negotiation.review:approve`` 的人代录
+    （主管、代理人、管理员），其他人 → 403 ``not_owner``。只改传了的项，电话校验并规范化。
+    """
+    return await _svc(session).save_receiver(negotiation_id, payload, user)
+
+
+@router.post(
+    "/{negotiation_id}/confirm-receiver",
+    response_model=NegotiationResponse,
+    dependencies=[require_permission(SCOPE, "write")],
+)
+async def confirm_negotiation_receiver(
+    negotiation_id: UUID,
+    payload: NegotiationReceiverConfirm,
+    session: SessionDep,
+    user: CurrentActiveUser,
+) -> NegotiationResponse:
+    """确认收货信息（N9）= 定稿，同事务建推广单（建单人仍是谈款 PR）。三项以 body 为准、缺项一次全报；
+    返回谈款（带 ``promotion_id``、``promotion_internal_code``）；重复确认 → 409「已定稿，推广单已生成」。
+    """
+    return await _svc(session).confirm_receiver(negotiation_id, payload, user)
 
 
 __all__ = ["router"]

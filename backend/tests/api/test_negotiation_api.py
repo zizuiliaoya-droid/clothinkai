@@ -5,6 +5,7 @@
 - ``POST /`` 持 ``*`` → 403 ``FLOW_ACTION_FORBIDDEN``（``star_create``）
 - ``POST /{id}/final-review`` 挂 ``negotiation_final:approve``：主管 403 ``PERMISSION_DENIED``；退回不写意见 422（schema 层）；
   ``POST /{id}/review`` 管理员 scope 够、service 规则拦 → 403 ``star_first_level``（S7）
+- ``PUT /{id}/receiver``、``POST /{id}/confirm-receiver`` 挂 ``negotiation:write``；限长 / 电话 / 缺项 422，重复确认 409（S8）
 """
 
 from __future__ import annotations
@@ -140,3 +141,55 @@ class TestNegotiationRoutes:
             {"action": "reject"},
         )
         assert (resp.status_code, resp.json()["code"]) == (422, "VALIDATION_ERROR"), resp.text
+
+    async def test_receiver_routes(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        negotiation_factory: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+    ) -> None:
+        """``PUT /{id}/receiver`` 与 ``POST /{id}/confirm-receiver`` 挂 ``negotiation:write``：财务 403（进 service 之前）；
+        超长 422（schema 层）、电话格式不对 422 ``INVALID_RECEIVER_PHONE``；确认缺项 422 ``FLOW_GATE_MISSING``；
+        确认成功返回谈款带 ``promotion_id`` / ``promotion_internal_code``，再确认 409「已定稿，推广单已生成」（S8）。"""
+        style = await product_factory.style()
+        sku = await product_factory.sku(style)
+        blogger = await blogger_factory.blogger()
+        n = await negotiation_factory.negotiation(
+            style=style,
+            blogger=blogger,
+            pr=flow_users.pr,
+            status="待补收货地址",
+            reviewed_by=flow_users.pr_manager.id,
+            final_reviewed_by=flow_users.admin.id,
+            items=[(style, sku)],
+        )
+        save, confirm = (
+            f"/api/negotiations/{n.id}/receiver",
+            f"/api/negotiations/{n.id}/confirm-receiver",
+        )
+        body = {
+            "receiver_name": "张三",
+            "receiver_phone": "13812345678",
+            "receiver_address": "杭州某路 1 号",
+        }
+        for method, path in (("PUT", save), ("POST", confirm)):
+            resp = await _call(session, flow_users.finance, method, path, body)
+            assert (resp.status_code, resp.json()["code"]) == (403, "PERMISSION_DENIED"), path
+        resp = await _call(session, flow_users.pr, "PUT", save, {"receiver_name": "名" * 33})
+        assert (resp.status_code, resp.json()["code"]) == (422, "VALIDATION_ERROR"), resp.text
+        resp = await _call(session, flow_users.pr, "PUT", save, {"receiver_phone": "12345"})
+        assert (resp.status_code, resp.json()["code"]) == (422, "INVALID_RECEIVER_PHONE"), resp.text
+        resp = await _call(session, flow_users.pr, "POST", confirm, {"receiver_name": "张三"})
+        assert (resp.status_code, resp.json()["code"]) == (422, "FLOW_GATE_MISSING"), resp.text
+        resp = await _call(session, flow_users.pr_manager, "POST", confirm, body)
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["status"] == "已定稿"
+        assert data["promotion_id"] and data["promotion_internal_code"]
+        assert data["receiver_confirmed_by"] == str(flow_users.pr_manager.id)
+        resp = await _call(session, flow_users.pr, "POST", confirm, body)
+        assert resp.status_code == 409, resp.text
+        assert resp.json()["code"] == "NEGOTIATION_STATE_CONFLICT"
+        assert resp.json()["message"] == "已定稿，推广单已生成"

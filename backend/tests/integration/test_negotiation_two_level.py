@@ -3,12 +3,14 @@
 本文件按条目逐步长：S5 可见范围与读接口（列表 / 计数 / 详情的可见范围、超 36 小时、``ui``、收件投影、
 ``receiver_suggestion``、商品明细与品名、列表 SQL 条数不随行数涨）；S6 新建 / 编辑 / 提交（N1 ~ N3：
 商品推定写回与明细、``star_create``、``others_in_progress``、转移全表的编辑 / 提交两列、提交缺项、提交留痕、goods-members）；
-S7 两级审核（N4 ~ N7：审核人规则、通过不建推广单、转移全表的两级审核两列、退回重提后旧意见仍在事件里）。
+S7 两级审核（N4 ~ N7：审核人规则、通过不建推广单、转移全表的两级审核两列、退回重提后旧意见仍在事件里）；
+S8 收货与定稿建单（N8、N9：转移全表的收货两列、复制到推广单、PR 不在时代录代确认、30 并发确认只建 1 张）。
 角色一律用 ``flow_users``（迁移 seed 的真实角色）；造数用 ``negotiation_factory`` 直插任意状态。
 """
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -23,12 +25,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppException, IllegalStateTransitionError, PermissionDeniedError
 from app.core.tenancy import tenant_id_ctx
-from app.modules.auth.models import Permission, UserPermissionOverride
+from app.modules.auth.models import Permission, User, UserPermissionOverride
 from app.modules.flow.exceptions import FlowActionForbiddenError, FlowGateMissingError
 from app.modules.negotiation.enums import NegotiationFinalReviewAction, NegotiationReviewAction
 from app.modules.negotiation.exceptions import (
     NegotiationNotFoundError,
     NegotiationSelfReviewForbiddenError,
+    NegotiationStateConflictError,
 )
 from app.modules.negotiation.models import Negotiation
 from app.modules.negotiation.repository import NegotiationRepository
@@ -36,13 +39,20 @@ from app.modules.negotiation.schemas import (
     NegotiationCreate,
     NegotiationFinalReviewRequest,
     NegotiationListFilters,
+    NegotiationReceiverConfirm,
+    NegotiationReceiverUpdate,
     NegotiationReviewRequest,
     NegotiationUpdate,
 )
-from app.modules.negotiation.service import NegotiationService
+from app.modules.negotiation.service import FINALIZED_CONFLICT_MESSAGE, NegotiationService
 from app.modules.product.goods_models import GoodsMain, GoodsStyleItem
 from app.modules.promotion.enums import CooperationMode
-from app.modules.promotion.schemas import GoodsItemIn
+from app.modules.promotion.exceptions import InvalidReceiverPhoneError
+from app.modules.promotion.schemas import GoodsItemIn, PromotionShipPushRequest, PromotionUpdate
+from app.modules.promotion.service import PromotionService
+from app.modules.promotion.urge_calculator import get_today
+from tests.concurrency import committed, default_tenant_id, run_concurrently
+from tests.conftest import purge_negotiations
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
@@ -1447,3 +1457,575 @@ class TestReviewerRules:
                 n.id, _FINAL_APPROVE, flow_users.pr_manager
             )
         assert exc.value.code == "PERMISSION_DENIED"
+
+
+# ---------------------------------------------------------------------------
+# S8 收货信息与定稿建单（N8、N9；9.3 B「并发防重复建单」「复制到推广单」「PR 不在时」）
+# ---------------------------------------------------------------------------
+
+
+def _confirm(**kw: Any) -> NegotiationReceiverConfirm:
+    return NegotiationReceiverConfirm(**{**_RECEIVER, **kw})
+
+
+async def _receiver_pending(world: _World, pr: Any, flow_users: Any, **kw: Any) -> Any:
+    """待补收货地址（两级都过了）的谈款。"""
+    kw.setdefault("reviewed_by", flow_users.pr_manager.id)
+    kw.setdefault("final_reviewed_by", flow_users.admin.id)
+    return await world.make(pr, "待补收货地址", **kw)
+
+
+async def _promotion_row(session: AsyncSession, promotion_id: Any) -> Any:
+    return (
+        await session.execute(
+            sa_text(
+                "SELECT pr_id, line_id, ship_status, receiver_name, receiver_phone, receiver_address,"
+                " sku_id, goods_main_id, cooperation_mode, platform, scheduled_publish_date,"
+                " quote_amount, remark, cooperation_date FROM promotion WHERE id = :p"
+            ),
+            {"p": promotion_id},
+        )
+    ).one()
+
+
+async def _promotion_items(session: AsyncSession, promotion_id: Any) -> list[tuple[Any, Any]]:
+    rows = await session.execute(
+        sa_text(
+            "SELECT style_id, sku_id FROM promotion_item WHERE promotion_id = :p ORDER BY sort_order"
+        ),
+        {"p": promotion_id},
+    )
+    return [(r[0], r[1]) for r in rows.all()]
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+class TestReceiverTransitions:
+    """转移全表的收货两列（N8、N9）：只在待补收货地址；已定稿再确认 → 409「已定稿，推广单已生成」。"""
+
+    @pytest.mark.parametrize("status", _STATES)
+    async def test_receiver_save(
+        self, session: AsyncSession, flow_users: Any, world: _World, status: str
+    ) -> None:
+        n = await world.make(flow_users.pr, status)
+        svc = NegotiationService(session)
+        body = NegotiationReceiverUpdate(receiver_name="李四")
+        if status == "待补收货地址":
+            resp = await svc.save_receiver(n.id, body, flow_users.pr)
+            assert (resp.status, resp.receiver_name) == (status, "李四")
+            return
+        with pytest.raises(IllegalStateTransitionError) as exc:
+            await svc.save_receiver(n.id, body, flow_users.pr)
+        assert exc.value.code == "ILLEGAL_STATE_TRANSITION"
+        assert exc.value.details == {"from_state": status, "action": "receiver_save"}
+
+    @pytest.mark.parametrize("status", _STATES)
+    async def test_receiver_confirm(
+        self, session: AsyncSession, flow_users: Any, world: _World, status: str
+    ) -> None:
+        n = await world.make(flow_users.pr, status)
+        svc = NegotiationService(session)
+        if status == "待补收货地址":
+            resp = await svc.confirm_receiver(n.id, _confirm(), flow_users.pr)
+            assert resp.status == "已定稿"
+            assert resp.promotion_id is not None
+            return
+        if status == "已定稿":
+            with pytest.raises(NegotiationStateConflictError) as conflict:
+                await svc.confirm_receiver(n.id, _confirm(), flow_users.pr)
+            assert (conflict.value.code, conflict.value.status_code) == (
+                "NEGOTIATION_STATE_CONFLICT",
+                409,
+            )
+            assert conflict.value.message == FINALIZED_CONFLICT_MESSAGE
+            return
+        with pytest.raises(IllegalStateTransitionError) as exc:
+            await svc.confirm_receiver(n.id, _confirm(), flow_users.pr)
+        assert exc.value.code == "ILLEGAL_STATE_TRANSITION"
+        assert exc.value.details == {"from_state": status, "action": "receiver_confirm"}
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+class TestFinalize:
+    async def test_copied_to_promotion(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        world: _World,
+        suit: _Suit,
+        negotiation_factory: Any,
+    ) -> None:
+        """定稿建单（9.3 B「复制到推广单」）：建单人 = 谈款 PR、``line_id`` 同谈款、待发货、收件三项（电话规范化）、
+        套装 2 行明细、``promotion.sku_id`` = 主款式那行、8 项照抄、合作日期 = 确认当天；事件 finalized + created。
+        之后推送仓库不用再补选（B8：不复制明细 → 推送缺颜色尺码）；改推广单收件不回写谈款。
+        """
+        n = await negotiation_factory.negotiation(
+            style=suit.top,
+            blogger=world.blogger,
+            pr=flow_users.pr,
+            goods_main_id=suit.suit.id,
+            status="待补收货地址",
+            scheduled_publish_date=date(2026, 11, 1),
+            quote_amount=Decimal("800.00"),
+            remark="备注一句",
+            submitted_at=_T0,
+            reviewed_by=flow_users.pr_manager.id,
+            final_reviewed_by=flow_users.admin.id,
+            items=[(suit.top, suit.top_sku), (suit.pants, suit.pants_sku)],
+        )
+        line_id = n.line_id
+        resp = await NegotiationService(session).confirm_receiver(
+            n.id, _confirm(receiver_phone="+86 138-1234-5678"), flow_users.pr
+        )
+        assert resp.status == "已定稿"
+        assert resp.promotion_id is not None and resp.promotion_internal_code
+        assert (resp.receiver_confirmed_by, resp.receiver_phone) == (
+            flow_users.pr.id,
+            "13812345678",
+        )
+        assert resp.receiver_confirmed_at is not None
+        row = await _promotion_row(session, resp.promotion_id)
+        assert tuple(row) == (
+            flow_users.pr.id,
+            line_id,
+            "待发货",
+            "张三",
+            "13812345678",
+            _RECEIVER["receiver_address"],
+            suit.top_sku.id,
+            suit.suit.id,
+            "寄拍",
+            "小红书",
+            date(2026, 11, 1),
+            Decimal("800.00"),
+            "备注一句",
+            get_today(),
+        )
+        assert await _promotion_items(session, resp.promotion_id) == [
+            (suit.top.id, suit.top_sku.id),
+            (suit.pants.id, suit.pants_sku.id),
+        ]
+        events = (
+            await session.execute(
+                sa_text(
+                    "SELECT event_type, negotiation_id, promotion_id, from_state, to_state,"
+                    " actor_id, payload FROM line_event WHERE line_id = :l ORDER BY seq"
+                ),
+                {"l": line_id},
+            )
+        ).all()
+        assert [tuple(e) for e in events] == [
+            (
+                "promotion.created",
+                None,
+                resp.promotion_id,
+                None,
+                None,
+                flow_users.pr.id,
+                {"source": "谈款定稿", "negotiation_id": str(n.id)},
+            ),
+            (
+                "negotiation.finalized",
+                n.id,
+                None,
+                "待补收货地址",
+                "已定稿",
+                flow_users.pr.id,
+                {"promotion_id": str(resp.promotion_id)},
+            ),
+        ]
+        promotions = PromotionService(session)
+        await promotions.update_promotion(
+            resp.promotion_id, PromotionUpdate(receiver_address="上海市某路 2 号"), flow_users.pr
+        )
+        assert (await NegotiationService(session).get(n.id, flow_users.pr)).receiver_address == (
+            _RECEIVER["receiver_address"]
+        )
+        pushed = await promotions.ship_push(
+            resp.promotion_id, PromotionShipPushRequest(), flow_users.pr_manager
+        )
+        assert pushed.ship_status == "待打单"
+
+    async def test_body_wins_and_gates_reported_together(
+        self, session: AsyncSession, flow_users: Any, world: _World
+    ) -> None:
+        """以 body 为准（与已保存的不同也行）；三项缺 / 电话格式不对一次全报，键与 ``ui`` 相同，什么都不写。"""
+        n = await _receiver_pending(
+            world, flow_users.pr, flow_users, receiver_name="旧名字", receiver_phone="13800000000"
+        )
+        svc = NegotiationService(session)
+        ui_missing = [
+            m["key"]
+            for m in ((await svc.get(n.id, flow_users.pr)).ui or {})["actions"]["receiver_confirm"][
+                "missing"
+            ]
+        ]
+        assert ui_missing == ["receiver_address"]
+        with pytest.raises(FlowGateMissingError) as exc:
+            await svc.confirm_receiver(
+                n.id,
+                NegotiationReceiverConfirm(
+                    receiver_name="  ", receiver_phone="12345", receiver_address=None
+                ),
+                flow_users.pr,
+            )
+        assert [m["key"] for m in exc.value.details["missing"]] == [
+            "receiver_name",
+            "receiver_phone",
+            "receiver_address",
+        ]
+        assert (await svc.get(n.id, flow_users.pr)).status == "待补收货地址"
+        assert await _promotion_count(session, n.line_id) == 0
+        done = await svc.confirm_receiver(n.id, _confirm(receiver_name="新名字"), flow_users.pr)
+        assert (done.receiver_name, done.receiver_phone) == ("新名字", "13812345678")
+        row = await _promotion_row(session, done.promotion_id)
+        assert (row[3], row[4]) == ("新名字", "13812345678")
+
+    async def test_items_not_copied_when_incomplete(
+        self, session: AsyncSession, flow_users: Any, world: _World
+    ) -> None:
+        """存量没选颜色尺码的（偏差 5）：照样定稿建单，明细不复制，推送仓库时补选。"""
+        n = await _receiver_pending(world, flow_users.pr, flow_users, items=[(world.style, None)])
+        resp = await NegotiationService(session).confirm_receiver(n.id, _confirm(), flow_users.pr)
+        assert resp.status == "已定稿"
+        assert await _promotion_items(session, resp.promotion_id) == []
+        assert (await _promotion_row(session, resp.promotion_id))[6] is None
+
+    async def test_confirm_twice(
+        self, session: AsyncSession, flow_users: Any, world: _World
+    ) -> None:
+        n = await _receiver_pending(world, flow_users.pr, flow_users)
+        svc = NegotiationService(session)
+        first = await svc.confirm_receiver(n.id, _confirm(), flow_users.pr)
+        with pytest.raises(NegotiationStateConflictError) as exc:
+            await svc.confirm_receiver(n.id, _confirm(), flow_users.pr_manager)
+        assert exc.value.details["promotion_id"] == str(first.promotion_id)
+        assert await _promotion_count(session, n.line_id) == 1
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+class TestReceiverSave:
+    async def test_save_normalizes_and_records_diff(
+        self, session: AsyncSession, flow_users: Any, world: _World
+    ) -> None:
+        """只改传了的项；电话规范化后存；事件 receiver_saved 带 diff；没有改动不写事件。"""
+        n = await _receiver_pending(world, flow_users.pr, flow_users)
+        svc = NegotiationService(session)
+        first = await svc.save_receiver(
+            n.id,
+            NegotiationReceiverUpdate(receiver_name=" 张三 ", receiver_phone="138 1234 5678"),
+            flow_users.pr,
+        )
+        assert (first.status, first.receiver_name, first.receiver_phone) == (
+            "待补收货地址",
+            "张三",
+            "13812345678",
+        )
+        await svc.save_receiver(
+            n.id, NegotiationReceiverUpdate(receiver_address="杭州某路"), flow_users.pr
+        )
+        await svc.save_receiver(
+            n.id, NegotiationReceiverUpdate(receiver_name="张三"), flow_users.pr
+        )
+        cleared = await svc.save_receiver(
+            n.id, NegotiationReceiverUpdate(receiver_phone=""), flow_users.pr
+        )
+        assert (cleared.receiver_name, cleared.receiver_phone, cleared.receiver_address) == (
+            "张三",
+            None,
+            "杭州某路",
+        )
+        events = [e for e in await _events(session, n.id) if e[0] == "negotiation.receiver_saved"]
+        assert [(e[3], e[4]) for e in events] == [
+            (
+                {
+                    "diff": {
+                        "receiver_name": {"before": None, "after": "张三"},
+                        "receiver_phone": {"before": None, "after": "13812345678"},
+                    }
+                },
+                flow_users.pr.id,
+            ),
+            (
+                {"diff": {"receiver_address": {"before": None, "after": "杭州某路"}}},
+                flow_users.pr.id,
+            ),
+            (
+                {"diff": {"receiver_phone": {"before": "13812345678", "after": None}}},
+                flow_users.pr.id,
+            ),
+        ]
+
+    async def test_bad_phone_and_length(
+        self, session: AsyncSession, flow_users: Any, world: _World
+    ) -> None:
+        n = await _receiver_pending(world, flow_users.pr, flow_users)
+        with pytest.raises(InvalidReceiverPhoneError):
+            await NegotiationService(session).save_receiver(
+                n.id, NegotiationReceiverUpdate(receiver_phone="12345"), flow_users.pr
+            )
+        assert [
+            e for e in await _events(session, n.id) if e[0] == "negotiation.receiver_saved"
+        ] == []
+        for field, size in (
+            ("receiver_name", 33),
+            ("receiver_phone", 33),
+            ("receiver_address", 256),
+        ):
+            with pytest.raises(PydanticValidationError):
+                NegotiationReceiverUpdate(**{field: "1" * size})
+            with pytest.raises(PydanticValidationError):
+                NegotiationReceiverConfirm(**{field: "1" * size})
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+class TestReceiverProxy:
+    """PR 不在时（Q4、11-57）：主管、代理人、管理员能代录、代确认；确认人另记，建单人仍是谈款 PR。"""
+
+    async def test_manager_admin_proxy_confirm_for_pr(
+        self, session: AsyncSession, tenant_a: Any, flow_users: Any, world: _World
+    ) -> None:
+        await _override(session, tenant_a, flow_users.pr2, "negotiation.review:approve")
+        await _override(session, tenant_a, flow_users.pr2, "negotiation_all:read")
+        svc = NegotiationService(session)
+        for who in ("pr_manager", "admin", "pr2"):
+            actor = getattr(flow_users, who)
+            n = await _receiver_pending(world, flow_users.pr, flow_users)
+            saved = await svc.save_receiver(
+                n.id, NegotiationReceiverUpdate(receiver_name=f"{who} 代录"), actor
+            )
+            assert saved.receiver_name == f"{who} 代录", who
+            done = await svc.confirm_receiver(n.id, _confirm(), actor)
+            assert (done.status, done.receiver_confirmed_by, done.pr_id) == (
+                "已定稿",
+                actor.id,
+                flow_users.pr.id,
+            ), who
+            row = await _promotion_row(session, done.promotion_id)
+            assert row[0] == flow_users.pr.id, who
+            finalized = [e for e in await _events(session, n.id) if e[0] == "negotiation.finalized"]
+            assert [e[4] for e in finalized] == [actor.id], who
+
+    async def test_other_pr_not_owner(
+        self, session: AsyncSession, tenant_a: Any, flow_users: Any, world: _World
+    ) -> None:
+        """别的 PR：看不到 → 404；只授了看全部（没有主管审核权）→ 403 ``not_owner``。财务看得到但没有写权限 → 403。"""
+        n = await _receiver_pending(world, flow_users.pr, flow_users)
+        svc = NegotiationService(session)
+        with pytest.raises(NegotiationNotFoundError):
+            await svc.save_receiver(
+                n.id, NegotiationReceiverUpdate(receiver_name="x"), flow_users.pr2
+            )
+        await _override(session, tenant_a, flow_users.pr2, "negotiation_all:read")
+        for call in (
+            svc.save_receiver(n.id, NegotiationReceiverUpdate(receiver_name="x"), flow_users.pr2),
+            svc.confirm_receiver(n.id, _confirm(), flow_users.pr2),
+        ):
+            with pytest.raises(FlowActionForbiddenError) as exc:
+                await call
+            assert exc.value.details["rule"] == "not_owner"
+        with pytest.raises(PermissionDeniedError) as denied:
+            await svc.confirm_receiver(n.id, _confirm(), flow_users.finance)
+        assert denied.value.code == "PERMISSION_DENIED"
+        assert (await svc.get(n.id, flow_users.pr)).status == "待补收货地址"
+        assert await _promotion_count(session, n.line_id) == 0
+
+
+# ---------------------------------------------------------------------------
+# S8 并发：30 条独立连接同时确认同一张 → 恰好 1 张推广单、29 个 409、0 个别的错（9.3 B「并发防重复建单」）
+# ---------------------------------------------------------------------------
+
+
+class TestConfirmConcurrent:
+    async def test_30_concurrent_confirms(self, engine: Any) -> None:
+        from app.core.security.auth import hash_password
+
+        tenant_id = await default_tenant_id(engine)
+        today = get_today()
+        suffix = uuid4().hex[:8]
+        negotiation_id, line_id = uuid4(), uuid4()
+        style_id, sku_id, blogger_id = uuid4(), uuid4(), uuid4()
+        codes = ("pr", "pr_manager", "admin")  # 本人、主管、管理员轮流确认
+        user_ids = {code: uuid4() for code in codes}
+        async with committed(engine) as seed:
+            seq_before = (
+                await seed.execute(
+                    sa_text(
+                        "SELECT last_seq FROM promotion_sequence"
+                        " WHERE tenant_id = :tid AND date_key = :dk"
+                    ),
+                    {"tid": tenant_id, "dk": today},
+                )
+            ).scalar_one_or_none()
+            for code, uid in user_ids.items():
+                await seed.execute(
+                    sa_text(
+                        'INSERT INTO "user" (id, tenant_id, username, password_hash, status, '
+                        "password_must_change, created_at, updated_at) "
+                        "VALUES (:id, :tid, :un, :ph, 'active', false, NOW(), NOW())"
+                    ),
+                    {
+                        "id": uid,
+                        "tid": tenant_id,
+                        "un": f"neg_{code}_{suffix}",
+                        "ph": hash_password("Password123"),
+                    },
+                )
+                await seed.execute(
+                    sa_text(
+                        "INSERT INTO user_role (id, tenant_id, user_id, role_id) "
+                        "SELECT gen_random_uuid(), :tid, :uid, id FROM role WHERE code = :code"
+                    ),
+                    {"tid": tenant_id, "uid": uid, "code": code},
+                )
+            await seed.execute(
+                sa_text(
+                    "INSERT INTO style (id, tenant_id, style_code, style_name, category, "
+                    "design_status, is_active, is_deleted, created_at, updated_at) "
+                    "VALUES (:id, :tid, :code, '并发谈款款', '连衣裙', '大货', true, false, NOW(), NOW())"
+                ),
+                {"id": style_id, "tid": tenant_id, "code": f"NEGC{suffix}"},
+            )
+            await seed.execute(
+                sa_text(
+                    "INSERT INTO sku (id, tenant_id, style_id, sku_code, color, size, base_price, "
+                    "sourcing_type, is_active, is_deleted, created_at, updated_at) VALUES (:id, "
+                    ":tid, :sid, :code, '黑色', 'M', 200, '自产', true, false, NOW(), NOW())"
+                ),
+                {"id": sku_id, "tid": tenant_id, "sid": style_id, "code": f"NEGK{suffix}"},
+            )
+            await seed.execute(
+                sa_text(
+                    "INSERT INTO blogger (id, tenant_id, xiaohongshu_id, nickname, platform, "
+                    "is_suspected_fake, is_active, is_deleted, created_at, updated_at) "
+                    "VALUES (:id, :tid, :xhs, '并发谈款博主', '小红书', false, true, false, NOW(), NOW())"
+                ),
+                {"id": blogger_id, "tid": tenant_id, "xhs": f"XHSN{suffix}"},
+            )
+            await seed.execute(
+                sa_text(
+                    "INSERT INTO negotiation (id, tenant_id, line_id, blogger_id, style_id, pr_id, "
+                    "cooperation_mode, platform, scheduled_publish_date, quote_amount, status, "
+                    "submitted_at, reviewed_by, final_reviewed_by, created_at, updated_at) VALUES "
+                    "(:id, :tid, :line, :bid, :sid, :pr, '寄拍', '小红书', :spd, 500.00, "
+                    "'待补收货地址', NOW(), :mgr, :adm, NOW(), NOW())"
+                ),
+                {
+                    "id": negotiation_id,
+                    "tid": tenant_id,
+                    "line": line_id,
+                    "bid": blogger_id,
+                    "sid": style_id,
+                    "pr": user_ids["pr"],
+                    "spd": date(2026, 11, 1),
+                    "mgr": user_ids["pr_manager"],
+                    "adm": user_ids["admin"],
+                },
+            )
+            await seed.execute(
+                sa_text(
+                    "INSERT INTO negotiation_item (id, tenant_id, negotiation_id, style_id, sku_id, "
+                    "sort_order, created_at, updated_at) "
+                    "VALUES (gen_random_uuid(), :tid, :nid, :sid, :sku, 0, NOW(), NOW())"
+                ),
+                {"tid": tenant_id, "nid": negotiation_id, "sid": style_id, "sku": sku_id},
+            )
+
+        n = 30
+        barrier = asyncio.Barrier(n)
+
+        async def attempt(s: AsyncSession, i: int) -> str:
+            user = await s.get(User, user_ids[codes[i % len(codes)]])  # 先拿到连接，再一起出发
+            assert user is not None
+            await barrier.wait()
+            try:
+                await NegotiationService(s).confirm_receiver(negotiation_id, _confirm(), user)
+                return "ok"
+            except NegotiationStateConflictError as exc:
+                return "conflict" if exc.message == FINALIZED_CONFLICT_MESSAGE else "conflict?"
+            except Exception as e:
+                return f"other:{type(e).__name__}:{getattr(e, 'code', '')}"
+
+        try:
+            results = await run_concurrently(engine, n, attempt, tenant_id=tenant_id)
+            assert results.count("ok") == 1, results
+            assert results.count("conflict") == n - 1, results
+            winner = user_ids[codes[results.index("ok") % len(codes)]]
+            async with committed(engine) as check:
+                by_line = (
+                    await check.execute(
+                        sa_text("SELECT id, pr_id FROM promotion WHERE line_id = :l"),
+                        {"l": line_id},
+                    )
+                ).all()
+                by_blogger = (
+                    await check.execute(
+                        sa_text("SELECT COUNT(*) FROM promotion WHERE blogger_id = :b"),
+                        {"b": blogger_id},
+                    )
+                ).scalar_one()
+                neg = (
+                    await check.execute(
+                        sa_text(
+                            "SELECT status, promotion_id, receiver_confirmed_by FROM negotiation"
+                            " WHERE id = :id"
+                        ),
+                        {"id": negotiation_id},
+                    )
+                ).one()
+                finalized = (
+                    await check.execute(
+                        sa_text(
+                            "SELECT COUNT(*) FROM line_event WHERE line_id = :l"
+                            " AND event_type IN ('negotiation.finalized', 'promotion.created')"
+                        ),
+                        {"l": line_id},
+                    )
+                ).scalar_one()
+            assert len(by_line) == 1 and by_blogger == 1, (by_line, by_blogger)
+            assert by_line[0][1] == user_ids["pr"]
+            assert tuple(neg) == ("已定稿", by_line[0][0], winner)
+            assert finalized == 2
+        finally:
+            async with committed(engine) as cleanup:
+                promotion_ids = list(
+                    (
+                        await cleanup.execute(
+                            sa_text("SELECT id FROM promotion WHERE blogger_id = :b"),
+                            {"b": blogger_id},
+                        )
+                    ).scalars()
+                )
+                await purge_negotiations(cleanup, [negotiation_id])
+                from tests.conftest import purge_promotions
+
+                await purge_promotions(cleanup, promotion_ids)
+                await cleanup.execute(
+                    sa_text("DELETE FROM audit_log WHERE resource_id = ANY(CAST(:r AS text[]))"),
+                    {"r": [str(negotiation_id), *(str(p) for p in promotion_ids)]},
+                )
+                if seq_before is None:
+                    await cleanup.execute(
+                        sa_text(
+                            "DELETE FROM promotion_sequence WHERE tenant_id = :tid AND date_key = :dk"
+                        ),
+                        {"tid": tenant_id, "dk": today},
+                    )
+                else:
+                    await cleanup.execute(
+                        sa_text(
+                            "UPDATE promotion_sequence SET last_seq = :seq"
+                            " WHERE tenant_id = :tid AND date_key = :dk"
+                        ),
+                        {"seq": seq_before, "tid": tenant_id, "dk": today},
+                    )
+                for sql, key in (
+                    ("DELETE FROM sku WHERE id = :id", sku_id),
+                    ("DELETE FROM style WHERE id = :id", style_id),
+                    ("DELETE FROM blogger WHERE id = :id", blogger_id),
+                ):
+                    await cleanup.execute(sa_text(sql), {"id": key})
+                for uid in user_ids.values():
+                    await cleanup.execute(
+                        sa_text("DELETE FROM user_role WHERE user_id = :id"), {"id": uid}
+                    )
+                    await cleanup.execute(sa_text('DELETE FROM "user" WHERE id = :id'), {"id": uid})
