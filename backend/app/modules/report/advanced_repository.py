@@ -136,6 +136,10 @@ def goods_filter_clauses(seasons: Sequence[str] | None) -> tuple[str, dict[str, 
 #    —— 多个款式共用一条链接正是套装的形态，所以按商品数而不是款式数去重。
 #    生产上这条分支只覆盖 20 行日报（``style.qianniu_product_id`` 非空仅 2 条），
 #    却因为写在 JOIN 条件里拖掉了整条查询 67% 的时间。
+#
+# 停用链接（7e-9）：正路只认 ``is_active`` 的链接，停用链接的日报不进单品，
+# 店铺 / BI 店铺总览不走这里、照旧全店。兜底的 ``NOT EXISTS`` 刻意**不**看
+# ``is_active``：停用的链接照样挡住兜底，否则停用后反而被兜底算回单品。
 _QIANNIU_GOODS_LINK_CTE = """
 qn_link AS (
     SELECT q.id AS qid, pp.goods_main_id AS goods_id
@@ -144,6 +148,7 @@ qn_link AS (
       ON pp.tenant_id = q.tenant_id
      AND pp.platform = '千牛'
      AND pp.goods_main_id IS NOT NULL
+     AND pp.is_active = true
      AND (
        (q.platform_product_id IS NOT NULL AND pp.id = q.platform_product_id)
        OR (q.platform_product_id IS NULL AND pp.platform_id = q.platform_id_snapshot)
@@ -382,6 +387,8 @@ class ProductionRepository:
                 ON mapped_a.tenant_id = a.tenant_id
                 AND mapped_a.platform = '万相台'
                 AND mapped_a.goods_main_id IS NOT NULL
+                -- 停用链接的站内花费不进单品（7e-9）
+                AND mapped_a.is_active = true
                 AND (
                   (a.platform_product_id IS NOT NULL
                    AND mapped_a.id = a.platform_product_id)
@@ -520,6 +527,8 @@ class ProductionRepository:
                 ON mapped_a.tenant_id = a.tenant_id
                AND mapped_a.platform = '万相台'
                AND mapped_a.goods_main_id IS NOT NULL
+               -- 与 aggregate_by_goods 同口径：停用链接不进单品（7e-9）
+               AND mapped_a.is_active = true
                AND (
                  (a.platform_product_id IS NOT NULL
                   AND mapped_a.id = a.platform_product_id)
@@ -634,6 +643,8 @@ class ProductionRepository:
               ON pp.tenant_id = q.tenant_id
               AND pp.platform = '千牛'
               AND pp.goods_main_id IS NOT NULL
+              -- 停用链接不进单品（7e-9）；下面兜底的 NOT EXISTS 不看 is_active
+              AND pp.is_active = true
               AND (
                 (q.platform_product_id IS NOT NULL
                  AND pp.id = q.platform_product_id)
@@ -685,6 +696,7 @@ class ProductionRepository:
               ON pp.tenant_id = a.tenant_id
               AND pp.platform = '万相台'
               AND pp.goods_main_id IS NOT NULL
+              AND pp.is_active = true
               AND (
                 (a.platform_product_id IS NOT NULL
                  AND pp.id = a.platform_product_id)
