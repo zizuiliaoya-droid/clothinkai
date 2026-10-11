@@ -42,6 +42,7 @@ import { BloggerHoverCard } from "@/components/BloggerHoverCard/BloggerHoverCard
 import { BloggerSelect } from "@/components/RemoteSelect/BloggerSelect";
 import { StyleSelect } from "@/components/RemoteSelect/StyleSelect";
 import { PLATFORMS } from "@/features/common/platforms";
+import { negotiationStatusStyle } from "@/features/flow/stageStyle";
 
 const MODES: CooperationMode[] = ["寄拍", "送拍", "置换"];
 
@@ -55,13 +56,6 @@ const modeColor: Record<string, string> = {
   寄拍: "blue",
   送拍: "green",
   置换: "purple",
-};
-
-const statusColor: Record<NegotiationStatus, string> = {
-  草稿: "default",
-  待审核: "gold",
-  审核通过: "green",
-  审核驳回: "red",
 };
 
 const TABS: { key: string; label: string }[] = [
@@ -287,7 +281,7 @@ export function NegotiationPage() {
       width: 150,
       render: (v: NegotiationStatus, row) => (
         <Space size={4} direction="vertical" align="start">
-          <Tag color={statusColor[v]}>{v}</Tag>
+          <Tag color={negotiationStatusStyle(v).color}>{negotiationStatusStyle(v).label}</Tag>
           {v === "审核驳回" && row.review_opinion && (
             <Tooltip title={row.review_opinion}>
               <Typography.Text type="danger" style={{ fontSize: 12 }}>
@@ -295,7 +289,7 @@ export function NegotiationPage() {
               </Typography.Text>
             </Tooltip>
           )}
-          {v === "审核通过" && row.promotion_internal_code && (
+          {v === "已定稿" && row.promotion_internal_code && (
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               推广单 {row.promotion_internal_code}
             </Typography.Text>
@@ -309,7 +303,7 @@ export function NegotiationPage() {
       fixed: "right",
       render: (_, record) => {
         const editable = ["草稿", "审核驳回"].includes(record.status);
-        const reviewable = record.status === "待审核" && canReview;
+        const reviewable = record.status === "主管待审" && canReview;
         const items = [
           {
             key: "edit",

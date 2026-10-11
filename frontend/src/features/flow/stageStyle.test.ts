@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { NEGOTIATION_STATUSES } from "@/features/negotiation/types";
 import {
   NEGOTIATION_STATUS_STYLE,
   PROMOTION_SETTLEMENT_STYLE,
@@ -12,7 +13,7 @@ import {
 } from "./stageStyle";
 
 const TABLES = [
-  ["谈款状态", NEGOTIATION_STATUS_STYLE, ["草稿", "待审核", "审核通过", "审核驳回"]],
+  ["谈款状态", NEGOTIATION_STATUS_STYLE, [...NEGOTIATION_STATUSES]],
   ["推广单结款状态", PROMOTION_SETTLEMENT_STYLE, ["未核查", "待核查", "待付款", "已付款", "已驳回"]],
   ["推广单阶段", PROMOTION_STAGE_STYLE, [...PROMOTION_STAGES]],
   ["发货状态", SHIP_STATUS_STYLE, ["待发货", "待打单", "已发货"]],
@@ -33,9 +34,33 @@ describe("stageStyle", () => {
     for (const s of PROMOTION_STAGES) expect(PROMOTION_STAGE_STYLE[s].label).toBe(s);
   });
 
+  it("谈款 7 态：存储值顺序 = Tab 顺序，文案 = 设计 3.2「界面显示」列，颜色互不相同", () => {
+    // 存储值与后端 NegotiationStatus 一致（后端没有导出快照，这里照抄 enums.py）
+    expect([...NEGOTIATION_STATUSES]).toEqual([
+      "主管待审",
+      "待老板审核",
+      "老板退回",
+      "待补收货地址",
+      "草稿",
+      "审核驳回",
+      "已定稿",
+    ]);
+    expect(Object.fromEntries(NEGOTIATION_STATUSES.map((s) => [s, negotiationStatusStyle(s).label]))).toEqual({
+      主管待审: "谈款中 · 主管待审",
+      待老板审核: "谈款中 · 待老板审核",
+      老板退回: "谈款中 · 老板退回",
+      待补收货地址: "待补收货地址",
+      草稿: "草稿",
+      审核驳回: "审批未通过",
+      已定稿: "已定稿",
+    });
+    const colors = NEGOTIATION_STATUSES.map((s) => negotiationStatusStyle(s).color);
+    expect(new Set(colors).size).toBe(7);
+    expect(negotiationStatusStyle("审核驳回").color).toBe("red");
+    expect(negotiationStatusStyle("已定稿").color).toBe("green");
+  });
+
   it("沿用现有页面的配色", () => {
-    expect(negotiationStatusStyle("待审核")).toEqual({ label: "待审核", color: "gold" });
-    expect(negotiationStatusStyle("审核驳回")).toEqual({ label: "审核驳回", color: "red" });
     expect(promotionSettlementStyle("已付款")).toEqual({ label: "已付款", color: "green" });
     expect(promotionSettlementStyle("未核查")).toEqual({ label: "未核查", color: "default" });
     // 催发 3 档沿用推广列表「是否催发」列的颜色
@@ -51,7 +76,8 @@ describe("stageStyle", () => {
   });
 
   it("不认识的值回落为原文 + default，空值回落为「未知」（Tag 上一定有字）", () => {
-    expect(negotiationStatusStyle("待主管审核")).toEqual({ label: "待主管审核", color: "default" });
+    // 旧 4 态的「审核通过」「待审核」迁移后不再出现，出现了也照原文显示
+    expect(negotiationStatusStyle("审核通过")).toEqual({ label: "审核通过", color: "default" });
     expect(promotionSettlementStyle("待财务付款")).toEqual({ label: "待财务付款", color: "default" });
     expect(promotionStageStyle("待老板审核")).toEqual({ label: "待老板审核", color: "default" });
     expect(shipStatusStyle("已打单")).toEqual({ label: "已打单", color: "default" });
