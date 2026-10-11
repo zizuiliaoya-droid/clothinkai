@@ -1,4 +1,4 @@
-"""U10b PlatformProductService（平台商品映射 CRUD + 幂等 upsert + 反查）。"""
+"""U10b PlatformProductService（平台商品映射 CRUD + 反查；改报表口径字段时清汇总覆盖）。"""
 
 from __future__ import annotations
 
@@ -21,6 +21,8 @@ from app.modules.product.platform_product_schemas import (
     PlatformProductResponse,
     PlatformProductUpdate,
 )
+from app.modules.report.exceptions import SummaryRefreshBusyError
+from app.modules.report.summary_invalidation import invalidate_summary_coverage
 
 
 class PlatformProductConflictError(DuplicateResourceError):
@@ -32,10 +34,28 @@ class PlatformProductNotFoundError(ResourceNotFoundError):
     code = "PLATFORM_PRODUCT_NOT_FOUND"
 
 
+def _report_fields(pp: PlatformProduct) -> tuple[object, ...]:
+    """影响报表口径的 4 个字段（7e-9，报表视图设计 2.9）。任一变了，汇总表里的旧数字就作废。
+
+    启停决定进不进单品，渠道决定普通 / 直播列，归属与款式决定算到哪个商品。名称等其他字段不影响。
+    """
+    return (pp.is_active, pp.channel, pp.goods_main_id, pp.style_id)
+
+
 class PlatformProductService:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
         self._audit = AuditService(session)
+
+    async def _invalidate_summary(self, tenant_id: UUID) -> None:
+        """同一事务清汇总覆盖；撞刷新锁超时 → 整事务回滚，原样抛 409（链接没改）。"""
+        try:
+            await invalidate_summary_coverage(
+                self._session, tenant_id=tenant_id, reason="platform_link_change"
+            )
+        except SummaryRefreshBusyError:
+            await self._session.rollback()
+            raise
 
     # ------------------------------------------------------------------ #
     # 引用校验
@@ -211,61 +231,6 @@ class PlatformProductService:
         await self._session.commit()
         return await self._to_response(pp)
 
-    # ------------------------------------------------------------------ #
-    # create_or_update（内部导入路径，幂等）
-    # ------------------------------------------------------------------ #
-    async def create_or_update(
-        self,
-        *,
-        platform: str,
-        platform_id: str,
-        style_id: UUID,
-        sku_id: UUID | None = None,
-        title: str | None = None,
-        user_id: UUID,
-    ) -> PlatformProduct:
-        await self._validate_refs(style_id, sku_id)
-        existing = await self._find(platform, platform_id)
-        if existing is not None:
-            existing.style_id = style_id
-            existing.sku_id = sku_id
-            existing.title = title
-            existing.is_active = True
-            # 款式换了商品归属可能失效（旧商品未必含新款式），重新推定。
-            # 人工指定过的归属只在仍然有效时保留。
-            existing.goods_main_id = await self._resolve_goods_keep_if_valid(
-                style_id, existing.goods_main_id
-            )
-            await self._session.flush()
-            await self._audit.log(
-                action="platform_product.update_via_import",
-                resource="platform_product",
-                resource_id=existing.id,
-                after={"style_id": str(style_id)},
-                user_id=user_id,
-            )
-            await self._session.commit()
-            return existing
-        pp = PlatformProduct(
-            platform=platform,
-            platform_id=platform_id,
-            style_id=style_id,
-            sku_id=sku_id,
-            goods_main_id=await self._resolve_goods(style_id, None),
-            title=title,
-        )
-        self._session.add(pp)
-        await self._session.flush()
-        await self._audit.log(
-            action="platform_product.create_via_import",
-            resource="platform_product",
-            resource_id=pp.id,
-            after={"platform": platform, "platform_id": platform_id, "style_id": str(style_id)},
-            user_id=user_id,
-        )
-        await self._session.commit()
-        return pp
-
     async def _resolve_goods_keep_if_valid(
         self, style_id: UUID, current: UUID | None
     ) -> UUID | None:
@@ -301,6 +266,7 @@ class PlatformProductService:
         pp = await self._session.get(PlatformProduct, pp_id)
         if pp is None:
             raise PlatformProductNotFoundError("平台商品映射不存在")
+        before = _report_fields(pp)
         if payload.style_id is not None:
             await self._validate_refs(payload.style_id, payload.sku_id)
             pp.style_id = payload.style_id
@@ -320,6 +286,8 @@ class PlatformProductService:
                 pp.style_id, pp.goods_main_id
             )
         await self._session.flush()
+        if _report_fields(pp) != before:
+            await self._invalidate_summary(pp.tenant_id)
         await self._audit.log(
             action="platform_product.update",
             resource="platform_product",
@@ -338,7 +306,9 @@ class PlatformProductService:
         pp = await self._session.get(PlatformProduct, pp_id)
         if pp is None:
             raise PlatformProductNotFoundError("平台商品映射不存在")
+        tenant_id = pp.tenant_id
         await self._session.delete(pp)
+        await self._invalidate_summary(tenant_id)
         await self._audit.log(
             action="platform_product.delete",
             resource="platform_product",

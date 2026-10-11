@@ -70,6 +70,7 @@ from app.modules.report.advanced_repository import (
     WorkProgressRepository,
 )
 from app.modules.report.exceptions import SummaryRefreshBusyError
+from app.modules.report.summary_invalidation import summary_lock_key
 from app.modules.report.summary_models import (
     ProductRoiSummary,
     PrWorkProgressSummary,
@@ -113,15 +114,12 @@ _PR_COUNTERS = (
 
 _SHOP_METRICS = ("visitors", "pay_amount", "pay_orders")
 
-# 租户级刷新锁。键带命名空间前缀，与 import_tasks 按 batch_id 取的锁不会撞
-# （两边都是 hashtextextended 到 bigint 键空间，字符串不同即可）。
+# 租户级刷新锁。键与覆盖失效 helper 共用（summary_lock_key），失效那边阻塞等这把锁。
 # CAST 必须写：同一参数类型推断不出来时 asyncpg 会报 IndeterminateDatatype。
 _LOCK_SQL = text("SELECT pg_try_advisory_xact_lock(hashtextextended(CAST(:key AS text), 0))")
 
-
-def _lock_key(tenant_id: UUID) -> str:
-    """刷新锁的键。单独成函数是为了让测试拿同一个键去占锁，不在测试里再写一遍格式。"""
-    return f"report_summary:{tenant_id}"
+# 旧名保留：测试拿同一个键去占锁
+_lock_key = summary_lock_key
 
 
 # 覆盖记录：区间内每一天一行，不论那天有没有数据。
