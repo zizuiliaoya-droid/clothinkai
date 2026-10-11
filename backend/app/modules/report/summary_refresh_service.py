@@ -83,6 +83,8 @@ from app.modules.urge.service import UrgeService
 # product_roi_summary 直接落盘的指标列（与 daily_trend_by_goods 的输出同名）。
 # confirmed_amount / total_spend / net_roi 不在这里：前两个是加法派生，最后一个是
 # 比率。比率落盘会把除零语义固化进数据，那个语义现在由 safe_div 一处决定。
+# 062 的 paired_* 三列刷新源还没出（逐日配对加购接上后改引 summary_models.ROI_METRICS），
+# 暂靠 server_default 0。
 _ROI_METRICS = (
     "pay_amount",
     "brushing_amount",
@@ -90,6 +92,8 @@ _ROI_METRICS = (
     "add_cart_count",
     "promo_cost",
     "ad_spend",
+    "pay_orders",
+    "ad_add_cart_count",
 )
 
 # pr_work_progress_summary 落盘的计数列（14 个，与 aggregate_by_pr 的输出一一对应）。
@@ -264,6 +268,7 @@ class SummaryRefreshService:
                 "id": uuid4(),
                 "tenant_id": tenant_id,
                 "goods_main_id": r["goods_id"],
+                "channel": r["channel"],
                 "stat_date": r["date"],
                 "refreshed_at": now,
                 **{m: r[m] for m in _ROI_METRICS},

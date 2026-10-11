@@ -202,9 +202,9 @@ class TestRefreshMatchesLiveAggregation:
                 .all()
             )
             assert len(stored) == len(live) > 0
-            by_key = {(s.goods_main_id, s.stat_date): s for s in stored}
+            by_key = {(s.goods_main_id, s.channel, s.stat_date): s for s in stored}
             for row in live:
-                got = by_key[(row["goods_id"], row["date"])]
+                got = by_key[(row["goods_id"], row["channel"], row["date"])]
                 for metric in (
                     "pay_amount",
                     "brushing_amount",
