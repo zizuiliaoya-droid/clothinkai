@@ -129,6 +129,15 @@ class NegotiationReceiverConfirm(BaseModel):
     receiver_address: _ReceiverAddressField = None
 
 
+class NegotiationReassignRequest(BaseModel):
+    """管理员转交（N12，``POST /{id}/reassign``，11-57）：换对接 PR。原因 1 ~ 500 字（7.1，去空白后判）。"""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    pr_id: UUID
+    reason: str = Field(min_length=1, max_length=500)
+
+
 class NegotiationItemResponse(BaseModel):
     """谈款商品明细一行（7.2）。颜色尺码实时读 SKU；``sku_id`` 为空 = 还没选。"""
 
@@ -326,6 +335,7 @@ __all__ = [
     "NegotiationItemResponse",
     "NegotiationListFilters",
     "NegotiationListResponse",
+    "NegotiationReassignRequest",
     "NegotiationReceiverConfirm",
     "NegotiationReceiverUpdate",
     "NegotiationResponse",

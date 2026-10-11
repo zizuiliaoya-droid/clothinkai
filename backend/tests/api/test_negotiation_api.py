@@ -6,6 +6,7 @@
 - ``POST /{id}/final-review`` 挂 ``negotiation_final:approve``：主管 403 ``PERMISSION_DENIED``；退回不写意见 422（schema 层）；
   ``POST /{id}/review`` 管理员 scope 够、service 规则拦 → 403 ``star_first_level``（S7）
 - ``PUT /{id}/receiver``、``POST /{id}/confirm-receiver`` 挂 ``negotiation:write``；限长 / 电话 / 缺项 422，重复确认 409（S8）
+- ``POST /{id}/copy`` 201；``POST /{id}/reassign`` 非管理员 403 ``admin_only``、原因限长（S9）
 """
 
 from __future__ import annotations
@@ -193,3 +194,42 @@ class TestNegotiationRoutes:
         assert resp.status_code == 409, resp.text
         assert resp.json()["code"] == "NEGOTIATION_STATE_CONFLICT"
         assert resp.json()["message"] == "已定稿，推广单已生成"
+
+    async def test_copy_and_reassign_routes(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        negotiation_factory: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+    ) -> None:
+        """``POST /{id}/copy`` 挂 ``negotiation:write``，成功 201 返回新草稿；``POST /{id}/reassign`` 挂 ``negotiation:write``
+        + service 判持 ``*``：主管 403 ``admin_only``、财务 403 ``PERMISSION_DENIED``，原因空白 / 超 500 字 422，管理员 200（S9）。"""
+        style = await product_factory.style()
+        blogger = await blogger_factory.blogger()
+        rejected = await negotiation_factory.negotiation(
+            style=style, blogger=blogger, pr=flow_users.pr, status="审核驳回"
+        )
+        path = f"/api/negotiations/{rejected.id}/copy"
+        resp = await _call(session, flow_users.finance, "POST", path)
+        assert (resp.status_code, resp.json()["code"]) == (403, "PERMISSION_DENIED")
+        resp = await _call(session, flow_users.pr, "POST", path)
+        assert resp.status_code == 201, resp.text
+        assert (resp.json()["status"], resp.json()["copied_from_id"]) == ("草稿", str(rejected.id))
+
+        pending = await negotiation_factory.negotiation(
+            style=style, blogger=blogger, pr=flow_users.pr, status="主管待审"
+        )
+        path = f"/api/negotiations/{pending.id}/reassign"
+        body = {"pr_id": str(flow_users.pr2.id), "reason": "原 PR 请假"}
+        resp = await _call(session, flow_users.finance, "POST", path, body)
+        assert (resp.status_code, resp.json()["code"]) == (403, "PERMISSION_DENIED")
+        resp = await _call(session, flow_users.pr_manager, "POST", path, body)
+        assert resp.status_code == 403, resp.text
+        assert resp.json()["details"]["rule"] == "admin_only"
+        for reason in ("   ", "因" * 501):
+            resp = await _call(session, flow_users.admin, "POST", path, {**body, "reason": reason})
+            assert (resp.status_code, resp.json()["code"]) == (422, "VALIDATION_ERROR"), resp.text
+        resp = await _call(session, flow_users.admin, "POST", path, body)
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["pr_id"] == str(flow_users.pr2.id)

@@ -47,7 +47,14 @@ class InvalidNegotiationGoodsError(ValidationError):
     code = "INVALID_NEGOTIATION_GOODS"
 
 
+class InvalidNegotiationAssigneeError(ValidationError):
+    """转交（N12）的新 PR 不合规：停用 / 不存在、没有 ``negotiation:write``、持 ``*``、= 原 PR 或本轮审核人（422）。"""
+
+    code = "INVALID_NEGOTIATION_ASSIGNEE"
+
+
 __all__ = [
+    "InvalidNegotiationAssigneeError",
     "InvalidNegotiationBloggerError",
     "InvalidNegotiationGoodsError",
     "InvalidNegotiationStyleError",

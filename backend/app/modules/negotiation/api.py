@@ -20,6 +20,7 @@ from app.modules.negotiation.schemas import (
     NegotiationGoodsMembers,
     NegotiationListFilters,
     NegotiationListResponse,
+    NegotiationReassignRequest,
     NegotiationReceiverConfirm,
     NegotiationReceiverUpdate,
     NegotiationResponse,
@@ -257,6 +258,41 @@ async def confirm_negotiation_receiver(
     返回谈款（带 ``promotion_id``、``promotion_internal_code``）；重复确认 → 409「已定稿，推广单已生成」。
     """
     return await _svc(session).confirm_receiver(negotiation_id, payload, user)
+
+
+@router.post(
+    "/{negotiation_id}/copy",
+    response_model=NegotiationResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[require_permission(SCOPE, "write")],
+)
+async def copy_negotiation(
+    negotiation_id: UUID,
+    session: SessionDep,
+    user: CurrentActiveUser,
+) -> NegotiationResponse:
+    """复制为新谈款（N10）：只在审核驳回、原单本人；返回新草稿（新 ``line_id``、``copied_from_id`` 指回原单）。
+    复制博主、商品、颜色尺码、模式、平台、服务费、备注、约定发布时间，不复制审核与收货。
+    """
+    return await _svc(session).copy(negotiation_id, user)
+
+
+@router.post(
+    "/{negotiation_id}/reassign",
+    response_model=NegotiationResponse,
+    dependencies=[require_permission(SCOPE, "write")],
+)
+async def reassign_negotiation(
+    negotiation_id: UUID,
+    payload: NegotiationReassignRequest,
+    session: SessionDep,
+    user: CurrentActiveUser,
+) -> NegotiationResponse:
+    """管理员转交（N12，11-57；首版只开接口、界面不出按钮）：主管待审 / 待老板审核 / 老板退回 / 待补收货地址
+    换对接 PR，状态不变。不持 ``*`` → 403 ``admin_only``；草稿 → 404；其余状态 → 422；
+    新 PR 停用、没有 ``negotiation:write``、持 ``*``、= 原 PR 或本轮审核人 → 422 ``INVALID_NEGOTIATION_ASSIGNEE``。
+    """
+    return await _svc(session).reassign(negotiation_id, payload, user)
 
 
 __all__ = ["router"]

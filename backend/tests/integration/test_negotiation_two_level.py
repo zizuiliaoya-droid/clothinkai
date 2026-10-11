@@ -4,7 +4,9 @@
 ``receiver_suggestion``、商品明细与品名、列表 SQL 条数不随行数涨）；S6 新建 / 编辑 / 提交（N1 ~ N3：
 商品推定写回与明细、``star_create``、``others_in_progress``、转移全表的编辑 / 提交两列、提交缺项、提交留痕、goods-members）；
 S7 两级审核（N4 ~ N7：审核人规则、通过不建推广单、转移全表的两级审核两列、退回重提后旧意见仍在事件里）；
-S8 收货与定稿建单（N8、N9：转移全表的收货两列、复制到推广单、PR 不在时代录代确认、30 并发确认只建 1 张）。
+S8 收货与定稿建单（N8、N9：转移全表的收货两列、复制到推广单、PR 不在时代录代确认、30 并发确认只建 1 张）；
+S9 复制为新谈款与管理员转交（N10、N12：转移全表的复制 / 转交两列、复制哪些不复制哪些、两条线互相引用的事件、
+转交后归属变化、新 PR 的资格、``admin_only``）。
 角色一律用 ``flow_users``（迁移 seed 的真实角色）；造数用 ``negotiation_factory`` 直插任意状态。
 """
 
@@ -39,6 +41,7 @@ from app.modules.negotiation.schemas import (
     NegotiationCreate,
     NegotiationFinalReviewRequest,
     NegotiationListFilters,
+    NegotiationReassignRequest,
     NegotiationReceiverConfirm,
     NegotiationReceiverUpdate,
     NegotiationReviewRequest,
@@ -2029,3 +2032,286 @@ class TestConfirmConcurrent:
                         sa_text("DELETE FROM user_role WHERE user_id = :id"), {"id": uid}
                     )
                     await cleanup.execute(sa_text('DELETE FROM "user" WHERE id = :id'), {"id": uid})
+
+
+# ---------------------------------------------------------------------------
+# S9 复制为新谈款（N10）与管理员转交（N12，11-57）
+# ---------------------------------------------------------------------------
+
+_REASSIGNABLE = ("主管待审", "待老板审核", "老板退回", "待补收货地址")
+
+
+def _reassign(pr: Any, reason: str = "原 PR 请假") -> NegotiationReassignRequest:
+    return NegotiationReassignRequest(pr_id=pr.id, reason=reason)
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+class TestCopyReassignTransitions:
+    """转移全表的复制 / 转交两列：复制只在审核驳回；转交只在 N12 的 4 个状态（草稿取不到 → 404）。"""
+
+    @pytest.mark.parametrize("status", _STATES)
+    async def test_copy(
+        self, session: AsyncSession, flow_users: Any, world: _World, status: str
+    ) -> None:
+        n = await world.make(flow_users.pr, status)
+        svc = NegotiationService(session)
+        if status == "审核驳回":
+            resp = await svc.copy(n.id, flow_users.pr)
+            assert (resp.status, resp.copied_from_id) == ("草稿", n.id)
+            return
+        with pytest.raises(IllegalStateTransitionError) as exc:
+            await svc.copy(n.id, flow_users.pr)
+        assert exc.value.code == "ILLEGAL_STATE_TRANSITION"
+        assert exc.value.details == {"from_state": status, "action": "copy"}
+
+    @pytest.mark.parametrize("status", _STATES)
+    async def test_reassign(
+        self, session: AsyncSession, flow_users: Any, world: _World, status: str
+    ) -> None:
+        n = await world.make(flow_users.pr, status)
+        svc = NegotiationService(session)
+        if status == "草稿":
+            with pytest.raises(NegotiationNotFoundError):
+                await svc.reassign(n.id, _reassign(flow_users.pr2), flow_users.admin)
+            return
+        if status in _REASSIGNABLE:
+            resp = await svc.reassign(n.id, _reassign(flow_users.pr2), flow_users.admin)
+            assert (resp.status, resp.pr_id) == (status, flow_users.pr2.id)
+            return
+        with pytest.raises(IllegalStateTransitionError) as exc:
+            await svc.reassign(n.id, _reassign(flow_users.pr2), flow_users.admin)
+        assert exc.value.code == "ILLEGAL_STATE_TRANSITION"
+        assert exc.value.details == {"from_state": status, "action": "reassign"}
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+class TestCopy:
+    async def test_copies_terms_not_reviews(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        negotiation_factory: Any,
+        blogger_factory: Any,
+        suit: _Suit,
+    ) -> None:
+        """复制博主、商品、明细、模式、平台、服务费、备注、约定发布时间；不复制审核与收货。
+        新单新 ``line_id``、``copied_from_id`` 指回原单、本人是新单 PR；两条主线各写一条事件互相引用。"""
+        blogger = await blogger_factory.blogger()
+        src = await negotiation_factory.negotiation(
+            style=suit.top,
+            blogger=blogger,
+            pr=flow_users.pr,
+            status="审核驳回",
+            goods_main_id=suit.suit.id,
+            items=[(suit.top, suit.top_sku), (suit.pants, None)],
+            cooperation_mode="送拍",
+            platform="抖音",
+            scheduled_publish_date=date(2026, 12, 1),
+            quote_amount=Decimal("888.00"),
+            remark="上次价格太高",
+            submitted_at=_T0,
+            reviewed_by=flow_users.pr_manager.id,
+            reviewed_at=_T0,
+            review_opinion="价格太高",
+            receiver_name="不该复制",
+        )
+        src_id, src_line = src.id, src.line_id
+        svc = NegotiationService(session)
+        new = await svc.copy(src_id, flow_users.pr)
+        assert new.id != src_id and new.line_id != src_line
+        assert (new.status, new.copied_from_id, new.pr_id) == ("草稿", src_id, flow_users.pr.id)
+        assert (
+            new.blogger_id,
+            new.style_id,
+            new.goods_main_id,
+            new.cooperation_mode,
+            new.platform,
+            new.scheduled_publish_date,
+            new.quote_amount,
+            new.remark,
+        ) == (
+            blogger.id,
+            suit.top.id,
+            suit.suit.id,
+            "送拍",
+            "抖音",
+            date(2026, 12, 1),
+            Decimal("888.00"),
+            "上次价格太高",
+        )
+        assert [(i.style_id, i.sku_id) for i in new.items] == [
+            (suit.top.id, suit.top_sku.id),
+            (suit.pants.id, None),
+        ]
+        assert (new.submitted_at, new.reviewed_by, new.review_opinion) == (None, None, None)
+        assert (new.final_reviewed_by, new.receiver_name, new.promotion_id) == (None, None, None)
+
+        assert [(e[0], e[1], e[2], e[3], e[4], e[5]) for e in await _events(session, new.id)] == [
+            (
+                "negotiation.copied",
+                None,
+                "草稿",
+                {"from_negotiation_id": str(src_id), "from_line_id": str(src_line)},
+                flow_users.pr.id,
+                new.line_id,
+            )
+        ]
+        assert [(e[0], e[1], e[2], e[3], e[4], e[5]) for e in await _events(session, src_id)] == [
+            (
+                "negotiation.copied_out",
+                None,
+                None,
+                {"to_negotiation_id": str(new.id), "to_line_id": str(new.line_id)},
+                flow_users.pr.id,
+                src_line,
+            )
+        ]
+        # 原单不动：仍是审核驳回、意见还在
+        old = await svc.get(src_id, flow_users.pr)
+        assert (old.status, old.review_opinion) == ("审核驳回", "价格太高")
+        # 新草稿就是普通草稿：本人能改、能提交（颜色尺码没选齐 → 缺项）
+        with pytest.raises(FlowGateMissingError) as gate:
+            await svc.submit(new.id, flow_users.pr)
+        assert [m["key"] for m in gate.value.details["missing"]] == ["goods_items"]
+
+    async def test_only_owner_copies(
+        self, session: AsyncSession, flow_users: Any, world: _World
+    ) -> None:
+        """主管、管理员看得到驳回单但不是本人 → 403 ``not_owner``；别的 PR 看不到 → 404；财务没有写权限 → 403。"""
+        n = await world.make(flow_users.pr, "审核驳回")
+        svc = NegotiationService(session)
+        for who in ("pr_manager", "admin"):
+            with pytest.raises(FlowActionForbiddenError) as exc:
+                await svc.copy(n.id, getattr(flow_users, who))
+            assert exc.value.details["rule"] == "not_owner", who
+        with pytest.raises(NegotiationNotFoundError):
+            await svc.copy(n.id, flow_users.pr2)
+        with pytest.raises(PermissionDeniedError) as denied:
+            await svc.copy(n.id, flow_users.finance)
+        assert denied.value.code == "PERMISSION_DENIED"
+        copies = (
+            await session.execute(
+                sa_text("SELECT COUNT(*) FROM negotiation WHERE copied_from_id = :n"), {"n": n.id}
+            )
+        ).scalar_one()
+        assert copies == 0
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+class TestReassign:
+    async def test_reassign_moves_ownership(
+        self, session: AsyncSession, flow_users: Any, world: _World
+    ) -> None:
+        """转交后新 PR 能编辑、提交，原 PR 列表里看不到、编辑 404；事件带前后 PR 与原因，状态不变。"""
+        n = await world.make(
+            flow_users.pr, "老板退回", reviewed_by=flow_users.pr_manager.id, final_reviewed_by=None
+        )
+        nid = n.id
+        svc = NegotiationService(session)
+        before_name = flow_users.pr.display_name or flow_users.pr.username
+        after_name = flow_users.pr2.display_name or flow_users.pr2.username
+        resp = await svc.reassign(
+            nid, _reassign(flow_users.pr2, "  原 PR 离职  "), flow_users.admin
+        )
+        assert (resp.status, resp.pr_id) == ("老板退回", flow_users.pr2.id)
+        events = [e for e in await _events(session, nid) if e[0] == "negotiation.reassigned"]
+        assert [(e[1], e[2], e[3], e[4], e[6]) for e in events] == [
+            (
+                None,
+                None,
+                {
+                    "from_pr_id": str(flow_users.pr.id),
+                    "from_pr_name": before_name,
+                    "to_pr_id": str(flow_users.pr2.id),
+                    "to_pr_name": after_name,
+                },
+                flow_users.admin.id,
+                "原 PR 离职",
+            )
+        ]
+        assert nid not in await _ids(svc, flow_users.pr)
+        assert nid in await _ids(svc, flow_users.pr2)
+        with pytest.raises(NegotiationNotFoundError):
+            await svc.update(nid, NegotiationUpdate(remark="原 PR"), flow_users.pr)
+        edited = await svc.update(nid, NegotiationUpdate(remark="新 PR 改"), flow_users.pr2)
+        assert edited.remark == "新 PR 改"
+        submitted = await svc.submit(nid, flow_users.pr2)
+        assert submitted.status == "主管待审"
+        # 之后两级审核的「≠ 谈款人」按新 PR 判：原 PR 不再是谈款人
+        assert submitted.pr_id == flow_users.pr2.id
+
+    async def test_new_pr_must_qualify(
+        self, session: AsyncSession, tenant_a: Any, factory: Any, flow_users: Any, world: _World
+    ) -> None:
+        """新 PR 要是启用账号、持 ``negotiation:write``、≠ 原 PR、≠ 本轮两级审核人（否则等于自审），也不能是持 ``*`` 的账号
+        （管理员建的谈款没人能定稿，同 N1）→ 都是 422 ``INVALID_NEGOTIATION_ASSIGNEE``，谈款不动。"""
+        disabled = await factory.user(
+            tenant_a, roles=[await _role(session, "pr")], status="disabled"
+        )
+        n = await world.make(
+            flow_users.pr,
+            "待老板审核",
+            reviewed_by=flow_users.pr_manager.id,
+            final_reviewed_by=flow_users.pr2.id,
+        )
+        svc = NegotiationService(session)
+        cases = {
+            "same_pr": flow_users.pr.id,
+            "manager_reviewer": flow_users.pr_manager.id,
+            "final_reviewer": flow_users.pr2.id,
+            "star": flow_users.admin.id,
+            "no_write": flow_users.finance.id,
+            "disabled": disabled.id,
+            "missing": uuid4(),
+        }
+        for name, pr_id in cases.items():
+            with pytest.raises(AppException) as exc:
+                await svc.reassign(
+                    n.id, NegotiationReassignRequest(pr_id=pr_id, reason="转"), flow_users.admin
+                )
+            assert (exc.value.code, exc.value.status_code) == (
+                "INVALID_NEGOTIATION_ASSIGNEE",
+                422,
+            ), name
+            assert exc.value.details["pr_id"] == str(pr_id), name
+        assert (await svc.get(n.id, flow_users.admin)).pr_id == flow_users.pr.id
+        reassigned = (
+            await session.execute(
+                sa_text(
+                    "SELECT COUNT(*) FROM line_event WHERE negotiation_id = :n"
+                    " AND event_type = 'negotiation.reassigned'"
+                ),
+                {"n": n.id},
+            )
+        ).scalar_one()
+        assert reassigned == 0
+
+    async def test_manager_reviewer_rejected(
+        self, session: AsyncSession, flow_users: Any, world: _World
+    ) -> None:
+        """转给本轮主管审核人 → 422（9.3 B「PR 不在时」；B12 去掉「≠ 本轮审核人」这条会红）。
+        主管也持 ``negotiation:write``，所以只有这条规则挡得住。"""
+        n = await world.make(flow_users.pr, "待老板审核", reviewed_by=flow_users.pr_manager.id)
+        svc = NegotiationService(session)
+        with pytest.raises(AppException) as exc:
+            await svc.reassign(n.id, _reassign(flow_users.pr_manager), flow_users.admin)
+        assert exc.value.code == "INVALID_NEGOTIATION_ASSIGNEE"
+        assert (await svc.get(n.id, flow_users.admin)).pr_id == flow_users.pr.id
+
+    async def test_admin_only(self, session: AsyncSession, flow_users: Any, world: _World) -> None:
+        """不持 ``*`` → 403 ``admin_only``（主管、本人、别的 PR 都一样）；转交不进矩阵，``ui`` 里没有这个动作。"""
+        n = await world.make(flow_users.pr, "主管待审")
+        svc = NegotiationService(session)
+        for who in ("pr_manager", "pr"):
+            with pytest.raises(FlowActionForbiddenError) as exc:
+                await svc.reassign(n.id, _reassign(flow_users.pr2), getattr(flow_users, who))
+            assert exc.value.details["rule"] == "admin_only", who
+        detail = await svc.get(n.id, flow_users.admin)
+        assert "reassign" not in (detail.ui or {}).get("actions", {})
+        assert detail.pr_id == flow_users.pr.id
+
+
+async def _role(session: AsyncSession, code: str) -> Any:
+    from app.modules.auth.models import Role
+
+    return (await session.execute(select(Role).where(Role.code == code))).scalar_one()

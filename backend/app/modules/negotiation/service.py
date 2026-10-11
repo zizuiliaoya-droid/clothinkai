@@ -29,7 +29,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import AuditService
-from app.core.exceptions import FieldPermissionDenied, ValidationError
+from app.core.exceptions import FieldPermissionDenied, IllegalStateTransitionError, ValidationError
 from app.core.security.field_permissions import (
     build_field_perm_context,
     can_read_field,
@@ -56,6 +56,7 @@ from app.modules.negotiation.enums import (
     NegotiationStatus,
 )
 from app.modules.negotiation.exceptions import (
+    InvalidNegotiationAssigneeError,
     InvalidNegotiationBloggerError,
     InvalidNegotiationGoodsError,
     InvalidNegotiationStyleError,
@@ -76,6 +77,7 @@ from app.modules.negotiation.schemas import (
     NegotiationItemResponse,
     NegotiationListFilters,
     NegotiationListResponse,
+    NegotiationReassignRequest,
     NegotiationReceiverConfirm,
     NegotiationReceiverUpdate,
     NegotiationResponse,
@@ -112,6 +114,14 @@ STAR_CREATE_REASON = "管理员建的谈款没人能定稿"
 FINALIZED_CONFLICT_MESSAGE = "已定稿，推广单已生成"
 """重复确认收货信息（N9）：已定稿，或并发里输给 ``uq_promotion_line`` 的那个请求 → 409 的文案。"""
 _PROMOTION_LINE_UQ = "uq_promotion_line"
+# 管理员能转交的状态（N12）：要 PR 动手或还在推进的 4 个；草稿只有本人看得到（取不到 → 404），终态不转
+_REASSIGNABLE = (
+    NegotiationStatus.PENDING.value,
+    NegotiationStatus.FINAL_PENDING.value,
+    NegotiationStatus.FINAL_RETURNED.value,
+    NegotiationStatus.RECEIVER_PENDING.value,
+)
+ADMIN_ONLY_REASON = "只有管理员可以转交谈款"
 
 
 def _utcnow() -> datetime:
@@ -1085,6 +1095,156 @@ class NegotiationService:
         return await self.get(negotiation_id, user)
 
     # ------------------------------------------------------------------ #
+    # N10 复制为新谈款 / N12 管理员转交
+    # ------------------------------------------------------------------ #
+
+    async def copy(self, negotiation_id: UUID, user: User) -> NegotiationResponse:
+        """N10：审核驳回、本人 → 新草稿（201）。复制博主、商品、明细、模式、平台、服务费、备注、约定发布时间，
+        不复制审核与收货；新 ``line_id``、``copied_from_id`` 指回原单。两条线各写一条事件互相引用（6.2、6.3）：
+        新线 ``negotiation.copied``、原线 ``negotiation.copied_out``。原单不动（终态）。
+        明细原样复制（sku 已删 / 商品成员变了的，提交时 ★¹ 照常拦）。
+        """
+        actor, source, views, _members = await self._load_for_action(negotiation_id, user)
+        require(actor, build_negotiation_doc(source, items_complete=False), "copy", gates=False)
+        tenant_id, source_line = source.tenant_id, source.line_id
+        negotiation = Negotiation(
+            tenant_id=tenant_id,
+            line_id=uuid4(),
+            copied_from_id=source.id,
+            blogger_id=source.blogger_id,
+            style_id=source.style_id,
+            goods_main_id=source.goods_main_id,
+            pr_id=user.id,
+            cooperation_mode=source.cooperation_mode,
+            platform=source.platform,
+            scheduled_publish_date=source.scheduled_publish_date,
+            quote_amount=source.quote_amount,
+            remark=source.remark,
+            status=NegotiationStatus.DRAFT.value,
+        )
+        self._repo.add(negotiation)
+        await self._session.flush()
+        new_id, new_line = negotiation.id, negotiation.line_id
+        await self._repo.replace_items(
+            tenant_id=tenant_id,
+            negotiation_id=new_id,
+            rows=[(v.style_id, v.sku_id) for v in views],
+        )
+        await self._events.append(
+            tenant_id=tenant_id,
+            line_id=new_line,
+            event_type=LineEventType.NEGOTIATION_COPIED,
+            actor_id=user.id,
+            negotiation_id=new_id,
+            to_state=NegotiationStatus.DRAFT.value,
+            payload={"from_negotiation_id": str(negotiation_id), "from_line_id": str(source_line)},
+        )
+        await self._events.append(
+            tenant_id=tenant_id,
+            line_id=source_line,
+            event_type=LineEventType.NEGOTIATION_COPIED_OUT,
+            actor_id=user.id,
+            negotiation_id=negotiation_id,
+            payload={"to_negotiation_id": str(new_id), "to_line_id": str(new_line)},
+        )
+        await self._audit.log(
+            action="negotiation.copy",
+            resource="negotiation",
+            resource_id=new_id,
+            after={"status": NegotiationStatus.DRAFT.value, "copied_from_id": str(negotiation_id)},
+            user_id=user.id,
+        )
+        await self._session.commit()
+        return await self.get(new_id, user)
+
+    async def _check_assignee(self, negotiation: Negotiation, pr_id: UUID) -> User:
+        """N12 新 PR 的资格（7.2）：启用账号、同租户、持 ``negotiation:write``；≠ 原 PR、≠ 本轮两级审核人（否则等于自审）；
+        不持 ``*``（管理员当谈款人就没人能定稿，同 N1、11-1）。不合规 → 422 ``INVALID_NEGOTIATION_ASSIGNEE``。
+        """
+
+        def invalid(message: str) -> InvalidNegotiationAssigneeError:
+            return InvalidNegotiationAssigneeError(message, details={"pr_id": str(pr_id)})
+
+        if pr_id == negotiation.pr_id:
+            raise invalid("新 PR 就是现在的对接 PR")
+        if pr_id in (negotiation.reviewed_by, negotiation.final_reviewed_by):
+            raise invalid("不能转给本轮的审核人（否则等于自己审自己的谈款）")
+        target = await self._session.get(User, pr_id)
+        if (
+            target is None
+            or target.tenant_id != negotiation.tenant_id
+            or target.deleted_at is not None
+            or target.status != "active"
+        ):
+            raise invalid("新 PR 不存在或已停用")
+        target_actor = await load_flow_actor(target.id, self._roles, self._perms)
+        if target_actor.is_star:
+            raise invalid(STAR_CREATE_REASON)
+        if not target_actor.perms.has(SCOPE_NEGOTIATION, "write"):
+            raise invalid("新 PR 没有谈款编辑权限")
+        return target
+
+    async def reassign(
+        self, negotiation_id: UUID, payload: NegotiationReassignRequest, user: User
+    ) -> NegotiationResponse:
+        """N12（11-57）：PR 请假或离职时管理员把谈款转给另一位 PR，状态不变。不进矩阵、首版不出按钮。
+        顺序：看不到（草稿）→ 404；不持 ``*`` → 403 ``admin_only``；状态不在 4 个里 → 422；新 PR 不合规 → 422；
+        条件 UPDATE ``pr_id``（状态与原 PR 都没变才改，0 行 → 409）；事件 ``negotiation.reassigned`` 带前后 PR 与原因。
+        之后「本人」与两级审核的「≠ 谈款人」都按新 PR 判（都读 ``pr_id``）。
+        """
+        actor, negotiation, _views, _members = await self._load_for_action(negotiation_id, user)
+        if not actor.is_star:
+            raise FlowActionForbiddenError(rule="admin_only", reason=ADMIN_ONLY_REASON)
+        status = negotiation.status
+        if status not in _REASSIGNABLE:
+            raise IllegalStateTransitionError(
+                f"当前状态「{status}」不允许此操作",
+                details={"from_state": status, "action": "reassign"},
+            )
+        target = await self._check_assignee(negotiation, payload.pr_id)
+        tenant_id, line_id, from_pr_id = (
+            negotiation.tenant_id,
+            negotiation.line_id,
+            negotiation.pr_id,
+        )
+        from_pr = await self._session.get(User, from_pr_id)
+        from_name = (from_pr.display_name or from_pr.username) if from_pr is not None else None
+        to_id, to_name = target.id, target.display_name or target.username
+        updated = await self._repo.update_state(
+            negotiation_id=negotiation_id,
+            tenant_id=tenant_id,
+            from_statuses=(status,),
+            values={"pr_id": to_id},
+            pr_id=from_pr_id,
+        )
+        if updated is None:
+            raise NegotiationStateConflictError(details={"negotiation_id": str(negotiation_id)})
+        await self._events.append(
+            tenant_id=tenant_id,
+            line_id=line_id,
+            event_type=LineEventType.NEGOTIATION_REASSIGNED,
+            actor_id=user.id,
+            negotiation_id=negotiation_id,
+            note=payload.reason,
+            payload={
+                "from_pr_id": str(from_pr_id),
+                "from_pr_name": from_name,
+                "to_pr_id": str(to_id),
+                "to_pr_name": to_name,
+            },
+        )
+        await self._audit.log(
+            action="negotiation.reassign",
+            resource="negotiation",
+            resource_id=negotiation_id,
+            before={"pr_id": str(from_pr_id)},
+            after={"pr_id": str(to_id)},
+            user_id=user.id,
+        )
+        await self._session.commit()
+        return await self.get(negotiation_id, user)
+
+    # ------------------------------------------------------------------ #
     # 读
     # ------------------------------------------------------------------ #
 
@@ -1251,6 +1411,7 @@ class NegotiationService:
 
 
 __all__ = [
+    "ADMIN_ONLY_REASON",
     "OVERDUE_AFTER",
     "FINALIZED_CONFLICT_MESSAGE",
     "OVERDUE_COUNT_KEY",
