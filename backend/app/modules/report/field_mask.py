@@ -10,6 +10,8 @@ report 模块原来没有字段裁剪；下钻（R1）、散点（R6）、毛利
   按报表读权限给，不受逐单字段权限约束（设计第 11 节决定 12）。残余：样本只有一单时聚合额等于单价。
   业务方要更严时**只改** :func:`aggregate_promo_amounts_visible`：对 ``work_progress`` / ``bi``
   返回 ``can_read_field("promotion", "quote_amount", ctx)``，``production`` / ``store_daily`` 照常 True（ROI 要用）
+- **ROI 例外**：BI 的站外推广花费、总花费、ROI 是投产口径（算 ROI 要用），即便按上面收紧 ``bi``
+  也**不**过 F3，照常给；收紧只作用于 BI 的推广汇总金额（服务费、已发布 / 未发布花费、取消金额）
 - F1 毛利随 R3
 """
 
