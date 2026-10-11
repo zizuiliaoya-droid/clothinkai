@@ -71,6 +71,7 @@ class TestNegotiationRoutes:
                         "style_id": str(style.id),
                         "display_short_name": "短裙",
                         "goods_title": "短裙全称",
+                        "style_main_image_url": None,
                     }
                 ],
             }

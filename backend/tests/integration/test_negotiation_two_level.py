@@ -1203,8 +1203,23 @@ class TestSubmit:
 @pytest.mark.usefixtures("tenant_ctx")
 class TestGoodsMembers:
     async def test_members(
-        self, session: AsyncSession, flow_users: Any, world: _World, suit: _Suit
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        world: _World,
+        suit: _Suit,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        from app.core import attachment as att_mod
+
+        class _FakeSigner:
+            def generate_presigned_url(self, _op: str, **kw: Any) -> str:
+                return f"https://fake-r2.local/{kw['Params']['Key']}"
+
+        monkeypatch.setattr(att_mod.attachment_service, "_client", _FakeSigner(), raising=False)
+        key = f"k/{uuid4().hex[:6]}/pants"
+        suit.pants.main_image_key = key
+        await session.flush()
         svc = NegotiationService(session)
         single = await svc.goods_members(style_id=world.style.id, goods_main_id=None)
         assert single.goods_main_id is None
@@ -1213,13 +1228,16 @@ class TestGoodsMembers:
                 "style_id": world.style.id,
                 "display_short_name": "飞狐短裙",
                 "goods_title": "飞狐短裙全称",
+                "style_main_image_url": None,
             }
         ]
         inferred = await svc.goods_members(style_id=suit.pants.id, goods_main_id=None)
         assert inferred.goods_main_id == suit.suit.id
-        assert [(m.style_id, m.display_short_name) for m in inferred.members] == [
-            (suit.top.id, "上衣"),
-            (suit.pants.id, "阔腿裤"),
+        assert [
+            (m.style_id, m.display_short_name, m.style_main_image_url) for m in inferred.members
+        ] == [
+            (suit.top.id, "上衣", None),
+            (suit.pants.id, "阔腿裤", f"https://fake-r2.local/{key}"),
         ]
 
         with pytest.raises(AppException) as exc:

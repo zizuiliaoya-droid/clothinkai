@@ -173,25 +173,26 @@ def _items_complete(
     )
 
 
+def _style_image_url(key: str | None, *, style_id: UUID) -> str | None:
+    """款式主图签名 URL；没有图或签名失败（只记日志）回 null。"""
+    from app.core.attachment import attachment_service
+
+    if not key:
+        return None
+    try:
+        return attachment_service.get_signed_url("private", key, expires_in=3600)
+    except Exception:
+        log.warning("negotiation_item_style_image_url_failed", extra={"style_id": str(style_id)})
+        return None
+
+
 def _item_responses(
     views: builtins.list[NegotiationItemView],
 ) -> builtins.list[NegotiationItemResponse]:
     """明细行 → 响应（品名规则同推广单 ``_item_responses``；主图签名失败只记日志、回 null）。"""
-    from app.core.attachment import attachment_service
-
     responses: builtins.list[NegotiationItemResponse] = []
     for view in views:
-        image_url: str | None = None
-        if view.style_main_image_key:
-            try:
-                image_url = attachment_service.get_signed_url(
-                    "private", view.style_main_image_key, expires_in=3600
-                )
-            except Exception:
-                log.warning(
-                    "negotiation_item_style_image_url_failed",
-                    extra={"style_id": str(view.style_id)},
-                )
+        image_url = _style_image_url(view.style_main_image_key, style_id=view.style_id)
         responses.append(
             NegotiationItemResponse(
                 id=view.id,
@@ -487,6 +488,7 @@ class NegotiationService:
                     display_short_name=normalize_goods_short_name(names[member][1])
                     or names[member][0],
                     goods_title=names[member][0],
+                    style_main_image_url=_style_image_url(names[member][2], style_id=member),
                 )
                 for member in members
             ],

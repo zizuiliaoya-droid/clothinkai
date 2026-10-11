@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PromotionItem } from "./types";
-import { colorSizeLabel, itemSpecLines, shipDetailLines } from "./shipDisplay";
+import { colorSizeLabel, itemSpecLines, promotionImages, shipDetailLines } from "./shipDisplay";
 
 const SKU_CODE = "SKU-7788-BLK-M";
 
@@ -115,5 +115,47 @@ describe("shipDetailLines", () => {
   it("待发货与历史单（null）没有悬停内容", () => {
     expect(shipDetailLines({ ...base, ship_status: "待发货" })).toEqual([]);
     expect(shipDetailLines(base)).toEqual([]);
+  });
+});
+
+describe("promotionImages（主图列，7c-15）", () => {
+  const row = {
+    style_id: "top",
+    style_main_image_url: "https://img/top.jpg",
+    display_short_name: "飞狐套装",
+    style_short_name_snapshot: "快照名",
+  };
+  const member = (style_id: string, display_short_name: string, style_main_image_url: string | null) => ({
+    style_id,
+    display_short_name,
+    goods_title: display_short_name,
+    style_main_image_url,
+  });
+
+  it("套装按成员顺序每个成员一张，缺图不占位、同款去重；alt 用成员简称", () => {
+    const images = promotionImages({
+      ...row,
+      goods_members: [
+        member("top", "上衣", "https://img/top.jpg"),
+        member("skirt", "短裙", null),
+        member("pants", "阔腿裤", "https://img/pants.jpg"),
+        member("pants", "阔腿裤", "https://img/pants.jpg"),
+      ],
+    });
+    expect(images).toEqual([
+      { style_id: "top", style_code: "上衣", url: "https://img/top.jpg", source: "upload" },
+      { style_id: "pants", style_code: "阔腿裤", url: "https://img/pants.jpg", source: "upload" },
+    ]);
+  });
+
+  it("成员都没图 → []（GoodsImages 显示「暂无主图」），不回落推广单款式图", () => {
+    expect(promotionImages({ ...row, goods_members: [member("top", "上衣", null)] })).toEqual([]);
+  });
+
+  it("接口没给 goods_members（旧缓存）→ 回落推广单款式主图；也没有 → []", () => {
+    expect(promotionImages({ ...row, goods_members: [] })).toEqual([
+      { style_id: "top", style_code: "飞狐套装", url: "https://img/top.jpg", source: "upload" },
+    ]);
+    expect(promotionImages({ ...row, goods_members: [], style_main_image_url: null })).toEqual([]);
   });
 });

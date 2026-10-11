@@ -444,19 +444,31 @@ class PromotionServiceBase:
         self,
         promotion: Promotion,
         members: builtins.list[UUID],
-        style_names: Mapping[UUID, tuple[str, str | None]],
+        style_names: Mapping[UUID, tuple[str, str | None, str | None]],
     ) -> builtins.list[GoodsMemberResponse]:
-        """成员款式 → 响应（品名规则同 ``_item_responses``；查不到款式回落建单快照的简称）。"""
+        """成员款式 → 响应（品名、主图规则同 ``_item_responses``；查不到款式回落建单快照的简称）。"""
         responses: builtins.list[GoodsMemberResponse] = []
         for style_id in members:
-            name, short_name = style_names.get(
-                style_id, (promotion.style_short_name_snapshot, None)
+            name, short_name, image_key = style_names.get(
+                style_id, (promotion.style_short_name_snapshot, None, None)
             )
+            image_url: str | None = None
+            if image_key:
+                try:
+                    image_url = self._attachment_service.get_signed_url(
+                        "private", image_key, expires_in=3600
+                    )
+                except Exception:
+                    log.warning(
+                        "promotion_goods_member_image_url_failed",
+                        extra={"style_id": str(style_id)},
+                    )
             responses.append(
                 GoodsMemberResponse(
                     style_id=style_id,
                     display_short_name=normalize_goods_short_name(short_name) or name,
                     goods_title=name,
+                    style_main_image_url=image_url,
                 )
             )
         return responses
@@ -544,7 +556,7 @@ class PromotionServiceBase:
         negotiators: Mapping[UUID, UUID] | None = None,
         members_by_goods: Mapping[UUID, builtins.list[UUID]] | None = None,
         user_names: Mapping[UUID, str] | None = None,
-        style_names: Mapping[UUID, tuple[str, str | None]] | None = None,
+        style_names: Mapping[UUID, tuple[str, str | None, str | None]] | None = None,
     ) -> PromotionResponse:
         """组装响应：字段权限过滤 + 衍生字段计算 + 矩阵 ``ui``.
 

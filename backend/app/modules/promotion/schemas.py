@@ -484,6 +484,8 @@ class GoodsMemberResponse(BaseModel):
     """款式简称，没填（或全空白）回落款式名。"""
     goods_title: str
     """款式全称（悬停显示）。"""
+    style_main_image_url: str | None = None
+    """该成员款式主图的签名 URL（推广列表主图列并排显示）；没有图或签名失败为 null。"""
 
 
 class PromotionResponse(BaseModel):
