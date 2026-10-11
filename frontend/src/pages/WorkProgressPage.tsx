@@ -13,6 +13,10 @@ import { TIME_PRESETS, type ReportFilterSchema } from "@/features/report/reportF
 import type { PrWorkProgress, TimePreset } from "@/features/report/types";
 import { toDateRange, useReportFilters } from "@/features/report/useReportFilters";
 import { extractErrorMessage } from "@/services/apiClient";
+import {
+  canExportReport,
+  useReportCapabilities,
+} from "@/features/report/useReportCapabilities";
 
 const pct = (v: string | null) =>
   v == null ? "—" : `${(Number(v) * 100).toFixed(1)}%`;
@@ -61,6 +65,9 @@ export function WorkProgressPage() {
     queryFn: () => getWorkProgress({ preset, date_from: dateFrom, date_to: dateTo }),
   });
   // 导出与数据新鲜度都用这同一个区间
+  // 导出按钮按 capabilities 出现（持 report.export:read 且能读这张表）；能力没回来前不显示
+  const { data: reportCaps } = useReportCapabilities();
+  const canExport = canExportReport(reportCaps, "work-progress");
   const exportMutation = useMutation({
     mutationFn: () =>
       exportReport("work-progress", {
@@ -143,14 +150,16 @@ export function WorkProgressPage() {
           }
           allowClear={false}
         />
-        <Button
-          icon={<DownloadOutlined />}
-          loading={exportMutation.isPending}
-          disabled={!enabled}
-          onClick={() => exportMutation.mutate()}
-        >
-          导出
-        </Button>
+        {canExport && (
+          <Button
+            icon={<DownloadOutlined />}
+            loading={exportMutation.isPending}
+            disabled={!enabled}
+            onClick={() => exportMutation.mutate()}
+          >
+            导出
+          </Button>
+        )}
       </Space>
       <Table
         rowKey={(r) => r.pr_id ?? r.pr_name}

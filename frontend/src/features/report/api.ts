@@ -7,6 +7,7 @@ import type {
   ProductionTrend,
   ProgressSummary,
   PrWorkProgress,
+  ReportCapabilities,
   ReportFreshness,
   StoreDailyRow,
   StyleCardPage,
@@ -155,6 +156,12 @@ export async function refreshSummaries(
       timeout: 120_000,
     }
   );
+  return resp.data;
+}
+
+/** 报表能力（7e R1）：菜单与导出按钮按它显示；只要登录。 */
+export async function getReportCapabilities(): Promise<ReportCapabilities> {
+  const resp = await apiClient.get<ReportCapabilities>("/api/reports/capabilities");
   return resp.data;
 }
 

@@ -43,6 +43,10 @@ import {
   useReportTimeRange,
 } from "@/components/ReportTimeRangeFilter/ReportTimeRangeFilter";
 import { extractErrorMessage } from "@/services/apiClient";
+import {
+  canExportReport,
+  useReportCapabilities,
+} from "@/features/report/useReportCapabilities";
 
 const money = (v: string | null) => (v == null ? "—" : `¥${v}`);
 const pct = (v: string | null) =>
@@ -115,6 +119,9 @@ export function ProductionPage() {
         season: season.length ? season : undefined,
       }),
   });
+  // 导出按钮按 capabilities 出现（持 report.export:read 且能读这张表）；能力没回来前不显示
+  const { data: reportCaps } = useReportCapabilities();
+  const canExport = canExportReport(reportCaps, "production");
   const exportMutation = useMutation({
     mutationFn: () =>
       exportReport("production", {
@@ -254,14 +261,16 @@ export function ProductionPage() {
           checked={excludeBrushing}
           onChange={(v) => setFilters({ exclude_brushing: v })}
         />
-        <Button
-          icon={<DownloadOutlined />}
-          loading={exportMutation.isPending}
-          disabled={!enabled}
-          onClick={() => exportMutation.mutate()}
-        >
-          导出
-        </Button>
+        {canExport && (
+          <Button
+            icon={<DownloadOutlined />}
+            loading={exportMutation.isPending}
+            disabled={!enabled}
+            onClick={() => exportMutation.mutate()}
+          >
+            导出
+          </Button>
+        )}
       </Space>
       <Table
         rowKey="goods_id"

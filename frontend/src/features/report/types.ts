@@ -234,6 +234,24 @@ export interface ReportFreshness {
   can_refresh: boolean;
 }
 
+/**
+ * 当前用户在报表侧能看 / 能做什么（GET /api/reports/capabilities，7e R1）。
+ *
+ * `/me` 只给角色，前端算不了 scope：菜单与导出按钮都看它。只管显示，后端 403 才是闸门。
+ * `all` / `full` = 看全部，`own` / `personal` = 只看本人，null = 无权。
+ */
+export interface ReportCapabilities {
+  work_progress: "all" | "own" | null;
+  publish_progress: "all" | "own" | null;
+  bi: "full" | "personal" | null;
+  production: boolean;
+  store_read: boolean;
+  store_write: boolean;
+  /** 能导出的报表类型（`/api/reports/{type}/export` 的 type）。 */
+  export: string[];
+  refresh: boolean;
+}
+
 /** POST /api/reports/summaries/refresh 的返回：各汇总表写入行数。 */
 export interface SummaryRefreshResult {
   ok: boolean;

@@ -13,6 +13,10 @@ import {
 import type { StoreDailyRow, TimeGranularity, TimePreset } from "@/features/report/types";
 import { extractErrorMessage } from "@/services/apiClient";
 import {
+  canExportReport,
+  useReportCapabilities,
+} from "@/features/report/useReportCapabilities";
+import {
   ReportCardTitle,
   ReportFreshness,
 } from "@/components/ReportFreshness/ReportFreshness";
@@ -74,6 +78,9 @@ export function StoreDailyPage() {
     queryFn: () =>
       getStoreDaily({ preset, date_from: df, date_to: dt, granularity }),
   });
+  // 导出按钮按 capabilities 出现（持 report.export:read 且能读这张表）；能力没回来前不显示
+  const { data: reportCaps } = useReportCapabilities();
+  const canExport = canExportReport(reportCaps, "store-daily");
   const exportMutation = useMutation({
     mutationFn: () =>
       exportReport("store-daily", {
@@ -158,14 +165,16 @@ export function StoreDailyPage() {
           options={GRANULARITY}
           onChange={(v) => setFilters({ granularity: v })}
         />
-        <Button
-          icon={<DownloadOutlined />}
-          loading={exportMutation.isPending}
-          disabled={!enabled}
-          onClick={() => exportMutation.mutate()}
-        >
-          导出
-        </Button>
+        {canExport && (
+          <Button
+            icon={<DownloadOutlined />}
+            loading={exportMutation.isPending}
+            disabled={!enabled}
+            onClick={() => exportMutation.mutate()}
+          >
+            导出
+          </Button>
+        )}
       </Space>
       <Table
         rowKey="date"
