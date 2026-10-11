@@ -188,6 +188,51 @@ qn_link AS (
 )
 """
 
+# 逐日配对加购（7e R2，设计 3.2），接在 ``qn_link`` 后面用：``WITH {qn_link}, {本段}``。
+#
+# 同一（商品, 渠道, 日）千牛与万相台**都有行**才配对：``paired_days = 1``，两列各取当天
+# 的加购和（NULL 记 0，行在就算有）；只有一边的日子三列都是 0（不出行）。必须逐日判断：
+# 整段区间判一次「两边都有数据」，千牛 D1、D2 + 万相台只有 D2 时会把 D1 的千牛加购也算进去。
+# 按天存原值，取 0 / 求差留给读取侧在求和之后做（两天 +5 / −8 合计 −3，不是逐日取 0 的 5）。
+#
+# 千牛一侧走 ``qn_link``（停用链接与兜底口径同主表）；万相台一侧与 ``ads`` 同口径：
+# 映射到商品的启用链接，渠道取万相台链接的 ``channel``。
+# ``daily_trend_by_goods`` 与 ``aggregate_by_goods`` 共用这一份，不各写一遍。
+_PAIRED_CART_CTE = """
+paired_qn AS (
+    SELECT qn_link.goods_id, qn_link.channel, q.date AS d,
+           COALESCE(SUM(q.add_cart_count), 0) AS cart
+    FROM qn_link
+    JOIN qianniu_daily q ON q.id = qn_link.qid
+    GROUP BY qn_link.goods_id, qn_link.channel, q.date
+),
+paired_ad AS (
+    SELECT mapped_a.goods_main_id AS goods_id, mapped_a.channel, a.date AS d,
+           COALESCE(SUM(a.add_cart_count), 0) AS cart
+    FROM ad_daily a
+    JOIN platform_product mapped_a
+      ON mapped_a.tenant_id = a.tenant_id
+     AND mapped_a.platform = '万相台'
+     AND mapped_a.goods_main_id IS NOT NULL
+     AND mapped_a.is_active = true
+     AND (
+       (a.platform_product_id IS NOT NULL AND mapped_a.id = a.platform_product_id)
+       OR (a.platform_product_id IS NULL AND mapped_a.platform_id = a.platform_id_snapshot)
+     )
+    WHERE a.tenant_id = :tenant_id AND a.date BETWEEN :date_from AND :date_to
+    GROUP BY mapped_a.goods_main_id, mapped_a.channel, a.date
+),
+paired_cart AS (
+    SELECT pq.goods_id, pq.channel, pq.d,
+           pq.cart AS paired_all_cart,
+           pa.cart AS paired_ad_cart,
+           1 AS paired_days
+    FROM paired_qn pq
+    JOIN paired_ad pa
+      ON pa.goods_id = pq.goods_id AND pa.channel = pq.channel AND pa.d = pq.d
+)
+"""
+
 
 class WorkProgressRepository:
     def __init__(self, session: AsyncSession) -> None:
@@ -449,7 +494,8 @@ class ProductionRepository:
         这是 ``product_roi_summary`` 汇总表的**唯一刷新源**。渠道（7e R2）：销售 /
         退款 / 加购 / 支付单数按千牛链接的 ``channel``（兜底记普通），站内花费与站内
         加购按万相台链接的 ``channel``，推广与刷单记普通。``goods_id`` 给定时把渠道
-        合计成一行（R2 期间投产不拆渠道），形态与改动前一致。
+        合计成一行（R2 期间投产不拆渠道），形态与改动前一致。``paired_*`` 三列是
+        逐日配对加购（``_PAIRED_CART_CTE``），粗桶 = 桶内逐日配对结果之和。
 
         刷新与实时读共用这一个方法是刻意的：汇总表最大的风险是「预聚合的口径和
         实时查询的口径悄悄分叉」，而这个项目已经为「同一个值两处定义」付过三次代价
@@ -494,9 +540,24 @@ class ProductionRepository:
         ch_col = "channel," if by_channel else ""
         ch_grp = ", channel" if by_channel else ""
         order_by = ("" if single else "goods_id, ") + ("channel, " if by_channel else "") + "d"
+        # 配对加购先在 _PAIRED_CART_CTE 里逐日判断，这里只按桶求和
+        paired_bucket = bucket_expr(granularity, "pc.d")
+        g_sel_paired = "" if single else "pc.goods_id AS goods_id,"
+        g_grp_paired = "" if single else ", pc.goods_id"
+        ch_sel_paired = "pc.channel AS channel," if by_channel else ""
+        ch_grp_paired = ", pc.channel" if by_channel else ""
         sql = text(
             f"""
-            WITH {_QIANNIU_GOODS_LINK_CTE},
+            WITH {_QIANNIU_GOODS_LINK_CTE}, {_PAIRED_CART_CTE},
+            paired AS (
+              SELECT {g_sel_paired} {ch_sel_paired} {paired_bucket} AS d,
+                     SUM(pc.paired_all_cart) AS paired_all_cart,
+                     SUM(pc.paired_ad_cart) AS paired_ad_cart,
+                     SUM(pc.paired_days) AS paired_days
+              FROM paired_cart pc
+              {"WHERE pc.goods_id = :goods_id" if single else ""}
+              GROUP BY {paired_bucket}{g_grp_paired}{ch_grp_paired}
+            ),
             sales AS (
               SELECT {g_sel_sales} {ch_sel_sales} {sales_bucket} AS d,
                      COALESCE(SUM(q.pay_amount), 0) AS pay_amount,
@@ -599,22 +660,33 @@ class ProductionRepository:
                      COALESCE(SUM(pay_orders), 0) AS pay_orders,
                      COALESCE(SUM(promo_cost), 0) AS promo_cost,
                      COALESCE(SUM(ad_spend), 0) AS ad_spend,
-                     COALESCE(SUM(ad_add_cart_count), 0) AS ad_add_cart_count
+                     COALESCE(SUM(ad_add_cart_count), 0) AS ad_add_cart_count,
+                     COALESCE(SUM(paired_all_cart), 0) AS paired_all_cart,
+                     COALESCE(SUM(paired_ad_cart), 0) AS paired_ad_cart,
+                     COALESCE(SUM(paired_days), 0) AS paired_days
               FROM (
                 SELECT {g_zero} {ch_col} d, pay_amount, refund_amount, add_cart_count,
                        pay_orders,
                        0::numeric AS brushing_amount,
                        0::numeric AS promo_cost, 0::numeric AS ad_spend,
-                       0::bigint AS ad_add_cart_count
+                       0::bigint AS ad_add_cart_count,
+                       0::bigint AS paired_all_cart, 0::bigint AS paired_ad_cart,
+                       0::bigint AS paired_days
                 FROM sales
                 UNION ALL
-                SELECT {g_zero} {ch_col} d, 0, 0, 0, 0, brushing_amount, 0, 0, 0
+                SELECT {g_zero} {ch_col} d, 0, 0, 0, 0, brushing_amount, 0, 0, 0, 0, 0, 0
                 FROM brushing
                 UNION ALL
-                SELECT {g_zero} {ch_col} d, 0, 0, 0, 0, 0, 0, ad_spend, ad_add_cart_count
+                SELECT {g_zero} {ch_col} d, 0, 0, 0, 0, 0, 0, ad_spend, ad_add_cart_count,
+                       0, 0, 0
                 FROM ads
                 UNION ALL
-                SELECT {g_zero} {ch_col} d, 0, 0, 0, 0, 0, promo_cost, 0, 0 FROM promos
+                SELECT {g_zero} {ch_col} d, 0, 0, 0, 0, 0, promo_cost, 0, 0, 0, 0, 0
+                FROM promos
+                UNION ALL
+                SELECT {g_zero} {ch_col} d, 0, 0, 0, 0, 0, 0, 0, 0,
+                       paired_all_cart, paired_ad_cart, paired_days
+                FROM paired
               ) source
               GROUP BY d{g_grp_union}{ch_grp}
             ),
@@ -623,12 +695,14 @@ class ProductionRepository:
                      add_cart_count, pay_orders,
                      pay_amount - refund_amount AS confirmed_amount,
                      promo_cost, ad_spend, ad_add_cart_count,
+                     paired_all_cart, paired_ad_cart, paired_days,
                      promo_cost + ad_spend AS total_spend
               FROM aggregated
             )
             SELECT {g_sel_union} {ch_col} d AS date, pay_amount, brushing_amount,
                    refund_amount, add_cart_count, pay_orders, confirmed_amount,
-                   promo_cost, ad_spend, ad_add_cart_count, total_spend,
+                   promo_cost, ad_spend, ad_add_cart_count,
+                   paired_all_cart, paired_ad_cart, paired_days, total_spend,
                    -- 与 services.metric.common.safe_div 同口径：分母 ≤ 0 置 NULL
                    CASE WHEN total_spend <= 0 THEN NULL
                         ELSE ROUND(confirmed_amount / total_spend, 4)

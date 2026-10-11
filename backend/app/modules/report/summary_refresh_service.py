@@ -72,6 +72,7 @@ from app.modules.report.advanced_repository import (
 from app.modules.report.exceptions import SummaryRefreshBusyError
 from app.modules.report.summary_invalidation import summary_lock_key
 from app.modules.report.summary_models import (
+    ROI_METRICS,
     ProductRoiSummary,
     PrWorkProgressSummary,
     ShopDailySummary,
@@ -83,18 +84,8 @@ from app.modules.urge.service import UrgeService
 # product_roi_summary 直接落盘的指标列（与 daily_trend_by_goods 的输出同名）。
 # confirmed_amount / total_spend / net_roi 不在这里：前两个是加法派生，最后一个是
 # 比率。比率落盘会把除零语义固化进数据，那个语义现在由 safe_div 一处决定。
-# 062 的 paired_* 三列刷新源还没出（逐日配对加购接上后改引 summary_models.ROI_METRICS），
-# 暂靠 server_default 0。
-_ROI_METRICS = (
-    "pay_amount",
-    "brushing_amount",
-    "refund_amount",
-    "add_cart_count",
-    "promo_cost",
-    "ad_spend",
-    "pay_orders",
-    "ad_add_cart_count",
-)
+# 清单只在 summary_models.ROI_METRICS 定义一次（062），刷新与读取共用。
+_ROI_METRICS = ROI_METRICS
 
 # pr_work_progress_summary 落盘的计数列（14 个，与 aggregate_by_pr 的输出一一对应）。
 # 档期内 / 催发 / 重要催发 / 超时 4 个由 urge_status 派生、依赖「今天」，存的是
