@@ -973,10 +973,10 @@ class TestSkuReferences:
             style=top, blogger=blogger, pr=flow_users.pr, sku_id=sku.id
         )
         refs = await SkuService(session).check_references(sku.id)
-        assert refs == {"promotion_count": 3, "order_count": 0}
+        assert refs == {"promotion_count": 3, "order_count": 0, "negotiation_item_count": 0}
         # 只被套装另一款的明细引用
         refs = await SkuService(session).check_references(suit.pants_sku.id)
-        assert refs == {"promotion_count": 0, "order_count": 0}
+        assert refs == {"promotion_count": 0, "order_count": 0, "negotiation_item_count": 0}
         await promotion_factory.promotion(
             style=top,
             blogger=blogger,
@@ -984,7 +984,7 @@ class TestSkuReferences:
             items=[(top, sku), (suit.pants, suit.pants_sku)],
         )
         refs = await SkuService(session).check_references(suit.pants_sku.id)
-        assert refs == {"promotion_count": 1, "order_count": 0}
+        assert refs == {"promotion_count": 1, "order_count": 0, "negotiation_item_count": 0}
 
 
 # ---------------------------------------------------------------------------

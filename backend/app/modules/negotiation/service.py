@@ -80,6 +80,7 @@ from app.modules.negotiation.schemas import (
     NegotiationReassignRequest,
     NegotiationReceiverConfirm,
     NegotiationReceiverUpdate,
+    NegotiationRejectionItem,
     NegotiationResponse,
     NegotiationReviewRequest,
     NegotiationUpdate,
@@ -122,6 +123,8 @@ _REASSIGNABLE = (
     NegotiationStatus.RECEIVER_PENDING.value,
 )
 ADMIN_ONLY_REASON = "只有管理员可以转交谈款"
+REJECTIONS_LIMIT = 5
+"""博主卡片「谈款驳回记录」最多几条（7c-7、8.7）。"""
 
 
 def _utcnow() -> datetime:
@@ -1405,9 +1408,48 @@ class NegotiationService:
                     quote_amount=r.get("quote_amount") if can_see_quote else None,
                 )
             )
-        return BloggerCooperationHistory(
-            blogger_id=blogger_id, total_cooperations=total, items=items
+        # 谈款驳回记录（7c-7）：跨 PR、不按可见范围过滤；negotiation_id 只给看得到那张的人，服务费按字段规则
+        actor = await self._flow_actor(user)
+        rejection_rows, total_rejections = await self._repo.blogger_rejections(
+            tenant_id=user.tenant_id, blogger_id=blogger_id, limit=REJECTIONS_LIMIT
         )
+        rejections = [
+            NegotiationRejectionItem(
+                negotiation_id=(
+                    r["negotiation_id"]
+                    if can_see_negotiation(actor, pr_id=r["pr_id"], status=str(r["status"]))
+                    else None
+                ),
+                pr_name=r.get("pr_name"),
+                rejected_at=r["rejected_at"],
+                style_code=r.get("style_code"),
+                display_short_name=r.get("display_short_name"),
+                platform=r.get("platform"),
+                quote_amount=r.get("quote_amount") if can_see_quote else None,
+                opinion=r.get("opinion"),
+            )
+            for r in rejection_rows
+        ]
+        return BloggerCooperationHistory(
+            blogger_id=blogger_id,
+            total_cooperations=total,
+            items=items,
+            rejections=rejections,
+            total_rejections=total_rejections,
+        )
+
+    async def others_in_progress(
+        self, blogger_id: UUID, user: User, *, exclude_negotiation_id: UUID | None = None
+    ) -> builtins.list[OthersInProgressItem]:
+        """``GET /blogger/{id}/others-in-progress``（7c-16）：同博主别的 PR 在谈的单，只给姓名、状态、更新时间；
+        不受可见范围限制。``exclude_negotiation_id``：编辑时排除自己这张。"""
+        rows = await self._repo.others_in_progress(
+            tenant_id=user.tenant_id,
+            blogger_id=blogger_id,
+            viewer_id=user.id,
+            exclude_negotiation_id=exclude_negotiation_id,
+        )
+        return [OthersInProgressItem(**r) for r in rows]
 
 
 __all__ = [
@@ -1415,6 +1457,7 @@ __all__ = [
     "OVERDUE_AFTER",
     "FINALIZED_CONFLICT_MESSAGE",
     "OVERDUE_COUNT_KEY",
+    "REJECTIONS_LIMIT",
     "STAR_CREATE_REASON",
     "NegotiationService",
     "can_see_negotiation",

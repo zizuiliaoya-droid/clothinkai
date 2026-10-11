@@ -316,19 +316,42 @@ class BloggerCooperationItem(BaseModel):
     quote_amount: Decimal | None = None  # 敏感
 
 
+class NegotiationRejectionItem(BaseModel):
+    """博主卡片「谈款驳回记录」一条（7c-7）：所有 PR 的主管驳回单，不按可见范围过滤。"""
+
+    negotiation_id: UUID | None = None
+    """只给看得到这张谈款的人（本人、持 ``negotiation_all:read``），其余为 null（hover 卡不跳转）。"""
+
+    pr_name: str | None = None
+    rejected_at: datetime
+    style_code: str | None = None
+    display_short_name: str | None = None
+    platform: str | None = None
+    quote_amount: Decimal | None = None
+    """照 ``promotion.quote_amount`` 字段规则裁剪（运营为 null）。"""
+
+    opinion: str | None = None
+
+
 class BloggerCooperationHistory(BaseModel):
-    """某博主最近 N 次合作。"""
+    """某博主最近 N 次合作 + 最近 5 条谈款驳回记录（7c-7）。"""
 
     blogger_id: UUID
     total_cooperations: int
     """历史合作总数（不受 limit 影响）。"""
 
     items: list[BloggerCooperationItem]
+    rejections: list[NegotiationRejectionItem] = Field(default_factory=list)
+    """最近 5 条主管驳回（跨 PR，7c-7），按驳回时间倒序。"""
+
+    total_rejections: int = 0
+    """主管驳回总数（不受 5 条限制）。"""
 
 
 __all__ = [
     "BloggerCooperationHistory",
     "BloggerCooperationItem",
+    "NegotiationRejectionItem",
     "NegotiationCreate",
     "NegotiationFinalReviewRequest",
     "NegotiationGoodsMembers",

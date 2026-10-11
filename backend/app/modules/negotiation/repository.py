@@ -341,6 +341,55 @@ class NegotiationRepository:
         ).mappings()
         return [dict(r) for r in rows], total
 
+    async def blogger_rejections(
+        self, *, tenant_id: UUID, blogger_id: UUID, limit: int
+    ) -> tuple[builtins.list[Mapping[str, Any]], int]:
+        """某博主最近 N 张主管驳回的谈款（7c-7），跨 PR、不按可见范围过滤；连同总数一次查完。
+
+        只认「审核驳回」（主管驳回的终态）；老板退回只进时间线。``pr_id`` / ``status`` 给 service 判
+        ``negotiation_id`` 给不给；服务费由 service 按字段规则裁剪。
+        """
+        rows = (
+            (
+                await self._session.execute(
+                    text(
+                        """
+                        SELECT n.id AS negotiation_id, n.pr_id, n.status,
+                               COALESCE(u.display_name, u.username) AS pr_name,
+                               COALESCE(n.reviewed_at, n.updated_at) AS rejected_at,
+                               s.style_code,
+                               COALESCE(NULLIF(BTRIM(g.short_name), ''),
+                                        NULLIF(BTRIM(s.short_name), ''), s.style_name)
+                                 AS display_short_name,
+                               n.platform, n.quote_amount, n.review_opinion AS opinion,
+                               COUNT(*) OVER () AS total
+                        FROM negotiation n
+                        LEFT JOIN "user" u ON u.id = n.pr_id
+                        LEFT JOIN style s ON s.id = n.style_id
+                        LEFT JOIN goods_main g ON g.id = n.goods_main_id
+                        WHERE n.tenant_id = CAST(:tenant_id AS uuid)
+                          AND n.blogger_id = CAST(:blogger_id AS uuid)
+                          AND n.status = '审核驳回'
+                        ORDER BY COALESCE(n.reviewed_at, n.updated_at) DESC, n.id DESC
+                        LIMIT CAST(:limit AS integer)
+                        """
+                    ),
+                    {"tenant_id": tenant_id, "blogger_id": blogger_id, "limit": limit},
+                )
+            )
+            .mappings()
+            .all()
+        )
+        total = int(rows[0]["total"]) if rows else 0
+        return [dict(r) for r in rows], total
+
+    async def count_items_by_sku(self, sku_id: UUID) -> int:
+        """引用这个 SKU 的谈款张数（明细 ``negotiation_item.sku_id``，SKU 删除前的引用检查，7.8）；租户隔离由 RLS 保证。"""
+        stmt = select(func.count(func.distinct(NegotiationItem.negotiation_id))).where(
+            NegotiationItem.sku_id == sku_id
+        )
+        return int((await self._session.execute(stmt)).scalar_one())
+
     # ----------------------- write ----------------------- #
 
     def add(self, negotiation: Negotiation) -> None:
@@ -458,11 +507,17 @@ class NegotiationRepository:
         await self._session.flush()
 
     async def others_in_progress(
-        self, *, tenant_id: UUID, blogger_id: UUID, viewer_id: UUID
+        self,
+        *,
+        tenant_id: UUID,
+        blogger_id: UUID,
+        viewer_id: UUID,
+        exclude_negotiation_id: UUID | None = None,
     ) -> builtins.list[Mapping[str, Any]]:
         """同一博主别的 PR 在谈的单（7c-16）：``pr_id`` ≠ 当前用户、状态在 ``IN_PROGRESS_STATUSES``。
 
         不受可见范围限制，只投影同事姓名、状态、更新时间（不回 id 与内容）。
+        ``exclude_negotiation_id``：编辑时排除正在编辑的这张。
         """
         stmt = (
             select(
@@ -479,6 +534,8 @@ class NegotiationRepository:
             )
             .order_by(Negotiation.updated_at.desc(), Negotiation.id)
         )
+        if exclude_negotiation_id is not None:
+            stmt = stmt.where(Negotiation.id != exclude_negotiation_id)
         return [dict(r) for r in (await self._session.execute(stmt)).mappings().all()]
 
 

@@ -29,6 +29,7 @@ from app.core.security.field_permissions import (
 from app.modules.auth.models import User
 from app.modules.auth.repository import PermissionRepository, RoleRepository
 from app.modules.finance.order_adjustment_repository import OrderAdjustmentRepository
+from app.modules.negotiation.repository import NegotiationRepository
 from app.modules.product.domain import (
     build_sku_audit_changes,
     build_style_audit_changes,
@@ -464,6 +465,7 @@ class SkuService:
         self._perms = PermissionRepository(session)
         self._promotion_repo = PromotionRepository(session)
         self._order_repo = OrderAdjustmentRepository(session)
+        self._negotiation_repo = NegotiationRepository(session)
         self._audit = AuditService(session)
 
     # ----------------------- create / update / delete ----------------------- #
@@ -722,12 +724,14 @@ class SkuService:
         await self._session.commit()
 
     async def check_references(self, sku_id: UUID) -> dict[str, int]:
-        """检查 SKU 的全部历史推广和订单调整引用；依赖 RLS 隔离租户。"""
+        """检查 SKU 的全部历史推广、订单调整与谈款明细引用；依赖 RLS 隔离租户。"""
         promotion_count = await self._promotion_repo.count_by_sku(sku_id)
         order_count = await self._order_repo.count_by_sku(sku_id)
+        negotiation_item_count = await self._negotiation_repo.count_items_by_sku(sku_id)
         return {
             "promotion_count": promotion_count,
             "order_count": order_count,
+            "negotiation_item_count": negotiation_item_count,
         }
 
     # ----------------------- read ----------------------- #

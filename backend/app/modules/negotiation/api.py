@@ -26,6 +26,7 @@ from app.modules.negotiation.schemas import (
     NegotiationResponse,
     NegotiationReviewRequest,
     NegotiationUpdate,
+    OthersInProgressItem,
 )
 from app.modules.negotiation.service import NegotiationService
 from app.modules.promotion.enums import CooperationMode
@@ -120,12 +121,34 @@ async def blogger_cooperation_history(
     user: CurrentActiveUser,
     limit: Annotated[int, Query(ge=1, le=20)] = 5,
 ) -> BloggerCooperationHistory:
-    """博主最近 N 次合作款式，给悬浮卡用。
+    """博主最近 N 次合作款式，给悬浮卡用；另带最近 5 条谈款驳回记录与驳回总数（7c-7）。
 
-    取的是推广单而不是谈款单 —— 要看的是实际推了什么、效果如何，
-    草稿和被驳回的谈款没真推出去。
+    合作取的是推广单而不是谈款单 —— 要看的是实际推了什么、效果如何，
+    草稿和被驳回的谈款没真推出去。驳回记录跨 PR、不按可见范围过滤，
+    ``negotiation_id`` 只给看得到那张的人，服务费按字段规则裁剪。
     """
     return await _svc(session).blogger_history(blogger_id, user, limit=limit)
+
+
+@router.get(
+    "/blogger/{blogger_id}/others-in-progress",
+    response_model=list[OthersInProgressItem],
+    dependencies=[require_permission(SCOPE, "read")],
+)
+async def blogger_others_in_progress(
+    blogger_id: UUID,
+    session: SessionDep,
+    user: CurrentActiveUser,
+    exclude_negotiation_id: UUID | None = None,
+) -> list[OthersInProgressItem]:
+    """同一博主有别的 PR 在谈（7c-16）：只回同事姓名、状态、更新时间，不回 id 与内容；不受可见范围限制。
+
+    「在谈」= 草稿 / 主管待审 / 待老板审核 / 老板退回 / 待补收货地址，且 PR ≠ 当前用户；
+    ``exclude_negotiation_id`` 编辑时排除自己这张。
+    """
+    return await _svc(session).others_in_progress(
+        blogger_id, user, exclude_negotiation_id=exclude_negotiation_id
+    )
 
 
 @router.get(

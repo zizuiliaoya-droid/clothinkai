@@ -6,7 +6,8 @@
 S7 两级审核（N4 ~ N7：审核人规则、通过不建推广单、转移全表的两级审核两列、退回重提后旧意见仍在事件里）；
 S8 收货与定稿建单（N8、N9：转移全表的收货两列、复制到推广单、PR 不在时代录代确认、30 并发确认只建 1 张）；
 S9 复制为新谈款与管理员转交（N10、N12：转移全表的复制 / 转交两列、复制哪些不复制哪些、两条线互相引用的事件、
-转交后归属变化、新 PR 的资格、``admin_only``）。
+转交后归属变化、新 PR 的资格、``admin_only``）；S10 博主卡片驳回记录与 ``others-in-progress``（跨人可见、
+``negotiation_id`` 只给看得到的人、运营服务费 null、最近 5 条与总数、只有 3 个字段）。
 角色一律用 ``flow_users``（迁移 seed 的真实角色）；造数用 ``negotiation_factory`` 直插任意状态。
 """
 
@@ -2315,3 +2316,147 @@ async def _role(session: AsyncSession, code: str) -> Any:
     from app.modules.auth.models import Role
 
     return (await session.execute(select(Role).where(Role.code == code))).scalar_one()
+
+
+# ---------------------------------------------------------------------------
+# S10 博主卡片「谈款驳回记录」（7c-7）与「同博主有别的 PR 在谈」（7c-16）
+# ---------------------------------------------------------------------------
+async def _rejected(world: _World, pr: Any, at: datetime, **kw: Any) -> Any:
+    kw.setdefault("reviewed_at", at)
+    kw.setdefault("review_opinion", f"驳回 {at:%H:%M}")
+    return await world.make(pr, "审核驳回", **kw)
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+class TestBloggerRejections:
+    async def test_cross_pr_and_field_rules(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        world: _World,
+        blogger_factory: Any,
+        negotiation_factory: Any,
+    ) -> None:
+        """所有 PR 的主管驳回单都进卡片（不按 7c-10 过滤）；老板退回、别的博主的不进；
+        ``negotiation_id`` 只给看得到的人；服务费照 ``promotion.quote_amount`` 字段规则（运营 null）。"""
+        mine = await _rejected(
+            world,
+            flow_users.pr,
+            _T0,
+            reviewed_by=flow_users.pr_manager.id,
+            review_opinion="报价太高",
+            platform="抖音",
+            quote_amount=Decimal("800.00"),
+        )
+        theirs = await _rejected(
+            world, flow_users.pr2, _T0 + timedelta(hours=1), review_opinion="档期冲突"
+        )
+        await world.make(
+            flow_users.pr2,
+            "老板退回",
+            reviewed_by=flow_users.pr_manager.id,
+            final_review_opinion="老板退回不进卡片",
+        )
+        other_blogger = await blogger_factory.blogger()
+        await negotiation_factory.negotiation(
+            style=world.style,
+            blogger=other_blogger,
+            pr=flow_users.pr,
+            status="审核驳回",
+            reviewed_at=_T0,
+        )
+        svc = NegotiationService(session)
+        pr_name = flow_users.pr.display_name or flow_users.pr.username
+        pr2_name = flow_users.pr2.display_name or flow_users.pr2.username
+
+        hist = await svc.blogger_history(world.blogger.id, flow_users.pr)
+        assert hist.total_rejections == 2
+        assert [r.rejected_at for r in hist.rejections] == [_T0 + timedelta(hours=1), _T0]
+        assert [r.model_dump(mode="json", exclude={"rejected_at"}) for r in hist.rejections] == [
+            {
+                "negotiation_id": None,  # 别的 PR 的单，PR 看不到 → 不给 id
+                "pr_name": pr2_name,
+                "style_code": world.style.style_code,
+                "display_short_name": "飞狐短裙",
+                "platform": "小红书",
+                "quote_amount": "500.00",
+                "opinion": "档期冲突",
+            },
+            {
+                "negotiation_id": str(mine.id),
+                "pr_name": pr_name,
+                "style_code": world.style.style_code,
+                "display_short_name": "飞狐短裙",
+                "platform": "抖音",
+                "quote_amount": "800.00",
+                "opinion": "报价太高",
+            },
+        ]
+        # 看全部的人（主管、财务、运营、管理员）两张都给 id；运营没有服务费读权限
+        for who in ("pr_manager", "finance", "operations", "admin"):
+            hist = await svc.blogger_history(world.blogger.id, getattr(flow_users, who))
+            assert [r.negotiation_id for r in hist.rejections] == [theirs.id, mine.id], who
+            quotes = [r.quote_amount for r in hist.rejections]
+            if who == "operations":
+                assert quotes == [None, None], who
+            else:
+                assert quotes == [Decimal("500.00"), Decimal("800.00")], who
+        # PR 乙看甲的那张也没有 id，自己的有
+        hist = await svc.blogger_history(world.blogger.id, flow_users.pr2)
+        assert [r.negotiation_id for r in hist.rejections] == [theirs.id, None]
+
+    async def test_latest_five_and_total(
+        self, session: AsyncSession, flow_users: Any, world: _World
+    ) -> None:
+        """最多 5 条、按驳回时间倒序；``total_rejections`` 不受 5 条限制；合作的 ``limit`` 不影响驳回条数。"""
+        made = [
+            await _rejected(
+                world, (flow_users.pr, flow_users.pr2)[i % 2], _T0 + timedelta(minutes=i)
+            )
+            for i in range(7)
+        ]
+        hist = await NegotiationService(session).blogger_history(
+            world.blogger.id, flow_users.pr_manager, limit=1
+        )
+        assert hist.total_rejections == 7
+        assert [r.negotiation_id for r in hist.rejections] == [n.id for n in made[::-1][:5]]
+
+    async def test_no_rejections(
+        self, session: AsyncSession, flow_users: Any, world: _World
+    ) -> None:
+        await world.make(flow_users.pr, "主管待审")
+        hist = await NegotiationService(session).blogger_history(world.blogger.id, flow_users.pr)
+        assert (hist.rejections, hist.total_rejections) == ([], 0)
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+class TestOthersInProgress:
+    async def test_only_others_in_progress(
+        self, session: AsyncSession, flow_users: Any, world: _World
+    ) -> None:
+        """别的 PR 在谈（5 个在谈状态）的单跨人可见，只有姓名、状态、更新时间；自己的、终态的不算；
+        ``exclude_negotiation_id`` 排除指定那张。"""
+        in_progress = {
+            status: await world.make(flow_users.pr2, status)
+            for status in ("草稿", "主管待审", "待老板审核", "老板退回", "待补收货地址")
+        }
+        for status in ("审核驳回", "已定稿"):
+            await world.make(flow_users.pr2, status)
+        await world.make(flow_users.pr, "主管待审")
+        svc = NegotiationService(session)
+        rows = await svc.others_in_progress(world.blogger.id, flow_users.pr)
+        pr2_name = flow_users.pr2.display_name or flow_users.pr2.username
+        assert sorted(r.status for r in rows) == sorted(in_progress)
+        assert {r.pr_name for r in rows} == {pr2_name}
+        assert all(set(r.model_dump()) == {"pr_name", "status", "updated_at"} for r in rows)
+        excluded = await svc.others_in_progress(
+            world.blogger.id,
+            flow_users.pr,
+            exclude_negotiation_id=in_progress["老板退回"].id,
+        )
+        assert sorted(r.status for r in excluded) == sorted(set(in_progress) - {"老板退回"})
+        # PR 乙看到的是甲那张；主管看到两人的
+        assert [
+            r.status for r in await svc.others_in_progress(world.blogger.id, flow_users.pr2)
+        ] == ["主管待审"]
+        assert len(await svc.others_in_progress(world.blogger.id, flow_users.pr_manager)) == 6
