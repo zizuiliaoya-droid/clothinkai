@@ -19,7 +19,9 @@
 from __future__ import annotations
 
 import builtins
-from datetime import UTC, datetime
+import logging
+from collections.abc import Mapping
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
@@ -31,6 +33,8 @@ from app.core.security.field_permissions import build_field_perm_context, can_re
 from app.modules.auth.models import User
 from app.modules.auth.repository import PermissionRepository, RoleRepository
 from app.modules.blogger.repository import BloggerRepository
+from app.modules.flow.actor import load_flow_actor
+from app.modules.flow.matrix import FlowActor, Level, View, cell_level, ui_for
 from app.modules.negotiation.enums import NegotiationReviewAction, NegotiationStatus
 from app.modules.negotiation.exceptions import (
     InvalidNegotiationBloggerError,
@@ -43,30 +47,134 @@ from app.modules.negotiation.exceptions import (
     NegotiationReviewOpinionRequiredError,
     NegotiationSelfReviewForbiddenError,
 )
+from app.modules.negotiation.flow_doc import build_negotiation_doc
 from app.modules.negotiation.models import Negotiation
-from app.modules.negotiation.repository import NegotiationRepository
+from app.modules.negotiation.permissions import SCOPE_NEGOTIATION, SCOPE_NEGOTIATION_ALL
+from app.modules.negotiation.repository import NegotiationItemView, NegotiationRepository
 from app.modules.negotiation.schemas import (
     BloggerCooperationHistory,
     BloggerCooperationItem,
     NegotiationCreate,
+    NegotiationItemResponse,
     NegotiationListFilters,
+    NegotiationListResponse,
     NegotiationResponse,
     NegotiationReviewRequest,
     NegotiationUpdate,
+    ReceiverSuggestion,
 )
+from app.modules.promotion.display_name import normalize_goods_short_name
 from app.modules.promotion.enums import CooperationMode, ShipStatus
+from app.modules.promotion.flow_doc import goods_items_complete
 from app.modules.promotion.metrics_calculator import (
     calculate_cpl,
     calculate_effective_like_count,
 )
+from app.modules.promotion.receiver import RECEIVER_FIELDS
+from app.modules.promotion.repository import PromotionItemRepository
 from app.modules.promotion.schemas import PromotionCreate
 from app.modules.promotion.service import PromotionService
+from app.modules.promotion.urge_calculator import DEFAULT_TENANT_TZ
+
+log = logging.getLogger("app.modules.negotiation.service")
 
 _EDITABLE_STATUSES = (NegotiationStatus.DRAFT.value, NegotiationStatus.REJECTED.value)
+
+OVERDUE_AFTER = timedelta(hours=36)
+"""主管待审超过这么久算超时（7c-6，按实际时长比）。"""
+OVERDUE_COUNT_KEY = "主管待审超时"
+"""``status-counts`` 里超时数的键（7.2）。"""
+STAR_CREATE_REASON = "管理员建的谈款没人能定稿"
+"""持 ``*`` 不能建谈款（N1、11-1）：页级新建按钮的禁用原因，也是 ``star_create`` 的文案。"""
 
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+def _sees_all(actor: FlowActor) -> bool:
+    """持 ``negotiation_all:read``（管理员靠 ``*``）：看得到别人草稿之外的谈款。"""
+    return actor.perms.has(SCOPE_NEGOTIATION_ALL, "read")
+
+
+def can_see_negotiation(actor: FlowActor, *, pr_id: UUID, status: str) -> bool:
+    """可见范围（3.2）：本人；或 ``negotiation_all:read`` 看草稿之外的。与仓储 ``_VISIBLE`` 同一口径。"""
+    return pr_id == actor.user_id or (status != NegotiationStatus.DRAFT.value and _sees_all(actor))
+
+
+def _sees_overdue_badge(actor: FlowActor) -> bool:
+    """能不能看超时高亮 / 超时数（矩阵 overdue_badge：读/读/读/隐/隐）。拿本人的主管待审单探一格。"""
+    probe = build_negotiation_doc(
+        {
+            "status": NegotiationStatus.PENDING.value,
+            "pr_id": actor.user_id,
+            "reviewed_by": None,
+            "blogger_id": None,
+            "style_id": None,
+            "cooperation_mode": None,
+            "platform": None,
+            "scheduled_publish_date": None,
+            "quote_amount": None,
+            "receiver_name": None,
+            "receiver_phone": None,
+            "receiver_address": None,
+        },
+        items_complete=False,
+    )
+    return cell_level(actor, probe, "field", "overdue_badge") >= Level.READ
+
+
+def _items_complete(
+    views: builtins.list[NegotiationItemView], members: builtins.list[UUID]
+) -> bool:
+    """颜色尺码齐（N3）：款式集合 = 商品的启用成员，且每行 sku 有、未删、属于该行款式。"""
+    return goods_items_complete((v.style_id for v in views), members) and all(
+        v.sku_id is not None and v.sku_style_id == v.style_id and not v.sku_is_deleted
+        for v in views
+    )
+
+
+def _item_responses(
+    views: builtins.list[NegotiationItemView],
+) -> builtins.list[NegotiationItemResponse]:
+    """明细行 → 响应（品名规则同推广单 ``_item_responses``；主图签名失败只记日志、回 null）。"""
+    from app.core.attachment import attachment_service
+
+    responses: builtins.list[NegotiationItemResponse] = []
+    for view in views:
+        image_url: str | None = None
+        if view.style_main_image_key:
+            try:
+                image_url = attachment_service.get_signed_url(
+                    "private", view.style_main_image_key, expires_in=3600
+                )
+            except Exception:
+                log.warning(
+                    "negotiation_item_style_image_url_failed",
+                    extra={"style_id": str(view.style_id)},
+                )
+        responses.append(
+            NegotiationItemResponse(
+                id=view.id,
+                style_id=view.style_id,
+                style_code=view.style_code,
+                display_short_name=normalize_goods_short_name(view.style_short_name)
+                or view.style_name,
+                goods_title=view.style_name,
+                sku_id=view.sku_id,
+                color=view.color,
+                size=view.size,
+                style_main_image_url=image_url,
+            )
+        )
+    return responses
+
+
+def _suggestion_label(row: Mapping[str, Any]) -> str:
+    day = row["at"].astimezone(DEFAULT_TENANT_TZ).strftime("%m-%d")
+    if row["source"] == "promotion":
+        return f"推广单 {row['internal_code']} · {day}"
+    return f"谈款定稿 · {day}"
 
 
 class NegotiationService:
@@ -76,6 +184,7 @@ class NegotiationService:
         self._blogger_repo = BloggerRepository(session)
         self._roles = RoleRepository(session)
         self._perms = PermissionRepository(session)
+        self._items_repo = PromotionItemRepository(session)
         self._audit = AuditService(session)
 
     # ------------------------------------------------------------------ #
@@ -123,16 +232,70 @@ class NegotiationService:
     # 出参
     # ------------------------------------------------------------------ #
 
-    async def _can_see_quote(self, user: User) -> bool:
-        ctx = await build_field_perm_context(user.id, self._roles, self._perms)
-        return can_read_field("promotion", "quote_amount", ctx)
+    async def _flow_actor(self, user: User) -> FlowActor:
+        return await load_flow_actor(user.id, self._roles, self._perms)
 
     @staticmethod
-    def _row_to_response(row: dict[str, Any], *, can_see_quote: bool) -> NegotiationResponse:
+    def _to_response(
+        row: Mapping[str, Any],
+        *,
+        actor: FlowActor,
+        views: builtins.list[NegotiationItemView],
+        members: builtins.list[UUID],
+        now: datetime,
+        view: View,
+    ) -> NegotiationResponse:
+        """查询行 → 响应：矩阵 ``ui``、字段规则裁剪（服务费、收件三项逐项）、明细、超 36 小时。
+
+        快照用裁剪前的原值（卡点看的是单据本身），响应才裁剪。
+        """
+        doc = build_negotiation_doc(row, items_complete=_items_complete(views, members))
+        state = ui_for(actor, doc)
+        ctx = actor.field_ctx
         data = dict(row)
-        if not can_see_quote:
+        if not can_read_field("promotion", "quote_amount", ctx):
             data["quote_amount"] = None
+        for field in RECEIVER_FIELDS:
+            if not can_read_field("promotion", field, ctx):
+                data[field] = None
+        submitted_at = row.get("submitted_at")
+        if (
+            row["status"] == NegotiationStatus.PENDING.value
+            and submitted_at is not None
+            and "overdue_badge" in state.fields
+        ):
+            waited = now - submitted_at
+            data["overdue"] = waited > OVERDUE_AFTER
+            data["overdue_hours"] = int(waited.total_seconds() // 3600)
+        data["items"] = _item_responses(views)
+        data["ui"] = state.to_dict(view=view)
         return NegotiationResponse.model_validate(data)
+
+    @staticmethod
+    def _page_ui(actor: FlowActor) -> dict[str, Any]:
+        """页级 ``ui.actions.create``（偏差 8）：持 ``negotiation:write`` 才出现；持 ``*`` 灰掉（N1、11-1）。"""
+        actions: dict[str, Any] = {}
+        if actor.perms.has(SCOPE_NEGOTIATION, "write"):
+            actions["create"] = (
+                {"state": "disabled", "reason": STAR_CREATE_REASON}
+                if actor.is_star
+                else {"state": "enabled"}
+            )
+        return {"actions": actions}
+
+    async def _receiver_suggestion(
+        self, *, tenant_id: UUID, blogger_id: UUID
+    ) -> ReceiverSuggestion | None:
+        row = await self._repo.receiver_suggestion(tenant_id=tenant_id, blogger_id=blogger_id)
+        if row is None:
+            return None
+        return ReceiverSuggestion(
+            receiver_name=row["receiver_name"],
+            receiver_phone=row["receiver_phone"],
+            receiver_address=row["receiver_address"],
+            source=row["source"],
+            source_label=_suggestion_label(row),
+        )
 
     # ------------------------------------------------------------------ #
     # create / update
@@ -381,10 +544,31 @@ class NegotiationService:
     # ------------------------------------------------------------------ #
 
     async def get(self, negotiation_id: UUID, user: User) -> NegotiationResponse:
-        row = await self._repo.get_detail(negotiation_id)
+        """详情。看不到（别人的草稿、没有 ``negotiation_all:read`` 时别人的单）→ 404。"""
+        actor = await self._flow_actor(user)
+        row = await self._repo.get_detail(
+            negotiation_id, viewer_id=user.id, see_all=_sees_all(actor)
+        )
         if row is None:
             raise NegotiationNotFoundError("谈款单不存在")
-        return self._row_to_response(dict(row), can_see_quote=await self._can_see_quote(user))
+        views = (await self._repo.list_items([negotiation_id])).get(negotiation_id, [])
+        members = await self._items_repo.members_of(
+            goods_main_id=row["goods_main_id"], style_id=row["style_id"]
+        )
+        response = self._to_response(
+            row, actor=actor, views=views, members=members, now=_utcnow(), view="detail"
+        )
+        # 待补收货地址、且能录收货信息（N8：本人 / 主管 / 代理人 / 管理员）时预填
+        save = (response.ui or {}).get("actions", {}).get("receiver_save")
+        if (
+            row["status"] == NegotiationStatus.RECEIVER_PENDING.value
+            and save is not None
+            and save.get("state") == "enabled"
+        ):
+            response.receiver_suggestion = await self._receiver_suggestion(
+                tenant_id=user.tenant_id, blogger_id=row["blogger_id"]
+            )
+        return response
 
     async def list_negotiations(
         self,
@@ -393,23 +577,68 @@ class NegotiationService:
         filters: NegotiationListFilters,
         page: int = 1,
         page_size: int = 20,
-    ) -> tuple[builtins.list[NegotiationResponse], int]:
+    ) -> NegotiationListResponse:
+        """列表（可见范围同详情）。``ui`` 只用本页数据算：当前用户、明细、套装成员各一次查（D7）。"""
+        actor = await self._flow_actor(user)
+        now = _utcnow()
         rows, total = await self._repo.list_detailed(
             tenant_id=user.tenant_id,
+            viewer_id=user.id,
+            see_all=_sees_all(actor),
+            overdue_cutoff=now - OVERDUE_AFTER,
             status=filters.status.value if filters.status else None,
             blogger_id=filters.blogger_id,
             style_id=filters.style_id,
             pr_id=filters.pr_id,
             cooperation_mode=(filters.cooperation_mode.value if filters.cooperation_mode else None),
             keyword=filters.keyword,
+            overdue_only=filters.overdue_only,
             page=page,
             page_size=page_size,
         )
-        can_see = await self._can_see_quote(user)
-        return [self._row_to_response(dict(r), can_see_quote=can_see) for r in rows], total
+        items = await self._repo.list_items([r["id"] for r in rows])
+        members_by_goods = await self._items_repo.members_by_goods(
+            list({r["goods_main_id"] for r in rows if r["goods_main_id"] is not None})
+        )
+        responses = [
+            self._to_response(
+                r,
+                actor=actor,
+                views=items.get(r["id"], []),
+                members=(
+                    members_by_goods.get(r["goods_main_id"])
+                    if r["goods_main_id"] is not None
+                    else None
+                )
+                or [r["style_id"]],
+                now=now,
+                view="list",
+            )
+            for r in rows
+        ]
+        return NegotiationListResponse(
+            items=responses,
+            total=total,
+            page=page,
+            page_size=page_size,
+            ui=self._page_ui(actor),
+        )
 
     async def status_counts(self, user: User) -> dict[str, int]:
-        return await self._repo.count_by_status(tenant_id=user.tenant_id)
+        """7 个状态 + 「主管待审超时」，与列表同一可见范围；没有单据的也回 0。
+
+        超时数只给看得到超时高亮的人（矩阵 overdue_badge），财务、运营恒为 0。
+        """
+        actor = await self._flow_actor(user)
+        counts, overdue = await self._repo.count_by_status(
+            tenant_id=user.tenant_id,
+            viewer_id=user.id,
+            see_all=_sees_all(actor),
+            overdue_cutoff=_utcnow() - OVERDUE_AFTER,
+        )
+        out = {s.value: counts.get(s.value, 0) for s in NegotiationStatus}
+        out[OVERDUE_COUNT_KEY] = overdue if _sees_overdue_badge(actor) else 0
+        return out
 
     # ------------------------------------------------------------------ #
     # 博主历史合作（hover 卡）
@@ -476,4 +705,10 @@ class NegotiationService:
         )
 
 
-__all__ = ["NegotiationService"]
+__all__ = [
+    "OVERDUE_AFTER",
+    "OVERDUE_COUNT_KEY",
+    "STAR_CREATE_REASON",
+    "NegotiationService",
+    "can_see_negotiation",
+]

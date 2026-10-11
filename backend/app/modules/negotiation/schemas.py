@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Annotated
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -72,10 +72,43 @@ class NegotiationReviewRequest(BaseModel):
         return self
 
 
+class NegotiationItemResponse(BaseModel):
+    """谈款商品明细一行（7.2）。颜色尺码实时读 SKU；``sku_id`` 为空 = 还没选。"""
+
+    id: UUID
+    style_id: UUID
+    style_code: str
+    """搜索、导出用，界面不显示。"""
+    display_short_name: str
+    """款式简称，没填（或全空白）回落款式名（同推广单明细）。"""
+    goods_title: str
+    """款式全称（悬停显示）。"""
+    sku_id: UUID | None = None
+    color: str | None = None
+    size: str | None = None
+    style_main_image_url: str | None = None
+    """该行款式主图的签名 URL；没有图或签名失败为 null。"""
+
+
+class ReceiverSuggestion(BaseModel):
+    """待补收货地址时的预填（3.2）：该博主最近一张有收件信息的推广单，没有再取最近一张已定稿谈款。只做预填。"""
+
+    receiver_name: str | None = None
+    receiver_phone: str | None = None
+    receiver_address: str | None = None
+    source: Literal["promotion", "negotiation"]
+    source_label: str
+    """如「推广单 DE2610030A1 · 10-03」「谈款定稿 · 10-02」（日期按北京时间）。"""
+
+
 class NegotiationResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
+    line_id: UUID
+    """主线号（开抽屉、读时间线用）。"""
+    copied_from_id: UUID | None = None
+    """「复制为新谈款」的来源。"""
     blogger_id: UUID
     blogger_nickname: str | None = None
     style_id: UUID
@@ -106,6 +139,29 @@ class NegotiationResponse(BaseModel):
     reviewer_name: str | None = None
     reviewed_at: datetime | None = None
     review_opinion: str | None = None
+    final_reviewed_by: UUID | None = None
+    final_reviewer_name: str | None = None
+    final_reviewed_at: datetime | None = None
+    final_review_opinion: str | None = None
+
+    receiver_name: str | None = None
+    receiver_phone: str | None = None
+    receiver_address: str | None = None
+    """收件三项逐项过字段规则 ``promotion.receiver_*``（4.6），财务、运营拿到 null。"""
+    receiver_confirmed_at: datetime | None = None
+    receiver_confirmed_by: UUID | None = None
+
+    display_short_name: str | None = None
+    """品名：商品简称 → 款式简称 → 款式名（偏差 6）。"""
+    items: list[NegotiationItemResponse] = Field(default_factory=list)
+    overdue: bool = False
+    """主管待审且等待超过 36 小时（按实际时长比，7c-6）；看不到超时高亮的人恒为 false。"""
+    overdue_hours: int | None = None
+    """主管待审已等待的整小时数；其余状态、看不到超时高亮的人为 null。"""
+    receiver_suggestion: ReceiverSuggestion | None = None
+    """只在详情、待补收货地址、当前用户能录收货信息时有。"""
+    ui: dict[str, Any] | None = None
+    """矩阵 ``ui``（7.1）：列表行 actions + edits，详情 actions + fields。"""
 
     created_at: datetime
     updated_at: datetime
@@ -116,6 +172,8 @@ class NegotiationListResponse(BaseModel):
     total: int
     page: int = 1
     page_size: int = 20
+    ui: dict[str, Any] = Field(default_factory=lambda: {"actions": {}})
+    """页级 ``ui.actions``：``create``（新建谈款，偏差 8）。"""
 
 
 class NegotiationListFilters(BaseModel):
@@ -130,6 +188,8 @@ class NegotiationListFilters(BaseModel):
     cooperation_mode: CooperationMode | None = None
     keyword: str | None = Field(default=None, max_length=64)
     """搜博主昵称、款号、款名。"""
+    overdue_only: bool = False
+    """只看主管待审超 36 小时的（「超时」Tab）。"""
 
 
 # ---------------------------------------------------------------------------
@@ -184,9 +244,11 @@ __all__ = [
     "BloggerCooperationHistory",
     "BloggerCooperationItem",
     "NegotiationCreate",
+    "NegotiationItemResponse",
     "NegotiationListFilters",
     "NegotiationListResponse",
     "NegotiationResponse",
     "NegotiationReviewRequest",
     "NegotiationUpdate",
+    "ReceiverSuggestion",
 ]

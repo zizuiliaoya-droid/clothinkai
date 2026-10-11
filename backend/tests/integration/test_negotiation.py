@@ -459,10 +459,10 @@ class TestListAndHistory:
             )
             await svc.submit(to_submit.id, pr)
 
-            items, total = await svc.list_negotiations(user=pr, filters=NegotiationListFilters())
-            assert total == 2
-            assert items[0].status == "主管待审"
-            assert items[1].status == "草稿"
+            page = await svc.list_negotiations(user=pr, filters=NegotiationListFilters())
+            assert page.total == 2
+            assert page.items[0].status == "主管待审"
+            assert page.items[1].status == "草稿"
 
             counts = await svc.status_counts(pr)
             assert counts["草稿"] == 1

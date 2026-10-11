@@ -66,10 +66,12 @@ async def list_negotiations(
     keyword: Annotated[
         str | None, Query(max_length=64, description="博主昵称 / 款号 / 款名")
     ] = None,
+    overdue_only: Annotated[bool, Query(description="只看主管待审超 36 小时的")] = False,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
 ) -> NegotiationListResponse:
-    items, total = await _svc(session).list_negotiations(
+    """按可见范围过滤（PR 只看自己的、草稿只回本人的）；行带 ``ui``，响应带页级 ``ui.actions.create``。"""
+    return await _svc(session).list_negotiations(
         user=user,
         filters=NegotiationListFilters(
             status=negotiation_status,
@@ -78,11 +80,11 @@ async def list_negotiations(
             pr_id=pr_id,
             cooperation_mode=cooperation_mode,
             keyword=keyword,
+            overdue_only=overdue_only,
         ),
         page=page,
         page_size=page_size,
     )
-    return NegotiationListResponse(items=items, total=total, page=page, page_size=page_size)
 
 
 @router.get(
@@ -94,7 +96,7 @@ async def negotiation_status_counts(
     session: SessionDep,
     user: CurrentActiveUser,
 ) -> dict[str, int]:
-    """各状态单据数，给前端 Tab 做角标。"""
+    """各状态单据数（与列表同一可见范围）+「主管待审超时」，给前端 Tab 做角标。"""
     return await _svc(session).status_counts(user)
 
 
