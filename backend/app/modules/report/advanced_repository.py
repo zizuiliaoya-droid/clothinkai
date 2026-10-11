@@ -443,22 +443,117 @@ class StoreDailyRepository:
     async def aggregate(
         self, *, tenant_id: UUID, date_from: date, date_to: date
     ) -> list[Mapping[str, Any]]:
+        """店铺按日聚合（全店口径），只按天；``shop_daily_summary`` 的刷新源。
+
+        日期轴（7e R2，设计 2.4「日期并集」）= 千牛日报 ∪ 万相台 ∪ 已发布推广单合作日期
+        ∪ 刷单（``exclude_from_roi``）∪ ``store_daily`` 任一有行的日子，不再只列有千牛日报
+        的日子。全店：停用链接、未映射到商品的日报都算（问题 D）。「其中直播」两列按
+        链接 ``channel = '直播'``，不看 ``is_active`` / ``goods_main_id``。
+
+        手填层（``store_daily`` 的 4 列，含仅退款）LEFT JOIN、不 COALESCE：没录就是 NULL，
+        与汇总读取（``SummaryReadRepository.store_daily``）同一套。
+        """
         sql = text(
-            """
+            f"""
+            WITH days AS (
+              SELECT q.date AS d FROM qianniu_daily q
+              WHERE q.tenant_id = :tenant_id AND q.date BETWEEN :date_from AND :date_to
+              UNION
+              SELECT a.date FROM ad_daily a
+              WHERE a.tenant_id = :tenant_id AND a.date BETWEEN :date_from AND :date_to
+              UNION
+              SELECT p.cooperation_date FROM promotion p
+              WHERE p.tenant_id = :tenant_id AND p.is_active = true
+                AND p.publish_status = '已发布'
+                AND p.cooperation_date BETWEEN :date_from AND :date_to
+              UNION
+              SELECT oa.order_date FROM order_adjustment oa
+              WHERE oa.tenant_id = :tenant_id AND oa.exclude_from_roi = true
+                AND oa.order_date BETWEEN :date_from AND :date_to
+              UNION
+              SELECT sd.date FROM store_daily sd
+              WHERE sd.tenant_id = :tenant_id AND sd.date BETWEEN :date_from AND :date_to
+            ),
+            qn AS (
+              SELECT q.date AS d,
+                     COALESCE(SUM(q.visitors), 0) AS visitors,
+                     COALESCE(SUM(q.pay_amount), 0) AS pay_amount,
+                     COALESCE(SUM(q.pay_orders), 0) AS pay_orders,
+                     {_REFUND_SUM} AS refund_amount,
+                     COALESCE(SUM(q.pay_amount) FILTER (WHERE EXISTS (
+                       SELECT 1 FROM platform_product lp
+                       WHERE lp.tenant_id = q.tenant_id
+                         AND lp.platform = '千牛'
+                         AND lp.channel = '直播'
+                         AND (
+                           (q.platform_product_id IS NOT NULL AND lp.id = q.platform_product_id)
+                           OR (q.platform_product_id IS NULL
+                               AND lp.platform_id = q.platform_id_snapshot)
+                         )
+                     )), 0) AS live_pay_amount
+              FROM qianniu_daily q
+              WHERE q.tenant_id = :tenant_id AND q.date BETWEEN :date_from AND :date_to
+              GROUP BY q.date
+            ),
+            ads AS (
+              SELECT a.date AS d,
+                     COALESCE(SUM(a.cost), 0) AS ad_spend,
+                     COALESCE(SUM(a.cost) FILTER (WHERE EXISTS (
+                       SELECT 1 FROM platform_product lp
+                       WHERE lp.tenant_id = a.tenant_id
+                         AND lp.platform = '万相台'
+                         AND lp.channel = '直播'
+                         AND (
+                           (a.platform_product_id IS NOT NULL AND lp.id = a.platform_product_id)
+                           OR (a.platform_product_id IS NULL
+                               AND lp.platform_id = a.platform_id_snapshot)
+                         )
+                     )), 0) AS live_ad_spend
+              FROM ad_daily a
+              WHERE a.tenant_id = :tenant_id AND a.date BETWEEN :date_from AND :date_to
+              GROUP BY a.date
+            ),
+            promos AS (
+              -- 站外推广成本 = 当天合作日期的已发布推广单（全店，含没归属商品的单）
+              SELECT p.cooperation_date AS d,
+                     COALESCE(SUM(p.total_promo_cost), 0) AS promo_cost
+              FROM promotion p
+              WHERE p.tenant_id = :tenant_id AND p.is_active = true
+                AND p.publish_status = '已发布'
+                AND p.cooperation_date BETWEEN :date_from AND :date_to
+              GROUP BY p.cooperation_date
+            ),
+            brushing AS (
+              -- 全部 exclude_from_roi 调整，不要求款式能归到商品
+              SELECT oa.order_date AS d, COALESCE(SUM(oa.amount), 0) AS brushing_amount
+              FROM order_adjustment oa
+              WHERE oa.tenant_id = :tenant_id AND oa.exclude_from_roi = true
+                AND oa.order_date BETWEEN :date_from AND :date_to
+              GROUP BY oa.order_date
+            )
             SELECT
-              q.date AS date,
-              COALESCE(SUM(q.visitors), 0) AS visitors,
-              COALESCE(SUM(q.pay_amount), 0) AS pay_amount,
-              COALESCE(SUM(q.pay_orders), 0) AS pay_orders,
-              MAX(sd.ad_spend_total) AS ad_spend_total,
-              MAX(sd.zhitongche_spend) AS zhitongche_spend,
-              MAX(sd.yinli_spend) AS yinli_spend
-            FROM qianniu_daily q
+              days.d AS date,
+              COALESCE(qn.visitors, 0) AS visitors,
+              COALESCE(qn.pay_amount, 0) AS pay_amount,
+              COALESCE(qn.pay_orders, 0) AS pay_orders,
+              COALESCE(qn.refund_amount, 0) AS refund_amount,
+              COALESCE(brushing.brushing_amount, 0) AS brushing_amount,
+              COALESCE(ads.ad_spend, 0) AS ad_spend,
+              COALESCE(promos.promo_cost, 0) AS promo_cost,
+              COALESCE(qn.live_pay_amount, 0) AS live_pay_amount,
+              COALESCE(ads.live_ad_spend, 0) AS live_ad_spend,
+              sd.ad_spend_total AS ad_spend_total,
+              sd.zhitongche_spend AS zhitongche_spend,
+              sd.yinli_spend AS yinli_spend,
+              sd.refund_only_amount AS refund_only_amount
+            FROM days
+            LEFT JOIN qn ON qn.d = days.d
+            LEFT JOIN ads ON ads.d = days.d
+            LEFT JOIN promos ON promos.d = days.d
+            LEFT JOIN brushing ON brushing.d = days.d
             LEFT JOIN store_daily sd
-              ON sd.date = q.date AND sd.tenant_id = q.tenant_id
-            WHERE q.tenant_id = :tenant_id AND q.date BETWEEN :date_from AND :date_to
-            GROUP BY q.date
-            ORDER BY q.date
+              ON sd.tenant_id = :tenant_id AND sd.date = days.d
+            ORDER BY days.d
             """
         )
         return as_mappings(

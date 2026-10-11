@@ -47,9 +47,12 @@ from app.modules.report.advanced_repository import (
     goods_filter_clauses,
 )
 from app.modules.report.pr_scope import PrParam, pr_scope_from_param
-from app.modules.report.summary_models import PR_PROGRESS_METRICS
+from app.modules.report.summary_models import PR_PROGRESS_METRICS, SHOP_METRICS
 
 Source = Literal["summary", "live"]
+
+# 店铺手填层（store_daily）读取时 LEFT JOIN 的列，与 StoreDailyRepository.aggregate 同名
+_STORE_MANUAL_COLUMNS = ("ad_spend_total", "zhitongche_spend", "yinli_spend", "refund_only_amount")
 
 
 @dataclass(frozen=True)
@@ -299,24 +302,31 @@ class SummaryReadRepository:
     async def store_daily(
         self, *, tenant_id: UUID, date_from: date, date_to: date
     ) -> list[Mapping[str, Any]]:
-        # store_daily 是人工 override 层（3 个广告消耗），读取时 LEFT JOIN 过去即时生效，
-        # 不进汇总表 —— 手填完不用等下一次刷新
+        # store_daily 是人工 override 层（3 个广告消耗 + 仅退款），读取时 LEFT JOIN 过去即时
+        # 生效，不进汇总表 —— 手填完不用等下一次刷新。只读日表，周 / 月在 service 里分桶。
+        #
+        # 日期轴 = 汇总日表 ∪ 区间内 store_daily（计划决定 8）：刷新之后才手填、又没有
+        # 其他来源的日子，汇总日表里没有行；实时路径的并集里有它，这里不并就少一天。
+        metrics = ",\n              ".join(f"COALESCE(s.{m}, 0) AS {m}" for m in SHOP_METRICS)
+        manual = ",\n              ".join(f"sd.{c} AS {c}" for c in _STORE_MANUAL_COLUMNS)
         sql = text(
-            """
-            SELECT
-              s.stat_date AS date,
-              s.visitors AS visitors,
-              s.pay_amount AS pay_amount,
-              s.pay_orders AS pay_orders,
-              sd.ad_spend_total AS ad_spend_total,
-              sd.zhitongche_spend AS zhitongche_spend,
-              sd.yinli_spend AS yinli_spend
-            FROM shop_daily_summary s
+            f"""
+            WITH days AS (
+              SELECT s.stat_date AS d FROM shop_daily_summary s
+              WHERE s.tenant_id = :tenant_id AND s.stat_date BETWEEN :date_from AND :date_to
+              UNION
+              SELECT sd.date FROM store_daily sd
+              WHERE sd.tenant_id = :tenant_id AND sd.date BETWEEN :date_from AND :date_to
+            )
+            SELECT days.d AS date,
+              {metrics},
+              {manual}
+            FROM days
+            LEFT JOIN shop_daily_summary s
+              ON s.tenant_id = :tenant_id AND s.stat_date = days.d
             LEFT JOIN store_daily sd
-              ON sd.tenant_id = s.tenant_id AND sd.date = s.stat_date
-            WHERE s.tenant_id = :tenant_id
-              AND s.stat_date BETWEEN :date_from AND :date_to
-            ORDER BY s.stat_date
+              ON sd.tenant_id = :tenant_id AND sd.date = days.d
+            ORDER BY days.d
             """
         )
         params = {"tenant_id": tenant_id, "date_from": date_from, "date_to": date_to}

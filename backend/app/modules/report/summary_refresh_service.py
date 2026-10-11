@@ -74,6 +74,7 @@ from app.modules.report.summary_invalidation import summary_lock_key
 from app.modules.report.summary_models import (
     PR_PROGRESS_METRICS,
     ROI_METRICS,
+    SHOP_METRICS,
     ProductRoiSummary,
     PrWorkProgressSummary,
     ShopDailySummary,
@@ -94,7 +95,9 @@ _ROI_METRICS = ROI_METRICS
 # **刷新时刻**的状态 —— 见 _refresh_pr_progress 与 migration 054 的 docstring。
 _PR_COUNTERS = PR_PROGRESS_METRICS
 
-_SHOP_METRICS = ("visitors", "pay_amount", "pay_orders")
+# 店铺三张表落盘的指标列，清单只在 summary_models.SHOP_METRICS 定义一次（062），
+# 日表刷新、周 / 月二次聚合与汇总读取共用。
+_SHOP_METRICS = SHOP_METRICS
 
 # 租户级刷新锁。键与覆盖失效 helper 共用（summary_lock_key），失效那边阻塞等这把锁。
 # CAST 必须写：同一参数类型推断不出来时 asyncpg 会报 IndeterminateDatatype。
@@ -329,7 +332,7 @@ class SummaryRefreshService:
         rows = await self._store.aggregate(
             tenant_id=tenant_id, date_from=date_from, date_to=date_to
         )
-        # aggregate 还返回 store_daily 的 3 个手填广告消耗，这里**不取** ——
+        # aggregate 还返回 store_daily 的 4 个手填列（3 个广告消耗 + 仅退款），这里**不取** ——
         # 那是人工 override 层，读取时 LEFT JOIN 过去即时生效，
         # 存进汇总表反而要等下一次刷新才看得到自己刚填的值。
         payload = [
@@ -366,7 +369,7 @@ class SummaryRefreshService:
     ) -> int:
         """从 ``shop_daily_summary`` 二次聚合出周/月。
 
-        不另写一条按周/月分桶的聚合 SQL：周月就是日的加总，三个指标都可加，
+        不另写一条按周/月分桶的聚合 SQL：周月就是日的加总，SHOP_METRICS 都可加，
         从已经校验过口径的日表再 SUM 一次，天然与日表一致 —— 下钻「月 → 周 → 日」时
         各层数字对得上（PRD 投产模块要求的下钻）。
 
@@ -390,9 +393,10 @@ class SummaryRefreshService:
         agg = (
             select(
                 bucket.label("bucket"),
-                func.coalesce(func.sum(ShopDailySummary.visitors), 0).label("visitors"),
-                func.coalesce(func.sum(ShopDailySummary.pay_amount), 0).label("pay_amount"),
-                func.coalesce(func.sum(ShopDailySummary.pay_orders), 0).label("pay_orders"),
+                *(
+                    func.coalesce(func.sum(getattr(ShopDailySummary, m)), 0).label(m)
+                    for m in _SHOP_METRICS
+                ),
             )
             .where(
                 ShopDailySummary.tenant_id == tenant_id,

@@ -37,7 +37,9 @@ from app.modules.product.platform_product_models import PlatformProduct
 from app.modules.promotion.urge_calculator import get_today
 from app.modules.report.advanced_repository import (
     PRODUCTION_COUNT_COLUMNS,
+    BiRepository,
     ProductionRepository,
+    StoreDailyRepository,
     WorkProgressRepository,
 )
 from app.modules.report.advanced_schemas import ProductionRow, PrWorkProgress
@@ -1194,6 +1196,129 @@ class TestWorkProgress:
             tenant_id_ctx.reset(tok)
 
 
+# 店铺并集场景里有行的日子（相对周三的天数）
+_STORE_DAYS = (0, 1, 2, 3, 4, 7, 9)
+
+
+def _norm_store_row(row: Any) -> dict[str, Any]:
+    """店铺日行逐字比：金额两位小数转字符串，NULL 原样（未录 ≠ 0）。"""
+    return {
+        k: str(v.quantize(Decimal("0.01"))) if isinstance(v, Decimal) else v for k, v in row.items()
+    }
+
+
+async def _seed_store_and_refresh(
+    session: AsyncSession,
+    tenant: Any,
+    product_factory: Any,
+    blogger_factory: Any,
+    promotion_factory: Any,
+) -> dict[str, Any]:
+    """店铺日期并集（r2-H1 数据层）。W = 上月第一个不在 1 号的周三，查询区间 [W, 月末 − 2]。
+
+    - W：普通千牛 1000 / 退款 50 + 未映射日报 200；手填直通车 40、仅退款 10
+    - W+1：直播千牛 300 / 退款 30 + 停用链接 100 / 退款 10
+    - W+2：只有万相台：普通 60 + 直播 20
+    - W+3：只有已发布推广；W+5 的未发布推广不加日子
+    - W+4：只有刷单 150；W+6 的不剔除调整不加日子
+    - W+7：只有手填仅退款 5
+    - 刷新整月之后才录的 W+9 全站推 12（没有其他来源）
+    """
+    after_first = M_LO + timedelta(days=1)
+    wed = after_first + timedelta(days=(2 - after_first.weekday()) % 7)
+    hi = M_HI - timedelta(days=2)
+
+    style = await product_factory.style(style_code=f"SD{uuid4().hex[:6]}")
+    goods = await _goods(session, tenant, style, code=f"G_SD_{uuid4().hex[:5]}", season="春夏")
+    qn_norm = await _pp(session, tenant, style, goods)
+    qn_live = await _pp(session, tenant, style, goods, channel="直播")
+    qn_off = await _pp(session, tenant, style, goods, is_active=False)
+    ad_norm = await _pp(session, tenant, style, goods, platform="万相台")
+    ad_live = await _pp(session, tenant, style, goods, platform="万相台", channel="直播")
+
+    def ad(pp: PlatformProduct, day: date, cost: str) -> AdDaily:
+        return AdDaily(
+            tenant_id=tenant.id,
+            platform_product_id=pp.id,
+            platform_id_snapshot=pp.platform_id,
+            date=day,
+            cost=Decimal(cost),
+            extra={},
+        )
+
+    def adjust(day: date, amount: str, *, exclude: bool) -> OrderAdjustment:
+        return OrderAdjustment(
+            tenant_id=tenant.id,
+            order_type="刷单" if exclude else "拍单",
+            style_id=style.id,
+            amount=Decimal(amount),
+            order_date=day,
+            exclude_from_roi=exclude,
+            status="待付款",
+        )
+
+    w = [wed + timedelta(days=n) for n in range(10)]
+    session.add_all(
+        [
+            _qn(tenant, qn_norm, w[0], "1000.00", refund="50.00"),
+            QianniuDaily(
+                tenant_id=tenant.id,
+                platform_product_id=None,
+                platform_id_snapshot=f"UNMAPPED{uuid4().hex[:6]}",
+                date=w[0],
+                visitors=100,
+                pay_amount=Decimal("200.00"),
+                pay_orders=5,
+            ),
+            _qn(tenant, qn_live, w[1], "300.00", refund="30.00"),
+            _qn(tenant, qn_off, w[1], "100.00", refund="10.00"),
+            ad(ad_norm, w[2], "60.00"),
+            ad(ad_live, w[2], "20.00"),
+            adjust(w[4], "150.00", exclude=True),
+            adjust(w[6], "70.00", exclude=False),
+            StoreDaily(
+                tenant_id=tenant.id,
+                date=w[0],
+                zhitongche_spend=Decimal("40.00"),
+                refund_only_amount=Decimal("10.00"),
+            ),
+            StoreDaily(tenant_id=tenant.id, date=w[7], refund_only_amount=Decimal("5.00")),
+        ]
+    )
+    blogger = await blogger_factory.blogger()
+    for day, status in ((w[3], "已发布"), (w[5], "未发布")):
+        await promotion_factory.promotion(
+            style=style,
+            blogger=blogger,
+            cooperation_date=day,
+            publish_status=status,
+            quote_amount=Decimal("400.00"),
+            internal_code=f"SD{uuid4().hex[:10].upper()}",
+        )
+    await session.flush()
+    promo_cost = (
+        await session.execute(
+            text(
+                "SELECT COALESCE(SUM(total_promo_cost), 0) FROM promotion "
+                "WHERE tenant_id = CAST(:t AS uuid) AND publish_status = '已发布'"
+            ),
+            {"t": str(tenant.id)},
+        )
+    ).scalar_one()
+    assert promo_cost > 0, "推广成本为 0，场景失效"
+    await session.commit()
+    await _refresh(session, tenant, M_LO, M_HI)
+
+    # 刷新之后才手填、又没有其他来源的日子：汇总日表里没有它，汇总读取要并 store_daily
+    session.add(StoreDaily(tenant_id=tenant.id, date=w[9], ad_spend_total=Decimal("12.00")))
+    await session.commit()
+    return {
+        "wed": wed,
+        "hi": hi,
+        "promo_cost": str(Decimal(promo_cost).quantize(Decimal("0.01"))),
+    }
+
+
 class TestStoreDaily:
     async def test_summary_equals_live(
         self,
@@ -1225,6 +1350,121 @@ class TestStoreDaily:
             assert len(via_summary) == 3  # D1 / D2 / D3 三天有千牛日报
             manual = next(r for r in via_summary if r.date == D1)
             assert manual.ad_spend_total == Decimal("88.00"), "手填广告消耗没有 LEFT JOIN 进来"
+        finally:
+            tenant_id_ctx.reset(tok)
+
+    @pytest.mark.parametrize("granularity", ["day", "week"])
+    async def test_union_days_service_equal_one_source(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        recorder: _SourceRecorder,
+        monkeypatch: pytest.MonkeyPatch,
+        granularity: str,
+    ) -> None:
+        """r2-H1 数据层：区间从周三起、非整月，两路逐字等，一个响应只有一种来源。"""
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            seeded = await _seed_store_and_refresh(
+                session, tenant_a, product_factory, blogger_factory, promotion_factory
+            )
+            wed, hi = seeded["wed"], seeded["hi"]
+            svc = StoreDailyService(session)
+            via_summary = await svc.get_dashboard(tenant_a.id, (wed, hi), granularity)
+            assert recorder.calls == [("store_daily", "summary")]
+
+            monkeypatch.setattr(settings, "REPORT_SUMMARY_READS_ENABLED", False)
+            via_live = await svc.get_dashboard(tenant_a.id, (wed, hi), granularity)
+            assert recorder.calls[1:] == [("store_daily", "live")]
+            assert _dump(via_summary) == _dump(via_live)
+
+            if granularity == "day":
+                # 只有万相台 / 推广 / 刷单 / 手填的日子都在；未发布推广、不剔除的调整不加日子
+                assert [r.date for r in via_summary] == [
+                    wed + timedelta(days=n) for n in _STORE_DAYS
+                ]
+                return
+            # 周三那周只有周三手填了直通车：周行直通车 = 40，另两项整周没填仍是 None
+            first, second = via_summary
+            assert first.date == wed - timedelta(days=2)
+            assert first.zhitongche_spend == Decimal("40.00")
+            assert first.ad_spend_total is None
+            assert first.yinli_spend is None
+            assert (first.visitors, first.pay_amount, first.pay_orders) == (
+                400,
+                Decimal("1600.00"),
+                20,
+            )
+            # 下一周只有手填：刷新后才录的直通车总额也在
+            assert second.date == wed + timedelta(days=5)
+            assert second.ad_spend_total == Decimal("12.00")
+            assert second.pay_amount == Decimal("0.00")
+        finally:
+            tenant_id_ctx.reset(tok)
+
+    async def test_repository_day_rows_equal_hand_computed(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        """仓储层日行两路逐行等（6 列 + 仅退款，未录为 None）；值 = 手算；区间和 = BI 店铺汇总。"""
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            seeded = await _seed_store_and_refresh(
+                session, tenant_a, product_factory, blogger_factory, promotion_factory
+            )
+            wed, hi = seeded["wed"], seeded["hi"]
+            kwargs = {"tenant_id": tenant_a.id, "date_from": wed, "date_to": hi}
+            live = await StoreDailyRepository(session).aggregate(**kwargs)
+            summary = await SummaryReadRepository(session).store_daily(**kwargs)
+            assert [_norm_store_row(r) for r in summary] == [_norm_store_row(r) for r in live]
+
+            rows = {r["date"]: _norm_store_row(r) for r in live}
+            assert sorted(rows) == [wed + timedelta(days=n) for n in _STORE_DAYS]
+            promo = seeded["promo_cost"]
+            # (日, 访客, 支付, 支付单数, 退款, 刷单, 站内, 站外, 直播支付, 直播站内,
+            #  全站推, 直通车, 引力魔方, 仅退款)
+            want = {
+                0: (200, "1200.00", 10, "50.00", "0.00", "0.00", "0.00", "0.00", "0.00",
+                    None, "40.00", None, "10.00"),
+                1: (200, "400.00", 10, "40.00", "0.00", "0.00", "0.00", "300.00", "0.00",
+                    None, None, None, None),
+                2: (0, "0.00", 0, "0.00", "0.00", "80.00", "0.00", "0.00", "20.00",
+                    None, None, None, None),
+                3: (0, "0.00", 0, "0.00", "0.00", "0.00", promo, "0.00", "0.00",
+                    None, None, None, None),
+                4: (0, "0.00", 0, "0.00", "150.00", "0.00", "0.00", "0.00", "0.00",
+                    None, None, None, None),
+                7: (0, "0.00", 0, "0.00", "0.00", "0.00", "0.00", "0.00", "0.00",
+                    None, None, None, "5.00"),
+                9: (0, "0.00", 0, "0.00", "0.00", "0.00", "0.00", "0.00", "0.00",
+                    "12.00", None, None, None),
+            }  # fmt: skip
+            cols = (
+                "visitors", "pay_amount", "pay_orders", "refund_amount", "brushing_amount",
+                "ad_spend", "promo_cost", "live_pay_amount", "live_ad_spend",
+                "ad_spend_total", "zhitongche_spend", "yinli_spend", "refund_only_amount",
+            )  # fmt: skip
+            for n, values in want.items():
+                got = rows[wed + timedelta(days=n)]
+                assert tuple(got[c] for c in cols) == values, f"第 {n} 天"
+
+            # 6 列的区间和 = BI 店铺汇总的退款 / 站内 / 站外（R6 起 BI 改读这里）
+            bi = await BiRepository(session).aggregate_store_summary(**kwargs)
+
+            def total(col: str) -> Decimal:
+                return sum((Decimal(str(r[col])) for r in live), Decimal("0"))
+
+            assert total("pay_amount") == bi["sales_amount"]
+            assert total("refund_amount") == bi["refund_amount"]
+            assert total("ad_spend") == bi["internal_spend"]
+            assert total("promo_cost") == bi["external_spend"]
         finally:
             tenant_id_ctx.reset(tok)
 

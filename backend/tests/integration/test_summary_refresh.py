@@ -19,7 +19,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any
 from uuid import uuid4
@@ -39,6 +39,7 @@ from app.modules.report.advanced_repository import (
     WorkProgressRepository,
 )
 from app.modules.report.summary_models import (
+    SHOP_METRICS,
     ProductRoiSummary,
     PrWorkProgressSummary,
     ShopDailySummary,
@@ -468,16 +469,19 @@ class TestRefreshIsRepeatableAndIncremental:
             )
             assert leftover == 0
 
-            # 店铺日汇总同样要跟着缩
-            shop_left = await session.scalar(
-                select(func.count())
-                .select_from(ShopDailySummary)
-                .where(
-                    ShopDailySummary.tenant_id == tenant_a.id,
-                    ShopDailySummary.stat_date.in_([D1, D3]),
+            # 店铺日汇总同样要跟着缩。D1 还有万相台花费，按日期并集（062）那天仍有一行，
+            # 但千牛的数字必须清掉；D3 没有其他来源，整行消失
+            shop_left = (
+                await session.execute(
+                    select(ShopDailySummary.stat_date, ShopDailySummary.pay_amount)
+                    .where(
+                        ShopDailySummary.tenant_id == tenant_a.id,
+                        ShopDailySummary.stat_date.in_([D1, D3]),
+                    )
+                    .order_by(ShopDailySummary.stat_date)
                 )
-            )
-            assert shop_left == 0
+            ).all()
+            assert [(d, Decimal(p)) for d, p in shop_left] == [(D1, Decimal("0"))]
             seeded_goods = seeded["goods"]
             assert seeded_goods is not None
         finally:
@@ -656,6 +660,140 @@ class TestRefreshIsRepeatableAndIncremental:
                 )
             )
             assert week == Decimal("300.00")
+        finally:
+            tenant_id_ctx.reset(tok)
+
+    async def test_first_half_month_refresh_week_month_rows_equal_day_sums(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        """新租户不做前置刷新、直接刷半月：周 / 月行的 9 列 = 桶内日行之和（062 的 6 列也要折上去）。
+
+        数据都放在窗口外的月初（09-01）或窗口内，且各列来源分散在不同日子：
+        只有并集日期轴 + 周月按 SHOP_METRICS 二次聚合，月行才每列都对。
+        """
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            style = await product_factory.style(style_code=f"HM{uuid4().hex[:6]}")
+            goods = await _goods(session, tenant_a, style, code=f"G_HM_{uuid4().hex[:6]}")
+
+            async def link(platform: str, channel: str) -> PlatformProduct:
+                pp = PlatformProduct(
+                    tenant_id=tenant_a.id,
+                    platform=platform,
+                    platform_id=f"P{uuid4().hex[:8]}",
+                    style_id=style.id,
+                    goods_main_id=goods.id,
+                    channel=channel,
+                )
+                session.add(pp)
+                await session.flush()
+                return pp
+
+            qn_norm, qn_live = await link("千牛", "普通"), await link("千牛", "直播")
+            ad_norm, ad_live = await link("万相台", "普通"), await link("万相台", "直播")
+            for pp, day, pay, refund in (
+                (qn_norm, date(2026, 9, 1), "300.00", "30.00"),
+                (qn_live, date(2026, 9, 3), "200.00", "20.00"),
+            ):
+                session.add(
+                    QianniuDaily(
+                        tenant_id=tenant_a.id,
+                        platform_product_id=pp.id,
+                        platform_id_snapshot=pp.platform_id,
+                        date=day,
+                        visitors=10,
+                        pay_amount=Decimal(pay),
+                        pay_orders=1,
+                        refund_amount=Decimal(refund),
+                    )
+                )
+            for pp, cost in ((ad_norm, "50.00"), (ad_live, "20.00")):
+                session.add(
+                    AdDaily(
+                        tenant_id=tenant_a.id,
+                        platform_product_id=pp.id,
+                        platform_id_snapshot=pp.platform_id,
+                        date=date(2026, 9, 4),
+                        cost=Decimal(cost),
+                        extra={},
+                    )
+                )
+            session.add(
+                OrderAdjustment(
+                    tenant_id=tenant_a.id,
+                    order_type="刷单",
+                    style_id=style.id,
+                    amount=Decimal("100.00"),
+                    order_date=date(2026, 9, 6),
+                    exclude_from_roi=True,
+                    status="待付款",
+                )
+            )
+            await promotion_factory.promotion(
+                style=style,
+                blogger=await blogger_factory.blogger(),
+                cooperation_date=date(2026, 9, 5),
+                publish_status="已发布",
+                quote_amount=Decimal("400.00"),
+            )
+            await session.commit()
+
+            await SummaryRefreshService(session).refresh(
+                tenant_id=tenant_a.id, date_from=date(2026, 9, 2), date_to=date(2026, 9, 16)
+            )
+            await session.commit()
+
+            days = (
+                (
+                    await session.execute(
+                        select(ShopDailySummary).where(ShopDailySummary.tenant_id == tenant_a.id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+
+            def day_sum(lo: date, hi: date, metric: str) -> Decimal:
+                return sum(
+                    (Decimal(getattr(d, metric)) for d in days if lo <= d.stat_date < hi),
+                    Decimal("0"),
+                )
+
+            month = await session.scalar(
+                select(ShopMonthSummary).where(
+                    ShopMonthSummary.tenant_id == tenant_a.id,
+                    ShopMonthSummary.period_month == date(2026, 9, 1),
+                )
+            )
+            assert month is not None
+            for metric in SHOP_METRICS:
+                got = Decimal(getattr(month, metric))
+                assert got == day_sum(date(2026, 9, 1), date(2026, 10, 1), metric), metric
+                assert got > 0, f"月行 {metric} 为 0，场景失效"
+            # 窗口外的月初 09-01 也折进来了
+            assert Decimal(month.pay_amount) == Decimal("500.00")
+
+            weeks = (
+                (
+                    await session.execute(
+                        select(ShopWeekSummary).where(ShopWeekSummary.tenant_id == tenant_a.id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            assert weeks
+            for week in weeks:
+                end = week.week_start + timedelta(days=7)
+                for metric in SHOP_METRICS:
+                    assert Decimal(getattr(week, metric)) == day_sum(
+                        week.week_start, end, metric
+                    ), (week.week_start, metric)
         finally:
             tenant_id_ctx.reset(tok)
 
