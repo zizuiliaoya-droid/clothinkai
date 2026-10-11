@@ -13,7 +13,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.attachment import attachment_service
 from app.core.metrics import report_query_duration_seconds
-from app.modules.report.advanced_repository import ProductionRepository
+from app.modules.report.advanced_repository import (
+    PRODUCTION_ADDITIVE_COLUMNS,
+    ProductionRepository,
+)
 from app.modules.report.advanced_schemas import (
     ProductionReport,
     ProductionRow,
@@ -39,6 +42,25 @@ def _money(value: Any) -> Decimal:
     return Decimal(str(value or 0)).quantize(_CENT, rounding=ROUND_HALF_UP)
 
 
+def _merge_channels(rows: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    """把同一商品的渠道行求和回一行（7e R2，r2-M1：R2 期间投产接口不拆渠道）。
+
+    可加列（金额与计数）先求和，比率由 ``_to_row`` 在求和之后算；商品信息取首行，
+    ``channel`` 去掉。按 ``goods_id`` 首次出现的顺序输出，不在 Python 里重排：SQL 已按
+    商品级合计排好、同一商品的渠道行相邻，再排一次反而可能和数据库的排序规则不一致。
+    R3 拆渠道展示时删掉这一步。
+    """
+    merged: dict[Any, dict[str, Any]] = {}
+    for row in rows:
+        current = merged.get(row["goods_id"])
+        if current is None:
+            merged[row["goods_id"]] = {k: v for k, v in row.items() if k != "channel"}
+            continue
+        for col in PRODUCTION_ADDITIVE_COLUMNS:
+            current[col] = current[col] + row[col]
+    return list(merged.values())
+
+
 class ProductionService:
     def __init__(self, session: AsyncSession) -> None:
         self._repo = ProductionRepository(session)
@@ -60,20 +82,24 @@ class ProductionService:
             fresh = await self._summary.freshness(tenant_id, date_from, date_to)
             if fresh.source == "summary":
                 record_source(metric_label, "summary")
-                return await self._summary.production_by_goods(
-                    tenant_id=tenant_id,
-                    date_from=date_from,
-                    date_to=date_to,
-                    exclude_brushing=exclude_brushing,
-                    seasons=seasons,
+                return _merge_channels(
+                    await self._summary.production_by_goods(
+                        tenant_id=tenant_id,
+                        date_from=date_from,
+                        date_to=date_to,
+                        exclude_brushing=exclude_brushing,
+                        seasons=seasons,
+                    )
                 )
         record_source(metric_label, "live")
-        return await self._repo.aggregate_by_goods(
-            tenant_id=tenant_id,
-            date_from=date_from,
-            date_to=date_to,
-            exclude_brushing=exclude_brushing,
-            seasons=seasons,
+        return _merge_channels(
+            await self._repo.aggregate_by_goods(
+                tenant_id=tenant_id,
+                date_from=date_from,
+                date_to=date_to,
+                exclude_brushing=exclude_brushing,
+                seasons=seasons,
+            )
         )
 
     async def get_report(

@@ -21,7 +21,7 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.modules.report.production_service as production_mod
@@ -35,7 +35,8 @@ from app.modules.finance.order_adjustment_models import OrderAdjustment
 from app.modules.product.goods_models import GoodsMain, GoodsStyleItem
 from app.modules.product.platform_product_models import PlatformProduct
 from app.modules.promotion.urge_calculator import get_today
-from app.modules.report.advanced_schemas import PrWorkProgress
+from app.modules.report.advanced_repository import PRODUCTION_COUNT_COLUMNS, ProductionRepository
+from app.modules.report.advanced_schemas import ProductionRow, PrWorkProgress
 from app.modules.report.pr_scope import PR_SCOPE_ALL, PrScope, PrScopeKind
 from app.modules.report.production_service import ProductionService
 from app.modules.report.store_daily_service import StoreDailyService
@@ -108,7 +109,14 @@ async def _goods(
 
 
 async def _pp(
-    session: AsyncSession, tenant: Any, style: Any, goods: GoodsMain, *, platform: str = "千牛"
+    session: AsyncSession,
+    tenant: Any,
+    style: Any,
+    goods: GoodsMain,
+    *,
+    platform: str = "千牛",
+    channel: str = "普通",
+    is_active: bool = True,
 ) -> PlatformProduct:
     pp = PlatformProduct(
         tenant_id=tenant.id,
@@ -116,6 +124,8 @@ async def _pp(
         platform_id=f"P{uuid4().hex[:8]}",
         style_id=style.id,
         goods_main_id=goods.id,
+        channel=channel,
+        is_active=is_active,
     )
     session.add(pp)
     await session.flush()
@@ -129,6 +139,7 @@ def _qn(
     pay: str,
     refund: str | None = None,
     add_cart: int | None = None,
+    pay_orders: int = 5,
 ) -> QianniuDaily:
     return QianniuDaily(
         tenant_id=tenant.id,
@@ -137,7 +148,7 @@ def _qn(
         date=day,
         visitors=100,
         pay_amount=Decimal(pay),
-        pay_orders=5,
+        pay_orders=pay_orders,
         refund_amount=Decimal(refund) if refund is not None else None,
         add_cart_count=add_cart,
     )
@@ -423,6 +434,306 @@ class TestProductionReport:
             via_live = await svc.get_report(tenant_a.id, (M_LO, M_HI), use_summary=False)
             assert _dump(via_summary) == _dump(via_live)
             assert via_summary.previous
+        finally:
+            tenant_id_ctx.reset(tok)
+
+
+async def _seed_channels(
+    session: AsyncSession,
+    tenant: Any,
+    product_factory: Any,
+    blogger_factory: Any,
+    promotion_factory: Any,
+) -> dict[str, Any]:
+    """同一商品挂普通 + 直播两条千牛链接（7e R2：汇总表按渠道存，投产接口仍按商品一行）。
+
+    商品 A（春夏）：
+    - 普通千牛 D1 支付 1000 / 退款 50 / 加购 7，D2 支付 600 / 退款 20 / 加购 4；
+    - 直播千牛整段**只有退款**（D3 退款 25、加购 2）—— 逐行 HAVING 会丢掉这一行；
+    - 一条停用的千牛链接 D1 支付 300（7e-9：不进单品）；
+    - 普通万相台只有 D2（花费 80、站内加购 9）→ 配对加购只配上 D2；
+    - D2 已发布推广一单、刷单 200；上一期普通 200 + 直播 100。
+    商品 B（秋冬）：普通千牛 D2 支付 2000，排在 A 前面。
+    """
+    style_a = await product_factory.style(style_code=f"CA{uuid4().hex[:6]}")
+    goods_a = await _goods(session, tenant, style_a, code=f"G_CA_{uuid4().hex[:5]}", season="春夏")
+    qn_norm = await _pp(session, tenant, style_a, goods_a)
+    qn_live = await _pp(session, tenant, style_a, goods_a, channel="直播")
+    qn_off = await _pp(session, tenant, style_a, goods_a, is_active=False)
+    ad_norm = await _pp(session, tenant, style_a, goods_a, platform="万相台")
+
+    style_b = await product_factory.style(style_code=f"CB{uuid4().hex[:6]}")
+    goods_b = await _goods(session, tenant, style_b, code=f"G_CB_{uuid4().hex[:5]}", season="秋冬")
+    qn_b = await _pp(session, tenant, style_b, goods_b)
+
+    session.add_all(
+        [
+            _qn(tenant, qn_norm, D1, "1000.00", refund="50.00", add_cart=7),
+            _qn(tenant, qn_norm, D2, "600.00", refund="20.00", add_cart=4, pay_orders=3),
+            _qn(tenant, qn_live, D3, "0.00", refund="25.00", add_cart=2, pay_orders=0),
+            _qn(tenant, qn_off, D1, "300.00", refund="10.00", add_cart=3),
+            _qn(tenant, qn_norm, PREV_DAY, "200.00"),
+            _qn(tenant, qn_live, PREV_DAY, "100.00"),
+            _qn(tenant, qn_b, D2, "2000.00", refund="100.00", add_cart=5),
+            AdDaily(
+                tenant_id=tenant.id,
+                platform_product_id=ad_norm.id,
+                platform_id_snapshot=ad_norm.platform_id,
+                date=D2,
+                cost=Decimal("80.00"),
+                add_cart_count=9,
+                extra={},
+            ),
+            OrderAdjustment(
+                tenant_id=tenant.id,
+                order_type="刷单",
+                style_id=style_a.id,
+                amount=Decimal("200.00"),
+                order_date=D2,
+                exclude_from_roi=True,
+                status="待付款",
+            ),
+        ]
+    )
+    blogger = await blogger_factory.blogger()
+    await promotion_factory.promotion(
+        style=style_a,
+        blogger=blogger,
+        goods_main_id=goods_a.id,
+        cooperation_date=D2,
+        publish_status="已发布",
+        quote_amount=Decimal("400.00"),
+        internal_code=f"CH{uuid4().hex[:10].upper()}",
+    )
+    await session.flush()
+    promo_cost = (
+        await session.execute(
+            text(
+                "SELECT COALESCE(SUM(total_promo_cost), 0) FROM promotion "
+                "WHERE goods_main_id = CAST(:g AS uuid) AND publish_status = '已发布'"
+            ),
+            {"g": str(goods_a.id)},
+        )
+    ).scalar_one()
+    assert promo_cost > 0, "推广成本为 0，场景失效"
+    return {
+        "goods_a": goods_a,
+        "goods_b": goods_b,
+        "qn_live": qn_live,
+        "qn_off": qn_off,
+        "promo_cost": Decimal(promo_cost).quantize(Decimal("0.01")),
+    }
+
+
+# 投产行的冻结键集合：R2 按渠道存汇总，但响应结构不变（r2-M1）
+_PRODUCTION_ROW_KEYS = {
+    "goods_id",
+    "goods_code",
+    "goods_title",
+    "goods_short_name",
+    "is_suit",
+    "style_codes",
+    "main_image_url",
+    "pay_amount",
+    "refund_amount",
+    "return_rate",
+    "confirmed_amount",
+    "promo_cost",
+    "ad_spend",
+    "total_spend",
+    "add_cart_count",
+    "add_cart_cost",
+    "net_roi",
+    "unit_deal_cost",
+    "extra",
+}
+
+
+def _norm_repo_row(row: Any) -> dict[str, Any]:
+    """仓储层行逐字比：金额统一两位小数转字符串，计数转 int，其余原样。"""
+    out: dict[str, Any] = {}
+    for key, value in row.items():
+        if key in PRODUCTION_COUNT_COLUMNS:
+            out[key] = int(value)
+        elif isinstance(value, Decimal):
+            out[key] = str(value.quantize(Decimal("0.01")))
+        else:
+            out[key] = value
+    return out
+
+
+def _money_tuple(row: Any) -> tuple[Any, ...]:
+    return (
+        str(row.goods_id),
+        row.pay_amount,
+        row.refund_amount,
+        row.add_cart_count,
+        row.promo_cost,
+        row.ad_spend,
+    )
+
+
+class TestProductionChannels:
+    """r2-M1：汇总表按（商品, 渠道）存，投产接口两条路径都按商品把渠道求和回一行。"""
+
+    @pytest.mark.parametrize("exclude_brushing", [True, False])
+    async def test_service_one_row_per_goods_both_paths(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        recorder: _SourceRecorder,
+        exclude_brushing: bool,
+    ) -> None:
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            seeded = await _seed_channels(
+                session, tenant_a, product_factory, blogger_factory, promotion_factory
+            )
+            await session.commit()
+            span = M_HI - M_LO
+            await _refresh(session, tenant_a, M_LO - span - timedelta(days=1), M_HI)
+
+            svc = ProductionService(session)
+            via_summary = await svc.get_report(
+                tenant_a.id, (M_LO, M_HI), exclude_brushing=exclude_brushing
+            )
+            assert recorder.calls == [
+                ("production", "summary"),
+                ("production_previous", "summary"),
+            ]
+            via_live = await svc.get_report(
+                tenant_a.id, (M_LO, M_HI), exclude_brushing=exclude_brushing, use_summary=False
+            )
+            assert recorder.calls[2:] == [("production", "live"), ("production_previous", "live")]
+            assert _dump(via_summary) == _dump(via_live)
+
+            a_id, b_id = str(seeded["goods_a"].id), str(seeded["goods_b"].id)
+            # 每个商品一行，顺序 = 旧结构（支付额降序）
+            assert [str(r.goods_id) for r in via_summary.items] == [b_id, a_id]
+            assert via_summary.previous is not None
+            prev = [r for r in via_summary.previous if str(r.goods_id) == a_id]
+            assert len(prev) == 1
+            assert prev[0].pay_amount == Decimal("300.00")
+        finally:
+            tenant_id_ctx.reset(tok)
+
+    async def test_matches_old_structure_minus_inactive_link(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        recorder: _SourceRecorder,
+    ) -> None:
+        """数字 = 改动前的按商品口径（只扣停用链接）；渠道翻转不改数；启用停用链接差额 = 它的数据。"""
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            seeded = await _seed_channels(
+                session, tenant_a, product_factory, blogger_factory, promotion_factory
+            )
+            await session.commit()
+            await _refresh(session, tenant_a, M_LO, M_HI)
+            a, b = seeded["goods_a"], seeded["goods_b"]
+            promo = seeded["promo_cost"]
+
+            svc = ProductionService(session)
+            via_summary = await svc.get_report(tenant_a.id, (M_LO, M_HI))
+            assert recorder.calls[0] == ("production", "summary")
+            assert set(ProductionRow.model_fields) == _PRODUCTION_ROW_KEYS
+            assert all(set(r.model_dump()) == _PRODUCTION_ROW_KEYS for r in via_summary.items)
+            expected = [
+                (
+                    str(b.id),
+                    Decimal("2000.00"),
+                    Decimal("100.00"),
+                    5,
+                    Decimal("0.00"),
+                    Decimal("0.00"),
+                ),
+                # 1000 + 600 − 刷单 200；退款含直播只有退款的那一天 25
+                (str(a.id), Decimal("1400.00"), Decimal("95.00"), 13, promo, Decimal("80.00")),
+            ]
+            assert [_money_tuple(r) for r in via_summary.items] == expected
+
+            live_before = _dump(await svc.get_report(tenant_a.id, (M_LO, M_HI), use_summary=False))
+            assert live_before == _dump(via_summary)
+
+            # 直播链接改成普通：渠道合并后数字一分不变
+            await session.execute(
+                update(PlatformProduct)
+                .where(PlatformProduct.id == seeded["qn_live"].id)
+                .values(channel="普通")
+            )
+            await session.commit()
+            flipped = _dump(await svc.get_report(tenant_a.id, (M_LO, M_HI), use_summary=False))
+            assert flipped == live_before
+
+            # 启用停用链接：A 多出它那一天的支付 300 / 退款 10 / 加购 3，其余不变
+            await session.execute(
+                update(PlatformProduct)
+                .where(PlatformProduct.id == seeded["qn_off"].id)
+                .values(is_active=True)
+            )
+            await session.commit()
+            enabled = await svc.get_report(tenant_a.id, (M_LO, M_HI), use_summary=False)
+            assert [_money_tuple(r) for r in enabled.items] == [
+                expected[0],
+                (str(a.id), Decimal("1700.00"), Decimal("105.00"), 16, promo, Decimal("80.00")),
+            ]
+        finally:
+            tenant_id_ctx.reset(tok)
+
+    @pytest.mark.parametrize("exclude_brushing", [True, False])
+    @pytest.mark.parametrize("seasons", [None, ["春夏"]], ids=["no_filter", "season_spring"])
+    async def test_repository_rows_by_channel_equal(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        exclude_brushing: bool,
+        seasons: list[str] | None,
+    ) -> None:
+        """仓储层两路按（商品, 渠道）逐行相等，含直播行与 062 的 5 列。"""
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            seeded = await _seed_channels(
+                session, tenant_a, product_factory, blogger_factory, promotion_factory
+            )
+            await session.commit()
+            await _refresh(session, tenant_a, M_LO, M_HI)
+            kwargs = {
+                "tenant_id": tenant_a.id,
+                "date_from": M_LO,
+                "date_to": M_HI,
+                "exclude_brushing": exclude_brushing,
+                "seasons": seasons,
+            }
+            live = await ProductionRepository(session).aggregate_by_goods(**kwargs)
+            summary = await SummaryReadRepository(session).production_by_goods(**kwargs)
+            assert [_norm_repo_row(r) for r in summary] == [_norm_repo_row(r) for r in live]
+
+            a_id, b_id = seeded["goods_a"].id, seeded["goods_b"].id
+            keys = [(r["goods_id"], r["channel"]) for r in live]
+            want = [(a_id, "普通"), (a_id, "直播")]
+            assert keys == (want if seasons else [(b_id, "普通"), *want])
+
+            rows = {(r["goods_id"], r["channel"]): r for r in live}
+            normal, streaming = rows[(a_id, "普通")], rows[(a_id, "直播")]
+            # 直播整段只有退款：靠商品级 HAVING 留下
+            assert Decimal(streaming["pay_amount"]) == 0
+            assert Decimal(streaming["refund_amount"]) == Decimal("25.00")
+            # 062 的 5 列：千牛 D1、D2 + 万相台只有 D2 → 只配上 D2
+            assert int(normal["pay_orders"]) == 8
+            assert int(normal["ad_add_cart_count"]) == 9
+            assert int(normal["paired_days"]) == 1
+            assert int(normal["paired_all_cart"]) == 4
+            assert int(normal["paired_ad_cart"]) == 9
         finally:
             tenant_id_ctx.reset(tok)
 

@@ -41,9 +41,9 @@ from app.core.db import as_mappings
 from app.core.metrics import report_summary_reads_total
 from app.modules.promotion.urge_calculator import DEFAULT_TENANT_TZ
 from app.modules.report.advanced_repository import (
-    GOODS_META_COLUMNS,
-    GOODS_META_GROUP_BY,
+    PRODUCTION_ADDITIVE_COLUMNS,
     bucket_expr,
+    goods_channel_select,
     goods_filter_clauses,
 )
 
@@ -173,33 +173,31 @@ class SummaryReadRepository:
         exclude_brushing: bool,
         seasons: Sequence[str] | None = None,
     ) -> list[Mapping[str, Any]]:
+        """按（商品, 渠道）出行；外层过滤与排序与实时共用 ``goods_channel_select``。"""
         filter_sql, filter_params = goods_filter_clauses(seasons)
+        sums = ",\n".join(
+            f"COALESCE(SUM(s.{c}), 0) AS {c}"
+            for c in PRODUCTION_ADDITIVE_COLUMNS
+            if c != "pay_amount"
+        )
         sql = text(
             f"""
-            SELECT
-              {GOODS_META_COLUMNS},
-              -- 汇总表存含刷单原值，剔刷单口径在这里减（052 docstring）
-              COALESCE(SUM(s.pay_amount), 0)
-                - CASE WHEN :exclude_brushing
-                       THEN COALESCE(SUM(s.brushing_amount), 0)
-                       ELSE 0 END AS pay_amount,
-              COALESCE(SUM(s.refund_amount), 0) AS refund_amount,
-              COALESCE(SUM(s.add_cart_count), 0) AS add_cart_count,
-              COALESCE(SUM(s.promo_cost), 0) AS promo_cost,
-              COALESCE(SUM(s.ad_spend), 0) AS ad_spend
-            FROM goods_main g
-            JOIN product_roi_summary s
-              ON s.goods_main_id = g.id
-             AND s.tenant_id = g.tenant_id
-             AND s.stat_date BETWEEN :date_from AND :date_to
-            WHERE g.tenant_id = :tenant_id AND g.is_deleted = false
-              {filter_sql}
-            GROUP BY {GOODS_META_GROUP_BY}
-            -- 与实时路径同一个 HAVING：看的是含刷单的销售原值，不是扣过刷单的
-            HAVING COALESCE(SUM(s.pay_amount), 0) > 0
-                OR COALESCE(SUM(s.promo_cost), 0) > 0
-                OR COALESCE(SUM(s.ad_spend), 0) > 0
-            ORDER BY pay_amount DESC, goods_code
+            WITH per_channel AS (
+              SELECT s.goods_main_id AS goods_id, s.channel AS channel,
+                     -- 外层 HAVING 看含刷单的销售原值，不是扣过刷单的
+                     COALESCE(SUM(s.pay_amount), 0) AS pay_raw,
+                     -- 汇总表存含刷单原值，剔刷单口径在这里减（052 docstring）
+                     COALESCE(SUM(s.pay_amount), 0)
+                       - CASE WHEN :exclude_brushing
+                              THEN COALESCE(SUM(s.brushing_amount), 0)
+                              ELSE 0 END AS pay_amount,
+                     {sums}
+              FROM product_roi_summary s
+              WHERE s.tenant_id = :tenant_id
+                AND s.stat_date BETWEEN :date_from AND :date_to
+              GROUP BY s.goods_main_id, s.channel
+            ),
+            {goods_channel_select(filter_sql)}
             """
         )
         params = {

@@ -85,7 +85,66 @@ GOODS_META_COLUMNS = """
     WHERE ci.goods_main_id = g.id AND ci.is_active = true
   ) AS style_codes"""
 
-GOODS_META_GROUP_BY = "g.id, g.goods_code, g.goods_title, g.short_name, g.is_suit, g.main_image_key"
+# 投产主表按（商品, 渠道）出行（7e R2）的可加列。外层 SELECT（实时与汇总读取共用）
+# 与 ProductionService 把渠道求和回一行都引这两个元组，不各写一份列名。
+PRODUCTION_MONEY_COLUMNS: tuple[str, ...] = (
+    "pay_amount",
+    "refund_amount",
+    "promo_cost",
+    "ad_spend",
+)
+PRODUCTION_COUNT_COLUMNS: tuple[str, ...] = (
+    "add_cart_count",
+    "pay_orders",
+    "ad_add_cart_count",
+    "paired_all_cart",
+    "paired_ad_cart",
+    "paired_days",
+)
+PRODUCTION_ADDITIVE_COLUMNS: tuple[str, ...] = (
+    *PRODUCTION_MONEY_COLUMNS,
+    *PRODUCTION_COUNT_COLUMNS,
+)
+
+
+def goods_channel_select(filter_sql: str) -> str:
+    """投产主表的外层：接在名为 ``per_channel`` 的 CTE 后面（``WITH …, per_channel AS (…),``）。
+
+    ``per_channel`` 每（商品, 渠道）一行，列 = ``goods_id``、``channel``、``pay_raw``（含刷单的
+    销售原值）、``pay_amount``（按开关扣过刷单）与 ``PRODUCTION_ADDITIVE_COLUMNS`` 其余各列。
+
+    过滤与排序看**商品级合计**（窗口按商品求和），不看单个渠道行：行集合 = 改动前按商品
+    聚合的 HAVING（含刷单的销售原值、站外、站内三项任一 > 0），排序 = 商品级支付额降序、
+    货号、渠道。逐行 HAVING 会丢掉「直播整段只有退款」这种行，渠道求和回一行后就和旧数
+    对不上了。同一商品的渠道行排在一起，service 按首次出现的顺序合并即可。
+    """
+    money = ",\n".join(f"r.{c} AS {c}" for c in PRODUCTION_MONEY_COLUMNS)
+    counts = ",\n".join(f"CAST(r.{c} AS bigint) AS {c}" for c in PRODUCTION_COUNT_COLUMNS)
+    return f"""
+    goods_rows AS (
+      SELECT pc.*,
+             SUM(pc.pay_raw) OVER w AS goods_pay_raw,
+             SUM(pc.promo_cost) OVER w AS goods_promo_cost,
+             SUM(pc.ad_spend) OVER w AS goods_ad_spend,
+             SUM(pc.pay_amount) OVER w AS goods_pay_amount
+      FROM per_channel pc
+      JOIN goods_main g ON g.id = pc.goods_id
+      WHERE g.tenant_id = :tenant_id AND g.is_deleted = false
+        {filter_sql}
+      WINDOW w AS (PARTITION BY pc.goods_id)
+    )
+    SELECT
+      {GOODS_META_COLUMNS},
+      r.channel AS channel,
+      {money},
+      {counts}
+    FROM goods_rows r
+    JOIN goods_main g ON g.id = r.goods_id
+    WHERE r.goods_pay_raw > 0 OR r.goods_promo_cost > 0 OR r.goods_ad_spend > 0
+    -- 支付额相同的商品原来顺序不确定；货号兜底后汇总表读取能逐行比对
+    ORDER BY r.goods_pay_amount DESC, g.goods_code, r.channel
+    """
+
 
 # 日期分桶。周按 ISO（周一开始），汇总表刷新的 _bucket_start 用同一口径 ——
 # 两边分桶方式不一致会让周汇总与周趋势图对不上。
@@ -378,58 +437,45 @@ class ProductionRepository:
         exclude_brushing: bool = False,
         seasons: Sequence[str] | None = None,
     ) -> list[Mapping[str, Any]]:
-        """按商品/套装聚合；``qn_link`` CTE 保证每条日报只映射一次。
+        """按（商品, 渠道）聚合；``qn_link`` CTE 保证每条日报只映射一次。
 
         对齐 PRD V1.4 第 3 章：报表主体是「商品」而不是「款式」。套装（多个款式共用
         一条销售链接）合并成一行，销售额只算一次；套装的站外推广费与刷单剔除按成员
         款式求和。
 
+        渠道（7e R2，设计 3.2）：与 ``daily_trend_by_goods`` 同口径 —— 销售 / 退款 / 加购 /
+        支付单数按千牛链接的 ``channel``（兜底记普通），站内花费与站内加购按万相台链接的
+        ``channel``，推广与刷单记普通；配对加购走同一份 ``_PAIRED_CART_CTE``（逐日配对后
+        再按（商品, 渠道）求和）。过滤与排序看商品级合计（``goods_channel_select``）。
+        R2 期间投产接口不拆渠道：``ProductionService`` 把同一商品的渠道行求和回一行。
+
         ``seasons`` 为多选（PRD 第 4 章），空列表与 None 同义：不筛（类目筛选已下线，8a-3）。
         """
+        filter_sql, filter_params = goods_filter_clauses(seasons)
         # 款式理论上可以同时属于单品商品与套装（库层面表达不了这个约束），那时同一笔
         # 调整会被两个商品各减一次。取「主商品」（非套装优先、货号次之）保证只归一处，
         # 宁可归属有偏差也不让总额虚高。彻底的解法是给 order_adjustment 直接记
         # goods_main_id，留给后续批次。
-        brushing_sub = (
-            """
-            -- 剔除与否只看 exclude_from_roi，不再叠加 order_type 判断：
-            -- 标记本身就是「要不要进投产口径」的唯一开关，两个条件并列反而容易漏。
-            - COALESCE((
-                SELECT SUM(oa.amount) FROM order_adjustment oa
-                WHERE oa.tenant_id = :tenant_id
-                  AND oa.exclude_from_roi = true
-                  AND oa.order_date BETWEEN :date_from AND :date_to
-                  AND (
-                    SELECT gi.goods_main_id FROM goods_style_item gi
-                    JOIN goods_main gg ON gg.id = gi.goods_main_id
-                    WHERE gi.style_id = oa.style_id AND gi.is_active = true
-                    ORDER BY gg.is_suit, gg.goods_code
-                    LIMIT 1
-                  ) = g.id
-              ), 0)
-            """
-            if exclude_brushing
-            else ""
-        )
-        filter_sql, filter_params = goods_filter_clauses(seasons)
         sql = text(
             f"""
-            WITH {_QIANNIU_GOODS_LINK_CTE}
-            SELECT
-              {GOODS_META_COLUMNS},
-              (COALESCE(SUM(q.pay_amount), 0){brushing_sub}) AS pay_amount,
-              {_REFUND_SUM} AS refund_amount,
-              {_ADD_CART_SUM} AS add_cart_count,
-              COALESCE(MAX(promo.promo_cost), 0) AS promo_cost,
-              COALESCE(MAX(ad.ad_spend), 0) AS ad_spend
-            FROM goods_main g
-            -- 映射走 qn_link CTE（见 _QIANNIU_GOODS_LINK_CTE），这里只剩等值 JOIN。
-            -- 以前这两行是一大段 EXISTS/NOT EXISTS/COUNT(DISTINCT) 写在 JOIN 条件里，
-            -- 对每个 (商品, 日报) 组合各算一遍，310 行数据要 1848ms。
-            LEFT JOIN qn_link ON qn_link.goods_id = g.id
-            LEFT JOIN qianniu_daily q ON q.id = qn_link.qid
-            LEFT JOIN (
-              SELECT mapped_a.goods_main_id, SUM(a.cost) AS ad_spend
+            WITH {_QIANNIU_GOODS_LINK_CTE}, {_PAIRED_CART_CTE},
+            sales AS (
+              -- 映射走 qn_link CTE（见 _QIANNIU_GOODS_LINK_CTE），这里只剩等值 JOIN。
+              -- 以前这一段是一大段 EXISTS/NOT EXISTS/COUNT(DISTINCT) 写在 JOIN 条件里，
+              -- 对每个 (商品, 日报) 组合各算一遍，310 行数据要 1848ms。
+              SELECT qn_link.goods_id AS goods_id, qn_link.channel AS channel,
+                     COALESCE(SUM(q.pay_amount), 0) AS pay_amount,
+                     {_REFUND_SUM} AS refund_amount,
+                     {_ADD_CART_SUM} AS add_cart_count,
+                     COALESCE(SUM(q.pay_orders), 0) AS pay_orders
+              FROM qn_link
+              JOIN qianniu_daily q ON q.id = qn_link.qid
+              GROUP BY qn_link.goods_id, qn_link.channel
+            ),
+            ads AS (
+              SELECT mapped_a.goods_main_id AS goods_id, mapped_a.channel AS channel,
+                     COALESCE(SUM(a.cost), 0) AS ad_spend,
+                     COALESCE(SUM(a.add_cart_count), 0) AS ad_add_cart_count
               FROM ad_daily a
               JOIN platform_product mapped_a
                 ON mapped_a.tenant_id = a.tenant_id
@@ -445,35 +491,100 @@ class ProductionRepository:
                 )
               WHERE a.tenant_id = :tenant_id
                 AND a.date BETWEEN :date_from AND :date_to
-              GROUP BY mapped_a.goods_main_id
-            ) ad ON ad.goods_main_id = g.id
-            LEFT JOIN (
+              GROUP BY mapped_a.goods_main_id, mapped_a.channel
+            ),
+            promos AS (
               -- 商品归属：自己记的归属优先，为空回落主商品推定（_PROMO_GOODS_LATERAL）
-              SELECT {_PROMO_GOODS_ID} AS goods_main_id,
+              SELECT {_PROMO_GOODS_ID} AS goods_id,
                      -- 站外推广成本 = 博主服务费 + 样品成本 + 寄回运费（PRD V1.4 §9）。
                      -- total_promo_cost 是生成列，口径集中在数据库，报表只读不算。
-                     SUM(p.total_promo_cost) AS promo_cost
+                     COALESCE(SUM(p.total_promo_cost), 0) AS promo_cost
               FROM promotion p
               {_PROMO_GOODS_LATERAL}
               WHERE p.tenant_id = :tenant_id
                 AND p.cooperation_date BETWEEN :date_from AND :date_to
                 AND p.is_active = true AND p.publish_status = '已发布'
               GROUP BY {_PROMO_GOODS_ID}
-            ) promo ON promo.goods_main_id = g.id
-            WHERE g.tenant_id = :tenant_id AND g.is_deleted = false
-              {filter_sql}
-            GROUP BY {GOODS_META_GROUP_BY}
-            HAVING COALESCE(SUM(q.pay_amount), 0) > 0
-                OR COALESCE(MAX(promo.promo_cost), 0) > 0
-                OR COALESCE(MAX(ad.ad_spend), 0) > 0
-            -- 支付额相同的商品原来顺序不确定；货号兜底后汇总表读取能逐行比对
-            ORDER BY pay_amount DESC, goods_code
+            ),
+            brushing AS (
+              -- 剔除与否只看 exclude_from_roi，不再叠加 order_type 判断：
+              -- 标记本身就是「要不要进投产口径」的唯一开关，两个条件并列反而容易漏。
+              SELECT brush_goods.goods_main_id AS goods_id,
+                     COALESCE(SUM(oa.amount), 0) AS brushing_amount
+              FROM order_adjustment oa
+              CROSS JOIN LATERAL (
+                SELECT gi.goods_main_id FROM goods_style_item gi
+                JOIN goods_main gg ON gg.id = gi.goods_main_id
+                WHERE gi.style_id = oa.style_id AND gi.is_active = true
+                ORDER BY gg.is_suit, gg.goods_code
+                LIMIT 1
+              ) brush_goods
+              WHERE oa.tenant_id = :tenant_id
+                AND oa.exclude_from_roi = true
+                AND oa.order_date BETWEEN :date_from AND :date_to
+              GROUP BY brush_goods.goods_main_id
+            ),
+            paired AS (
+              -- 配对已在 _PAIRED_CART_CTE 里逐日判断，这里只按（商品, 渠道）求和
+              SELECT pc.goods_id AS goods_id, pc.channel AS channel,
+                     SUM(pc.paired_all_cart) AS paired_all_cart,
+                     SUM(pc.paired_ad_cart) AS paired_ad_cart,
+                     SUM(pc.paired_days) AS paired_days
+              FROM paired_cart pc
+              GROUP BY pc.goods_id, pc.channel
+            ),
+            per_channel AS (
+              SELECT goods_id, channel,
+                     COALESCE(SUM(pay_amount), 0) AS pay_raw,
+                     COALESCE(SUM(pay_amount), 0)
+                       - CASE WHEN :exclude_brushing
+                              THEN COALESCE(SUM(brushing_amount), 0)
+                              ELSE 0 END AS pay_amount,
+                     COALESCE(SUM(refund_amount), 0) AS refund_amount,
+                     COALESCE(SUM(add_cart_count), 0) AS add_cart_count,
+                     COALESCE(SUM(pay_orders), 0) AS pay_orders,
+                     COALESCE(SUM(promo_cost), 0) AS promo_cost,
+                     COALESCE(SUM(ad_spend), 0) AS ad_spend,
+                     COALESCE(SUM(ad_add_cart_count), 0) AS ad_add_cart_count,
+                     COALESCE(SUM(paired_all_cart), 0) AS paired_all_cart,
+                     COALESCE(SUM(paired_ad_cart), 0) AS paired_ad_cart,
+                     COALESCE(SUM(paired_days), 0) AS paired_days
+              FROM (
+                SELECT goods_id, channel, pay_amount, refund_amount, add_cart_count,
+                       pay_orders,
+                       0::numeric AS brushing_amount,
+                       0::numeric AS promo_cost, 0::numeric AS ad_spend,
+                       0::bigint AS ad_add_cart_count,
+                       0::bigint AS paired_all_cart, 0::bigint AS paired_ad_cart,
+                       0::bigint AS paired_days
+                FROM sales
+                UNION ALL
+                SELECT goods_id, CAST('普通' AS varchar(16)), 0, 0, 0, 0, brushing_amount,
+                       0, 0, 0, 0, 0, 0
+                FROM brushing
+                UNION ALL
+                SELECT goods_id, channel, 0, 0, 0, 0, 0, 0, ad_spend, ad_add_cart_count,
+                       0, 0, 0
+                FROM ads
+                UNION ALL
+                SELECT goods_id, CAST('普通' AS varchar(16)), 0, 0, 0, 0, 0, promo_cost,
+                       0, 0, 0, 0, 0
+                FROM promos
+                UNION ALL
+                SELECT goods_id, channel, 0, 0, 0, 0, 0, 0, 0, 0,
+                       paired_all_cart, paired_ad_cart, paired_days
+                FROM paired
+              ) source
+              GROUP BY goods_id, channel
+            ),
+            {goods_channel_select(filter_sql)}
             """
         )
         params: dict[str, Any] = {
             "tenant_id": tenant_id,
             "date_from": date_from,
             "date_to": date_to,
+            "exclude_brushing": exclude_brushing,
             **filter_params,
         }
         return as_mappings((await self._s.execute(sql, params)).mappings().all())
@@ -1152,7 +1263,9 @@ async def style_exists(session: AsyncSession, tenant_id: UUID, style_id: UUID) -
 
 __all__ = [
     "GOODS_META_COLUMNS",
-    "GOODS_META_GROUP_BY",
+    "PRODUCTION_ADDITIVE_COLUMNS",
+    "PRODUCTION_COUNT_COLUMNS",
+    "PRODUCTION_MONEY_COLUMNS",
     "BiRepository",
     "DrillFilters",
     "DrillRepository",
@@ -1161,6 +1274,7 @@ __all__ = [
     "TargetPlanningRepository",
     "WorkProgressRepository",
     "bucket_expr",
+    "goods_channel_select",
     "goods_filter_clauses",
     "style_exists",
 ]
