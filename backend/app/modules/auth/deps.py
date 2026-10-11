@@ -106,3 +106,25 @@ def require_permission(scope: str, action: str = "read") -> params.Depends:
     # 直接构造 params.Depends：fastapi.Depends() 的返回注解是 Any，
     # 用它会让本函数变成「返回 Any」。两者等价（Depends() 内部就是这一句）。
     return params.Depends(dependency=_checker)
+
+
+def require_any_permission(*pairs: tuple[str, str]) -> params.Depends:
+    """生成"任一 (scope, action) 命中即过"的依赖（如工作进度 read / read_own）。
+
+    只挡「一个都没有」；持哪一个、能看多少由 service 层再判（report/pr_scope.py）。
+    """
+
+    async def _checker(perms: CurrentPerms) -> EffectivePermissions:
+        if not any(perms.has(scope, action) for scope, action in pairs):
+            raise PermissionDeniedError(
+                "缺少权限 " + " / ".join(f"{scope}:{action}" for scope, action in pairs),
+                details={
+                    "required_any": [
+                        {"required_scope": scope, "required_action": action}
+                        for scope, action in pairs
+                    ]
+                },
+            )
+        return perms
+
+    return params.Depends(dependency=_checker)

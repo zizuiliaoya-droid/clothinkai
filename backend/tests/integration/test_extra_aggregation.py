@@ -21,6 +21,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.security.field_permissions import FieldPermissionContext
 from app.core.tenancy import tenant_id_ctx
 from app.modules.importer.adapters.qianniu import QianniuImportAdapter
 from app.modules.importer.adapters.wanxiangtai import WanxiangtaiImportAdapter
@@ -38,6 +39,7 @@ pytestmark = pytest.mark.asyncio
 D1, D2 = date(2026, 6, 15), date(2026, 6, 16)  # 周一、周二
 _STORE_FIXED = 7  # 店铺导出的固定列：日期 + 6 个指标
 _PRODUCTION_FIXED = 15  # 投产导出的固定列：编码、简称、名称、含款号 + 11 个指标
+_SUPER_CTX = FieldPermissionContext(frozenset(), frozenset(), frozenset(), is_superuser=True)
 
 
 async def _goods(
@@ -309,6 +311,7 @@ class TestExportEqualsPage:
                 exclude_brushing=True,
                 seasons=None,
                 granularity=granularity,
+                field_ctx=_SUPER_CTX,
             )
             extra_keys = headers[_STORE_FIXED:]
             assert len(rows) == len(page)
@@ -351,6 +354,7 @@ class TestExportEqualsPage:
                 exclude_brushing=True,
                 seasons=None,
                 granularity="day",
+                field_ctx=_SUPER_CTX,
             )
             extra_keys = headers[_PRODUCTION_FIXED:]
             exported = {row[0]: row[_PRODUCTION_FIXED:] for row in rows}

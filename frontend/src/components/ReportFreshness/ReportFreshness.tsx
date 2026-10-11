@@ -5,9 +5,10 @@ import {
   ReloadOutlined,
   ThunderboltOutlined,
 } from "@ant-design/icons";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import dayjs from "dayjs";
-import { getSummaryFreshness, refreshSummaries } from "@/features/report/api";
+import { refreshSummaries } from "@/features/report/api";
+import { useSummaryFreshness } from "@/features/report/useSummaryFreshness";
 import type { ReportFreshness as Freshness, TimePreset } from "@/features/report/types";
 import { extractErrorMessage, isApiError } from "@/services/apiClient";
 
@@ -68,7 +69,6 @@ function formatAsOf(iso: string): string {
   if (t.isSame(now, "year")) return t.format("MM-DD HH:mm");
   return t.format("YYYY-MM-DD HH:mm");
 }
-
 interface Props {
   preset: TimePreset;
   dateFrom?: string;
@@ -86,11 +86,7 @@ interface Props {
  */
 export function ReportFreshness({ preset, dateFrom, dateTo, enabled = true }: Props) {
   const queryClient = useQueryClient();
-  const { data } = useQuery({
-    queryKey: ["report-freshness", preset, dateFrom, dateTo],
-    enabled,
-    queryFn: () => getSummaryFreshness({ preset, date_from: dateFrom, date_to: dateTo }),
-  });
+  const { data } = useSummaryFreshness(preset, dateFrom, dateTo, enabled);
 
   const refresh = useMutation({
     // 用服务端解析出的具体日期：预设模式（近 30 天等）下页面手里没有日期

@@ -21,5 +21,31 @@ REPORT_SUMMARY_PERMISSIONS: list[tuple[str, str, str]] = [
     ("report.summary", "refresh", "手动刷新报表汇总表"),
 ]
 
+# 7e R1（报表视图设计第 4 节），由 migration 061 seed。
+#
+# 「只看本人」的 action 刻意叫 read_own 而不是 read：pr_manager / operations 持有
+# report.*:read，has() 的通配按 action 精确匹配，捞不到 read_own；持 read 的人照旧看全部。
+# BI 从 report.production:read 拆出 report.bi:read：给财务 BI 不连带放开投产页；
+# report.*:read 仍覆盖它（主管 / 运营不用显式授）。
+REPORT_WORK_PROGRESS_READ_OWN = ("report.work_progress", "read_own")
+REPORT_PUBLISH_PROGRESS_READ_OWN = ("report.publish_progress", "read_own")
+REPORT_BI_READ = ("report.bi", "read")
+REPORT_BI_READ_OWN = ("report.bi", "read_own")
 
-__all__ = ["REPORT_ADVANCED_PERMISSIONS", "REPORT_SUMMARY_PERMISSIONS"]
+REPORT_VIEW_PERMISSIONS: list[tuple[str, str, str]] = [
+    (*REPORT_WORK_PROGRESS_READ_OWN, "查看工作进度表（只看本人）"),
+    (*REPORT_PUBLISH_PROGRESS_READ_OWN, "查看发文进度表（只看本人）"),
+    (*REPORT_BI_READ, "查看 BI 看板"),
+    (*REPORT_BI_READ_OWN, "查看 BI 看板（个人版）"),
+]
+
+
+__all__ = [
+    "REPORT_ADVANCED_PERMISSIONS",
+    "REPORT_BI_READ",
+    "REPORT_BI_READ_OWN",
+    "REPORT_PUBLISH_PROGRESS_READ_OWN",
+    "REPORT_SUMMARY_PERMISSIONS",
+    "REPORT_VIEW_PERMISSIONS",
+    "REPORT_WORK_PROGRESS_READ_OWN",
+]

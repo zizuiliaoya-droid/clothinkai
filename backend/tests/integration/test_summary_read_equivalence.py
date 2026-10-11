@@ -28,12 +28,15 @@ import app.modules.report.production_service as production_mod
 import app.modules.report.store_daily_service as store_mod
 import app.modules.report.work_progress_service as work_mod
 from app.core.config import settings
+from app.core.security.field_permissions import FieldPermissionContext
 from app.core.tenancy import tenant_id_ctx
 from app.modules.collect.models import AdDaily, QianniuDaily
 from app.modules.finance.order_adjustment_models import OrderAdjustment
 from app.modules.product.goods_models import GoodsMain, GoodsStyleItem
 from app.modules.product.platform_product_models import PlatformProduct
 from app.modules.promotion.urge_calculator import get_today
+from app.modules.report.advanced_schemas import PrWorkProgress
+from app.modules.report.pr_scope import PR_SCOPE_ALL, PrScope, PrScopeKind
 from app.modules.report.production_service import ProductionService
 from app.modules.report.store_daily_service import StoreDailyService
 from app.modules.report.summary_read import SummaryReadRepository
@@ -279,6 +282,20 @@ async def _refresh(session: AsyncSession, tenant: Any, lo: date, hi: date) -> No
     await session.commit()
 
 
+_SUPER_CTX = FieldPermissionContext(frozenset(), frozenset(), frozenset(), is_superuser=True)
+
+
+async def _wp(
+    svc: WorkProgressService,
+    tenant: Any,
+    lo: date,
+    hi: date,
+    *,
+    scope: PrScope = PR_SCOPE_ALL,
+) -> list[PrWorkProgress]:
+    return await svc.get_for_range(tenant.id, lo, hi, scope=scope, field_ctx=_SUPER_CTX)
+
+
 def _dump(models: Any) -> Any:
     if isinstance(models, list):
         return [m.model_dump(mode="json") for m in models]
@@ -469,11 +486,11 @@ class TestWorkProgress:
             await _refresh(session, tenant_a, M_LO, M_HI)
 
             svc = WorkProgressService(session)
-            via_summary = await svc.get_for_month(tenant_a.id, MONTH)
+            via_summary = await _wp(svc, tenant_a, M_LO, M_HI)
             assert ("work_progress", "summary") in recorder.calls
 
             monkeypatch.setattr(settings, "REPORT_SUMMARY_READS_ENABLED", False)
-            via_live = await svc.get_for_month(tenant_a.id, MONTH)
+            via_live = await _wp(svc, tenant_a, M_LO, M_HI)
             assert ("work_progress", "live") in recorder.calls
             assert _dump(via_summary) == _dump(via_live)
 
@@ -505,21 +522,80 @@ class TestWorkProgress:
         finally:
             tenant_id_ctx.reset(tok)
 
-    async def test_current_month_stays_live(
+    @pytest.mark.parametrize("who", ["pr1", "unassigned"])
+    async def test_scoped_summary_equals_live(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        factory: Any,
+        recorder: _SourceRecorder,
+        monkeypatch: pytest.MonkeyPatch,
+        who: str,
+    ) -> None:
+        """只看本人（read_own → ``PrScope(PR, 本人)``）与「未分配」：SQL 之后按行过滤，两路逐字相等。"""
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            seeded = await _seed(
+                session, tenant_a, product_factory, blogger_factory, promotion_factory, factory
+            )
+            await session.commit()
+            await _refresh(session, tenant_a, M_LO, M_HI)
+            if who == "pr1":
+                scope = PrScope(PrScopeKind.PR, seeded["pr1"].id)
+                expected_pr = seeded["pr1"].id
+            else:
+                scope = PrScope(PrScopeKind.UNASSIGNED)
+                expected_pr = None
+
+            svc = WorkProgressService(session)
+            via_summary = await _wp(svc, tenant_a, M_LO, M_HI, scope=scope)
+            assert recorder.calls == [("work_progress", "summary")]
+
+            monkeypatch.setattr(settings, "REPORT_SUMMARY_READS_ENABLED", False)
+            via_live = await _wp(svc, tenant_a, M_LO, M_HI, scope=scope)
+            assert recorder.calls[1:] == [("work_progress", "live")]
+            assert _dump(via_summary) == _dump(via_live)
+
+            # 场景有效性：全量里有 3 行（pr1 / pr2 / 未分配），范围内只剩那一行，计数非零
+            everyone = await _wp(svc, tenant_a, M_LO, M_HI)
+            assert len(everyone) == 3
+            assert [r.pr_id for r in via_summary] == [expected_pr]
+            assert via_summary[0].quote_count > 0
+        finally:
+            tenant_id_ctx.reset(tok)
+
+    async def test_range_with_future_days_stays_live(
         self,
         session: AsyncSession,
         tenant_a: Any,
         recorder: _SourceRecorder,
     ) -> None:
-        """当月包含还没到的日子，刷新覆盖不到 → 一定走实时。
-
-        这是刻意的行为（PR 盯着当月看，实时对他们最有用），钉住免得以后被「优化」掉。
-        """
+        """区间含还没到的日子，刷新覆盖不到 → 走实时（通用的「每天有覆盖」规则，不是当月特例）。"""
         tok = tenant_id_ctx.set(tenant_a.id)
         try:
             await _refresh(session, tenant_a, TODAY - timedelta(days=30), TODAY)
-            await WorkProgressService(session).get_for_month(tenant_a.id, f"{TODAY:%Y-%m}")
+            svc = WorkProgressService(session)
+            await _wp(svc, tenant_a, TODAY - timedelta(days=5), TODAY + timedelta(days=1))
             assert recorder.calls == [("work_progress", "live")]
+        finally:
+            tenant_id_ctx.reset(tok)
+
+    async def test_fully_covered_range_reads_summary(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        recorder: _SourceRecorder,
+    ) -> None:
+        """区间每天都有覆盖就读汇总：截到今天的区间（``this_month`` 这种）也不再写死实时。"""
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            await _refresh(session, tenant_a, TODAY - timedelta(days=30), TODAY)
+            svc = WorkProgressService(session)
+            await _wp(svc, tenant_a, TODAY - timedelta(days=10), TODAY)
+            assert recorder.calls == [("work_progress", "summary")]
         finally:
             tenant_id_ctx.reset(tok)
 

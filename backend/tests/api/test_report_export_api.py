@@ -12,6 +12,13 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from openpyxl import load_workbook
 
+from app.core.security.field_permissions import FieldPermissionContext
+from app.core.security.permissions import EffectivePermissions
+from app.modules.report.pr_scope import PR_SCOPE_ALL
+
+_SUPER_CTX = FieldPermissionContext(frozenset(), frozenset(), frozenset(), is_superuser=True)
+_ALL_PERMS = EffectivePermissions(user_id="test", scopes=frozenset({"*"}))
+
 
 @pytest.mark.api
 @pytest.mark.asyncio
@@ -93,6 +100,7 @@ class TestReportExportApiContract:
             ),
         ]
         store_calls: list[dict[str, object]] = []
+        work_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
         work_row = SimpleNamespace(
             pr_name="PR甲",
             quote_count=10,
@@ -135,7 +143,8 @@ class TestReportExportApiContract:
             def __init__(self, _session: object) -> None:
                 pass
 
-            async def get_for_month(self, *_args: object) -> list[object]:
+            async def get_for_range(self, *args: object, **kwargs: object) -> list[object]:
+                work_calls.append((args[1:], kwargs))
                 return [work_row]
 
         monkeypatch.setattr(module, "ProductionService", FakeProductionService)
@@ -151,6 +160,7 @@ class TestReportExportApiContract:
             exclude_brushing=True,
             seasons=None,
             granularity="day",
+            field_ctx=_SUPER_CTX,
         )
         assert production_headers[:4] == ["商品编码", "商品简称", "商品名称", "含款号"]
         assert production_rows[0][1:3] == [dangerous_short, dangerous_text]
@@ -170,6 +180,7 @@ class TestReportExportApiContract:
             exclude_brushing=True,
             seasons=None,
             granularity="week",
+            field_ctx=_SUPER_CTX,
         )
         assert store_headers[:7] == [
             "日期",
@@ -215,6 +226,7 @@ class TestReportExportApiContract:
             exclude_brushing=True,
             seasons=None,
             granularity="day",
+            field_ctx=_SUPER_CTX,
         )
         assert len(work_headers) == len(work_rows[0]) == 20
         assert work_headers[1:9] == [
@@ -228,8 +240,17 @@ class TestReportExportApiContract:
             "信息完整率",
         ]
         assert work_rows[0][7:9] == [4, Decimal("0.8")]
+        # 工作进度按请求区间导（不再取起日所在整月），看全部 PR
+        assert work_calls == [(period, {"scope": PR_SCOPE_ALL, "field_ctx": _SUPER_CTX})]
 
-        response = await service.export(uuid4(), "production", period, granularity="day")
+        response = await service.export(
+            uuid4(),
+            "production",
+            period,
+            granularity="day",
+            field_ctx=_SUPER_CTX,
+            perms=_ALL_PERMS,
+        )
         body = b"".join([chunk async for chunk in response.body_iterator])
         worksheet = load_workbook(io.BytesIO(body), data_only=False).active
         # 危险表头是唯一的动态 extra 列，落在固定列之后（最后一列）
@@ -242,7 +263,14 @@ class TestReportExportApiContract:
         assert worksheet.cell(2, 3).value == f"'{dangerous_text}"
         assert worksheet.cell(2, 3).data_type != "f"
 
-        store_response = await service.export(uuid4(), "store-daily", period, granularity="week")
+        store_response = await service.export(
+            uuid4(),
+            "store-daily",
+            period,
+            granularity="week",
+            field_ctx=_SUPER_CTX,
+            perms=_ALL_PERMS,
+        )
         store_body = b"".join([chunk async for chunk in store_response.body_iterator])
         store_sheet = load_workbook(io.BytesIO(store_body), data_only=False).active
         assert store_calls[-1] == {"granularity": "week"}

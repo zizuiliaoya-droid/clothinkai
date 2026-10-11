@@ -21,6 +21,7 @@ import {
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useAuthStore } from "@/stores/authStore";
 import { logout as apiLogout } from "@/features/auth/api";
+import { useReportCapabilities } from "@/features/report/useReportCapabilities";
 
 const { Header, Sider, Content } = Layout;
 
@@ -41,6 +42,11 @@ export function AppLayout() {
   // 仓库发货只走 promotion_ship:fill / export（060 起只授 warehouse，管理员靠 *）；
   // PR / 主管 / 财务 / 运营点进去是 403，菜单里就不放。只管显示，后端 403 才是闸门
   const canViewWarehouse = isSystemAdmin || roles.includes("warehouse");
+  // 报表菜单按 capabilities（/me 只给角色，算不了 scope）：能力没回来前不显示，免得先出现再收回。
+  // 「BI看板」只给看全部的人；个人版随 R6。只管显示，后端 403 才是闸门
+  const { data: reportCaps } = useReportCapabilities();
+  const canViewWorkProgress = reportCaps?.work_progress != null;
+  const canViewBi = reportCaps?.bi === "full";
 
   async function handleLogout() {
     try {
@@ -110,10 +116,14 @@ export function AppLayout() {
         ...(canViewWarehouse
           ? [{ key: "/warehouse-orders", label: <Link to="/warehouse-orders">仓库发货</Link> }]
           : []),
-        {
-          key: "/work-progress",
-          label: <Link to="/work-progress">工作进度表</Link>,
-        },
+        ...(canViewWorkProgress
+          ? [
+              {
+                key: "/work-progress",
+                label: <Link to="/work-progress">工作进度表</Link>,
+              },
+            ]
+          : []),
         {
           key: "/publish-target",
           label: <Link to="/publish-target">爆款约篇数量</Link>,
@@ -144,7 +154,7 @@ export function AppLayout() {
       children: [
         { key: "/store-daily", label: <Link to="/store-daily">店铺数据</Link> },
         { key: "/production", label: <Link to="/production">投产报表</Link> },
-        { key: "/bi", label: <Link to="/bi">BI看板</Link> },
+        ...(canViewBi ? [{ key: "/bi", label: <Link to="/bi">BI看板</Link> }] : []),
       ],
     },
     {

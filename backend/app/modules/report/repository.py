@@ -5,6 +5,9 @@
 
 复用 U04 ``URGE_STATUS_SQL_EXPR``（:today/:urge_days/:important_days 参数）+
 ``services.metric.publish_progress.like_sum_expr``（折算系数来自 U04 常量）。
+
+4 个聚合都收必填 ``pr_scope``（7e R1 只看本人）：子句下推到 WHERE —— 摘要 / 卡片是跨 PR
+的聚合，SQL 之后无法再按行过滤。
 """
 
 from __future__ import annotations
@@ -19,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import as_mapping, as_mappings
 from app.modules.promotion.urge_calculator import URGE_STATUS_SQL_EXPR
+from app.modules.report.pr_scope import PrScope
 from app.services.metric.publish_progress import like_sum_expr
 
 _LIKE = like_sum_expr("like_count")
@@ -58,7 +62,9 @@ class PublishProgressRepository:
         today: date,
         urge_days: int,
         important_days: int,
+        pr_scope: PrScope,
     ) -> Mapping[str, Any]:
+        scope_sql, scope_params = pr_scope.sql("pr_id")
         # 显式 tenant_id 过滤（与 U04 list_with_cte 一致，RLS 之外的防御层）
         sql = text(
             f"""
@@ -74,14 +80,22 @@ class PublishProgressRepository:
             FROM promotion
             WHERE tenant_id = :tenant_id
               AND is_active = true
-              AND cooperation_date BETWEEN :date_from AND :date_to
+              AND cooperation_date BETWEEN :date_from AND :date_to{scope_sql}
             """
         )
         return as_mapping(
             (
                 await self._s.execute(
                     sql,
-                    self._params(tenant_id, date_from, date_to, today, urge_days, important_days),
+                    self._params(
+                        tenant_id,
+                        date_from,
+                        date_to,
+                        today,
+                        urge_days,
+                        important_days,
+                        **scope_params,
+                    ),
                 )
             )
             .mappings()
@@ -99,15 +113,19 @@ class PublishProgressRepository:
         important_days: int,
         page: int,
         page_size: int,
+        pr_scope: PrScope,
     ) -> tuple[list[Mapping[str, Any]], int]:
+        scope_sql, scope_params = pr_scope.sql("p.pr_id")
         where = (
             "WHERE p.tenant_id = :tenant_id "
             "AND p.is_active = true "
-            "AND p.cooperation_date BETWEEN :date_from AND :date_to"
+            "AND p.cooperation_date BETWEEN :date_from AND :date_to" + scope_sql
         )
-        # total = 不同 style 数
+        # total = 不同 style 数（与数据行同一个 WHERE，只看本人时也只数本人的款）
         total_sql = text(f"SELECT COUNT(DISTINCT p.style_id) FROM promotion p {where}")
-        params = self._params(tenant_id, date_from, date_to, today, urge_days, important_days)
+        params = self._params(
+            tenant_id, date_from, date_to, today, urge_days, important_days, **scope_params
+        )
         total = int((await self._s.execute(total_sql, params)).scalar_one())
 
         data_sql = text(
@@ -151,7 +169,9 @@ class PublishProgressRepository:
         today: date,
         urge_days: int,
         important_days: int,
+        pr_scope: PrScope,
     ) -> list[Mapping[str, Any]]:
+        scope_sql, scope_params = pr_scope.sql("p.pr_id")
         sql = text(
             f"""
             SELECT
@@ -166,7 +186,7 @@ class PublishProgressRepository:
             WHERE p.tenant_id = :tenant_id
               AND p.is_active = true
               AND p.style_id = :style_id
-              AND p.cooperation_date BETWEEN :date_from AND :date_to
+              AND p.cooperation_date BETWEEN :date_from AND :date_to{scope_sql}
             GROUP BY p.pr_id, u.display_name, u.username
             ORDER BY quote_count DESC
             """
@@ -179,14 +199,22 @@ class PublishProgressRepository:
             urge_days,
             important_days,
             style_id=style_id,
+            **scope_params,
         )
         return as_mappings((await self._s.execute(sql, params)).mappings().all())
 
     async def aggregate_by_half_month(
-        self, *, tenant_id: UUID, style_id: UUID, date_from: date, date_to: date
+        self,
+        *,
+        tenant_id: UUID,
+        style_id: UUID,
+        date_from: date,
+        date_to: date,
+        pr_scope: PrScope,
     ) -> list[Mapping[str, Any]]:
+        scope_sql, scope_params = pr_scope.sql("pr_id")
         sql = text(
-            """
+            f"""
             SELECT
               to_char(cooperation_date, 'YYYY-MM')
                 || (CASE WHEN extract(day FROM cooperation_date) <= 15
@@ -199,7 +227,7 @@ class PublishProgressRepository:
             WHERE tenant_id = :tenant_id
               AND is_active = true
               AND style_id = :style_id
-              AND cooperation_date BETWEEN :date_from AND :date_to
+              AND cooperation_date BETWEEN :date_from AND :date_to{scope_sql}
             GROUP BY period_label
             ORDER BY period_start ASC
             """
@@ -213,6 +241,7 @@ class PublishProgressRepository:
                         "style_id": style_id,
                         "date_from": date_from,
                         "date_to": date_to,
+                        **scope_params,
                     },
                 )
             )

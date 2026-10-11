@@ -34,6 +34,15 @@ ROLE_SCOPES: tuple[str, ...] = (
     "promotion_ship:push",
     "promotion_ship:fill",
     "promotion_ship:export",
+    # 7e R1（061）。收回的 report.publish_progress:read 不放这里，test_migration_061_state 单独断言
+    "report.work_progress:read_own",
+    "report.publish_progress:read_own",
+    "report.bi:read",
+    "report.bi:read_own",
+    "report.work_progress:read",
+    "report.export:read",
+    "report.store_daily:write",
+    "report.summary:refresh",
 )
 
 _APP_ROLE = "clothing_app"

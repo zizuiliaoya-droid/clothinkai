@@ -13,16 +13,38 @@ from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import PermissionDeniedError
 from app.core.metrics import report_export_total
+from app.core.security.field_permissions import FieldPermissionContext
+from app.core.security.permissions import EffectivePermissions
 from app.modules.report.exceptions import ReportExportTypeInvalidError
+from app.modules.report.pr_scope import PR_SCOPE_ALL
 from app.modules.report.production_service import ProductionService
 from app.modules.report.store_daily_service import StoreDailyService
 from app.modules.report.work_progress_service import WorkProgressService
 
 _XLSX_MEDIA = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
-_REPORT_TYPES = {"work-progress", "production", "store-daily"}
+# 报表类型 → 对应的读权限（7e R1，报表视图设计第 4 节）：路由只挡 report.export:read，
+# 这里再判这张报表本身能不能看。财务因此能导工作进度、不能导投产
+_READ_PERMISSION: dict[str, tuple[str, str]] = {
+    "work-progress": ("report.work_progress", "read"),
+    "production": ("report.production", "read"),
+    "store-daily": ("report.store_daily", "read"),
+}
+_REPORT_TYPES = set(_READ_PERMISSION)
 _GRANULARITIES = {"day", "week", "month", "year"}
+
+
+def exportable_report_types(perms: EffectivePermissions) -> list[str]:
+    """当前用户能导出的报表类型（capabilities 用）：持 ``report.export:read`` 且有该报表读权限。
+
+    与 :meth:`ReportExportService.export` 的两道判断同一份 ``_READ_PERMISSION``，按其顺序返回。
+    """
+    if not perms.has("report.export", "read"):
+        return []
+    return [t for t, (scope, action) in _READ_PERMISSION.items() if perms.has(scope, action)]
+
 
 _WORK_HEADERS = [
     "PR",
@@ -108,10 +130,24 @@ class ReportExportService:
         exclude_brushing: bool = True,
         seasons: Sequence[str] | None = None,
         granularity: str = "day",
+        field_ctx: FieldPermissionContext,
+        perms: EffectivePermissions,
     ) -> StreamingResponse:
+        """先校验类型（不认识的照旧 400），再判该类型的读权限（缺 → 403）。
+
+        ``perms`` 不给默认值：漏传直接报错，不悄悄放行。工作进度只认 ``read``，
+        只持 ``read_own`` 的人导不了（设计 2.5：PR 没有导出权限，不变）。
+        """
         if report_type not in _REPORT_TYPES:
             report_export_total.labels(report_type=report_type, result="invalid").inc()
             raise ReportExportTypeInvalidError(f"不支持的报表类型: {report_type}")
+        scope, action = _READ_PERMISSION[report_type]
+        if not perms.has(scope, action):
+            report_export_total.labels(report_type=report_type, result="forbidden").inc()
+            raise PermissionDeniedError(
+                f"缺少权限 {scope}:{action}",
+                details={"required_scope": scope, "required_action": action},
+            )
         if granularity not in _GRANULARITIES:
             raise ReportExportTypeInvalidError(f"不支持的时间粒度: {granularity}")
         headers, rows = await self._fetch_rows(
@@ -121,6 +157,7 @@ class ReportExportService:
             exclude_brushing=exclude_brushing,
             seasons=seasons,
             granularity=granularity,
+            field_ctx=field_ctx,
         )
         wb = Workbook(write_only=True)
         ws = wb.create_sheet(report_type)
@@ -147,6 +184,7 @@ class ReportExportService:
         exclude_brushing: bool,
         seasons: Sequence[str] | None,
         granularity: str,
+        field_ctx: FieldPermissionContext,
     ) -> tuple[list[str], list[list[Any]]]:
         if report_type == "production":
             report = await ProductionService(self._s).get_report(
@@ -202,8 +240,10 @@ class ReportExportService:
             ]
             return [*_STORE_HEADERS, *extra_keys], rows
 
-        month = f"{time_range[0]:%Y-%m}"
-        work_rows = await WorkProgressService(self._s).get_for_month(tenant_id, month)
+        # 按请求区间导（原来取起日所在整月）；能走到这里的都持 work_progress:read，看全部 PR
+        work_rows = await WorkProgressService(self._s).get_for_range(
+            tenant_id, *time_range, scope=PR_SCOPE_ALL, field_ctx=field_ctx
+        )
         rows = [
             [
                 row.pr_name,
@@ -232,4 +272,4 @@ class ReportExportService:
         return _WORK_HEADERS, rows
 
 
-__all__ = ["ReportExportService"]
+__all__ = ["ReportExportService", "exportable_report_types"]

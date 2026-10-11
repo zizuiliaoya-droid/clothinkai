@@ -1,4 +1,3 @@
-import { useEffect, useRef, useState } from "react";
 import {
   Alert,
   Card,
@@ -19,12 +18,16 @@ import { MiniLineChart } from "@/components/MiniLineChart/MiniLineChart";
 import { goodsDisplayName } from "@/features/product/api";
 import {
   ReportTimeRangeFilter,
-  type ReportDateRange,
   useReportTimeRange,
 } from "@/components/ReportTimeRangeFilter/ReportTimeRangeFilter";
 import { StyleImageThumbnail } from "@/components/StyleImageThumbnail/StyleImageThumbnail";
-import { useFilterMemory } from "@/features/preference/useFilterMemory";
 import { getBiDashboard } from "@/features/report/api";
+import { TIME_PRESETS, type ReportFilterSchema } from "@/features/report/reportFilters";
+import {
+  fromDateRange,
+  toDateRange,
+  useReportFilters,
+} from "@/features/report/useReportFilters";
 import type {
   BiStylePerformance,
   BiWorkloadRow,
@@ -98,39 +101,43 @@ function ProgressCell({ value, emptyText }: { value: string | null; emptyText: s
   );
 }
 
-/** 记忆到 user_preference 的筛选形态；自定义日期区间不记。 */
-interface BiFilterMemory {
+/** 筛选状态：preset / granularity 记忆；日期区间只从 URL 带入、不记；granularity 不在 URL 白名单里，只走记忆。 */
+interface BiFilters {
   preset: TimePreset;
+  date_from?: string;
+  date_to?: string;
   granularity: TimeGranularity;
 }
 
+const BI_FILTER_SCHEMA: ReportFilterSchema<BiFilters> = {
+  preset: { kind: "enum", values: TIME_PRESETS, url: true, memory: true },
+  date_from: { kind: "date", url: true, memory: false },
+  date_to: { kind: "date", url: true, memory: false },
+  granularity: {
+    kind: "enum",
+    values: GRANULARITY_OPTIONS.map((o) => o.value),
+    url: false,
+    memory: true,
+  },
+};
+
+const BI_FILTER_DEFAULTS: BiFilters = { preset: "last_30d", granularity: "day" };
+
 export function BiDashboardPage() {
-  const [preset, setPreset] = useState<TimePreset>("last_30d");
-  const [range, setRange] = useState<ReportDateRange>(null);
-  const [granularity, setGranularity] = useState<TimeGranularity>("day");
-
-  const memory = useFilterMemory<BiFilterMemory>("bi_dashboard");
-  const restoredRef = useRef(false);
-  useEffect(() => {
-    if (!memory.ready || restoredRef.current) return;
-    restoredRef.current = true;
-    if (memory.restored?.preset) setPreset(memory.restored.preset);
-    if (memory.restored?.granularity) setGranularity(memory.restored.granularity);
-  }, [memory.ready, memory.restored]);
-
-  useEffect(() => {
-    if (!restoredRef.current) return;
-    memory.persist({ preset, granularity });
-    // persist 每次渲染都是新函数，不进依赖，否则每次渲染都会触发保存。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [preset, granularity]);
+  const { filters, ready, setFilters } = useReportFilters(
+    "bi_dashboard",
+    BI_FILTER_SCHEMA,
+    BI_FILTER_DEFAULTS
+  );
+  const { preset, granularity } = filters;
+  const range = toDateRange(filters.date_from, filters.date_to);
 
   const { dateFrom, dateTo, enabled } = useReportTimeRange(preset, range);
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ["bi-dashboard", preset, dateFrom, dateTo, granularity],
     // 等偏好回填完再查，避免先用默认值查一次、回填后又查一次。
-    enabled: enabled && memory.ready,
+    enabled: enabled && ready,
     queryFn: () =>
       getBiDashboard({
         preset,
@@ -238,9 +245,9 @@ export function BiDashboardPage() {
             <Space wrap size={8}>
               <ReportTimeRangeFilter
                 preset={preset}
-                onPresetChange={setPreset}
+                onPresetChange={(v) => setFilters({ preset: v })}
                 range={range}
-                onRangeChange={setRange}
+                onRangeChange={(v) => setFilters(fromDateRange(v))}
               />
               <span>趋势粒度：</span>
               <Select<TimeGranularity>
@@ -248,7 +255,7 @@ export function BiDashboardPage() {
                 value={granularity}
                 style={{ width: 110 }}
                 options={GRANULARITY_OPTIONS}
-                onChange={setGranularity}
+                onChange={(v) => setFilters({ granularity: v })}
               />
             </Space>
           </Col>
@@ -260,7 +267,7 @@ export function BiDashboardPage() {
           type="error"
           showIcon
           message="BI 数据加载失败"
-          description="请稍后重试，或检查当前账号的投产报表权限。"
+          description="请稍后重试，或检查当前账号的 BI 看板权限。"
         />
       ) : null}
 

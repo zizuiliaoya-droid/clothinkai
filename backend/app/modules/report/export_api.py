@@ -8,9 +8,10 @@ from typing import Annotated
 from fastapi import APIRouter, Path, Query
 from fastapi.responses import StreamingResponse
 
-from app.modules.auth.deps import CurrentActiveUser, require_permission
+from app.modules.auth.deps import CurrentActiveUser, CurrentPerms, SessionDep, require_permission
 from app.modules.report.deps import ExportServiceDep
 from app.modules.report.domain import resolve_time_range
+from app.modules.report.field_mask import build_field_perm_context
 
 router = APIRouter(prefix="/api/reports", tags=["report"])
 
@@ -26,6 +27,8 @@ _ToQ = Annotated[date | None, Query()]
 async def export_report(
     report_type: Annotated[str, Path()],
     user: CurrentActiveUser,
+    perms: CurrentPerms,
+    session: SessionDep,
     service: ExportServiceDep,
     preset: _PresetQ = "last_30d",
     date_from: _FromQ = None,
@@ -43,6 +46,9 @@ async def export_report(
         exclude_brushing=exclude_brushing,
         seasons=season,
         granularity=granularity,
+        field_ctx=await build_field_perm_context(user.id, session),
+        # 路由只挡 report.export:read；service 再按报表类型判对应读权限
+        perms=perms,
     )
 
 

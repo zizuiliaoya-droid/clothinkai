@@ -34,8 +34,45 @@ class PrWorkProgress(BaseModel):
     hit_count: int
     hit_rate: Decimal | None = None
     like_count: int
-    cost: Decimal
+    # F3 聚合金额：读不到时为 null（R1 恒给，见 report/field_mask.py）
+    cost: Decimal | None
     cpl: Decimal | None = None
+
+
+# ----------------------------- 下钻单据 ----------------------------- #
+
+
+class DrillPromotionRow(BaseModel):
+    """报表下钻的一张推广单（7e R1，报表视图设计 2.1）。
+
+    字段是白名单：**不返回**收件信息、收款码、备注、``source_extra``。
+    金额按 F2 逐行裁剪（``report/field_mask.promotion_amounts_visible``），读不到给 null。
+    """
+
+    id: UUID
+    internal_code: str
+    cooperation_date: date
+    scheduled_publish_date: date | None
+    actual_publish_date: date | None
+    pr_id: UUID | None
+    pr_name: str
+    blogger_nickname: str
+    platform: str
+    display_short_name: str
+    publish_status: str
+    recall_status: str
+    quote_amount: Decimal | None
+    total_promo_cost: Decimal | None
+    like_count: int | None
+    # R1 ~ R7 恒 null（详情抽屉随流程线 PR-4，R8 补）
+    detail_url: str | None = None
+
+
+class DrillPromotionPage(BaseModel):
+    items: list[DrillPromotionRow]
+    total: int
+    page: int
+    page_size: int
 
 
 # ----------------------------- 爆款约篇 ----------------------------- #
@@ -158,6 +195,27 @@ class ReportFreshnessOut(BaseModel):
     can_refresh: bool
 
 
+# --------------------------- 报表能力（7e R1） --------------------------- #
+
+
+class ReportCapabilities(BaseModel):
+    """当前用户在报表侧能看 / 能做什么（报表视图设计第 4 节「能力端点」）。
+
+    ``/me`` 只返回角色，前端算不了 scope：菜单、导出 / 刷新按钮、BI 渲染哪一版都看它。
+    ``all`` / ``full`` = 看全部，``own`` / ``personal`` = 只看本人，``None`` = 无权。
+    """
+
+    work_progress: Literal["all", "own"] | None
+    publish_progress: Literal["all", "own"] | None
+    bi: Literal["full", "personal"] | None
+    production: bool
+    store_read: bool
+    store_write: bool
+    export: list[str]
+    """能导出的报表类型（``/api/reports/{type}/export`` 的 type）：持导出权且有该报表读权限。"""
+    refresh: bool
+
+
 # ----------------------------- BI 看板 ----------------------------- #
 
 
@@ -174,13 +232,14 @@ class BiStoreSummary(BaseModel):
 
 
 class BiPromotionSummary(BaseModel):
-    commission_amount: Decimal
+    # 4 个金额过 F3（field_mask.aggregate_promo_amounts_visible）：R1 恒有值，收紧时为 null
+    commission_amount: Decimal | None
     commission_count: int
-    published_spend: Decimal
+    published_spend: Decimal | None
     published_count: int
-    unpublished_spend: Decimal
+    unpublished_spend: Decimal | None
     unpublished_count: int
-    cancelled_amount: Decimal
+    cancelled_amount: Decimal | None
     cancelled_count: int
     publish_rate: Decimal | None = None
 
@@ -250,11 +309,14 @@ __all__ = [
     "BiStylePerformance",
     "BiTrendPoint",
     "BiWorkloadRow",
+    "DrillPromotionPage",
+    "DrillPromotionRow",
     "PrWorkProgress",
     "ProductionReport",
     "ProductionRow",
     "ProductionTrend",
     "ProductionTrendPoint",
+    "ReportCapabilities",
     "ReportFreshnessOut",
     "StoreDailyManualUpdate",
     "StoreDailyRow",

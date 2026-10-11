@@ -19,13 +19,15 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.security.field_permissions import FieldPermissionContext
 from app.core.tenancy import tenant_id_ctx
 from app.modules.promotion.schemas import PromotionListFilters
 from app.modules.promotion.service import PromotionService
 from app.modules.promotion.urge_calculator import get_today
+from app.modules.report.pr_scope import PR_SCOPE_ALL
 from app.modules.report.summary_models import PrWorkProgressSummary
 from app.modules.report.summary_refresh_service import SummaryRefreshService
-from app.modules.report.work_progress_service import WorkProgressService
+from app.modules.report.work_progress_service import WorkProgressService, _month_range
 from app.modules.urge.repository import UrgeConfigRepository
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
@@ -137,8 +139,15 @@ class TestWorkProgressUrgeCounts:
             )
             want = {"in_schedule_count": 1, "urge_count": 1, "important_urge_count": 0}
 
-            # 实时路径（当月始终实时）
-            rows = await WorkProgressService(session).get_for_month(tenant_a.id, f"{COOP:%Y-%m}")
+            # 实时路径（还没刷新、没有覆盖）
+            rows = await WorkProgressService(session).get_for_range(
+                tenant_a.id,
+                *_month_range(f"{COOP:%Y-%m}"),
+                scope=PR_SCOPE_ALL,
+                field_ctx=FieldPermissionContext(
+                    frozenset(), frozenset(), frozenset(), is_superuser=True
+                ),
+            )
             live = {k: sum(getattr(r, k) for r in rows) for k in want}
             assert live == want
 

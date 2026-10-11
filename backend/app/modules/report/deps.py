@@ -8,6 +8,7 @@ from fastapi import Depends
 
 from app.modules.auth.deps import SessionDep
 from app.modules.report.bi_service import BiService
+from app.modules.report.drill_service import DrillService
 from app.modules.report.export_service import ReportExportService
 from app.modules.report.production_service import ProductionService
 from app.modules.report.service import PublishProgressService
@@ -30,6 +31,13 @@ def get_work_progress_service(session: SessionDep) -> WorkProgressService:
 
 
 WorkProgressServiceDep = Annotated[WorkProgressService, Depends(get_work_progress_service)]
+
+
+def get_drill_service(session: SessionDep) -> DrillService:
+    return DrillService(session)
+
+
+DrillServiceDep = Annotated[DrillService, Depends(get_drill_service)]
 
 
 def get_target_planning_service(session: SessionDep) -> TargetPlanningService:
@@ -83,6 +91,7 @@ SummaryRefreshServiceDep = Annotated[SummaryRefreshService, Depends(get_summary_
 
 __all__ = [
     "BiServiceDep",
+    "DrillServiceDep",
     "ExportServiceDep",
     "ProductionServiceDep",
     "PublishProgressServiceDep",
@@ -92,6 +101,7 @@ __all__ = [
     "UserPreferenceServiceDep",
     "WorkProgressServiceDep",
     "get_bi_service",
+    "get_drill_service",
     "get_export_service",
     "get_production_service",
     "get_publish_progress_service",

@@ -3,10 +3,13 @@
 import { apiClient } from "@/services/apiClient";
 import type {
   BiDashboard,
+  DrillPromotionPage,
+  DrillPromotionParams,
   ProductionReport,
   ProductionTrend,
   ProgressSummary,
   PrWorkProgress,
+  ReportCapabilities,
   ReportFreshness,
   StoreDailyRow,
   StyleCardPage,
@@ -15,12 +18,13 @@ import type {
   TimeGranularity,
 } from "./types";
 
+/** 工作进度按区间统计（7e R1）；只持 read_own 时后端只返回本人那一行。 */
 export async function getWorkProgress(
-  month: string
+  params: { preset?: string; date_from?: string; date_to?: string } = {}
 ): Promise<PrWorkProgress[]> {
   const resp = await apiClient.get<PrWorkProgress[]>(
     "/api/reports/work-progress",
-    { params: { month } }
+    { params }
   );
   return resp.data;
 }
@@ -154,6 +158,24 @@ export async function refreshSummaries(
       timeout: 120_000,
     }
   );
+  return resp.data;
+}
+
+/** 报表能力（7e R1）：菜单与导出按钮按它显示；只要登录。 */
+export async function getReportCapabilities(): Promise<ReportCapabilities> {
+  const resp = await apiClient.get<ReportCapabilities>("/api/reports/capabilities");
+  return resp.data;
+}
+
+/**
+ * 报表下钻：区间内（按合作日期）的推广单明细（7e R1）。只持工作进度 read_own 时后端强制本人。
+ */
+export async function getDrillPromotions(
+  params: DrillPromotionParams
+): Promise<DrillPromotionPage> {
+  const resp = await apiClient.get<DrillPromotionPage>("/api/reports/drill/promotions", {
+    params,
+  });
   return resp.data;
 }
 

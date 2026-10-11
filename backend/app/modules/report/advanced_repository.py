@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import date
 from typing import Any
 from uuid import UUID
@@ -15,7 +16,9 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import as_mapping, as_mappings
+from app.modules.promotion.display_name import display_short_name_sql
 from app.modules.promotion.urge_calculator import URGE_STATUS_SQL_EXPR, UrgeThresholds
+from app.modules.report.pr_scope import PrScope
 from app.services.metric.publish_progress import like_sum_expr
 from app.services.metric.work_progress import HIT_STAT_THRESHOLD
 
@@ -40,6 +43,24 @@ _LIKE = like_sum_expr("p.like_count")
 _REFUND_SUM = "COALESCE(SUM(q.refund_amount), 0)"
 
 _ADD_CART_SUM = "COALESCE(SUM(q.add_cart_count), 0)"
+
+# 推广单的商品归属：推广记录自己记了商品（PR 录入时指定，可人工纠正）就用它；
+# 为空时回落到「主商品」推定 —— 款式所在商品里非套装优先、货号次之。兜底只为兼容历史
+# 数据与「款式还没归到商品」的异常，不是常规路径。
+#
+# 用法：``FROM promotion p {_PROMO_GOODS_LATERAL}``，归属 = ``COALESCE(p.goods_main_id,
+# owner.goods_main_id)``。投产主表与报表下钻引用这一处（7e R1），口径不各写一份。
+_PROMO_GOODS_LATERAL = """
+LEFT JOIN LATERAL (
+  SELECT gi.goods_main_id
+  FROM goods_style_item gi
+  JOIN goods_main gg ON gg.id = gi.goods_main_id
+  WHERE gi.style_id = p.style_id AND gi.is_active = true
+  ORDER BY gg.is_suit, gg.goods_code
+  LIMIT 1
+) owner ON p.goods_main_id IS NULL"""
+
+_PROMO_GOODS_ID = "COALESCE(p.goods_main_id, owner.goods_main_id)"
 
 # 商品维度报表的「商品信息」列（投产主表与它的汇总表读取共用）
 GOODS_META_COLUMNS = """
@@ -372,26 +393,17 @@ class ProductionRepository:
               GROUP BY mapped_a.goods_main_id
             ) ad ON ad.goods_main_id = g.id
             LEFT JOIN (
-              -- 推广记录自己记了商品归属（PR 录入时指定，可人工纠正）。
-              -- 归属为空时回落到「主商品」推定：非套装优先、货号次之。兜底只是为了
-              -- 兼容历史数据与「款式还没归到商品」的异常，不是常规路径。
-              SELECT COALESCE(p.goods_main_id, owner.goods_main_id) AS goods_main_id,
+              -- 商品归属：自己记的归属优先，为空回落主商品推定（_PROMO_GOODS_LATERAL）
+              SELECT {_PROMO_GOODS_ID} AS goods_main_id,
                      -- 站外推广成本 = 博主服务费 + 样品成本 + 寄回运费（PRD V1.4 §9）。
                      -- total_promo_cost 是生成列，口径集中在数据库，报表只读不算。
                      SUM(p.total_promo_cost) AS promo_cost
               FROM promotion p
-              LEFT JOIN LATERAL (
-                SELECT gi.goods_main_id
-                FROM goods_style_item gi
-                JOIN goods_main gg ON gg.id = gi.goods_main_id
-                WHERE gi.style_id = p.style_id AND gi.is_active = true
-                ORDER BY gg.is_suit, gg.goods_code
-                LIMIT 1
-              ) owner ON p.goods_main_id IS NULL
+              {_PROMO_GOODS_LATERAL}
               WHERE p.tenant_id = :tenant_id
                 AND p.cooperation_date BETWEEN :date_from AND :date_to
                 AND p.is_active = true AND p.publish_status = '已发布'
-              GROUP BY COALESCE(p.goods_main_id, owner.goods_main_id)
+              GROUP BY {_PROMO_GOODS_ID}
             ) promo ON promo.goods_main_id = g.id
             WHERE g.tenant_id = :tenant_id AND g.is_deleted = false
               {filter_sql}
@@ -926,6 +938,98 @@ class BiRepository:
         )
 
 
+@dataclass(frozen=True)
+class DrillFilters:
+    """下钻的筛选条件（已校验）。``pr_scope`` 由 ``resolve_pr_scope`` 定，下推到 SQL。"""
+
+    tenant_id: UUID
+    date_from: date
+    date_to: date
+    pr_scope: PrScope
+    goods_id: UUID | None
+    seasons: Sequence[str] | None
+    publish_status: str | None
+
+
+class DrillRepository:
+    """报表下钻的推广单明细（7e R1，报表视图设计 2.1）。
+
+    只取未删除（``is_active``）的单，按合作日期筛；商品归属与投产同一口径
+    （``_PROMO_GOODS_LATERAL``），品名用推广模块的简称规则、商品按归属 JOIN。
+    投影是白名单（见 ``DrillPromotionRow``），收件信息 / 收款码 / 备注 / ``source_extra`` 不进 SELECT。
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    @staticmethod
+    def _where(f: DrillFilters) -> tuple[str, dict[str, Any]]:
+        scope_sql, scope_params = f.pr_scope.sql("p.pr_id")
+        season_sql, season_params = goods_filter_clauses(f.seasons)
+        clauses = [
+            "p.tenant_id = :tenant_id AND p.is_active = true",
+            "AND p.cooperation_date BETWEEN :date_from AND :date_to",
+            scope_sql,
+            season_sql,
+        ]
+        params: dict[str, Any] = {
+            "tenant_id": f.tenant_id,
+            "date_from": f.date_from,
+            "date_to": f.date_to,
+            **scope_params,
+            **season_params,
+        }
+        if f.goods_id is not None:
+            clauses.append(f"AND {_PROMO_GOODS_ID} = CAST(:goods_id AS uuid)")
+            params["goods_id"] = f.goods_id
+        if f.publish_status is not None:
+            clauses.append("AND p.publish_status = CAST(:publish_status AS text)")
+            params["publish_status"] = f.publish_status
+        return "\n".join(c for c in clauses if c), params
+
+    _FROM = f"""
+        FROM promotion p
+        {_PROMO_GOODS_LATERAL}
+        LEFT JOIN goods_main g
+          ON g.id = {_PROMO_GOODS_ID} AND g.tenant_id = p.tenant_id
+        """
+
+    async def count(self, filters: DrillFilters) -> int:
+        where, params = self._where(filters)
+        sql = text(f"SELECT COUNT(*) {self._FROM} WHERE {where}")
+        return int((await self._s.execute(sql, params)).scalar_one())
+
+    async def page(
+        self, filters: DrillFilters, *, limit: int, offset: int
+    ) -> list[Mapping[str, Any]]:
+        where, params = self._where(filters)
+        sql = text(
+            f"""
+            SELECT
+              p.id AS id, p.internal_code AS internal_code,
+              p.cooperation_date AS cooperation_date,
+              p.scheduled_publish_date AS scheduled_publish_date,
+              p.actual_publish_date AS actual_publish_date,
+              p.pr_id AS pr_id,
+              COALESCE(u.display_name, u.username, '未分配') AS pr_name,
+              b.nickname AS blogger_nickname,
+              p.platform AS platform,
+              {display_short_name_sql(promotion="p", goods="g")} AS display_short_name,
+              p.publish_status AS publish_status, p.recall_status AS recall_status,
+              p.quote_amount AS quote_amount, p.total_promo_cost AS total_promo_cost,
+              p.like_count AS like_count
+            {self._FROM}
+            JOIN blogger b ON b.id = p.blogger_id
+            LEFT JOIN "user" u ON u.id = p.pr_id
+            WHERE {where}
+            ORDER BY p.cooperation_date DESC, p.internal_code, p.id
+            LIMIT CAST(:limit AS int) OFFSET CAST(:offset AS int)
+            """
+        )
+        params = {**params, "limit": limit, "offset": offset}
+        return as_mappings((await self._s.execute(sql, params)).mappings().all())
+
+
 async def style_exists(session: AsyncSession, tenant_id: UUID, style_id: UUID) -> bool:
     sql = text("SELECT 1 FROM style WHERE id = :sid AND tenant_id = :tid LIMIT 1")
     return (
@@ -937,6 +1041,8 @@ __all__ = [
     "GOODS_META_COLUMNS",
     "GOODS_META_GROUP_BY",
     "BiRepository",
+    "DrillFilters",
+    "DrillRepository",
     "ProductionRepository",
     "StoreDailyRepository",
     "TargetPlanningRepository",

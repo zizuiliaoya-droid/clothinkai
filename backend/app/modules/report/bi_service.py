@@ -11,6 +11,7 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.security.field_permissions import FieldPermissionContext
 from app.modules.product.goods_schemas import goods_display_name
 from app.modules.promotion.urge_calculator import get_today
 from app.modules.report.advanced_repository import BiRepository
@@ -23,6 +24,7 @@ from app.modules.report.advanced_schemas import (
     BiWorkloadRow,
     ProductionRow,
 )
+from app.modules.report.field_mask import aggregate_promo_amounts_visible
 from app.modules.report.production_service import ProductionService
 from app.modules.urge.service import UrgeService
 from app.services.metric.common import safe_div
@@ -70,7 +72,9 @@ class BiService:
         time_range: tuple[date, date],
         *,
         granularity: str = "day",
+        field_ctx: FieldPermissionContext,
     ) -> BiDashboard:
+        """``field_ctx`` 给 F3（推广汇总 4 个金额）；不给默认值，漏传直接报错。"""
         date_from, date_to = time_range
         store_row = await self._repo.aggregate_store_summary(
             tenant_id=tenant_id, date_from=date_from, date_to=date_to
@@ -102,7 +106,9 @@ class BiService:
         )
 
         store = self._store_summary(store_row)
-        promotion = self._promotion_summary(promotion_row)
+        promotion = self._promotion_summary(
+            promotion_row, amounts=aggregate_promo_amounts_visible("bi", field_ctx)
+        )
         workload = [self._workload_row(row) for row in workload_rows]
         published_by_goods = {
             row["goods_id"]: Decimal(str(row["external_spend"] or 0)) for row in published_rows
@@ -192,17 +198,22 @@ class BiService:
         )
 
     @staticmethod
-    def _promotion_summary(row: Mapping[str, Any]) -> BiPromotionSummary:
+    def _promotion_summary(row: Mapping[str, Any], *, amounts: bool) -> BiPromotionSummary:
         count = int(row["commission_count"])
         published = int(row["published_count"])
+
+        # F3：聚合金额按报表读权限给（field_mask.aggregate_promo_amounts_visible）
+        def amount(key: str) -> Decimal | None:
+            return row[key] if amounts else None
+
         return BiPromotionSummary(
-            commission_amount=row["commission_amount"],
+            commission_amount=amount("commission_amount"),
             commission_count=count,
-            published_spend=row["published_spend"],
+            published_spend=amount("published_spend"),
             published_count=published,
-            unpublished_spend=row["unpublished_spend"],
+            unpublished_spend=amount("unpublished_spend"),
             unpublished_count=int(row["unpublished_count"]),
-            cancelled_amount=row["cancelled_amount"],
+            cancelled_amount=amount("cancelled_amount"),
             cancelled_count=int(row["cancelled_count"]),
             publish_rate=safe_div(published, count, quantize=_Q4),
         )

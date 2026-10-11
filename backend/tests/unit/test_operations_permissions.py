@@ -72,6 +72,13 @@ _IN_CODE_CHECKS: tuple[tuple[str, str], ...] = (
 )
 
 
+# 061（7e R1）有意给运营的 report scope：store_daily:write（018 已授、代码追平）、
+# export:read（021 已授、代码追平）、summary:refresh（新授，默 22）。不算「商品域外的外溢」
+_OPS_061_ADDED: frozenset[str] = frozenset(
+    {"report.store_daily:write", "report.export:read", "report.summary:refresh"}
+)
+
+
 def _ops_now() -> tuple[str, ...]:
     return next(r for r in DEFAULT_ROLES if r.code == "operations").permissions
 
@@ -87,8 +94,20 @@ def _walk(dependant: Dependant) -> Iterator[Dependant]:
         yield from _walk(sub)
 
 
+def _declared_pairs(call: object) -> set[tuple[str, str]]:
+    """一个依赖闭包声明的 (scope, action)：require_permission 一对、require_any_permission 全部。"""
+    qualname = getattr(call, "__qualname__", "")
+    if qualname == "require_permission.<locals>._checker":
+        nonlocals = inspect.getclosurevars(call).nonlocals  # type: ignore[arg-type]
+        return {(nonlocals["scope"], nonlocals["action"])}
+    if qualname == "require_any_permission.<locals>._checker":
+        nonlocals = inspect.getclosurevars(call).nonlocals  # type: ignore[arg-type]
+        return set(nonlocals["pairs"])
+    return set()
+
+
 def _route_scopes() -> set[tuple[str, str]]:
-    """所有路由（含嵌套依赖）上 require_permission 声明的 (scope, action)。"""
+    """所有路由（含嵌套依赖）上 require_permission / require_any_permission 声明的 (scope, action)。"""
     from app.main import app
 
     found: set[tuple[str, str]] = set()
@@ -96,11 +115,7 @@ def _route_scopes() -> set[tuple[str, str]]:
         if not isinstance(route, APIRoute):
             continue
         for dep in _walk(route.dependant):
-            call = dep.call
-            if getattr(call, "__qualname__", "") != "require_permission.<locals>._checker":
-                continue
-            nonlocals = inspect.getclosurevars(call).nonlocals  # type: ignore[arg-type]
-            found.add((nonlocals["scope"], nonlocals["action"]))
+            found |= _declared_pairs(dep.call)
     return found
 
 
@@ -110,7 +125,7 @@ class TestOperationsRoleSpec:
         perms = _ops_now()
         assert "product.*:*" in perms
         assert "product.*:read" in perms
-        assert set(perms) - set(_OPS_BASELINE_DEFAULT) == {"product.*:*"}
+        assert set(perms) - set(_OPS_BASELINE_DEFAULT) == {"product.*:*"} | _OPS_061_ADDED
         assert set(_OPS_BASELINE_DEFAULT) <= set(perms)
 
     def test_description(self) -> None:
@@ -173,6 +188,19 @@ class TestNoSpillOutsideProduct:
         assert ("product", "write") in scopes
         assert ("ops.platform_link", "write") in scopes
 
+    def test_declared_pairs_reads_both_checkers(self) -> None:
+        from app.modules.auth.deps import require_any_permission, require_permission
+
+        one = require_permission("report.bi", "read").dependency
+        many = require_any_permission(
+            ("report.work_progress", "read"), ("report.work_progress", "read_own")
+        ).dependency
+        assert _declared_pairs(one) == {("report.bi", "read")}
+        assert _declared_pairs(many) == {
+            ("report.work_progress", "read"),
+            ("report.work_progress", "read_own"),
+        }
+
     @pytest.mark.parametrize(
         ("baseline", "now"),
         [
@@ -189,7 +217,10 @@ class TestNoSpillOutsideProduct:
         checks = _route_scopes() | set(_IN_CODE_CHECKS)
         changed = {(s, a) for s, a in checks if old.has(s, a) != new.has(s, a)}
         assert changed, "运营应该多了商品写权限"
-        outside = {(s, a) for s, a in changed if s.split(".", 1)[0] != "product"}
+        allowed = {tuple(p.split(":", 1)) for p in _OPS_061_ADDED}
+        outside = {
+            (s, a) for s, a in changed if s.split(".", 1)[0] != "product" and (s, a) not in allowed
+        }
         assert outside == set()
         # 只会多、不会少
         assert all(new.has(s, a) and not old.has(s, a) for s, a in changed)

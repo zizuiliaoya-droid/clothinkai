@@ -20,6 +20,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.security.field_permissions import FieldPermissionContext
 from app.core.tenancy import tenant_id_ctx
 from app.modules.collect.models import QianniuDaily
 from app.modules.importer.adapters.qianniu import QianniuImportAdapter
@@ -31,6 +32,8 @@ from app.modules.report.summary_read import SummaryReadRepository
 from app.modules.report.summary_refresh_service import SummaryRefreshService
 
 pytestmark = pytest.mark.asyncio
+
+_SUPER_CTX = FieldPermissionContext(frozenset(), frozenset(), frozenset(), is_superuser=True)
 
 D1, D2 = date(2026, 3, 5), date(2026, 3, 6)
 
@@ -187,7 +190,9 @@ class TestRefundAndAddCartFromRealExport:
             await _goods_with_link(session, tenant_a, product_factory, pid)
             await _import(session, tenant_a, [_export_row(pid, D1), _second_day(pid)])
 
-            dash = await BiService(session).get_dashboard(tenant_a.id, (D1, D2))
+            dash = await BiService(session).get_dashboard(
+                tenant_a.id, (D1, D2), field_ctx=_SUPER_CTX
+            )
             assert dash.store_summary.sales_amount == Decimal("15290.00")
             assert dash.store_summary.refund_amount == Decimal("5652.00")
             by_day = {p.date: p for p in dash.trend}
