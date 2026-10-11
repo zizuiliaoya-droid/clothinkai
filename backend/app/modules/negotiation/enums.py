@@ -32,4 +32,11 @@ class NegotiationReviewAction(str, Enum):
     REJECT = "reject"
 
 
-__all__ = ["NegotiationReviewAction", "NegotiationStatus"]
+class NegotiationFinalReviewAction(str, Enum):
+    """老板审核动作（N6 定稿 / N7 退回）。"""
+
+    APPROVE = "approve"
+    RETURN = "return"
+
+
+__all__ = ["NegotiationFinalReviewAction", "NegotiationReviewAction", "NegotiationStatus"]

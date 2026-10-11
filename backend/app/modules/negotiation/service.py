@@ -36,18 +36,20 @@ from app.modules.flow.actor import load_flow_actor
 from app.modules.flow.exceptions import FlowActionForbiddenError
 from app.modules.flow.line_events import LineEventRepository, LineEventType
 from app.modules.flow.matrix import FlowActor, Level, View, cell_level, require, ui_for
-from app.modules.negotiation.enums import NegotiationReviewAction, NegotiationStatus
+from app.modules.negotiation.enums import (
+    NegotiationFinalReviewAction,
+    NegotiationReviewAction,
+    NegotiationStatus,
+)
 from app.modules.negotiation.exceptions import (
     InvalidNegotiationBloggerError,
     InvalidNegotiationGoodsError,
     InvalidNegotiationStyleError,
     NegotiationNotFoundError,
-    NegotiationNotReviewableError,
-    NegotiationReviewOpinionRequiredError,
     NegotiationSelfReviewForbiddenError,
     NegotiationStateConflictError,
 )
-from app.modules.negotiation.flow_doc import build_negotiation_doc
+from app.modules.negotiation.flow_doc import NegotiationDoc, build_negotiation_doc
 from app.modules.negotiation.models import Negotiation
 from app.modules.negotiation.permissions import SCOPE_NEGOTIATION, SCOPE_NEGOTIATION_ALL
 from app.modules.negotiation.repository import NegotiationItemView, NegotiationRepository
@@ -55,6 +57,7 @@ from app.modules.negotiation.schemas import (
     BloggerCooperationHistory,
     BloggerCooperationItem,
     NegotiationCreate,
+    NegotiationFinalReviewRequest,
     NegotiationGoodsMembers,
     NegotiationItemResponse,
     NegotiationListFilters,
@@ -66,7 +69,7 @@ from app.modules.negotiation.schemas import (
     ReceiverSuggestion,
 )
 from app.modules.promotion.display_name import normalize_goods_short_name
-from app.modules.promotion.enums import CooperationMode, ShipStatus
+from app.modules.promotion.enums import CooperationMode
 from app.modules.promotion.exceptions import InvalidSkuReferenceError
 from app.modules.promotion.flow_doc import goods_items_complete
 from app.modules.promotion.metrics_calculator import (
@@ -75,8 +78,7 @@ from app.modules.promotion.metrics_calculator import (
 )
 from app.modules.promotion.receiver import RECEIVER_FIELDS
 from app.modules.promotion.repository import PromotionItemRepository, PromotionRepository
-from app.modules.promotion.schemas import GoodsItemIn, GoodsMemberResponse, PromotionCreate
-from app.modules.promotion.service import PromotionService
+from app.modules.promotion.schemas import GoodsItemIn, GoodsMemberResponse
 from app.modules.promotion.urge_calculator import DEFAULT_TENANT_TZ
 
 log = logging.getLogger("app.modules.negotiation.service")
@@ -715,102 +717,146 @@ class NegotiationService:
         return response
 
     # ------------------------------------------------------------------ #
-    # 审核
+    # N4 ~ N7 两级审核
     # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _require_review(
+        actor: FlowActor, doc: NegotiationDoc, action: str, negotiation_id: UUID
+    ) -> None:
+        """``require()``；自审（``self_review``）改抛 ``NEGOTIATION_SELF_REVIEW_FORBIDDEN``（7.1 保留原 code，两级都是）。"""
+        try:
+            require(actor, doc, action)
+        except FlowActionForbiddenError as exc:
+            if exc.rule == "self_review":
+                raise NegotiationSelfReviewForbiddenError(
+                    exc.reason,
+                    details={
+                        "negotiation_id": str(negotiation_id),
+                        "rule": exc.rule,
+                        "reason": exc.reason,
+                    },
+                ) from exc
+            raise
+
+    async def _decide(
+        self,
+        negotiation: Negotiation,
+        *,
+        user: User,
+        from_status: str,
+        to_status: str,
+        values: dict[str, Any],
+        event_type: LineEventType,
+        opinion: str | None,
+        audit_action: str,
+    ) -> NegotiationResponse:
+        """两级审核落库：条件 UPDATE（0 行 → 409）→ 同事务写事件（意见进 ``note``）与审计 → 提交。"""
+        negotiation_id = negotiation.id
+        tenant_id, line_id = negotiation.tenant_id, negotiation.line_id
+        updated = await self._repo.update_state(
+            negotiation_id=negotiation_id,
+            tenant_id=tenant_id,
+            from_statuses=(from_status,),
+            to_status=to_status,
+            values=values,
+        )
+        if updated is None:
+            raise NegotiationStateConflictError(details={"negotiation_id": str(negotiation_id)})
+        await self._events.append(
+            tenant_id=tenant_id,
+            line_id=line_id,
+            event_type=event_type,
+            actor_id=user.id,
+            negotiation_id=negotiation_id,
+            from_state=from_status,
+            to_state=to_status,
+            note=opinion,
+        )
+        await self._audit.log(
+            action=audit_action,
+            resource="negotiation",
+            resource_id=negotiation_id,
+            before={"status": from_status},
+            after={"status": to_status},
+            user_id=user.id,
+        )
+        await self._session.commit()
+        return await self.get(negotiation_id, user)
 
     async def review(
         self, negotiation_id: UUID, payload: NegotiationReviewRequest, user: User
     ) -> NegotiationResponse:
-        """主管审核。通过则在**同一事务**里生成推广单。"""
-        negotiation = await self._repo.get_by_id(negotiation_id)
-        if negotiation is None:
-            raise NegotiationNotFoundError("谈款单不存在")
-        if negotiation.status != NegotiationStatus.PENDING.value:
-            raise NegotiationNotReviewableError(
-                f"{negotiation.status}的谈款单不能审核",
-                details={"status": negotiation.status},
-            )
-        if negotiation.pr_id == user.id:
-            raise NegotiationSelfReviewForbiddenError(
-                "不能审核自己提交的谈款单",
-                details={"negotiation_id": str(negotiation_id)},
-            )
+        """N4 / N5 主管通过 / 驳回：主管待审 → 待老板审核 / 审核驳回（终态，意见留在行上，博主卡片读它）。
 
-        now = _utcnow()
-        if payload.action is NegotiationReviewAction.REJECT:
-            if not payload.review_opinion:
-                raise NegotiationReviewOpinionRequiredError("驳回时审核意见必填")
-            negotiation.status = NegotiationStatus.REJECTED.value
-            negotiation.reviewed_by = user.id
-            negotiation.reviewed_at = now
-            negotiation.review_opinion = payload.review_opinion
-            await self._session.flush()
-            await self._audit.log(
-                action="negotiation.review.reject",
-                resource="negotiation",
-                resource_id=negotiation.id,
-                after={"status": negotiation.status},
-                user_id=user.id,
-            )
-            await self._session.commit()
-            return await self.get(negotiation.id, user)
-
-        # ---- 通过：建推广单 ----
-        #
-        # 关键点：create_promotion 传 autocommit=False，让「改谈款状态 + 建推广单」
-        # 落在一个事务里。否则中途失败会留下一张「审核通过但 promotion_id 为空」的单据，
-        # 而表上的 CHECK 约束不允许这种状态。
-        #
-        # 建单人记在谈款单的 PR 身上（pr_id），不是审核人 —— 这单是 PR 谈下来的，
-        # 后续催发、结款都该找他。
-        pr_user = await self._session.get(User, negotiation.pr_id)
-        if pr_user is None:
-            # pr_id 是 RESTRICT 外键，正常不会走到这；真发生了说明数据被手工动过
-            raise NegotiationNotReviewableError(
-                "谈款单的对接 PR 已不存在，无法生成推广单",
-                details={"pr_id": str(negotiation.pr_id)},
-            )
-
-        # 过渡期（流程线 PR-2，S1）：谈款还是旧 4 态，审核通过即定稿，建的单直接进待发货、等主管确认推送仓库
-        promotion = await PromotionService(self._session).create_promotion(
-            PromotionCreate(
-                style_id=negotiation.style_id,
-                goods_main_id=negotiation.goods_main_id,
-                blogger_id=negotiation.blogger_id,
-                cooperation_mode=CooperationMode(negotiation.cooperation_mode),
-                platform=negotiation.platform,
-                scheduled_publish_date=negotiation.scheduled_publish_date,
-                quote_amount=negotiation.quote_amount,
-                remark=negotiation.remark,
+        通过**不建推广单**（老板定稿后确认收货信息时才建，N9）。持 ``*`` → 403 ``star_first_level``
+        （管理员不能代做第一级）；审自己谈的 → 403 ``NEGOTIATION_SELF_REVIEW_FORBIDDEN``；驳回意见必填在 schema 层。
+        """
+        actor, negotiation, views, members = await self._load_for_action(negotiation_id, user)
+        self._require_review(
+            actor,
+            build_negotiation_doc(negotiation, items_complete=_items_complete(views, members)),
+            "manager_review",
+            negotiation_id,
+        )
+        approve = payload.action is NegotiationReviewAction.APPROVE
+        opinion = payload.review_opinion or None
+        to_status = NegotiationStatus.FINAL_PENDING if approve else NegotiationStatus.REJECTED
+        return await self._decide(
+            negotiation,
+            user=user,
+            from_status=NegotiationStatus.PENDING.value,
+            to_status=to_status.value,
+            values={"reviewed_by": user.id, "reviewed_at": _utcnow(), "review_opinion": opinion},
+            event_type=(
+                LineEventType.NEGOTIATION_MANAGER_APPROVED
+                if approve
+                else LineEventType.NEGOTIATION_MANAGER_REJECTED
             ),
-            pr_user,
-            autocommit=False,
-            ship_status=ShipStatus.PENDING,
-            # 推广单继承谈款的主线号，promotion.created 记来源 = 谈款定稿（流程线 6.2）
-            line_id=negotiation.line_id,
-            negotiation_id=negotiation.id,
-            actor_id=user.id,
+            opinion=opinion,
+            audit_action="negotiation.review.approve" if approve else "negotiation.review.reject",
         )
 
-        negotiation.status = NegotiationStatus.APPROVED.value
-        negotiation.reviewed_by = user.id
-        negotiation.reviewed_at = now
-        negotiation.review_opinion = payload.review_opinion
-        negotiation.promotion_id = promotion.id
-        await self._session.flush()
-        await self._audit.log(
-            action="negotiation.review.approve",
-            resource="negotiation",
-            resource_id=negotiation.id,
-            after={
-                "status": negotiation.status,
-                "promotion_id": str(promotion.id),
-                "promotion_internal_code": promotion.internal_code,
-            },
-            user_id=user.id,
+    async def final_review(
+        self, negotiation_id: UUID, payload: NegotiationFinalReviewRequest, user: User
+    ) -> NegotiationResponse:
+        """N6 / N7 老板定稿 / 退回：待老板审核 → 待补收货地址 / 老板退回（PR 改完重提，N2、N3）。
+
+        审核人 ≠ 谈款人（自审 → ``NEGOTIATION_SELF_REVIEW_FORBIDDEN``）、≠ 本轮主管（403 ``same_reviewer``）；
+        退回意见必填在 schema 层。定稿也不建推广单，确认收货信息时才建（N9）。
+        """
+        actor, negotiation, views, members = await self._load_for_action(negotiation_id, user)
+        self._require_review(
+            actor,
+            build_negotiation_doc(negotiation, items_complete=_items_complete(views, members)),
+            "final_review",
+            negotiation_id,
         )
-        await self._session.commit()
-        return await self.get(negotiation.id, user)
+        approve = payload.action is NegotiationFinalReviewAction.APPROVE
+        opinion = payload.opinion or None
+        to_status = (
+            NegotiationStatus.RECEIVER_PENDING if approve else NegotiationStatus.FINAL_RETURNED
+        )
+        return await self._decide(
+            negotiation,
+            user=user,
+            from_status=NegotiationStatus.FINAL_PENDING.value,
+            to_status=to_status.value,
+            values={
+                "final_reviewed_by": user.id,
+                "final_reviewed_at": _utcnow(),
+                "final_review_opinion": opinion,
+            },
+            event_type=(
+                LineEventType.NEGOTIATION_FINAL_APPROVED
+                if approve
+                else LineEventType.NEGOTIATION_FINAL_RETURNED
+            ),
+            opinion=opinion,
+            audit_action=(
+                "negotiation.final_review.approve" if approve else "negotiation.final_review.return"
+            ),
+        )
 
     # ------------------------------------------------------------------ #
     # 读

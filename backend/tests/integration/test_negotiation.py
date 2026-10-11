@@ -4,10 +4,10 @@
 - 置换模式博主服务费强制 0（PRD 要求接口也校验，不能只靠前端禁用）
 - 只有草稿与老板退回能改、能提交（N2、N3）；审核驳回是终态，重谈走「复制为新谈款」
 - 禁止审核自己提交的单
-- 推广单的建单人是谈款单的对接 PR，不是审核人
+- 主管通过只进「待老板审核」、老板定稿只进「待补收货地址」，两步都不建推广单
 
 角色用 ``flow_users``（迁移 seed 的真实角色）：持 ``*`` 的管理员不能建谈款（N1、11-1）。
-两级审核、定稿建单的新流程在 ``test_negotiation_two_level.py``；这里的「审核通过即建单」是 S7 之前的过渡行为。
+两级审核规则、定稿建单的完整用例在 ``test_negotiation_two_level.py``。
 """
 
 from __future__ import annotations
@@ -23,13 +23,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import IllegalStateTransitionError
 from app.core.tenancy import tenant_id_ctx
-from app.modules.negotiation.enums import NegotiationReviewAction
-from app.modules.negotiation.exceptions import (
-    NegotiationNotReviewableError,
-    NegotiationSelfReviewForbiddenError,
-)
+from app.modules.negotiation.enums import NegotiationFinalReviewAction, NegotiationReviewAction
+from app.modules.negotiation.exceptions import NegotiationSelfReviewForbiddenError
 from app.modules.negotiation.schemas import (
     NegotiationCreate,
+    NegotiationFinalReviewRequest,
     NegotiationListFilters,
     NegotiationReviewRequest,
     NegotiationUpdate,
@@ -37,7 +35,6 @@ from app.modules.negotiation.schemas import (
 from app.modules.negotiation.service import NegotiationService
 from app.modules.promotion.enums import CooperationMode
 from app.modules.promotion.schemas import GoodsItemIn
-from app.modules.promotion.urge_calculator import get_today
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
@@ -140,13 +137,10 @@ class TestCreateNegotiation:
 
 @pytest.mark.usefixtures("tenant_ctx")
 class TestSubmitAndReview:
-    async def test_approve_creates_promotion_in_same_transaction(
+    async def test_two_levels_before_receiver_no_promotion(
         self, session: AsyncSession, flow_users: Any, product_factory: Any, blogger_factory: Any
     ) -> None:
-        """审核通过 → 生成推广单，两者同事务（S7 之前的过渡行为，S7 改成到「待老板审核」）。
-
-        推广单的建单人必须是谈款单的对接 PR（这单是他谈的，后续催发结款都找他），不是审核人。
-        """
+        """主管通过 → 待老板审核；老板定稿 → 待补收货地址。两步都不建推广单（确认收货信息时才建，N9）。"""
         pr, manager, style, sku, blogger = await _setup(
             flow_users, product_factory, blogger_factory, code="NG_APPROVE"
         )
@@ -169,52 +163,28 @@ class TestSubmitAndReview:
             NegotiationReviewRequest(action=NegotiationReviewAction.APPROVE),
             manager,
         )
-        # 过渡期（流程线 PR-3 S1）：旧 service 通过即建单，写 7 态里的「已定稿」
-        assert approved.status == "已定稿"
-        assert approved.promotion_id is not None
-        assert approved.promotion_internal_code is not None
-        assert approved.reviewed_by == manager.id
-
-        row = (
+        assert (approved.status, approved.reviewed_by, approved.promotion_id) == (
+            "待老板审核",
+            manager.id,
+            None,
+        )
+        finalized = await svc.final_review(
+            created.id,
+            NegotiationFinalReviewRequest(action=NegotiationFinalReviewAction.APPROVE),
+            flow_users.admin,
+        )
+        assert (finalized.status, finalized.final_reviewed_by, finalized.promotion_id) == (
+            "待补收货地址",
+            flow_users.admin.id,
+            None,
+        )
+        count = (
             await session.execute(
-                sa_text(
-                    "SELECT pr_id, cooperation_mode, platform, scheduled_publish_date,"
-                    " cooperation_date, cost_snapshot, ship_status"
-                    " FROM promotion WHERE id = :pid"
-                ),
-                {"pid": approved.promotion_id},
+                sa_text("SELECT COUNT(*) FROM promotion WHERE blogger_id = :b"),
+                {"b": blogger.id},
             )
-        ).one()
-        assert row[0] == pr.id, "建单人应是对接 PR，不是审核人"
-        assert row[1] == "寄拍"
-        assert row[3] == date(2026, 8, 10)
-        # 合作日期 = 建单当天（审核通过那天）
-        assert row[4] == get_today()
-        # 寄拍样品成本恒为 0
-        assert row[5] == Decimal("0.00")
-        # 过渡期（流程线 PR-2，S1）：谈款审核通过建的单直接进待发货，等主管确认推送仓库
-        assert row[6] == "待发货"
-        # 流程线 PR-3 S3：推广单继承谈款的主线号，promotion.created 记来源 = 谈款定稿、动作人 = 审核人
-        lines = (
-            await session.execute(
-                sa_text(
-                    "SELECT n.line_id, p.line_id, e.payload, e.actor_id"
-                    " FROM negotiation n JOIN promotion p ON p.id = n.promotion_id"
-                    " JOIN line_event e ON e.promotion_id = p.id"
-                    "  AND e.event_type = 'promotion.created'"
-                    " WHERE n.id = :nid"
-                ),
-                {"nid": created.id},
-            )
-        ).all()
-        assert lines == [
-            (
-                lines[0][0],
-                lines[0][0],
-                {"source": "谈款定稿", "negotiation_id": str(created.id)},
-                manager.id,
-            )
-        ]
+        ).scalar_one()
+        assert count == 0
 
     async def test_rejected_is_terminal(
         self, session: AsyncSession, flow_users: Any, product_factory: Any, blogger_factory: Any
@@ -261,57 +231,13 @@ class TestSubmitAndReview:
         svc = NegotiationService(session)
         created = await _create(svc, manager, style, sku, blogger)
         await svc.submit(created.id, manager)
-        with pytest.raises(NegotiationSelfReviewForbiddenError):
+        with pytest.raises(NegotiationSelfReviewForbiddenError) as exc:
             await svc.review(
                 created.id,
                 NegotiationReviewRequest(action=NegotiationReviewAction.APPROVE),
                 manager,
             )
-
-    async def test_approved_is_terminal(
-        self, session: AsyncSession, flow_users: Any, product_factory: Any, blogger_factory: Any
-    ) -> None:
-        """已定稿后不能再改、不能再审、不能再提交：推广单已经建出来了，改谈款信息同步不过去。"""
-        pr, manager, style, sku, blogger = await _setup(
-            flow_users, product_factory, blogger_factory, code="NG_TERM"
-        )
-        svc = NegotiationService(session)
-        created = await _create(svc, pr, style, sku, blogger)
-        await svc.submit(created.id, pr)
-        await svc.review(
-            created.id,
-            NegotiationReviewRequest(action=NegotiationReviewAction.APPROVE),
-            manager,
-        )
-
-        with pytest.raises(IllegalStateTransitionError) as edit_exc:
-            await svc.update(created.id, NegotiationUpdate(remark="还想改"), pr)
-        assert edit_exc.value.code == "ILLEGAL_STATE_TRANSITION"
-        with pytest.raises(IllegalStateTransitionError) as submit_exc:
-            await svc.submit(created.id, pr)
-        assert submit_exc.value.code == "ILLEGAL_STATE_TRANSITION"
-        with pytest.raises(NegotiationNotReviewableError):
-            await svc.review(
-                created.id,
-                NegotiationReviewRequest(action=NegotiationReviewAction.APPROVE),
-                manager,
-            )
-
-    async def test_draft_cannot_be_reviewed(
-        self, session: AsyncSession, flow_users: Any, product_factory: Any, blogger_factory: Any
-    ) -> None:
-        """没提交的草稿不能直接审 —— 否则 PR 还没填完就被批了。"""
-        pr, manager, style, sku, blogger = await _setup(
-            flow_users, product_factory, blogger_factory, code="NG_NODRAFT"
-        )
-        svc = NegotiationService(session)
-        created = await _create(svc, pr, style, sku, blogger)
-        with pytest.raises(NegotiationNotReviewableError):
-            await svc.review(
-                created.id,
-                NegotiationReviewRequest(action=NegotiationReviewAction.APPROVE),
-                manager,
-            )
+        assert exc.value.code == "NEGOTIATION_SELF_REVIEW_FORBIDDEN"
 
 
 @pytest.mark.usefixtures("tenant_ctx")
@@ -340,26 +266,27 @@ class TestListAndHistory:
         assert counts["主管待审"] == 1
 
     async def test_blogger_history_comes_from_promotions(
-        self, session: AsyncSession, flow_users: Any, product_factory: Any, blogger_factory: Any
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
     ) -> None:
         """hover 卡的历史合作取自推广单，草稿谈款不算。
 
         草稿和被驳回的谈款没真推出去，不该出现在「历史合作款式」里。
         """
-        pr, manager, style, sku, blogger = await _setup(
+        pr, _manager, style, sku, blogger = await _setup(
             flow_users, product_factory, blogger_factory, code="NG_HIST"
         )
         draft_style = await product_factory.style(style_code="NG_HIST_DRAFT")
         draft_sku = await product_factory.sku(draft_style)
         svc = NegotiationService(session)
 
-        # 一张走到审核通过 → 会生成推广单
-        approved = await _create(svc, pr, style, sku, blogger)
-        await svc.submit(approved.id, pr)
-        await svc.review(
-            approved.id,
-            NegotiationReviewRequest(action=NegotiationReviewAction.APPROVE),
-            manager,
+        # 一张定稿生成的推广单（定稿建单走 confirm-receiver，这里直接造推广单）
+        await promotion_factory.promotion(
+            style=style, blogger=blogger, pr=pr, cooperation_mode="送拍"
         )
         # 一张留在草稿 → 不该出现在历史里
         await _create(svc, pr, draft_style, draft_sku, blogger)

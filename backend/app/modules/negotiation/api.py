@@ -16,6 +16,7 @@ from app.modules.negotiation.enums import NegotiationStatus
 from app.modules.negotiation.schemas import (
     BloggerCooperationHistory,
     NegotiationCreate,
+    NegotiationFinalReviewRequest,
     NegotiationGoodsMembers,
     NegotiationListFilters,
     NegotiationListResponse,
@@ -30,6 +31,8 @@ router = APIRouter(prefix="/api/negotiations", tags=["negotiation"])
 
 SCOPE = "negotiation"
 SCOPE_REVIEW = "negotiation.review"
+# 老板定稿 / 退回：独立一级域（主管哪天被授 negotiation.*:* 也拿不到老板权，4.1）
+SCOPE_FINAL = "negotiation_final"
 
 
 def _svc(session: SessionDep) -> NegotiationService:
@@ -194,12 +197,30 @@ async def review_negotiation(
     session: SessionDep,
     user: CurrentActiveUser,
 ) -> NegotiationResponse:
-    """主管审核。
+    """主管审核（N4 / N5）：主管待审 → 待老板审核 / 审核驳回（终态）。
 
-    通过则在同一事务里生成推广单（建单人记在谈款单的对接 PR 身上，不是审核人）。
-    驳回必须填审核意见 —— PR 得知道要改什么。禁止审核自己提交的单。
+    通过不再建推广单（老板定稿后确认收货信息时才建）。驳回必须填审核意见 —— PR 得知道要改什么。
+    持 ``*`` → 403 ``star_first_level``（管理员不能代做第一级）；禁止审核自己谈的单。
     """
     return await _svc(session).review(negotiation_id, payload, user)
+
+
+@router.post(
+    "/{negotiation_id}/final-review",
+    response_model=NegotiationResponse,
+    dependencies=[require_permission(SCOPE_FINAL, "approve")],
+)
+async def final_review_negotiation(
+    negotiation_id: UUID,
+    payload: NegotiationFinalReviewRequest,
+    session: SessionDep,
+    user: CurrentActiveUser,
+) -> NegotiationResponse:
+    """老板定稿 / 退回（N6 / N7）：待老板审核 → 待补收货地址 / 老板退回。
+
+    退回时意见必填；审核人 ≠ 谈款人、≠ 本轮主管（``same_reviewer``）。
+    """
+    return await _svc(session).final_review(negotiation_id, payload, user)
 
 
 __all__ = ["router"]

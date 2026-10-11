@@ -3,6 +3,8 @@
 - ``GET /goods-members`` 挂 ``negotiation:write``：PR / 主管 200；财务、运营 403 ``PERMISSION_DENIED``（进 service 之前）；
   路由要排在 ``/{negotiation_id}`` 前面，否则会被当成 id 解析成 422
 - ``POST /`` 持 ``*`` → 403 ``FLOW_ACTION_FORBIDDEN``（``star_create``）
+- ``POST /{id}/final-review`` 挂 ``negotiation_final:approve``：主管 403 ``PERMISSION_DENIED``；退回不写意见 422（schema 层）；
+  ``POST /{id}/review`` 管理员 scope 够、service 规则拦 → 403 ``star_first_level``（S7）
 """
 
 from __future__ import annotations
@@ -88,3 +90,53 @@ class TestNegotiationRoutes:
         body = resp.json()
         assert body["code"] == "FLOW_ACTION_FORBIDDEN"
         assert body["details"]["rule"] == "star_create"
+
+    async def test_review_routes(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        negotiation_factory: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+    ) -> None:
+        """``final-review`` 缺 ``negotiation_final:approve`` → 403（进 service 之前）；退回不写意见 → 422；
+        管理员定稿 200；管理员做第一级 → 403 ``star_first_level``。"""
+        style = await product_factory.style()
+        blogger = await blogger_factory.blogger()
+        n = await negotiation_factory.negotiation(
+            style=style,
+            blogger=blogger,
+            pr=flow_users.pr,
+            status="待老板审核",
+            reviewed_by=flow_users.pr_manager.id,
+        )
+        path = f"/api/negotiations/{n.id}/final-review"
+        resp = await _call(session, flow_users.pr_manager, "POST", path, {"action": "approve"})
+        assert (resp.status_code, resp.json()["code"]) == (403, "PERMISSION_DENIED")
+        resp = await _call(session, flow_users.admin, "POST", path, {"action": "return"})
+        assert (resp.status_code, resp.json()["code"]) == (422, "VALIDATION_ERROR"), resp.text
+        resp = await _call(session, flow_users.admin, "POST", path, {"action": "approve"})
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["status"] == "待补收货地址"
+
+        pending = await negotiation_factory.negotiation(
+            style=style, blogger=blogger, pr=flow_users.pr, status="主管待审"
+        )
+        resp = await _call(
+            session,
+            flow_users.admin,
+            "POST",
+            f"/api/negotiations/{pending.id}/review",
+            {"action": "approve"},
+        )
+        assert resp.status_code == 403, resp.text
+        assert resp.json()["details"]["rule"] == "star_first_level"
+        # 主管驳回不写意见 → 422（以前 ValueError 进 ctx，序列化时 500）
+        resp = await _call(
+            session,
+            flow_users.pr_manager,
+            "POST",
+            f"/api/negotiations/{pending.id}/review",
+            {"action": "reject"},
+        )
+        assert (resp.status_code, resp.json()["code"]) == (422, "VALIDATION_ERROR"), resp.text

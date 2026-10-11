@@ -25,13 +25,6 @@ class NegotiationStateConflictError(IllegalStateTransitionError):
     message = "谈款单刚被别人处理过，请刷新后再试"
 
 
-class NegotiationNotReviewableError(AppException):
-    """只有待审核的单据能审。"""
-
-    code = "NEGOTIATION_NOT_REVIEWABLE"
-    status_code = 409
-
-
 class NegotiationSelfReviewForbiddenError(AppException):
     """禁止审核自己提交的谈款单。
 
@@ -40,12 +33,6 @@ class NegotiationSelfReviewForbiddenError(AppException):
 
     code = "NEGOTIATION_SELF_REVIEW_FORBIDDEN"
     status_code = 403
-
-
-class NegotiationReviewOpinionRequiredError(ValidationError):
-    """驳回时审核意见必填 —— PR 得知道要改什么。"""
-
-    code = "NEGOTIATION_REVIEW_OPINION_REQUIRED"
 
 
 class InvalidNegotiationBloggerError(ValidationError):
@@ -65,8 +52,6 @@ __all__ = [
     "InvalidNegotiationGoodsError",
     "InvalidNegotiationStyleError",
     "NegotiationNotFoundError",
-    "NegotiationNotReviewableError",
-    "NegotiationReviewOpinionRequiredError",
     "NegotiationSelfReviewForbiddenError",
     "NegotiationStateConflictError",
 ]

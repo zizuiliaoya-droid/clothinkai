@@ -2,7 +2,8 @@
 
 本文件按条目逐步长：S5 可见范围与读接口（列表 / 计数 / 详情的可见范围、超 36 小时、``ui``、收件投影、
 ``receiver_suggestion``、商品明细与品名、列表 SQL 条数不随行数涨）；S6 新建 / 编辑 / 提交（N1 ~ N3：
-商品推定写回与明细、``star_create``、``others_in_progress``、转移全表的编辑 / 提交两列、提交缺项、提交留痕、goods-members）。
+商品推定写回与明细、``star_create``、``others_in_progress``、转移全表的编辑 / 提交两列、提交缺项、提交留痕、goods-members）；
+S7 两级审核（N4 ~ N7：审核人规则、通过不建推广单、转移全表的两级审核两列、退回重提后旧意见仍在事件里）。
 角色一律用 ``flow_users``（迁移 seed 的真实角色）；造数用 ``negotiation_factory`` 直插任意状态。
 """
 
@@ -15,20 +16,27 @@ from uuid import uuid4
 
 import pytest
 from freezegun import freeze_time
+from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy import event, select
 from sqlalchemy import text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import AppException, IllegalStateTransitionError
+from app.core.exceptions import AppException, IllegalStateTransitionError, PermissionDeniedError
 from app.core.tenancy import tenant_id_ctx
 from app.modules.auth.models import Permission, UserPermissionOverride
 from app.modules.flow.exceptions import FlowActionForbiddenError, FlowGateMissingError
-from app.modules.negotiation.exceptions import NegotiationNotFoundError
+from app.modules.negotiation.enums import NegotiationFinalReviewAction, NegotiationReviewAction
+from app.modules.negotiation.exceptions import (
+    NegotiationNotFoundError,
+    NegotiationSelfReviewForbiddenError,
+)
 from app.modules.negotiation.models import Negotiation
 from app.modules.negotiation.repository import NegotiationRepository
 from app.modules.negotiation.schemas import (
     NegotiationCreate,
+    NegotiationFinalReviewRequest,
     NegotiationListFilters,
+    NegotiationReviewRequest,
     NegotiationUpdate,
 )
 from app.modules.negotiation.service import NegotiationService
@@ -46,6 +54,8 @@ _RECEIVER = {
     "receiver_address": "浙江省杭州市西湖区某路 1 号",
 }
 _T0 = datetime(2026, 10, 10, 2, 0, tzinfo=UTC)
+_APPROVE = NegotiationReviewRequest(action=NegotiationReviewAction.APPROVE)
+_FINAL_APPROVE = NegotiationFinalReviewRequest(action=NegotiationFinalReviewAction.APPROVE)
 
 
 @pytest.fixture
@@ -635,7 +645,7 @@ async def _events(session: AsyncSession, negotiation_id: Any) -> list[Any]:
         (
             await session.execute(
                 sa_text(
-                    "SELECT event_type, from_state, to_state, payload, actor_id, line_id"
+                    "SELECT event_type, from_state, to_state, payload, actor_id, line_id, note"
                     " FROM line_event WHERE negotiation_id = :n ORDER BY seq"
                 ),
                 {"n": negotiation_id},
@@ -927,6 +937,11 @@ class TestEdit:
         assert await repo.update_state(**args, pr_id=flow_users.pr2.id) is None
         assert (await repo.update_state(**args, pr_id=flow_users.pr.id)) is not None
 
+        pending = await world.make(flow_users.pr, "主管待审")
+        final_pending = await world.make(
+            flow_users.pr, "待老板审核", reviewed_by=flow_users.pr_manager.id
+        )
+
         async def _lost(*_a: Any, **_k: Any) -> None:
             return None
 
@@ -935,6 +950,8 @@ class TestEdit:
         for call in (
             svc.update(draft.id, NegotiationUpdate(remark="y"), flow_users.pr),
             svc.submit(draft.id, flow_users.pr),
+            svc.review(pending.id, _APPROVE, flow_users.pr_manager),
+            svc.final_review(final_pending.id, _FINAL_APPROVE, flow_users.admin),
         ):
             with pytest.raises(IllegalStateTransitionError) as exc:
                 await call
@@ -977,6 +994,45 @@ class TestTransitions:
             await svc.submit(n.id, flow_users.pr)
         assert exc.value.code == "ILLEGAL_STATE_TRANSITION"
         assert exc.value.details == {"from_state": status, "action": "submit"}
+
+    @pytest.mark.parametrize("status", _STATES)
+    async def test_manager_review(
+        self, session: AsyncSession, flow_users: Any, world: _World, status: str
+    ) -> None:
+        n = await world.make(flow_users.pr, status)
+        svc = NegotiationService(session)
+        if status == "草稿":
+            # 草稿只有本人看得到：主管取不到 → 404（先于状态机）
+            with pytest.raises(NegotiationNotFoundError):
+                await svc.review(n.id, _APPROVE, flow_users.pr_manager)
+            return
+        if status == "主管待审":
+            resp = await svc.review(n.id, _APPROVE, flow_users.pr_manager)
+            assert resp.status == "待老板审核"
+            return
+        with pytest.raises(IllegalStateTransitionError) as exc:
+            await svc.review(n.id, _APPROVE, flow_users.pr_manager)
+        assert exc.value.code == "ILLEGAL_STATE_TRANSITION"
+        assert exc.value.details == {"from_state": status, "action": "manager_review"}
+
+    @pytest.mark.parametrize("status", _STATES)
+    async def test_final_review(
+        self, session: AsyncSession, flow_users: Any, world: _World, status: str
+    ) -> None:
+        n = await world.make(flow_users.pr, status, reviewed_by=flow_users.pr_manager.id)
+        svc = NegotiationService(session)
+        if status == "草稿":
+            with pytest.raises(NegotiationNotFoundError):
+                await svc.final_review(n.id, _FINAL_APPROVE, flow_users.admin)
+            return
+        if status == "待老板审核":
+            resp = await svc.final_review(n.id, _FINAL_APPROVE, flow_users.admin)
+            assert resp.status == "待补收货地址"
+            return
+        with pytest.raises(IllegalStateTransitionError) as exc:
+            await svc.final_review(n.id, _FINAL_APPROVE, flow_users.admin)
+        assert exc.value.code == "ILLEGAL_STATE_TRANSITION"
+        assert exc.value.details == {"from_state": status, "action": "final_review"}
 
 
 # ---------------------------------------------------------------------------
@@ -1048,17 +1104,26 @@ class TestSubmit:
             first = await svc.submit(created.id, flow_users.pr)
         assert (first.status, first.submitted_at) == ("主管待审", _T0)
 
-        # 主管通过、老板退回（S7 之前直接改库造这一步）
-        stored = await session.get(Negotiation, created.id)
-        assert stored is not None
-        stored.status = "老板退回"
-        stored.reviewed_by = flow_users.pr_manager.id
-        stored.reviewed_at = _T0
-        stored.review_opinion = "主管：可以"
-        stored.final_reviewed_by = flow_users.admin.id
-        stored.final_reviewed_at = _T0
-        stored.final_review_opinion = "老板：价格再压"
-        await session.flush()
+        # 主管通过、老板退回
+        await svc.review(
+            created.id,
+            NegotiationReviewRequest(
+                action=NegotiationReviewAction.APPROVE, review_opinion="主管：可以"
+            ),
+            flow_users.pr_manager,
+        )
+        returned = await svc.final_review(
+            created.id,
+            NegotiationFinalReviewRequest(
+                action=NegotiationFinalReviewAction.RETURN, opinion="老板：价格再压"
+            ),
+            flow_users.admin,
+        )
+        assert (returned.status, returned.review_opinion, returned.final_review_opinion) == (
+            "老板退回",
+            "主管：可以",
+            "老板：价格再压",
+        )
 
         await svc.update(
             created.id, NegotiationUpdate(quote_amount=Decimal("300.00")), flow_users.pr
@@ -1075,10 +1140,13 @@ class TestSubmit:
         ) == (None, None, None)
 
         events = await _events(session, created.id)
-        assert [(e[0], e[1], e[2]) for e in events] == [
-            ("negotiation.created", None, "草稿"),
-            ("negotiation.submitted", "草稿", "主管待审"),
-            ("negotiation.submitted", "老板退回", "主管待审"),
+        # 重提清了行上的两级意见，上一轮的意见仍在事件里（9.3 B「留痕」，B9）
+        assert [(e[0], e[1], e[2], e[6]) for e in events] == [
+            ("negotiation.created", None, "草稿", None),
+            ("negotiation.submitted", "草稿", "主管待审", None),
+            ("negotiation.manager_approved", "主管待审", "待老板审核", "主管：可以"),
+            ("negotiation.final_returned", "待老板审核", "老板退回", "老板：价格再压"),
+            ("negotiation.submitted", "老板退回", "主管待审", None),
         ]
         snapshot = {
             "blogger_id": str(world.blogger.id),
@@ -1091,11 +1159,17 @@ class TestSubmit:
             "quote_amount": "500.00",
         }
         assert events[1][3] == {"snapshot": snapshot}
-        assert events[2][3] == {
+        assert events[4][3] == {
             "snapshot": {**snapshot, "quote_amount": "300.00"},
             "diff": {"quote_amount": {"before": "500.00", "after": "300.00"}},
         }
-        assert {e[4] for e in events} == {flow_users.pr.id}
+        assert [e[4] for e in events] == [
+            flow_users.pr.id,
+            flow_users.pr.id,
+            flow_users.pr_manager.id,
+            flow_users.admin.id,
+            flow_users.pr.id,
+        ]
 
     async def test_submit_response_has_others_in_progress(
         self, session: AsyncSession, flow_users: Any, world: _World
@@ -1140,3 +1214,236 @@ class TestGoodsMembers:
         with pytest.raises(AppException) as exc:
             await svc.goods_members(style_id=uuid4(), goods_main_id=None)
         assert exc.value.code == "INVALID_NEGOTIATION_STYLE"
+
+
+# ---------------------------------------------------------------------------
+# S7 两级审核（N4 ~ N7；7.2 POST /{id}/review、POST /{id}/final-review）
+# ---------------------------------------------------------------------------
+
+
+async def _promotion_count(session: AsyncSession, line_id: Any) -> int:
+    return int(
+        (
+            await session.execute(
+                sa_text("SELECT COUNT(*) FROM promotion WHERE line_id = :l"), {"l": line_id}
+            )
+        ).scalar_one()
+    )
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+class TestTwoLevelReview:
+    async def test_approve_then_finalize(
+        self, session: AsyncSession, flow_users: Any, world: _World
+    ) -> None:
+        """主管通过 → 待老板审核；老板定稿 → 待补收货地址。两级各记审核人 / 时间 / 意见、各写一条事件（意见进 note），推广单 0。"""
+        n = await world.make(flow_users.pr, "主管待审")
+        line_id = n.line_id
+        svc = NegotiationService(session)
+        with freeze_time(_T0):
+            first = await svc.review(
+                n.id,
+                NegotiationReviewRequest(
+                    action=NegotiationReviewAction.APPROVE, review_opinion="价格合适"
+                ),
+                flow_users.pr_manager,
+            )
+        assert (first.status, first.reviewed_by, first.reviewed_at, first.review_opinion) == (
+            "待老板审核",
+            flow_users.pr_manager.id,
+            _T0,
+            "价格合适",
+        )
+        assert first.reviewer_name is not None
+        assert first.promotion_id is None
+        assert await _promotion_count(session, line_id) == 0
+
+        later = _T0 + timedelta(hours=2)
+        with freeze_time(later):
+            second = await svc.final_review(n.id, _FINAL_APPROVE, flow_users.admin)
+        assert (second.status, second.final_reviewed_by, second.final_reviewed_at) == (
+            "待补收货地址",
+            flow_users.admin.id,
+            later,
+        )
+        # 不写意见时存 null；第一级的不动
+        assert (second.final_review_opinion, second.review_opinion) == (None, "价格合适")
+        assert second.final_reviewer_name is not None
+        assert second.promotion_id is None
+        assert await _promotion_count(session, line_id) == 0
+
+        events = await _events(session, n.id)
+        assert [(e[0], e[1], e[2], e[4], e[5], e[6]) for e in events] == [
+            (
+                "negotiation.manager_approved",
+                "主管待审",
+                "待老板审核",
+                flow_users.pr_manager.id,
+                line_id,
+                "价格合适",
+            ),
+            (
+                "negotiation.final_approved",
+                "待老板审核",
+                "待补收货地址",
+                flow_users.admin.id,
+                line_id,
+                None,
+            ),
+        ]
+
+    async def test_manager_reject_is_terminal(
+        self, session: AsyncSession, flow_users: Any, world: _World
+    ) -> None:
+        """主管驳回 = 终态「审核驳回」，意见留在行上（博主卡片读它）；ui 只剩复制。"""
+        n = await world.make(flow_users.pr, "主管待审")
+        svc = NegotiationService(session)
+        resp = await svc.review(
+            n.id,
+            NegotiationReviewRequest(
+                action=NegotiationReviewAction.REJECT, review_opinion="报价高"
+            ),
+            flow_users.pr_manager,
+        )
+        assert (resp.status, resp.review_opinion, resp.promotion_id) == ("审核驳回", "报价高", None)
+        events = await _events(session, n.id)
+        assert [(e[0], e[2], e[6]) for e in events] == [
+            ("negotiation.manager_rejected", "审核驳回", "报价高")
+        ]
+        own = await svc.get(n.id, flow_users.pr)
+        assert own.ui is not None
+        assert set(own.ui["actions"]) == {"copy"}
+
+    async def test_final_return(
+        self, session: AsyncSession, flow_users: Any, world: _World
+    ) -> None:
+        """老板退回 → 老板退回（PR 能改、能重提），退回意见在行上与事件 note 里。"""
+        n = await world.make(
+            flow_users.pr, "待老板审核", reviewed_by=flow_users.pr_manager.id, review_opinion="可以"
+        )
+        resp = await NegotiationService(session).final_review(
+            n.id,
+            NegotiationFinalReviewRequest(
+                action=NegotiationFinalReviewAction.RETURN, opinion="价格再压一压"
+            ),
+            flow_users.admin,
+        )
+        assert (resp.status, resp.final_review_opinion, resp.review_opinion) == (
+            "老板退回",
+            "价格再压一压",
+            "可以",
+        )
+        events = await _events(session, n.id)
+        assert [(e[0], e[2], e[4], e[6]) for e in events] == [
+            ("negotiation.final_returned", "老板退回", flow_users.admin.id, "价格再压一压")
+        ]
+        own = await NegotiationService(session).get(n.id, flow_users.pr)
+        assert own.ui is not None
+        assert own.ui["actions"]["edit"] == {"state": "enabled"}
+
+    async def test_opinion_required_in_schema(self) -> None:
+        """驳回 / 退回必须写意见（schema 层，只有空白也不行）；通过 / 定稿可以不写。"""
+        with pytest.raises(PydanticValidationError):
+            NegotiationReviewRequest(action=NegotiationReviewAction.REJECT, review_opinion="  ")
+        with pytest.raises(PydanticValidationError):
+            NegotiationFinalReviewRequest(action=NegotiationFinalReviewAction.RETURN)
+        with pytest.raises(PydanticValidationError):
+            NegotiationFinalReviewRequest(action=NegotiationFinalReviewAction.RETURN, opinion=" ")
+        assert _FINAL_APPROVE.opinion is None
+
+
+# ---------------------------------------------------------------------------
+# S7 审核人规则（3.2 Q3；9.3 B「审核人规则」）
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+class TestReviewerRules:
+    async def test_admin_cannot_do_first_level(
+        self, session: AsyncSession, flow_users: Any, world: _World
+    ) -> None:
+        """管理员（持 ``*``）做第一级 → 403 ``star_first_level``，单不动。"""
+        n = await world.make(flow_users.pr, "主管待审")
+        svc = NegotiationService(session)
+        with pytest.raises(FlowActionForbiddenError) as exc:
+            await svc.review(n.id, _APPROVE, flow_users.admin)
+        assert exc.value.code == "FLOW_ACTION_FORBIDDEN"
+        assert exc.value.details == {
+            "rule": "star_first_level",
+            "reason": "第一级由 PR 主管审核，管理员不能代做",
+        }
+        assert (await svc.get(n.id, flow_users.pr)).status == "主管待审"
+        assert await _events(session, n.id) == []
+
+    async def test_manager_cannot_review_own(
+        self, session: AsyncSession, flow_users: Any, world: _World
+    ) -> None:
+        """主管审自己建的 → 403 现有自审 code；主管自建的由管理员定稿不受影响（第一级要临时授权代理人，11-24）。"""
+        n = await world.make(flow_users.pr_manager, "主管待审")
+        svc = NegotiationService(session)
+        with pytest.raises(NegotiationSelfReviewForbiddenError) as exc:
+            await svc.review(n.id, _APPROVE, flow_users.pr_manager)
+        assert (exc.value.code, exc.value.status_code) == ("NEGOTIATION_SELF_REVIEW_FORBIDDEN", 403)
+        assert exc.value.details["rule"] == "self_review"
+        assert (await svc.get(n.id, flow_users.pr_manager)).status == "主管待审"
+
+    async def test_same_person_cannot_pass_both_levels(
+        self, session: AsyncSession, tenant_a: Any, flow_users: Any, world: _World
+    ) -> None:
+        """给主管个人授 ``negotiation_final:approve`` 后两级都由他做 → 403 ``same_reviewer``；别人过的第一级他能定稿。"""
+        await _override(session, tenant_a, flow_users.pr_manager, "negotiation_final:approve")
+        svc = NegotiationService(session)
+        n = await world.make(flow_users.pr, "主管待审")
+        passed = await svc.review(n.id, _APPROVE, flow_users.pr_manager)
+        assert passed.status == "待老板审核"
+        assert passed.ui is not None
+        assert passed.ui["actions"]["final_review"] == {
+            "state": "disabled",
+            "reason": "两级审核不能由同一人完成",
+        }
+        with pytest.raises(FlowActionForbiddenError) as exc:
+            await svc.final_review(n.id, _FINAL_APPROVE, flow_users.pr_manager)
+        assert exc.value.details["rule"] == "same_reviewer"
+        assert (await svc.get(n.id, flow_users.pr)).status == "待老板审核"
+
+        other = await world.make(flow_users.pr, "待老板审核", reviewed_by=flow_users.admin.id)
+        done = await svc.final_review(other.id, _FINAL_APPROVE, flow_users.pr_manager)
+        assert done.status == "待补收货地址"
+        # 老板一级同样不能审自己谈的
+        own = await world.make(flow_users.pr_manager, "待老板审核", reviewed_by=flow_users.admin.id)
+        with pytest.raises(NegotiationSelfReviewForbiddenError):
+            await svc.final_review(own.id, _FINAL_APPROVE, flow_users.pr_manager)
+
+    async def test_proxy_reviews_others_not_own(
+        self, session: AsyncSession, tenant_a: Any, flow_users: Any, world: _World
+    ) -> None:
+        """主管请假的代理人（PR + 个人授 ``negotiation.review:approve`` 与 ``negotiation_all:read``）：能审别人的，不能审自己的。"""
+        await _override(session, tenant_a, flow_users.pr, "negotiation.review:approve")
+        await _override(session, tenant_a, flow_users.pr, "negotiation_all:read")
+        svc = NegotiationService(session)
+        theirs = await world.make(flow_users.pr2, "主管待审")
+        mine = await world.make(flow_users.pr, "主管待审")
+        resp = await svc.review(theirs.id, _APPROVE, flow_users.pr)
+        assert (resp.status, resp.reviewed_by) == ("待老板审核", flow_users.pr.id)
+        with pytest.raises(NegotiationSelfReviewForbiddenError):
+            await svc.review(mine.id, _APPROVE, flow_users.pr)
+
+    async def test_review_needs_visibility(
+        self, session: AsyncSession, tenant_a: Any, flow_users: Any, world: _World
+    ) -> None:
+        """只授了 ``negotiation.review:approve`` 的代理人看不到别人的单：审 → 404（先于规则）。"""
+        await _override(session, tenant_a, flow_users.pr, "negotiation.review:approve")
+        theirs = await world.make(flow_users.pr2, "主管待审")
+        with pytest.raises(NegotiationNotFoundError):
+            await NegotiationService(session).review(theirs.id, _APPROVE, flow_users.pr)
+
+    async def test_manager_lacks_final_scope(
+        self, session: AsyncSession, flow_users: Any, world: _World
+    ) -> None:
+        """默认角色的主管没有老板权：service 层同样拦（403 ``PERMISSION_DENIED``，缺能力项不是规则）。"""
+        n = await world.make(flow_users.pr, "待老板审核", reviewed_by=flow_users.admin.id)
+        with pytest.raises(PermissionDeniedError) as exc:
+            await NegotiationService(session).final_review(
+                n.id, _FINAL_APPROVE, flow_users.pr_manager
+            )
+        assert exc.value.code == "PERMISSION_DENIED"

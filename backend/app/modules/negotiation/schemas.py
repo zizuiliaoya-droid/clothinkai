@@ -8,8 +8,13 @@ from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic_core import PydanticCustomError
 
-from app.modules.negotiation.enums import NegotiationReviewAction, NegotiationStatus
+from app.modules.negotiation.enums import (
+    NegotiationFinalReviewAction,
+    NegotiationReviewAction,
+    NegotiationStatus,
+)
 from app.modules.promotion.enums import CooperationMode
 from app.modules.promotion.schemas import GoodsItemIn, GoodsMemberResponse
 
@@ -75,7 +80,23 @@ class NegotiationReviewRequest(BaseModel):
     @model_validator(mode="after")
     def _require_opinion_on_reject(self) -> NegotiationReviewRequest:
         if self.action == NegotiationReviewAction.REJECT and not self.review_opinion:
-            raise ValueError("驳回时审核意见必填")
+            # PydanticCustomError 而不是 ValueError：后者把异常对象放进 ctx，422 响应序列化时变 500
+            raise PydanticCustomError("review_opinion_required", "驳回时审核意见必填")
+        return self
+
+
+class NegotiationFinalReviewRequest(BaseModel):
+    """老板审核（N6 定稿 / N7 退回，7.2）。退回时意见必填（schema 层）。"""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    action: NegotiationFinalReviewAction
+    opinion: str | None = Field(default=None, max_length=2000)
+
+    @model_validator(mode="after")
+    def _require_opinion_on_return(self) -> NegotiationFinalReviewRequest:
+        if self.action == NegotiationFinalReviewAction.RETURN and not self.opinion:
+            raise PydanticCustomError("final_opinion_required", "退回时意见必填")
         return self
 
 
@@ -271,6 +292,7 @@ __all__ = [
     "BloggerCooperationHistory",
     "BloggerCooperationItem",
     "NegotiationCreate",
+    "NegotiationFinalReviewRequest",
     "NegotiationGoodsMembers",
     "NegotiationItemResponse",
     "NegotiationListFilters",
