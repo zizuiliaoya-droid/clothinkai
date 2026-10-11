@@ -20,6 +20,7 @@ import { DownOutlined, PlusOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnsType } from "antd/es/table";
 import dayjs from "dayjs";
+import { useSearchParams } from "react-router-dom";
 import { listPromotions, reviewPromotion, shipInclude } from "@/features/promotion/api";
 import { buildMenuItems } from "@/features/flow/flowMenu";
 import type {
@@ -114,9 +115,13 @@ export function PromotionListPage() {
   const canManagePaymentQr = Boolean(
     user?.roles.some((r) => ["admin", "platform_admin", "pr", "pr_manager"].includes(r))
   );
+  // 谈款定稿后「去推广管理」带 ?keyword=内部编码 过来（流程线 8.3）
+  const [searchParams] = useSearchParams();
+  const initialKeyword = searchParams.get("keyword")?.trim() || undefined;
   const [filters, setFilters] = useState<PromotionListFilters>({
     page: 1,
     page_size: 10,
+    keyword: initialKeyword,
   });
   // 各弹窗的表单与提交都在 features/promotion/components/ 里，页面只管开哪个、对哪条单
   const [open, setOpen] = useState(false);
@@ -594,6 +599,7 @@ export function PromotionListPage() {
       <Space style={{ marginBottom: 16 }} wrap>
         <Input.Search
           placeholder="搜索内部编码 / 货号 / 商品简称 / 商品编码"
+          defaultValue={initialKeyword}
           allowClear
           style={{ width: 300 }}
           onSearch={(v) =>

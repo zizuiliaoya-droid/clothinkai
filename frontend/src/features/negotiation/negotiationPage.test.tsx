@@ -2,6 +2,7 @@
 // 谈款页列表（流程线 8.3）：8 个 Tab +「超时 N」、列、操作菜单按 row.ui、新建按页级 ui、超时行高亮。
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UiState } from "@/features/flow/keys";
 import type { Negotiation, NegotiationItem, NegotiationPage as NegotiationPageData } from "./types";
@@ -130,9 +131,11 @@ function pageOf(rows: Negotiation[], ui: UiState = { actions: { create: { state:
 function renderPage() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <QueryClientProvider client={client}>
-      <NegotiationPage />
-    </QueryClientProvider>
+    <MemoryRouter>
+      <QueryClientProvider client={client}>
+        <NegotiationPage />
+      </QueryClientProvider>
+    </MemoryRouter>
   );
 }
 
