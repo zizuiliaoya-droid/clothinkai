@@ -3,6 +3,8 @@
 import { apiClient } from "@/services/apiClient";
 import type {
   BiDashboard,
+  DrillPromotionPage,
+  DrillPromotionParams,
   ProductionReport,
   ProductionTrend,
   ProgressSummary,
@@ -162,6 +164,18 @@ export async function refreshSummaries(
 /** 报表能力（7e R1）：菜单与导出按钮按它显示；只要登录。 */
 export async function getReportCapabilities(): Promise<ReportCapabilities> {
   const resp = await apiClient.get<ReportCapabilities>("/api/reports/capabilities");
+  return resp.data;
+}
+
+/**
+ * 报表下钻：区间内（按合作日期）的推广单明细（7e R1）。只持工作进度 read_own 时后端强制本人。
+ */
+export async function getDrillPromotions(
+  params: DrillPromotionParams
+): Promise<DrillPromotionPage> {
+  const resp = await apiClient.get<DrillPromotionPage>("/api/reports/drill/promotions", {
+    params,
+  });
   return resp.data;
 }
 

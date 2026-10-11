@@ -22,7 +22,8 @@ export interface PrWorkProgress {
   hit_count: number;
   hit_rate: string | null;
   like_count: number;
-  cost: string;
+  /** 聚合额按报表读权限（F3），R1 恒有值；类型留 null 与后端一致。 */
+  cost: string | null;
   cpl: string | null;
 }
 
@@ -250,6 +251,48 @@ export interface ReportCapabilities {
   /** 能导出的报表类型（`/api/reports/{type}/export` 的 type）。 */
   export: string[];
   refresh: boolean;
+}
+
+/**
+ * 报表下钻的一张推广单（GET /api/reports/drill/promotions，7e R1）。
+ *
+ * 字段是后端白名单：不含收件信息、收款码、备注、source_extra。
+ * 金额按字段权限逐行裁剪，读不到为 null（页面显示「—」）；detail_url R1 ~ R7 恒 null，不渲染链接。
+ */
+export interface DrillPromotionRow {
+  id: string;
+  internal_code: string;
+  cooperation_date: string;
+  scheduled_publish_date: string | null;
+  actual_publish_date: string | null;
+  pr_id: string | null;
+  pr_name: string;
+  blogger_nickname: string;
+  platform: string;
+  display_short_name: string;
+  publish_status: string;
+  recall_status: string;
+  quote_amount: string | null;
+  total_promo_cost: string | null;
+  /** 7 天点赞，null = 未录。 */
+  like_count: number | null;
+  detail_url: string | null;
+}
+
+export interface DrillPromotionPage {
+  items: DrillPromotionRow[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+/** 下钻参数：日期按合作日期、必填；pr_id 为 UUID 或 unassigned（未分配）。 */
+export interface DrillPromotionParams {
+  date_from: string;
+  date_to: string;
+  pr_id?: string;
+  page?: number;
+  page_size?: number;
 }
 
 /** POST /api/reports/summaries/refresh 的返回：各汇总表写入行数。 */
