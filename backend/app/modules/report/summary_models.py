@@ -16,12 +16,14 @@ from uuid import UUID
 
 from sqlalchemy import (
     BigInteger,
+    CheckConstraint,
     Date,
     DateTime,
     ForeignKey,
     Index,
     Integer,
     Numeric,
+    String,
     text,
 )
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
@@ -57,8 +59,12 @@ def _count() -> Mapped[int]:
     return mapped_column(Integer, nullable=False, server_default=_ZERO)
 
 
+def _big_count() -> Mapped[int]:
+    return mapped_column(BigInteger, nullable=False, server_default=_ZERO)
+
+
 class ProductRoiSummary(TenantScopedModel):
-    """(商品, 日) 的投产指标。
+    """(商品, 渠道, 日) 的投产指标（062 加渠道维度）。
 
     刷新源：``ProductionRepository.daily_trend_by_goods(goods_id=None)``。
 
@@ -74,6 +80,8 @@ class ProductRoiSummary(TenantScopedModel):
         ForeignKey("goods_main.id", ondelete="CASCADE"),
         nullable=False,
     )
+    # 062：销售 / 加购按千牛链接的渠道，站内花费按万相台链接的渠道，推广 / 刷单记普通
+    channel: Mapped[str] = mapped_column(String(16), nullable=False, server_default=text("'普通'"))
     stat_date: Mapped[date] = mapped_column(Date, nullable=False)
     pay_amount: Mapped[Decimal] = _money()
     brushing_amount: Mapped[Decimal] = _money()
@@ -84,6 +92,13 @@ class ProductRoiSummary(TenantScopedModel):
     add_cart_count: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=_ZERO)
     promo_cost: Mapped[Decimal] = _money()
     ad_spend: Mapped[Decimal] = _money()
+    # 062 补 5 列：支付件数、站内加购，以及逐日配对的加购（同一商品、渠道、日
+    # 千牛与万相台都有行才记，paired_days = 1；否则三列都是 0）
+    pay_orders: Mapped[int] = _big_count()
+    ad_add_cart_count: Mapped[int] = _big_count()
+    paired_all_cart: Mapped[int] = _big_count()
+    paired_ad_cart: Mapped[int] = _big_count()
+    paired_days: Mapped[int] = _count()
     refreshed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     __table_args__ = (
@@ -91,15 +106,18 @@ class ProductRoiSummary(TenantScopedModel):
             "uq_product_roi_summary",
             "tenant_id",
             "goods_main_id",
+            "channel",
             "stat_date",
             unique=True,
         ),
         Index("idx_product_roi_summary_date", "tenant_id", "stat_date"),
+        # 命名约定套前缀，库里实名 ck_product_roi_summary_channel
+        CheckConstraint("channel IN ('普通', '直播')", name="channel"),
     )
 
 
 class PrWorkProgressSummary(TenantScopedModel):
-    """(PR, 日) 的工作进度计数。
+    """(PR, 归属商品, 日) 的工作进度计数（062 加商品维度）。
 
     刷新源：``WorkProgressRepository.aggregate_by_pr`` 逐日调用。
 
@@ -116,6 +134,13 @@ class PrWorkProgressSummary(TenantScopedModel):
     pr_id: Mapped[UUID | None] = mapped_column(
         PGUUID(as_uuid=True),
         ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    # 062：归属商品（_PROMO_GOODS_LATERAL），可为空 —— 归属不到商品的单据也要进统计。
+    # 唯一键 (tenant_id, pr_id, goods_main_id, stat_date) NULLS NOT DISTINCT 同样由迁移建
+    goods_main_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("goods_main.id", ondelete="CASCADE"),
         nullable=True,
     )
     stat_date: Mapped[date] = mapped_column(Date, nullable=False)
@@ -137,7 +162,18 @@ class PrWorkProgressSummary(TenantScopedModel):
     # numeric 而不是整数：抖音/快手点赞按 ×0.1 折算，单日可以是小数。逐日存整数会
     # 「先舍入再求和」，与实时路径「先求和再取整」对不上（054 改的类型）
     like_count: Mapped[Decimal] = mapped_column(Numeric, nullable=False, server_default=_ZERO)
+    # 旧列保留、不再展示（062 起展示 promo_cost）
     cost: Mapped[Decimal] = _money()
+    # 062 补 9 列：报价金额按发布状态拆，推广费只看 is_active，发货读 ship_status = '已发货'
+    quote_amount: Mapped[Decimal] = _money()
+    published_quote_amount: Mapped[Decimal] = _money()
+    effective_quote_amount: Mapped[Decimal] = _money()
+    unpublished_quote_amount: Mapped[Decimal] = _money()
+    cancelled_quote_amount: Mapped[Decimal] = _money()
+    promo_cost: Mapped[Decimal] = _money()
+    unpublished_count: Mapped[int] = _count()
+    shipped_count: Mapped[int] = _count()
+    shipped_published_count: Mapped[int] = _count()
     refreshed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     __table_args__ = (
@@ -151,9 +187,9 @@ class PrWorkProgressSummary(TenantScopedModel):
 class _ShopSummaryBase(TenantScopedModel):
     """店铺汇总的公共指标。
 
-    三个指标都是可加的，所以周/月表可以直接从日表二次聚合，不必另写分桶 SQL。
+    指标全部可加，所以周/月表可以直接从日表二次聚合，不必另写分桶 SQL。
 
-    ``store_daily`` 的手填值（3 个广告消耗 + 备注）**不在这里** —— 那是人工
+    ``store_daily`` 的手填值（3 个广告消耗 + 仅退款 + 备注）**不在这里** —— 那是人工
     override 层，读取时 LEFT JOIN 过去，填完立刻生效，不用等下次刷新。
     """
 
@@ -162,6 +198,13 @@ class _ShopSummaryBase(TenantScopedModel):
     visitors: Mapped[int] = _count()
     pay_amount: Mapped[Decimal] = _money()
     pay_orders: Mapped[int] = _count()
+    # 062 补 6 列（全店口径）。退款不限精度，理由同 054 的 product_roi_summary.refund_amount
+    refund_amount: Mapped[Decimal] = mapped_column(Numeric, nullable=False, server_default=_ZERO)
+    brushing_amount: Mapped[Decimal] = _money()
+    ad_spend: Mapped[Decimal] = _money()
+    promo_cost: Mapped[Decimal] = _money()
+    live_pay_amount: Mapped[Decimal] = _money()
+    live_ad_spend: Mapped[Decimal] = _money()
     refreshed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
@@ -223,7 +266,66 @@ class ShopMonthSummary(_ShopSummaryBase):
     __table_args__ = (Index("uq_shop_month_summary", "tenant_id", "period_month", unique=True),)
 
 
+# 各表落盘的指标列：刷新写入与汇总读取（含周 / 月二次聚合）都引这里，不另抄清单。
+# 单测断言它们 = 模型列去掉键列与 refreshed_at，加列漏写会红（推广列表漏过 5 列的教训）。
+# 比率不落盘，由 service 层的 safe_div 现算。
+ROI_METRICS: tuple[str, ...] = (
+    "pay_amount",
+    "brushing_amount",
+    "refund_amount",
+    "add_cart_count",
+    "promo_cost",
+    "ad_spend",
+    "pay_orders",
+    "ad_add_cart_count",
+    "paired_all_cart",
+    "paired_ad_cart",
+    "paired_days",
+)
+
+PR_PROGRESS_METRICS: tuple[str, ...] = (
+    "quote_count",
+    "in_schedule_count",
+    "urge_count",
+    "important_urge_count",
+    "overdue_count",
+    "publish_count",
+    "info_complete_count",
+    "cancel_count",
+    "recall_due_count",
+    "recall_success_count",
+    "effective_quote_count",
+    "hit_count",
+    "like_count",
+    "cost",
+    "quote_amount",
+    "published_quote_amount",
+    "effective_quote_amount",
+    "unpublished_quote_amount",
+    "cancelled_quote_amount",
+    "promo_cost",
+    "unpublished_count",
+    "shipped_count",
+    "shipped_published_count",
+)
+
+SHOP_METRICS: tuple[str, ...] = (
+    "visitors",
+    "pay_amount",
+    "pay_orders",
+    "refund_amount",
+    "brushing_amount",
+    "ad_spend",
+    "promo_cost",
+    "live_pay_amount",
+    "live_ad_spend",
+)
+
+
 __all__ = [
+    "PR_PROGRESS_METRICS",
+    "ROI_METRICS",
+    "SHOP_METRICS",
     "PrWorkProgressSummary",
     "ProductRoiSummary",
     "ReportSummaryCoverage",
