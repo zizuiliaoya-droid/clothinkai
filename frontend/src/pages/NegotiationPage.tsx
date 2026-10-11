@@ -348,34 +348,35 @@ export function NegotiationPage() {
         items={NEGOTIATION_TABS.map((t) => ({
           key: t.key,
           label: t.key ? (
-            <Space size={4}>
-              <Badge count={counts?.[t.key] ?? 0} offset={[10, 0]} size="small">
-                <span style={{ paddingRight: 12 }}>{t.label}</span>
-              </Badge>
-              {t.key === "主管待审" && overdueCount > 0 && (
-                <Tag
-                  color="red"
-                  role="button"
-                  tabIndex={0}
-                  aria-pressed={overdueOnly}
-                  aria-label={`只看超 36 小时的主管待审（${overdueCount} 条）`}
-                  style={{ cursor: "pointer", marginInlineEnd: 0 }}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    showOverdue();
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
+            // 角标浮在包裹内容的右上角、向外溢出：「超时 N」也放进包裹里，溢出落进 Tab 间距，不压在 Tag 上
+            <Badge count={counts?.[t.key] ?? 0} offset={[10, 0]} size="small">
+              <Space size={4} style={{ paddingRight: 12 }}>
+                <span>{t.label}</span>
+                {t.key === "主管待审" && overdueCount > 0 && (
+                  <Tag
+                    color="red"
+                    role="button"
+                    tabIndex={0}
+                    aria-pressed={overdueOnly}
+                    aria-label={`只看超 36 小时的主管待审（${overdueCount} 条）`}
+                    style={{ cursor: "pointer", marginInlineEnd: 0 }}
+                    onClick={(e) => {
                       e.stopPropagation();
                       showOverdue();
-                    }
-                  }}
-                >
-                  超时 {overdueCount}
-                </Tag>
-              )}
-            </Space>
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        showOverdue();
+                      }
+                    }}
+                  >
+                    超时 {overdueCount}
+                  </Tag>
+                )}
+              </Space>
+            </Badge>
           ) : (
             t.label
           ),

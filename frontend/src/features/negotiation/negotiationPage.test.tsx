@@ -168,6 +168,19 @@ describe("NegotiationPage", () => {
     expect(screen.getByText("只看主管待审超 36 小时")).toBeTruthy();
   });
 
+  it("主管待审 Tab 的数字角标排在「超时 N」后面，不被它盖住", async () => {
+    listMock.mockResolvedValue(pageOf([row()]));
+    countsMock.mockResolvedValue({ 主管待审: 5, 主管待审超时: 3 });
+    renderPage();
+    const overdue = await screen.findByRole("button", { name: /只看超 36 小时的主管待审（3 条）/ });
+    const tab = overdue.closest(".ant-tabs-tab") as HTMLElement;
+    const count = tab.querySelector(".ant-badge-count") as HTMLElement;
+    expect(count.getAttribute("title")).toBe("5");
+    // 角标浮在包裹内容的右上角、向外溢出：只有「超时 N」也在包裹里，溢出才落进 Tab 间距而不是压在 Tag 上
+    expect(count.closest(".ant-badge")?.contains(overdue)).toBe(true);
+    expect(overdue.compareDocumentPosition(count) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it("没有超时不出「超时」角标", async () => {
     listMock.mockResolvedValue(pageOf([row()]));
     countsMock.mockResolvedValue({ 主管待审: 2, 主管待审超时: 0 });
