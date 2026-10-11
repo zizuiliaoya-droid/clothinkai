@@ -267,7 +267,7 @@ export function BiDashboardPage() {
           type="error"
           showIcon
           message="BI 数据加载失败"
-          description="请稍后重试，或检查当前账号的投产报表权限。"
+          description="请稍后重试，或检查当前账号的 BI 看板权限。"
         />
       ) : null}
 
