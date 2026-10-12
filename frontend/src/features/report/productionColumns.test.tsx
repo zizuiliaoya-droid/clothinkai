@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // 单品投产列定义（7e R3 S8）：页面列键顺序 = 后端 production_columns.PRODUCTION_PAGE_KEYS；
 // 一行 = 商品 × 渠道，同商品两渠道在表格里是两个不同的行键。
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, fireEvent, render } from "@testing-library/react";
 import { Table } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -149,6 +149,72 @@ describe("productionColumns 列定义", () => {
     );
     getByRole("button", { name: "折线图" }).click();
     expect(onTrend).toHaveBeenCalledWith(expect.objectContaining({ goods_id: GOODS_A }));
+  });
+});
+
+describe("productionColumns 显示（S9）", () => {
+  it("近 7 天三列在一个列组下，列组表头「近 7 天（MM-DD ~ MM-DD）」，子列不再带前缀", () => {
+    const cols = buildProductionColumns({ recent7Range: RANGE, showMargin: false, onTrend: () => {} });
+    const group = cols.find((c) => c.key === "recent7");
+    expect(group?.title).toBe("近 7 天（10-05 ~ 10-11）");
+    const children = ("children" in group! ? group.children : []) as ColumnsType<ProductionRow>;
+    expect(children.map((c) => c.key)).toEqual([
+      "recent7_pay_amount",
+      "recent7_total_spend",
+      "recent7_net_roi",
+    ]);
+    expect(children.map((c) => c.title)).toEqual(["支付金额", "推广总花费", "净投产比"]);
+  });
+
+  it("毛利三列按 showMargin 显示 / 隐藏", () => {
+    const on = columnKeys(buildProductionColumns({ recent7Range: RANGE, showMargin: true, onTrend: () => {} }));
+    const off = columnKeys(buildProductionColumns({ recent7Range: RANGE, showMargin: false, onTrend: () => {} }));
+    const margin = ["goods_cost_total", "gross_profit", "gross_margin_rate"];
+    margin.forEach((k) => expect(on).toContain(k));
+    margin.forEach((k) => expect(off).not.toContain(k));
+  });
+
+  it("商品列每行有渠道标签；link_count ≥ 2 才标「N 条链接」", () => {
+    const rows = [
+      row({ channel: "普通", link_count: 3 }),
+      row({ channel: "直播", link_count: 1 }),
+    ];
+    const cols = buildProductionColumns({ recent7Range: RANGE, showMargin: false, onTrend: () => {} });
+    const { container } = render(
+      <Table rowKey={productionRowKey} columns={cols} dataSource={rows} pagination={false} />
+    );
+    const trs = Array.from(container.querySelectorAll("tbody tr[data-row-key]"));
+    expect(trs[0].textContent).toContain("普通");
+    expect(trs[0].textContent).toContain("3 条链接");
+    expect(trs[1].textContent).toContain("直播");
+    expect(trs[1].textContent).not.toContain("条链接");
+  });
+
+  it("站外加购：null 显示「—」带说明入口，有数照出", () => {
+    const cols = buildProductionColumns({ recent7Range: RANGE, showMargin: false, onTrend: () => {} });
+    const { container, getAllByTestId } = render(
+      <Table
+        rowKey={productionRowKey}
+        columns={cols}
+        dataSource={[row({ offsite_add_cart: null }), row({ channel: "直播", offsite_add_cart: 0 })]}
+        pagination={false}
+      />
+    );
+    const empties = getAllByTestId("offsite-add-cart-empty");
+    expect(empties).toHaveLength(1);
+    expect(empties[0].textContent).toBe("—");
+    // 有数的那行（0 也是数）不带说明
+    const live = container.querySelector(`tr[data-row-key="${GOODS_A}|直播"]`);
+    expect(live?.querySelector('[data-testid="offsite-add-cart-empty"]')).toBeNull();
+  });
+
+  it("支付件数列头带说明「剔除刷单开关不扣件数」", async () => {
+    const cols = buildProductionColumns({ recent7Range: RANGE, showMargin: false, onTrend: () => {} });
+    const { getByLabelText, findByText } = render(
+      <Table rowKey={productionRowKey} columns={cols} dataSource={[row({})]} pagination={false} />
+    );
+    fireEvent.mouseEnter(getByLabelText("支付件数说明"));
+    expect(await findByText("剔除刷单开关不扣件数")).toBeTruthy();
   });
 });
 

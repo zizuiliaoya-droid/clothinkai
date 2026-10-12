@@ -49,6 +49,7 @@ import {
   productionColumnsWidth,
   productionRowKey,
 } from "@/features/report/productionColumns";
+import { ProductionInactiveLinkNotice } from "@/features/report/components/ProductionCells";
 
 const TREND_GRANULARITY: Array<{ label: string; value: TimeGranularity }> = [
   { label: "按日", value: "day" },
@@ -137,8 +138,8 @@ export function ProductionPage() {
   // 列定义与导出共用（features/report/productionColumns.ts ↔ 后端 production_columns.py）
   const baseColumns = buildProductionColumns({
     recent7Range: data?.recent7_range,
-    // S9 接 capabilities.production_margin；接上前不渲染毛利三列（非管理员本来就是 null）
-    showMargin: false,
+    // 毛利三列只给管理员（capabilities.production_margin）；能力没回来前不渲染
+    showMargin: reportCaps?.production_margin ?? false,
     onTrend: setTrendGoods,
   });
 
@@ -171,12 +172,15 @@ export function ProductionPage() {
         <ReportCardTitle
           title="投产报表"
           freshness={
-            <ReportFreshness
-              preset={preset}
-              dateFrom={df}
-              dateTo={dt}
-              enabled={enabled && ready}
-            />
+            <Space size={12} wrap>
+              <ProductionInactiveLinkNotice count={data?.inactive_link_count} />
+              <ReportFreshness
+                preset={preset}
+                dateFrom={df}
+                dateTo={dt}
+                enabled={enabled && ready}
+              />
+            </Space>
           }
         />
       }

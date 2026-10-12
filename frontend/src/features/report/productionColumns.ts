@@ -10,6 +10,8 @@ import type { ColumnsType } from "antd/es/table";
 import {
   ProductionGoodsCell,
   ProductionImageCell,
+  ProductionOffsiteCartCell,
+  ProductionPayOrdersTitle,
   ProductionTrendButton,
 } from "./components/ProductionCells";
 import type { ProductionRow, Recent7Range } from "./types";
@@ -48,7 +50,7 @@ export function productionRowKey(row: Pick<ProductionRow, "goods_id" | "channel"
   return `${row.goods_id}|${row.channel}`;
 }
 
-type ColumnKind = "text" | "codes" | "money" | "count" | "rate" | "ratio";
+type ColumnKind = "text" | "codes" | "money" | "count" | "rate" | "ratio" | "offsite";
 
 interface ColumnSpec {
   title: string;
@@ -56,7 +58,7 @@ interface ColumnSpec {
   width: number;
   /** 毛利三列：只给管理员（showMargin 为 false 时不渲染）。 */
   margin?: boolean;
-  /** 近 7 天列组：列名前缀「近 7 天（MM-DD ~ MM-DD）」。 */
+  /** 近 7 天列组：页面放在列组「近 7 天（MM-DD ~ MM-DD）」下（导出是表头前缀）。 */
   group?: "recent7";
 }
 
@@ -65,7 +67,7 @@ const SPECS: Record<ProductionPageKey, ColumnSpec> = {
   goods_short_name: { title: "商品", kind: "text", width: 220 },
   style_codes: { title: "含款号", kind: "codes", width: 140 },
   pay_amount: { title: "支付金额", kind: "money", width: 110 },
-  pay_orders: { title: "支付件数", kind: "count", width: 100 },
+  pay_orders: { title: "支付件数", kind: "count", width: 110 },
   refund_amount: { title: "退款金额", kind: "money", width: 110 },
   return_rate: { title: "退货退款率", kind: "rate", width: 110 },
   confirmed_amount: { title: "实际销售金额", kind: "money", width: 130 },
@@ -79,7 +81,7 @@ const SPECS: Record<ProductionPageKey, ColumnSpec> = {
   add_cart_cost: { title: "总加购成本", kind: "money", width: 120 },
   ad_add_cart_count: { title: "站内加购", kind: "count", width: 100 },
   ad_add_cart_cost: { title: "站内加购成本", kind: "money", width: 120 },
-  offsite_add_cart: { title: "站外加购", kind: "count", width: 100 },
+  offsite_add_cart: { title: "站外加购", kind: "offsite", width: 100 },
   recent7_pay_amount: { title: "支付金额", kind: "money", width: 120, group: "recent7" },
   recent7_total_spend: { title: "推广总花费", kind: "money", width: 120, group: "recent7" },
   recent7_net_roi: { title: "净投产比", kind: "ratio", width: 110, group: "recent7" },
@@ -108,6 +110,8 @@ function renderValue(kind: ColumnKind, value: unknown) {
       const codes = value as string[] | null | undefined;
       return codes?.length ? codes.join("、") : "—";
     }
+    case "offsite":
+      return createElement(ProductionOffsiteCartCell, { value: value as number | null });
     default:
       return plain(value as string | number | null);
   }
@@ -126,7 +130,7 @@ export function buildProductionColumns({
   showMargin,
   onTrend,
 }: BuildProductionColumnsOptions): ColumnsType<ProductionRow> {
-  const metricColumns: ColumnsType<ProductionRow> = PRODUCTION_PAGE_KEYS.filter(
+  const flatColumns = PRODUCTION_PAGE_KEYS.filter(
     (key) => showMargin || !SPECS[key].margin
   ).map((key) => {
     const spec = SPECS[key];
@@ -143,13 +147,28 @@ export function buildProductionColumns({
       };
     }
     return {
-      title: spec.group === "recent7" ? `${recent7Label(recent7Range)}${spec.title}` : spec.title,
+      title: key === "pay_orders" ? createElement(ProductionPayOrdersTitle) : spec.title,
       key,
       dataIndex: key,
       width: spec.width,
       render: (value: unknown) => renderValue(spec.kind, value),
     };
   });
+
+  // 近 7 天三列（相邻）收进一个列组：列组表头「近 7 天（MM-DD ~ MM-DD）」，子列只写指标名
+  const recent7Children = flatColumns.filter((c) => SPECS[c.key].group === "recent7");
+  const metricColumns: ColumnsType<ProductionRow> = [];
+  for (const col of flatColumns) {
+    if (SPECS[col.key].group !== "recent7") {
+      metricColumns.push(col);
+    } else if (col === recent7Children[0]) {
+      metricColumns.push({
+        title: recent7Label(recent7Range),
+        key: "recent7",
+        children: recent7Children,
+      });
+    }
+  }
 
   return [
     {
@@ -172,7 +191,16 @@ export function buildProductionColumns({
   ];
 }
 
-/** 表格横向滚动宽度：各列宽之和（extra 列另加）。 */
+/** 表格横向滚动宽度：各列宽之和（列组按子列算；extra 列另加）。 */
 export function productionColumnsWidth(columns: ColumnsType<ProductionRow>): number {
-  return columns.reduce((sum, c) => sum + (typeof c.width === "number" ? c.width : 0), 0);
+  return columns.reduce(
+    (sum, c) =>
+      sum +
+      ("children" in c && c.children
+        ? productionColumnsWidth(c.children as ColumnsType<ProductionRow>)
+        : typeof c.width === "number"
+          ? c.width
+          : 0),
+    0
+  );
 }
