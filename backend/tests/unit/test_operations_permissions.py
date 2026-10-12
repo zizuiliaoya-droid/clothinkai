@@ -126,7 +126,10 @@ class TestOperationsRoleSpec:
         assert "product.*:*" in perms
         assert "product.*:read" in perms
         # 流程线 M2（061）另加看全部谈款（只读，service 层判，不在任何路由依赖上）
-        assert set(perms) - set(_OPS_BASELINE_DEFAULT) == {"product.*:*", "negotiation_all:read"} | _OPS_061_ADDED
+        assert (
+            set(perms) - set(_OPS_BASELINE_DEFAULT)
+            == {"product.*:*", "negotiation_all:read"} | _OPS_061_ADDED
+        )
         assert set(_OPS_BASELINE_DEFAULT) <= set(perms)
 
     def test_description(self) -> None:
