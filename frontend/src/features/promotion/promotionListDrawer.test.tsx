@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // 推广列表点一行开主线抽屉（流程线 8.4）：页签 单据详情 / 金额改动 / 催发记录；「金额改动记录」菜单切到金额改动页签；
-// 读不到报价（运营）没有金额改动页签与菜单项；详情按 ui.fields 出分组；不出商品编码。
+// 金额改动页签与菜单只看页级 ui.actions.amount_log（运营没有），不看报价值；详情按 ui.fields 出分组；不出商品编码。
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
@@ -163,8 +163,12 @@ beforeEach(() => {
   api.listPromotionUrgeRecords.mockResolvedValue([]);
 });
 
-function renderPage(rows: Promotion[], detail: Promotion) {
-  api.listPromotions.mockResolvedValue({ items: rows, total: rows.length, page: 1, page_size: 10 });
+/** 页级 ui：能读金额改动接口（管理员 / 主管 / PR）才有 amount_log。 */
+const PAGE_UI_AMOUNT = { actions: { amount_log: { state: "enabled" as const } } };
+const PAGE_UI_NONE = { actions: {} };
+
+function renderPage(rows: Promotion[], detail: Promotion, pageUi: { actions: UiState["actions"] } = PAGE_UI_AMOUNT) {
+  api.listPromotions.mockResolvedValue({ items: rows, total: rows.length, page: 1, page_size: 10, ui: pageUi });
   api.getPromotion.mockResolvedValue(detail);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
@@ -220,9 +224,25 @@ describe("PromotionListPage 主线抽屉", () => {
     expect(await d.findByText("这单金额没有改动过")).toBeTruthy();
   });
 
-  it("读不到报价（运营：quote_amount = null、详情没有收件分组）：没有金额改动页签与菜单项、不出收件块", async () => {
-    const opsRow = promotion({ quote_amount: null, receiver_name: null, receiver_phone: null, receiver_address: null, ui: { actions: {}, edits: [] } });
-    renderPage([opsRow], { ...opsRow, ui: { actions: {}, fields: { goods_items: { state: "read" }, shipping: { state: "read" } } } });
+  it("报价为空但页级 ui 有 amount_log（管理员 / 主管 / PR）：照样有金额改动页签与菜单项", async () => {
+    const row = promotion({ quote_amount: null });
+    renderPage([row], { ...row, ui: DETAIL_UI });
+    expect(await openMenu()).toContain("金额改动记录");
+    fireEvent.click(screen.getByText("金额改动记录"));
+    await waitFor(() => expect(drawer()).toBeTruthy());
+    const d = within(drawer());
+    expect((await d.findByRole("tab", { name: "金额改动" })).getAttribute("aria-selected")).toBe("true");
+    await waitFor(() => expect(api.promotionAmountLog).toHaveBeenCalledWith("p1"));
+  });
+
+  it("页级 ui 没有 amount_log（运营，详情没有收件分组）：报价有值也没有金额改动页签与菜单项、不出收件块", async () => {
+    // 报价有值：判定不能看值
+    const opsRow = promotion({ receiver_name: null, receiver_phone: null, receiver_address: null, ui: { actions: {}, edits: [] } });
+    renderPage(
+      [opsRow],
+      { ...opsRow, quote_amount: null, ui: { actions: {}, fields: { goods_items: { state: "read" }, shipping: { state: "read" } } } },
+      PAGE_UI_NONE
+    );
     expect(await openMenu()).not.toContain("金额改动记录");
     fireEvent.click((await screen.findAllByText("XHS-20261009-001"))[0]);
     await waitFor(() => expect(drawer()).toBeTruthy());

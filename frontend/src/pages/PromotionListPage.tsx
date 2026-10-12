@@ -161,7 +161,7 @@ export function PromotionListPage() {
   const openLine = (row: Promotion, tab?: LineTab) => {
     if (row.line_id) setLineTarget({ row, tab });
   };
-  /** 抽屉页签（6.6）：单据详情 / 金额改动（读不到报价不出）/ 催发记录。 */
+  /** 抽屉页签（6.6）：单据详情 / 金额改动（按页级 ui.actions.amount_log 出）/ 催发记录。 */
   const lineTabs = (row: Promotion) => [
     {
       key: "detail",
@@ -174,7 +174,7 @@ export function PromotionListPage() {
         />
       ),
     },
-    ...(row.quote_amount != null
+    ...(canAmountLog
       ? [{ key: "amount", label: "金额改动", children: <AmountLogPanel promotionId={row.id} /> }]
       : []),
     { key: "urge", label: "催发记录", children: <UrgeRecordsPanel promotionId={row.id} /> },
@@ -184,6 +184,8 @@ export function PromotionListPage() {
     queryKey: ["promotions", filters],
     queryFn: () => listPromotions(filters),
   });
+  // 「金额改动」页签与菜单只看页级标记（与金额改动接口同一判定），不看行上的报价值
+  const canAmountLog = Boolean(data?.ui?.actions?.amount_log);
 
   /** 审核通过。寄拍没有寄回单号时后端会拒，错误信息直接透出给操作人。 */
   const approveMutation = useMutation({
@@ -595,8 +597,8 @@ export function PromotionListPage() {
             onClick: () => setRetroConfirmTarget(record),
           },
           // 金额改动记录 = 主线抽屉的一个页签（8.4）：打开抽屉并切过去。
-          // 读不到报价的角色（接口给 null）没有这个页签，菜单项也不出
-          ...(record.line_id && record.quote_amount != null
+          // 页级 ui.actions.amount_log 没有（读不到金额改动接口）就没有这个页签，菜单项也不出
+          ...(record.line_id && canAmountLog
             ? [
                 {
                   key: "amount-log",

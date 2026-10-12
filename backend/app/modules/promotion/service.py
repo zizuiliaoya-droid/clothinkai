@@ -699,7 +699,17 @@ class PromotionService(
             )
             for row in rows
         ]
-        return PromotionPage(items=items, total=total, page=page, page_size=page_size)
+        # 页级标记（收尾 L3）：「金额改动」页签与菜单只看它，与行上的报价值无关
+        page_actions: dict[str, Any] = {}
+        if await self.amount_log_readable(user):
+            page_actions["amount_log"] = {"state": "enabled"}
+        return PromotionPage(
+            items=items,
+            total=total,
+            page=page,
+            page_size=page_size,
+            ui={"actions": page_actions},
+        )
 
     # ============================================================
     # 软停用 / 内部 API

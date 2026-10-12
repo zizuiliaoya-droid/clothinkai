@@ -270,6 +270,11 @@ class PromotionServiceBase:
                 )
             )
 
+    async def amount_log_readable(self, user: User) -> bool:
+        """金额改动接口的读判定：推广列表页级 ``ui.actions.amount_log`` 用同一个（收尾 L3）。"""
+        ctx = await build_field_perm_context(user.id, self._roles, self._perms)
+        return can_read_field("promotion", "quote_amount", ctx)
+
     async def amount_log(
         self, promotion_id: UUID, user: User, *, limit: int = 100
     ) -> builtins.list[PromotionAmountLogResponse]:
@@ -280,8 +285,7 @@ class PromotionServiceBase:
         任何 ``promotion.xxx:read`` 都会被命中，于是能读到看不见的金额。
         这里用的是推广响应过滤金额时的同一个闸门。
         """
-        ctx = await build_field_perm_context(user.id, self._roles, self._perms)
-        if not can_read_field("promotion", "quote_amount", ctx):
+        if not await self.amount_log_readable(user):
             raise FieldPermissionDenied(field="quote_amount", entity="promotion")
 
         rows = await self._repo.amount_log(

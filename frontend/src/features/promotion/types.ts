@@ -340,6 +340,8 @@ export interface PromotionPage {
   total: number;
   page: number;
   page_size: number;
+  /** 页级 ui.actions.amount_log：能读金额改动接口才有，「金额改动」页签与菜单只看它。 */
+  ui: Pick<UiState, "actions">;
 }
 
 export interface PromotionListFilters {
