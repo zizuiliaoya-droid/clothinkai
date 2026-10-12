@@ -541,7 +541,7 @@ async def _seed_channels(
     }
 
 
-# 投产行的冻结键集合：R2 按渠道存汇总，但响应结构不变（r2-M1）
+# 投产行的冻结键集合：R3 起一行 = （商品, 渠道），多了 channel 与 link_count
 _PRODUCTION_ROW_KEYS = {
     "goods_id",
     "goods_code",
@@ -550,6 +550,8 @@ _PRODUCTION_ROW_KEYS = {
     "is_suit",
     "style_codes",
     "main_image_url",
+    "channel",
+    "link_count",
     "pay_amount",
     "refund_amount",
     "return_rate",
@@ -589,11 +591,15 @@ def _money_tuple(row: Any) -> tuple[Any, ...]:
     )
 
 
+def _channel_tuple(row: Any) -> tuple[Any, ...]:
+    return (str(row.goods_id), row.channel, row.link_count, *_money_tuple(row)[1:])
+
+
 class TestProductionChannels:
-    """r2-M1：汇总表按（商品, 渠道）存，投产接口两条路径都按商品把渠道求和回一行。"""
+    """7e R3：投产接口按（商品, 渠道）出行；内部调用方（BI / 企微 / AI）仍按商品合计。"""
 
     @pytest.mark.parametrize("exclude_brushing", [True, False])
-    async def test_service_one_row_per_goods_both_paths(
+    async def test_service_rows_by_channel_both_paths(
         self,
         session: AsyncSession,
         tenant_a: Any,
@@ -627,16 +633,21 @@ class TestProductionChannels:
             assert _dump(via_summary) == _dump(via_live)
 
             a_id, b_id = str(seeded["goods_a"].id), str(seeded["goods_b"].id)
-            # 每个商品一行，顺序 = 旧结构（支付额降序）
-            assert [str(r.goods_id) for r in via_summary.items] == [b_id, a_id]
+            # 一行 = （商品, 渠道）：同一商品两行相邻、普通在前；顺序先看商品级支付额
+            keys = [(str(r.goods_id), r.channel) for r in via_summary.items]
+            assert keys == [(b_id, "普通"), (a_id, "普通"), (a_id, "直播")]
+            assert len(set(keys)) == len(keys)
+            # N 条链接 = 该渠道启用的千牛链接数；停用的那条普通链接不算
+            assert [r.link_count for r in via_summary.items] == [1, 1, 1]
             assert via_summary.previous is not None
-            prev = [r for r in via_summary.previous if str(r.goods_id) == a_id]
-            assert len(prev) == 1
-            assert prev[0].pay_amount == Decimal("300.00")
+            prev = [
+                (r.channel, r.pay_amount) for r in via_summary.previous if str(r.goods_id) == a_id
+            ]
+            assert prev == [("普通", Decimal("200.00")), ("直播", Decimal("100.00"))]
         finally:
             tenant_id_ctx.reset(tok)
 
-    async def test_matches_old_structure_minus_inactive_link(
+    async def test_split_rows_and_goods_rows_keep_old_numbers(
         self,
         session: AsyncSession,
         tenant_a: Any,
@@ -645,7 +656,7 @@ class TestProductionChannels:
         promotion_factory: Any,
         recorder: _SourceRecorder,
     ) -> None:
-        """数字 = 改动前的按商品口径（只扣停用链接）；渠道翻转不改数；启用停用链接差额 = 它的数据。"""
+        """拆行后各渠道的数；``get_goods_rows`` 仍是 R2 的按商品口径（只扣停用链接）。"""
         tok = tenant_id_ctx.set(tenant_a.id)
         try:
             seeded = await _seed_channels(
@@ -654,41 +665,68 @@ class TestProductionChannels:
             await session.commit()
             await _refresh(session, tenant_a, M_LO, M_HI)
             a, b = seeded["goods_a"], seeded["goods_b"]
+            a_id, b_id = str(a.id), str(b.id)
             promo = seeded["promo_cost"]
+            zero = Decimal("0.00")
 
             svc = ProductionService(session)
             via_summary = await svc.get_report(tenant_a.id, (M_LO, M_HI))
             assert recorder.calls[0] == ("production", "summary")
             assert set(ProductionRow.model_fields) == _PRODUCTION_ROW_KEYS
             assert all(set(r.model_dump()) == _PRODUCTION_ROW_KEYS for r in via_summary.items)
-            expected = [
+            assert [_channel_tuple(r) for r in via_summary.items] == [
+                (b_id, "普通", 1, Decimal("2000.00"), Decimal("100.00"), 5, zero, zero),
+                # 1000 + 600 − 刷单 200；推广与刷单都记普通行
                 (
-                    str(b.id),
-                    Decimal("2000.00"),
-                    Decimal("100.00"),
-                    5,
-                    Decimal("0.00"),
-                    Decimal("0.00"),
+                    a_id,
+                    "普通",
+                    1,
+                    Decimal("1400.00"),
+                    Decimal("70.00"),
+                    11,
+                    promo,
+                    Decimal("80.00"),
                 ),
-                # 1000 + 600 − 刷单 200；退款含直播只有退款的那一天 25
-                (str(a.id), Decimal("1400.00"), Decimal("95.00"), 13, promo, Decimal("80.00")),
+                # 直播整段只有退款
+                (a_id, "直播", 1, zero, Decimal("25.00"), 2, zero, zero),
             ]
-            assert [_money_tuple(r) for r in via_summary.items] == expected
 
-            live_before = _dump(await svc.get_report(tenant_a.id, (M_LO, M_HI), use_summary=False))
-            assert live_before == _dump(via_summary)
+            # 内部调用方：按商品合计、不带渠道，数字 = R2 的旧结构
+            old = [
+                (b_id, Decimal("2000.00"), Decimal("100.00"), 5, zero, zero),
+                (a_id, Decimal("1400.00"), Decimal("95.00"), 13, promo, Decimal("80.00")),
+            ]
+            goods_summary = await svc.get_goods_rows(
+                tenant_a.id, (M_LO, M_HI), exclude_brushing=True, use_summary=True
+            )
+            assert recorder.calls[-1] == ("production", "summary")
+            goods_live = await svc.get_goods_rows(
+                tenant_a.id, (M_LO, M_HI), exclude_brushing=True, use_summary=False
+            )
+            assert recorder.calls[-1] == ("production", "live")
+            assert _dump(goods_summary) == _dump(goods_live)
+            assert [_money_tuple(r) for r in goods_summary] == old
+            assert {(r.channel, r.link_count) for r in goods_summary} == {(None, 0)}
 
-            # 直播链接改成普通：渠道合并后数字一分不变
+            # 直播链接改成普通：A 合成一行「2 条链接」，数字 = 原来按商品的合计
             await session.execute(
                 update(PlatformProduct)
                 .where(PlatformProduct.id == seeded["qn_live"].id)
                 .values(channel="普通")
             )
             await session.commit()
-            flipped = _dump(await svc.get_report(tenant_a.id, (M_LO, M_HI), use_summary=False))
-            assert flipped == live_before
+            flipped = await svc.get_report(tenant_a.id, (M_LO, M_HI), use_summary=False)
+            assert [_channel_tuple(r) for r in flipped.items] == [
+                (b_id, "普通", 1, *old[0][1:]),
+                (a_id, "普通", 2, *old[1][1:]),
+            ]
+            assert _dump(
+                await svc.get_goods_rows(
+                    tenant_a.id, (M_LO, M_HI), exclude_brushing=True, use_summary=False
+                )
+            ) == _dump(goods_live)
 
-            # 启用停用链接：A 多出它那一天的支付 300 / 退款 10 / 加购 3，其余不变
+            # 启用停用链接：A 多出它那一天的支付 300 / 退款 10 / 加购 3，链接数 3
             await session.execute(
                 update(PlatformProduct)
                 .where(PlatformProduct.id == seeded["qn_off"].id)
@@ -696,9 +734,18 @@ class TestProductionChannels:
             )
             await session.commit()
             enabled = await svc.get_report(tenant_a.id, (M_LO, M_HI), use_summary=False)
-            assert [_money_tuple(r) for r in enabled.items] == [
-                expected[0],
-                (str(a.id), Decimal("1700.00"), Decimal("105.00"), 16, promo, Decimal("80.00")),
+            assert [_channel_tuple(r) for r in enabled.items] == [
+                (b_id, "普通", 1, *old[0][1:]),
+                (
+                    a_id,
+                    "普通",
+                    3,
+                    Decimal("1700.00"),
+                    Decimal("105.00"),
+                    16,
+                    promo,
+                    Decimal("80.00"),
+                ),
             ]
         finally:
             tenant_id_ctx.reset(tok)

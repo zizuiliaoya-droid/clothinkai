@@ -42,13 +42,13 @@ def _money(value: Any) -> Decimal:
     return Decimal(str(value or 0)).quantize(_CENT, rounding=ROUND_HALF_UP)
 
 
-def _merge_channels(rows: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
-    """把同一商品的渠道行求和回一行（7e R2，r2-M1：R2 期间投产接口不拆渠道）。
+def _fold_channels(rows: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    """把同一商品的渠道行求和回一行，只给 ``get_goods_rows``（BI / 企微 / AI）用。
 
-    可加列（金额与计数）先求和，比率由 ``_to_row`` 在求和之后算；商品信息取首行，
-    ``channel`` 去掉。按 ``goods_id`` 首次出现的顺序输出，不在 Python 里重排：SQL 已按
-    商品级合计排好、同一商品的渠道行相邻，再排一次反而可能和数据库的排序规则不一致。
-    R3 拆渠道展示时删掉这一步。
+    投产接口 R3 起按（商品, 渠道）出行；这几个内部调用方按 ``goods_id`` 挂站外花费 / 去重，
+    拆行后会重复挂、多发，所以仍按商品合计（R6 再定）。可加列（金额与计数）先求和，比率由
+    ``_to_row`` 在求和之后算；商品信息取首行，``channel`` 去掉。按 ``goods_id`` 首次出现的
+    顺序输出，不在 Python 里重排：SQL 已按商品级合计排好、同一商品的渠道行相邻。
     """
     merged: dict[Any, dict[str, Any]] = {}
     for row in rows:
@@ -82,25 +82,46 @@ class ProductionService:
             fresh = await self._summary.freshness(tenant_id, date_from, date_to)
             if fresh.source == "summary":
                 record_source(metric_label, "summary")
-                return _merge_channels(
-                    await self._summary.production_by_goods(
-                        tenant_id=tenant_id,
-                        date_from=date_from,
-                        date_to=date_to,
-                        exclude_brushing=exclude_brushing,
-                        seasons=seasons,
-                    )
+                return await self._summary.production_by_goods(
+                    tenant_id=tenant_id,
+                    date_from=date_from,
+                    date_to=date_to,
+                    exclude_brushing=exclude_brushing,
+                    seasons=seasons,
                 )
         record_source(metric_label, "live")
-        return _merge_channels(
-            await self._repo.aggregate_by_goods(
-                tenant_id=tenant_id,
-                date_from=date_from,
-                date_to=date_to,
-                exclude_brushing=exclude_brushing,
-                seasons=seasons,
-            )
+        return await self._repo.aggregate_by_goods(
+            tenant_id=tenant_id,
+            date_from=date_from,
+            date_to=date_to,
+            exclude_brushing=exclude_brushing,
+            seasons=seasons,
         )
+
+    async def get_goods_rows(
+        self,
+        tenant_id: UUID,
+        time_range: tuple[date, date],
+        *,
+        exclude_brushing: bool,
+        use_summary: bool,
+    ) -> list[ProductionRow]:
+        """按商品合计的投产行（``channel=None``、``link_count=0``，不带 extra）。
+
+        给 BI 单品表、企微预警、AI 策略用：它们按 ``goods_id`` 挂数 / 去重，数字同 R2。
+        """
+        date_from, date_to = time_range
+        with report_query_duration_seconds.labels("production").time():
+            rows = await self._goods_rows(
+                tenant_id,
+                date_from,
+                date_to,
+                exclude_brushing=exclude_brushing,
+                seasons=None,
+                use_summary=use_summary,
+                metric_label="production",
+            )
+        return [self._to_row(r, exclude_brushing) for r in _fold_channels(rows)]
 
     async def get_report(
         self,
@@ -140,14 +161,24 @@ class ProductionService:
                 metric_label="production_previous",
             )
             extra_by_goods = await self._aggregate_extra(tenant_id, cur_from, cur_to)
+            links = await self._repo.link_counts(
+                tenant_id=tenant_id,
+                goods_ids=list({r["goods_id"] for r in (*cur_rows, *prev_rows)}),
+            )
         items = []
+        extra_attached: set[str] = set()
         for r in cur_rows:
-            row = self._to_row(r, exclude_brushing)
-            row.extra = extra_by_goods.get(str(r["goods_id"]), {})
+            row = self._to_row(r, exclude_brushing, links)
+            # extra 是按商品聚合的（不分渠道），只挂在该商品的第一行（普通在前），
+            # 否则直播行会把同一份数再显示 / 导出一遍
+            gid = str(r["goods_id"])
+            if gid not in extra_attached:
+                row.extra = extra_by_goods.get(gid, {})
+                extra_attached.add(gid)
             items.append(row)
         return ProductionReport(
             items=items,
-            previous=[self._to_row(r, exclude_brushing) for r in prev_rows],
+            previous=[self._to_row(r, exclude_brushing, links) for r in prev_rows],
         )
 
     async def get_trend(
@@ -233,7 +264,12 @@ class ProductionService:
         return {gid: aggregate_extra(extras, same_day=same_day) for gid, extras in by_goods.items()}
 
     @staticmethod
-    def _to_row(r: Mapping[str, Any], exclude_brushing: bool) -> ProductionRow:
+    def _to_row(
+        r: Mapping[str, Any],
+        exclude_brushing: bool,
+        link_counts: Mapping[tuple[Any, str], int] | None = None,
+    ) -> ProductionRow:
+        """``r`` 带 ``channel`` 时是（商品, 渠道）行；按商品合计的行没有 ``channel``。"""
         # 先把金额归一成两位小数再派生 —— 两条数据源路径的输出才会逐字相同
         pay = _money(r["pay_amount"])
         refund = _money(r["refund_amount"])
@@ -252,6 +288,10 @@ class ProductionService:
             except Exception:
                 main_image_url = None
         style_codes_raw = r.get("style_codes")
+        channel = r.get("channel")
+        link_count = 0
+        if channel is not None and link_counts is not None:
+            link_count = link_counts.get((r["goods_id"], channel), 0)
         return ProductionRow(
             goods_id=r["goods_id"],
             goods_code=r["goods_code"],
@@ -260,6 +300,8 @@ class ProductionService:
             is_suit=bool(r.get("is_suit")),
             style_codes=style_codes_raw.split(",") if style_codes_raw else [],
             main_image_url=main_image_url,
+            channel=channel,
+            link_count=link_count,
             pay_amount=pay,
             refund_amount=refund,
             return_rate=ret_rate,

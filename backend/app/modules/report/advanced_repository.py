@@ -86,7 +86,7 @@ GOODS_META_COLUMNS = """
   ) AS style_codes"""
 
 # 投产主表按（商品, 渠道）出行（7e R2）的可加列。外层 SELECT（实时与汇总读取共用）
-# 与 ProductionService 把渠道求和回一行都引这两个元组，不各写一份列名。
+# 与 ProductionService.get_goods_rows 按商品求和都引这两个元组，不各写一份列名。
 PRODUCTION_MONEY_COLUMNS: tuple[str, ...] = (
     "pay_amount",
     "refund_amount",
@@ -115,8 +115,8 @@ def goods_channel_select(filter_sql: str) -> str:
 
     过滤与排序看**商品级合计**（窗口按商品求和），不看单个渠道行：行集合 = 改动前按商品
     聚合的 HAVING（含刷单的销售原值、站外、站内三项任一 > 0），排序 = 商品级支付额降序、
-    货号、渠道。逐行 HAVING 会丢掉「直播整段只有退款」这种行，渠道求和回一行后就和旧数
-    对不上了。同一商品的渠道行排在一起，service 按首次出现的顺序合并即可。
+    货号、商品 id、渠道（普通在前）。逐行 HAVING 会丢掉「直播整段只有退款」这种行，按商品
+    求和（``ProductionService.get_goods_rows``）后就和旧数对不上了。同一商品的渠道行相邻。
     """
     money = ",\n".join(f"r.{c} AS {c}" for c in PRODUCTION_MONEY_COLUMNS)
     counts = ",\n".join(f"CAST(r.{c} AS bigint) AS {c}" for c in PRODUCTION_COUNT_COLUMNS)
@@ -141,8 +141,10 @@ def goods_channel_select(filter_sql: str) -> str:
     FROM goods_rows r
     JOIN goods_main g ON g.id = r.goods_id
     WHERE r.goods_pay_raw > 0 OR r.goods_promo_cost > 0 OR r.goods_ad_spend > 0
-    -- 支付额相同的商品原来顺序不确定；货号兜底后汇总表读取能逐行比对
-    ORDER BY r.goods_pay_amount DESC, g.goods_code, r.channel
+    -- 支付额相同的商品原来顺序不确定；货号兜底后汇总表读取能逐行比对。
+    -- 再按商品 id、渠道（普通在前，不靠中文排序规则）兜底：同一商品的两行相邻
+    ORDER BY r.goods_pay_amount DESC, g.goods_code, g.id,
+             CASE WHEN r.channel = '普通' THEN 0 ELSE 1 END
     """
 
 
@@ -591,7 +593,8 @@ class ProductionRepository:
         支付单数按千牛链接的 ``channel``（兜底记普通），站内花费与站内加购按万相台链接的
         ``channel``，推广与刷单记普通；配对加购走同一份 ``_PAIRED_CART_CTE``（逐日配对后
         再按（商品, 渠道）求和）。过滤与排序看商品级合计（``goods_channel_select``）。
-        R2 期间投产接口不拆渠道：``ProductionService`` 把同一商品的渠道行求和回一行。
+        投产接口按（商品, 渠道）出行（7e R3）；BI / 企微 / AI 走 ``ProductionService.get_goods_rows``
+        按商品求和回一行。
 
         ``seasons`` 为多选（PRD 第 4 章），空列表与 None 同义：不筛（类目筛选已下线，8a-3）。
         """
@@ -732,6 +735,31 @@ class ProductionRepository:
             **filter_params,
         }
         return as_mappings((await self._s.execute(sql, params)).mappings().all())
+
+    async def link_counts(
+        self, *, tenant_id: UUID, goods_ids: Sequence[UUID]
+    ) -> dict[tuple[UUID, str], int]:
+        """（商品, 渠道）→ 启用的千牛链接数（7e R3，页面「N 条链接」）。
+
+        看当前状态、不看区间：链接今天停用了就不算。汇总 / 实时两路共用这一条。
+        """
+        if not goods_ids:
+            return {}
+        sql = text(
+            """
+            SELECT pp.goods_main_id AS goods_id, pp.channel AS channel, COUNT(*) AS n
+            FROM platform_product pp
+            WHERE pp.tenant_id = :tenant_id
+              AND pp.platform = '千牛'
+              AND pp.is_active = true
+              AND pp.goods_main_id = ANY(CAST(:goods_ids AS uuid[]))
+            GROUP BY pp.goods_main_id, pp.channel
+            """
+        )
+        rows = (
+            await self._s.execute(sql, {"tenant_id": tenant_id, "goods_ids": list(goods_ids)})
+        ).mappings()
+        return {(r["goods_id"], r["channel"]): int(r["n"]) for r in rows}
 
     async def daily_trend_by_goods(
         self,

@@ -55,9 +55,12 @@ class AnomalyAlertService:
         if cfg is None or not cfg.is_enabled:
             return 0
         tr = resolve_time_range(_WINDOW, None, None)
-        report = await ProductionService(self._s).get_report(tenant_id, tr)
+        # 按商品合计（去重键是 goods_id），不用投产页的（商品, 渠道）行
+        rows = await ProductionService(self._s).get_goods_rows(
+            tenant_id, tr, exclude_brushing=True, use_summary=True
+        )
         sent = 0
-        for row in report.items:
+        for row in rows:
             for alert_type, detail in self._evaluate_row(row, cfg):
                 sent += await self._fire(tenant_id, alert_type, row, detail, cfg)
         return sent

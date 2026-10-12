@@ -128,7 +128,11 @@ class StoreDailyManualUpdate(BaseModel):
 
 
 class ProductionRow(BaseModel):
-    """投产报表一行 = 一个商品（PRD V1.4 第 3 章），套装合并成一行。"""
+    """投产报表一行 = 商品 × 渠道（7e R3，设计 2.3），套装合并成一行。
+
+    商品没有直播链接时只有「普通」一行；同渠道多条链接合在一行（``link_count``）。
+    站外推广成本与刷单都记在「普通」行。
+    """
 
     goods_id: UUID
     goods_code: str
@@ -138,6 +142,10 @@ class ProductionRow(BaseModel):
     # 商品含哪些款式货号；单品就是它自己那一个，套装是多个
     style_codes: list[str] = Field(default_factory=list)
     main_image_url: str | None = None
+    # None 只出现在 ProductionService.get_goods_rows 的按商品合计行（BI / 企微 / AI 用）
+    channel: Literal["普通", "直播"] | None = None
+    # 该商品该渠道启用的千牛链接数（当前状态，不看区间）；按商品合计行为 0
+    link_count: int = 0
     pay_amount: Decimal
     refund_amount: Decimal
     return_rate: Decimal | None = None

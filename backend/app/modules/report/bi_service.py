@@ -101,7 +101,8 @@ class BiService:
         # BI 其余几块（店铺总览、约稿金额、工作量、趋势）是全店口径，汇总表还装不下，
         # 都是实时。这一块如果单独读汇总表，同一个看板上会一半是一小时前、一半是此刻 ——
         # 所以 BI 整体切汇总表之前，这里显式强制实时，保持整页同源。
-        production = await self._production.get_report(
+        # 单品表按商品（站外花费按 goods_id 挂），不用投产页的（商品, 渠道）行
+        production_rows = await self._production.get_goods_rows(
             tenant_id, time_range, exclude_brushing=True, use_summary=False
         )
 
@@ -115,7 +116,7 @@ class BiService:
         }
         styles = [
             self._goods_row(row, published_by_goods.get(row.goods_id, Decimal("0")))
-            for row in production.items
+            for row in production_rows
         ]
         trend = [BiTrendPoint.model_validate(row) for row in trend_rows]
 
