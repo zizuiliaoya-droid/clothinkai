@@ -124,6 +124,69 @@ class StoreDailyManualUpdate(BaseModel):
     remark: str | None = None
 
 
+class StoreReportRow(BaseModel):
+    """店铺日 / 周 / 月一行（7e R4，设计 2.4）。由 ``report/store_buckets.py`` 从日行算出。
+
+    ``date_from`` / ``date_to`` 是行上的实际起止 = 桶（自然日 / ISO 周 / 自然月）∩ 请求区间，
+    日行两者相同。可加列先按天算好再求和（站内推广费逐天套默 13），比率在求和之后现算。
+    公式见 PRD §9 + Q17；「其中直播」两列只展示，不参与任何公式。
+    """
+
+    date_from: date
+    date_to: date
+    visitors: int
+    pay_amount: Decimal
+    pay_orders: int
+    refund_amount: Decimal
+    brushing_amount: Decimal
+    actual_sales: Decimal
+    """实际销售额 = 支付 − 退款 − 刷单本金。"""
+    ad_spend: Decimal
+    """万相台合计。"""
+    # 手填三项：整桶没填为 None（页面显示「—」），填了几天就加那几天
+    ad_spend_total: Decimal | None = None
+    zhitongche_spend: Decimal | None = None
+    yinli_spend: Decimal | None = None
+    internal_spend: Decimal
+    """站内推广费：逐天判断，某天手填了三项任一就用三项之和（默 13），否则万相台。"""
+    promo_cost: Decimal
+    """站外推广成本（全店已发布推广单）。"""
+    total_spend: Decimal
+    live_pay_amount: Decimal
+    live_ad_spend: Decimal
+    refund_only_amount: Decimal | None = None
+    """仅退款：只加已录入的日子；整桶都没录为 None。"""
+    total_spend_ratio: Decimal | None = None
+    """推广总占比 = 推广总额 ÷ 支付总额。"""
+    internal_ratio: Decimal | None = None
+    external_ratio: Decimal | None = None
+    net_spend_ratio: Decimal | None = None
+    """净推广占比 = 推广总额 ÷ 实际销售额。"""
+    net_roi: Decimal | None = None
+    """净投产 = 实际销售额 ÷ 推广总额。"""
+    roi_ex_brushing: Decimal | None = None
+    """投产（扣除刷单）=（支付总额 − 刷单本金）÷ 推广总额。"""
+    refund_only_rate: Decimal | None = None
+    """仅退款率 = Σ仅退款 ÷ Σ支付，分子分母都只取已录仅退款的日子（默 14）。"""
+    refund_only_days: int
+    """「已录 x / y 天」的 x。"""
+    day_count: int
+    """「已录 x / y 天」的 y：桶内有日行的日子数（没有日行的日子在日表里录不了）。"""
+    extra: dict = Field(default_factory=dict)
+
+
+class StoreReport(BaseModel):
+    """``GET /api/reports/store/{daily|weekly|monthly}`` 的响应（一个响应只有一种来源）。"""
+
+    granularity: Literal["day", "week", "month"]
+    date_from: date
+    date_to: date
+    items: list[StoreReportRow]
+    recorded_days: int
+    """整段已录仅退款的天数（日表标题旁「已录 x / y 天」）。"""
+    total_days: int
+
+
 # ----------------------------- 投产报表 ----------------------------- #
 
 
