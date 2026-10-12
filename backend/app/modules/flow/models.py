@@ -1,7 +1,7 @@
 """跨环节事件表 ORM（流程线设计 2.3、第 6 节）。
 
 一张表按 ``line_id`` 串谈款与推广单：谈款的提交 / 审核 / 退回、留言贴图、推广单各环节都写这里，时间线一次按主线读完。
-只追加：仓储只暴露 append / list_by_line，库里 ``clothing_app`` 也没有 UPDATE / DELETE（迁移 061）。
+只追加：仓储只暴露 append / list_by_line，库里 ``clothing_app`` 也没有 UPDATE / DELETE（迁移 063）。
 """
 
 from __future__ import annotations

@@ -27,7 +27,7 @@ from app.modules.auth.default_roles import DEFAULT_ROLES
 RLS_TABLES: tuple[str, ...] = (
     "import_conflict",
     "promotion_item",
-    # PR-3（061）
+    # PR-3（063）
     "line_event",
     "negotiation_item",
 )
@@ -50,7 +50,8 @@ ROLE_SCOPES: tuple[str, ...] = (
     "report.export:read",
     "report.store_daily:write",
     "report.summary:refresh",
-    # PR-3（061）；negotiation_final:approve 只入册不绑角色，见 test_migration_063_state
+    # 7e R2（062）只加汇总列、不改授权，这里没有条目
+    # PR-3（063）；negotiation_final:approve 只入册不绑角色，见 test_migration_063_state
     "negotiation_all:read",
 )
 

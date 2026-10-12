@@ -1,4 +1,4 @@
-"""迁移 061_negotiation_two_level 在 head 状态下的库结构与 seed（流程线设计 2.3、4.5）。
+"""迁移 063_negotiation_two_level 在 head 状态下的库结构与 seed（流程线设计 2.3、4.5）。
 
 往返与存量演练（同义改名、line_id 继承、下行折态与有损行数、个人授权）按设计 9.4 在测试库上手工跑，
 结果写报告，不进仓库。RLS 与 clothing_app 权限断言在 test_flow_rls_schema.py。
@@ -111,7 +111,7 @@ async def _roles_for(session: AsyncSession, scope: str) -> set[str]:
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-class TestMigration061Negotiation:
+class TestMigration063Negotiation:
     async def test_new_columns(self, session: AsyncSession) -> None:
         rows = (
             await session.execute(
@@ -185,7 +185,7 @@ class TestMigration061Negotiation:
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-class TestMigration061LineEvent:
+class TestMigration063LineEvent:
     async def test_columns(self, session: AsyncSession) -> None:
         rows = (
             await session.execute(
@@ -225,7 +225,7 @@ class TestMigration061LineEvent:
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-class TestMigration061NegotiationItem:
+class TestMigration063NegotiationItem:
     async def test_columns(self, session: AsyncSession) -> None:
         rows = (
             await session.execute(
@@ -276,7 +276,7 @@ class TestMigration061NegotiationItem:
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-class TestMigration061Seed:
+class TestMigration063Seed:
     async def test_all_read_granted_like_default_roles(self, session: AsyncSession) -> None:
         rows = (
             await session.execute(
@@ -316,7 +316,7 @@ class TestMigration061Seed:
             assert await _roles_for(session, scope) == set(), scope
 
 
-class TestOrmMatchesMigration061:
+class TestOrmMatchesMigration063:
     def test_negotiation_columns(self) -> None:
         cols = Negotiation.__table__.columns
         for name, (_dtype, length) in _NEGOTIATION_NEW_COLUMNS.items():

@@ -22,7 +22,7 @@ SCOPE_NEGOTIATION_WRITE = "negotiation:write"
 SCOPE_NEGOTIATION_REVIEW = "negotiation.review"
 SCOPE_NEGOTIATION_REVIEW_APPROVE = "negotiation.review:approve"
 
-# 流程线 M2（迁移 061）。都是独立一级域：叫 negotiation.final:approve 的话，哪天有人给主管加
+# 流程线 M2（迁移 063）。都是独立一级域：叫 negotiation.final:approve 的话，哪天有人给主管加
 # negotiation.*:*，主管就顺带拿到老板权；negotiation:read PR 也有，分不出「只看自己」和「看全部」。
 SCOPE_NEGOTIATION_FINAL = "negotiation_final"
 SCOPE_NEGOTIATION_FINAL_APPROVE = "negotiation_final:approve"

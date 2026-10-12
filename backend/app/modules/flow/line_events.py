@@ -3,7 +3,7 @@
 - ``LineEventType``：6.3 的全部事件类型（库里不加 CHECK，加类型只改这里）
 - ``EVENT_GROUP``：事件类型 → 字段规则键（``line_event.<键>``，6.5 第 2 层按它判能不能看到这组事件）
 - ``LineEventRepository``：只有 ``append()`` 与 ``list_by_line()``，没有 update / delete（库里 ``clothing_app``
-  也没有 UPDATE / DELETE，迁移 061）。``append()`` 只 add + flush、不提交：业务回滚时事件一起消失；
+  也没有 UPDATE / DELETE，迁移 063）。``append()`` 只 add + flush、不提交：业务回滚时事件一起消失；
   写不进去就让整个动作失败（时间线是业务留痕，不吞异常）
 
 读接口（``LineEventService.read``、``PAYLOAD_FIELD_RULES``）随 PR-4。
@@ -94,7 +94,7 @@ class LineEventType(str, Enum):
     RETRO_EDITED = "retro.edited"
 
 
-# 字段规则键（6.5 第 2 层；个人授予 / 撤销的 scope 是 ``field.line_event.<键>:read``，迁移 061 入册）
+# 字段规则键（6.5 第 2 层；个人授予 / 撤销的 scope 是 ``field.line_event.<键>:read``，迁移 063 入册）
 EVENT_GROUP_KEYS: tuple[str, ...] = (
     "negotiation",
     "comment",

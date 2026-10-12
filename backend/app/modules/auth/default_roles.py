@@ -63,7 +63,7 @@ OPS_PLATFORM_LINK_WRITE = "ops.platform_link:write"
 NEGOTIATION_READ = "negotiation:read"
 NEGOTIATION_WRITE = "negotiation:write"
 NEGOTIATION_REVIEW = "negotiation.review:approve"
-# 流程线 PR-3 谈款两级审核（迁移 061）。都是独立一级域，现有任何通配都碰不到：
+# 流程线 PR-3 谈款两级审核（迁移 063）。都是独立一级域，现有任何通配都碰不到：
 # - 看全部谈款（草稿除外）：negotiation:read PR 也有，分不出「只看自己」和「看全部」
 # - 老板定稿 / 退回：只入册、不绑角色，管理员靠 *；叫 negotiation.final:approve 的话，
 #   哪天有人给主管加 negotiation.*:*，主管就顺带拿到老板权

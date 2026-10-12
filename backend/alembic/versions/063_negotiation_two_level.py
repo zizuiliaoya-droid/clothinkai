@@ -12,8 +12,8 @@
 下行有损：7 态折回 4 态（主管待审 / 待老板审核 / 待补收货地址 → 待审核，老板退回 → 草稿，已定稿 → 审核通过），
 老板审、收货信息、复制来源、谈款商品明细与全部事件丢弃；这 8 个 scope 上的个人授权（``user_permission_override``）一并删除。
 
-Revision ID: 061_negotiation_two_level
-Revises: 060_promotion_shipping
+Revision ID: 063_negotiation_two_level
+Revises: 062_report_view_columns
 Create Date: 2026-10-10
 """
 
@@ -28,13 +28,13 @@ from sqlalchemy.dialects import postgresql
 
 from app.core.security.rls import disable_rls_sql, enable_rls_sql
 
-revision: str = "061_negotiation_two_level"
-down_revision: str | Sequence[str] | None = "060_promotion_shipping"
+revision: str = "063_negotiation_two_level"
+down_revision: str | Sequence[str] | None = "062_report_view_columns"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 # 迁移编号只出现在这里（与并行分支谁后合并谁改号，见 brief-flow3 第 8 节）
-_REV = "061"
+_REV = "063"
 
 _APP_ROLE = "clothing_app"
 # identity 列的隐式序列名（PG 规则：<表>_<列>_seq）
