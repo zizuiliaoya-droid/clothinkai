@@ -541,7 +541,8 @@ async def _seed_channels(
     }
 
 
-# 投产行的冻结键集合：R3 起一行 = （商品, 渠道），多了 channel 与 link_count
+# 投产行的冻结键集合：R3 起一行 = （商品, 渠道），多了 channel 与 link_count，
+# 以及 S2 的支付件数 / 站内加购 / 站内加购成本 / 站外加购 / 退货前投产比
 _PRODUCTION_ROW_KEYS = {
     "goods_id",
     "goods_code",
@@ -559,8 +560,13 @@ _PRODUCTION_ROW_KEYS = {
     "promo_cost",
     "ad_spend",
     "total_spend",
+    "pay_orders",
     "add_cart_count",
     "add_cart_cost",
+    "ad_add_cart_count",
+    "ad_add_cart_cost",
+    "offsite_add_cart",
+    "pre_return_roi",
     "net_roi",
     "unit_deal_cost",
     "extra",
@@ -797,6 +803,132 @@ class TestProductionChannels:
             assert int(normal["paired_days"]) == 1
             assert int(normal["paired_all_cart"]) == 4
             assert int(normal["paired_ad_cart"]) == 9
+        finally:
+            tenant_id_ctx.reset(tok)
+
+
+async def _seed_add_cart(
+    session: AsyncSession, tenant: Any, product_factory: Any
+) -> dict[str, Any]:
+    """7e R3 S2：新公式与加购（千牛 / 万相台都挂普通 + 直播）。
+
+    商品 A（春夏）：
+    - 普通千牛 D1 支付 1000 / 退款 100 / 加购 7 / 4 件，D2 支付 600 / 加购 20 / 4 件；
+      普通万相台只有 D2（花费 90、站内加购 9）→ 只配上 D2，站外加购 = 20 − 9 = 11
+      （整段区间判配对会把 D1 的 7 也算进去，得 18）；D2 刷单 200（不扣件数）；
+    - 直播千牛 D1 支付 300 / 加购 15 / 2 件，D2 加购 2 / 0 件；直播万相台 D1、D2 各花费 30、
+      站内加购 10 → 两天配对差 +5 / −8，先求和 −3 再取 0 → 0（逐日取 0 会得 5）。
+    商品 B（秋冬）：只有普通千牛 D1 支付 500 / 加购 3 / 2 件 → 没有配对日，站外加购 null。
+    """
+    style_a = await product_factory.style(style_code=f"AC{uuid4().hex[:6]}")
+    goods_a = await _goods(session, tenant, style_a, code=f"G_AC_{uuid4().hex[:5]}", season="春夏")
+    qn_norm = await _pp(session, tenant, style_a, goods_a)
+    qn_live = await _pp(session, tenant, style_a, goods_a, channel="直播")
+    ad_norm = await _pp(session, tenant, style_a, goods_a, platform="万相台")
+    ad_live = await _pp(session, tenant, style_a, goods_a, platform="万相台", channel="直播")
+    style_b = await product_factory.style(style_code=f"BC{uuid4().hex[:6]}")
+    goods_b = await _goods(session, tenant, style_b, code=f"G_BC_{uuid4().hex[:5]}", season="秋冬")
+    qn_b = await _pp(session, tenant, style_b, goods_b)
+
+    def ad(pp: PlatformProduct, day: date, cost: str, cart: int) -> AdDaily:
+        return AdDaily(
+            tenant_id=tenant.id,
+            platform_product_id=pp.id,
+            platform_id_snapshot=pp.platform_id,
+            date=day,
+            cost=Decimal(cost),
+            add_cart_count=cart,
+            extra={},
+        )
+
+    session.add_all(
+        [
+            _qn(tenant, qn_norm, D1, "1000.00", refund="100.00", add_cart=7, pay_orders=4),
+            _qn(tenant, qn_norm, D2, "600.00", refund="0.00", add_cart=20, pay_orders=4),
+            ad(ad_norm, D2, "90.00", 9),
+            _qn(tenant, qn_live, D1, "300.00", refund="0.00", add_cart=15, pay_orders=2),
+            _qn(tenant, qn_live, D2, "0.00", refund="0.00", add_cart=2, pay_orders=0),
+            ad(ad_live, D1, "30.00", 10),
+            ad(ad_live, D2, "30.00", 10),
+            _qn(tenant, qn_b, D1, "500.00", refund="0.00", add_cart=3, pay_orders=2),
+            OrderAdjustment(
+                tenant_id=tenant.id,
+                order_type="刷单",
+                style_id=style_a.id,
+                amount=Decimal("200.00"),
+                order_date=D2,
+                exclude_from_roi=True,
+                status="待付款",
+            ),
+        ]
+    )
+    await session.flush()
+    return {"goods_a": goods_a, "goods_b": goods_b}
+
+
+def _add_cart_tuple(row: Any) -> tuple[Any, ...]:
+    return (
+        str(row.goods_id),
+        row.channel,
+        row.pay_orders,
+        row.ad_add_cart_count,
+        row.ad_add_cart_cost,
+        row.offsite_add_cart,
+        row.pre_return_roi,
+        row.unit_deal_cost,
+    )
+
+
+class TestProductionAddCart:
+    """7e R3 S2：退货前投产比、推广单件成交成本（÷ 支付件数）、站内 / 站外加购。"""
+
+    @pytest.mark.parametrize("exclude_brushing", [True, False])
+    async def test_new_metrics_both_paths(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+        recorder: _SourceRecorder,
+        exclude_brushing: bool,
+    ) -> None:
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            seeded = await _seed_add_cart(session, tenant_a, product_factory)
+            await session.commit()
+            await _refresh(session, tenant_a, M_LO, M_HI)
+
+            svc = ProductionService(session)
+            via_summary = await svc.get_report(
+                tenant_a.id, (M_LO, M_HI), exclude_brushing=exclude_brushing
+            )
+            assert recorder.calls[0] == ("production", "summary")
+            via_live = await svc.get_report(
+                tenant_a.id, (M_LO, M_HI), exclude_brushing=exclude_brushing, use_summary=False
+            )
+            assert ("production", "live") in recorder.calls
+            assert _dump(via_summary) == _dump(via_live)
+
+            a_id, b_id = str(seeded["goods_a"].id), str(seeded["goods_b"].id)
+            # 普通行支付 1600（剔刷单 1400）/ 总推广成本 90；件数不受刷单开关影响
+            normal_roi = Decimal("15.5556") if exclude_brushing else Decimal("17.7778")
+            assert [_add_cart_tuple(r) for r in via_summary.items] == [
+                (a_id, "普通", 8, 9, Decimal("10.0000"), 11, normal_roi, Decimal("11.2500")),
+                (a_id, "直播", 2, 20, Decimal("3.0000"), 0, Decimal("5.0000"), Decimal("30.0000")),
+                # 没有站内加购 / 推广成本 / 配对日：以它们为分母的比率与站外加购是 null，
+                # 不是 0；单件成交成本分母是件数（2），推广成本 0 → 0
+                (b_id, "普通", 2, 0, None, None, None, Decimal("0.0000")),
+            ]
+            # 场景有效性：每个新列都出现非零值
+            items = via_summary.items
+            for field in (
+                "pay_orders",
+                "ad_add_cart_count",
+                "ad_add_cart_cost",
+                "offsite_add_cart",
+                "pre_return_roi",
+                "unit_deal_cost",
+            ):
+                assert any(getattr(r, field) for r in items), field
         finally:
             tenant_id_ctx.reset(tok)
 

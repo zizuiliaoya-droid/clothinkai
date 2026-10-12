@@ -153,9 +153,19 @@ class ProductionRow(BaseModel):
     promo_cost: Decimal
     ad_spend: Decimal
     total_spend: Decimal
+    # 千牛「支付件数」，刷单开关不扣件数
+    pay_orders: int
     add_cart_count: int
     add_cart_cost: Decimal | None = None
+    # 站内加购 = 万相台「总购物车数」；站内加购成本 = 站内投放 / 站内加购
+    ad_add_cart_count: int
+    ad_add_cart_cost: Decimal | None = None
+    # 站外加购 = max(Σ配对日总加购 − Σ配对日站内加购, 0)；区间内没有配对日 → None
+    offsite_add_cart: int | None = None
+    # 退货前投产比 = 支付金额 / 总推广成本
+    pre_return_roi: Decimal | None = None
     net_roi: Decimal | None = None
+    # 推广单件成交成本 = 总推广成本 / 支付件数（7e R3 起，字段名沿用）
     unit_deal_cost: Decimal | None = None
     # 千牛/站内导入数据按商品汇总的其余指标（对齐 final.xlsx 投产报表 70 列；
     # qianniu_daily.extra + ad_daily.extra 按 platform_product→商品归集，按 extra_metrics 规则聚合）

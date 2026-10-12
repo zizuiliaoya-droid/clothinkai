@@ -277,6 +277,8 @@ class ProductionService:
         ad_spend = _money(r["ad_spend"])
         confirmed = pay - refund
         total_spend = promo_cost + ad_spend
+        pay_orders = int(r["pay_orders"])
+        ad_add_cart = int(r["ad_add_cart_count"])
         ret_rate = style_roi.return_rate(refund, pay)
         main_image_url: str | None = None
         main_image_key = r.get("main_image_key")
@@ -309,15 +311,17 @@ class ProductionService:
             promo_cost=promo_cost,
             ad_spend=ad_spend,
             total_spend=total_spend,
+            pay_orders=pay_orders,
             add_cart_count=int(r["add_cart_count"]),
             add_cart_cost=style_roi.add_to_cart_cost(total_spend, r["add_cart_count"]),
-            net_roi=style_roi.net_roi(confirmed, total_spend, exclude_brushing=exclude_brushing),
-            # 加购转化率字段 V1 基础口径缺失 → unit_deal_cost 多为 null
-            unit_deal_cost=style_roi.unit_deal_cost(
-                style_roi.add_to_cart_cost(total_spend, r["add_cart_count"]),
-                None,
-                ret_rate,
+            ad_add_cart_count=ad_add_cart,
+            ad_add_cart_cost=style_roi.add_to_cart_cost(ad_spend, ad_add_cart),
+            offsite_add_cart=style_roi.offsite_add_cart(
+                int(r["paired_all_cart"]), int(r["paired_ad_cart"]), int(r["paired_days"])
             ),
+            pre_return_roi=style_roi.pre_return_roi(pay, total_spend),
+            net_roi=style_roi.net_roi(confirmed, total_spend, exclude_brushing=exclude_brushing),
+            unit_deal_cost=style_roi.promo_cost_per_unit(total_spend, pay_orders),
         )
 
 
