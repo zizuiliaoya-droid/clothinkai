@@ -7,6 +7,8 @@ export type FilterPageCode =
   | "product_roi"
   | "pr_work_progress"
   | "store_daily"
+  | "store_weekly"
+  | "store_monthly"
   | "bi_dashboard";
 
 export async function getFilterPreference<T extends object>(

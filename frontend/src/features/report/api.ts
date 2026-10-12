@@ -11,7 +11,8 @@ import type {
   PrWorkProgress,
   ReportCapabilities,
   ReportFreshness,
-  StoreDailyRow,
+  StoreGranularity,
+  StoreReport,
   StyleCardPage,
   SummaryRefreshResult,
   TargetWithActual,
@@ -63,19 +64,18 @@ export async function getPublishCards(
   return resp.data;
 }
 
-export async function getStoreDaily(
-  params: {
-    preset?: string;
-    date_from?: string;
-    date_to?: string;
-    /** 按周 / 月 / 年由后端分桶，date 是桶首日；不传 = 按日。 */
-    granularity?: TimeGranularity;
-  } = {}
-): Promise<StoreDailyRow[]> {
-  const resp = await apiClient.get<StoreDailyRow[]>(
-    "/api/reports/store-daily",
-    { params }
-  );
+const STORE_REPORT_PATHS: Record<StoreGranularity, string> = {
+  day: "/api/reports/store/daily",
+  week: "/api/reports/store/weekly",
+  month: "/api/reports/store/monthly",
+};
+
+/** 店铺日明细 / 周汇总 / 月度汇总（7e R4）：后端按「ISO 周（自然月）∩ 区间」分桶，行上带实际起止。 */
+export async function getStoreReport(
+  granularity: StoreGranularity,
+  params: { preset?: string; date_from?: string; date_to?: string } = {}
+): Promise<StoreReport> {
+  const resp = await apiClient.get<StoreReport>(STORE_REPORT_PATHS[granularity], { params });
   return resp.data;
 }
 

@@ -79,15 +79,63 @@ export interface StyleCardPage {
   page_size: number;
 }
 
-export interface StoreDailyRow {
-  date: string;
+/** 店铺报表粒度（7e R4）：日明细 / 周汇总 / 月度汇总三页。 */
+export type StoreGranularity = "day" | "week" | "month";
+
+/**
+ * 店铺日 / 周 / 月一行（7e R4，设计 2.4；对齐后端 StoreReportRow）。
+ *
+ * `date_from` / `date_to` 是行上的实际起止 = 桶 ∩ 请求区间（日行两者相同）。
+ * 比率在分桶求和后现算，分母为 0 / 负时为 null。「其中直播」两列只展示，不参与公式。
+ */
+export interface StoreReportRow {
+  date_from: string;
+  date_to: string;
+  /** 商品访客数合计：按商品累加，同一访客看了多个商品会重复计。 */
   visitors: number;
   pay_amount: string;
   pay_orders: number;
+  refund_amount: string;
+  brushing_amount: string;
+  actual_sales: string;
+  /** 万相台合计。 */
+  ad_spend: string;
+  /** 手填三项：整桶没填为 null。 */
   ad_spend_total: string | null;
   zhitongche_spend: string | null;
   yinli_spend: string | null;
+  /** 站内推广费：逐天判断，手填了三项任一就用三项之和，否则万相台。 */
+  internal_spend: string;
+  /** 站外推广成本。 */
+  promo_cost: string;
+  total_spend: string;
+  live_pay_amount: string;
+  live_ad_spend: string;
+  /** 仅退款：只加已录入的日子；整桶都没录为 null。 */
+  refund_only_amount: string | null;
+  total_spend_ratio: string | null;
+  internal_ratio: string | null;
+  external_ratio: string | null;
+  net_spend_ratio: string | null;
+  net_roi: string | null;
+  roi_ex_brushing: string | null;
+  refund_only_rate: string | null;
+  /** 「已录 x / y 天」的 x：桶内已录仅退款的天数。 */
+  refund_only_days: number;
+  /** 「已录 x / y 天」的 y：桶内有日行的天数。 */
+  day_count: number;
   extra?: Record<string, unknown>;
+}
+
+/** GET /api/reports/store/{daily|weekly|monthly} 的响应（一个响应只有一种来源）。 */
+export interface StoreReport {
+  granularity: StoreGranularity;
+  date_from: string;
+  date_to: string;
+  items: StoreReportRow[];
+  /** 整段已录仅退款的天数。 */
+  recorded_days: number;
+  total_days: number;
 }
 
 /** 单品投产渠道（7e R3）：一行 = 商品 × 渠道；null 只出现在内部按商品合计的行上。 */
