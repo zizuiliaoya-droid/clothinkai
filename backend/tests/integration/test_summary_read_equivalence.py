@@ -659,6 +659,8 @@ class TestProductionChannels:
             assert len(set(keys)) == len(keys)
             # N 条链接 = 该渠道启用的千牛链接数；停用的那条普通链接不算
             assert [r.link_count for r in via_summary.items] == [1, 1, 1]
+            # 停用链接数（S5）：那条停用的普通链接 D1 有日报 → 1，两路同值（上面逐字比已含）
+            assert via_summary.inactive_link_count == 1
             assert via_summary.previous is not None
             prev = [
                 (r.channel, r.pay_amount) for r in via_summary.previous if str(r.goods_id) == a_id
@@ -754,6 +756,8 @@ class TestProductionChannels:
             )
             await session.commit()
             enabled = await svc.get_report(tenant_a.id, (M_LO, M_HI), use_summary=False)
+            assert via_summary.inactive_link_count == 1
+            assert enabled.inactive_link_count == 0
             assert [_channel_tuple(r) for r in enabled.items] == [
                 (b_id, "普通", 1, *old[0][1:]),
                 (

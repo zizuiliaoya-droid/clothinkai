@@ -762,6 +762,63 @@ class ProductionRepository:
         ).mappings()
         return {(r["goods_id"], r["channel"]): int(r["n"]) for r in rows}
 
+    async def inactive_link_count(
+        self,
+        *,
+        tenant_id: UUID,
+        date_from: date,
+        date_to: date,
+        seasons: Sequence[str] | None,
+    ) -> int:
+        """区间内有数据、但因停用没计入单品的链接数（7e R3，设计 2.9 的展示部分）。
+
+        口径：``is_active = false``、有归属商品（商品未删、过季节筛选）的千牛 / 万相台链接，
+        区间内有千牛日报**行**或万相台花费**行**（金额 0 的行也算：数据进来了、被排除了）。
+        日报对链接同 ``qn_link`` / ``ads``：有 FK 按 FK，没回填按 ``platform_id`` 快照，
+        平台各配各的。汇总 / 实时两路都调这一条（汇总表不存停用链接的数），不随刷单开关。
+        """
+        filter_sql, filter_params = goods_filter_clauses(seasons)
+        sql = text(
+            f"""
+            SELECT COUNT(DISTINCT pp.id) AS n
+            FROM platform_product pp
+            JOIN goods_main g ON g.id = pp.goods_main_id
+            WHERE pp.tenant_id = :tenant_id
+              AND pp.is_active = false
+              AND g.tenant_id = :tenant_id AND g.is_deleted = false
+              {filter_sql}
+              AND (
+                (pp.platform = '千牛' AND EXISTS (
+                  SELECT 1 FROM qianniu_daily q
+                  WHERE q.tenant_id = pp.tenant_id
+                    AND q.date BETWEEN :date_from AND :date_to
+                    AND (
+                      (q.platform_product_id IS NOT NULL AND q.platform_product_id = pp.id)
+                      OR (q.platform_product_id IS NULL
+                          AND q.platform_id_snapshot = pp.platform_id)
+                    )
+                ))
+                OR (pp.platform = '万相台' AND EXISTS (
+                  SELECT 1 FROM ad_daily a
+                  WHERE a.tenant_id = pp.tenant_id
+                    AND a.date BETWEEN :date_from AND :date_to
+                    AND (
+                      (a.platform_product_id IS NOT NULL AND a.platform_product_id = pp.id)
+                      OR (a.platform_product_id IS NULL
+                          AND a.platform_id_snapshot = pp.platform_id)
+                    )
+                ))
+              )
+            """
+        )
+        params: dict[str, Any] = {
+            "tenant_id": tenant_id,
+            "date_from": date_from,
+            "date_to": date_to,
+            **filter_params,
+        }
+        return int((await self._s.execute(sql, params)).scalar_one())
+
     async def goods_unit_costs(
         self, *, tenant_id: UUID, goods_ids: Sequence[UUID]
     ) -> dict[UUID, Decimal | None]:

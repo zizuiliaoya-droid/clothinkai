@@ -179,6 +179,10 @@ class ProductionService:
                 metric_label="production_recent7",
             )
             extra_by_goods = await self._aggregate_extra(tenant_id, cur_from, cur_to)
+            # 停用链接数：汇总 / 实时两路共用这一条实时 SQL，只算本期
+            inactive = await self._repo.inactive_link_count(
+                tenant_id=tenant_id, date_from=cur_from, date_to=cur_to, seasons=seasons
+            )
             goods_ids = list({r["goods_id"] for r in (*cur_rows, *prev_rows)})
             links = await self._repo.link_counts(tenant_id=tenant_id, goods_ids=goods_ids)
             # 成本读取时现算（不进汇总表）：汇总 / 实时两路共用这一条
@@ -209,6 +213,7 @@ class ProductionService:
             items=items,
             previous=previous,
             recent7_range=Recent7Range(date_from=r7_from, date_to=r7_to),
+            inactive_link_count=inactive,
         )
 
     @staticmethod

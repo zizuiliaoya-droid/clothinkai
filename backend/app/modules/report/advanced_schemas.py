@@ -195,6 +195,9 @@ class ProductionReport(BaseModel):
     previous: list[ProductionRow] | None = None
     # get_report 恒给；AI 内部包一层按商品合计的行时不给
     recent7_range: Recent7Range | None = None
+    # 本期区间内有日报行或花费行的停用链接数（7e-9，页面「N 条链接已停用、未计入单品」）；
+    # 两路共用同一条实时 SQL（不读汇总表），只算本期、不随刷单开关。AI 包装不给 → 0
+    inactive_link_count: int = 0
 
 
 class ProductionTrendPoint(BaseModel):

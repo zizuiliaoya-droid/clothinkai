@@ -360,3 +360,192 @@ class TestInactiveLink:
             assert bi["internal_spend"] == Decimal("150.00")
         finally:
             tenant_id_ctx.reset(token)
+
+
+# 停用链接数（7e R3，计划决定 10）的区间：远离上面的 D1 / D2 与其他用例
+C1 = date(2026, 4, 6)
+C2 = date(2026, 4, 7)
+OUTSIDE = date(2026, 4, 9)
+
+
+async def _count(session: AsyncSession, tenant: Any, *, seasons: list[str] | None = None) -> int:
+    return await ProductionRepository(session).inactive_link_count(
+        tenant_id=tenant.id, date_from=C1, date_to=C2, seasons=seasons
+    )
+
+
+class TestInactiveLinkCount:
+    """``inactive_link_count``：区间内有日报行或花费行的停用链接数（金额 0 的行也算）。
+
+    每条用例都有一条启用的对照链接带数据：启用链接不算，计数才不是「什么都数」。
+    """
+
+    async def _setup(
+        self, session: AsyncSession, tenant: Any, product_factory: Any, *, season: str = "春夏"
+    ) -> tuple[Any, GoodsMain]:
+        style = await product_factory.style(style_code=f"IC{uuid4().hex[:6]}")
+        goods = await _goods(session, tenant, style, code=f"G_IC_{uuid4().hex[:6]}")
+        goods.season = season
+        on = await _link(session, tenant, style, goods)
+        _qianniu(
+            session,
+            tenant,
+            on.platform_id,
+            C1,
+            pay="100.00",
+            refund="0",
+            cart=1,
+            tag="on",
+            platform_product_id=on.id,
+        )
+        await session.flush()
+        return style, goods
+
+    async def test_zero_amount_daily_row_counts(
+        self, session: AsyncSession, tenant_a: Any, product_factory: Any
+    ) -> None:
+        """停用千牛链接区间内一行金额 0 的日报（只有快照、没回填 FK）→ 1。"""
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            style, goods = await self._setup(session, tenant_a, product_factory)
+            off = await _link(session, tenant_a, style, goods, is_active=False)
+            _qianniu(session, tenant_a, off.platform_id, C2, pay="0", refund="0", cart=0, tag="z")
+            await session.flush()
+            assert await _count(session, tenant_a) == 1
+        finally:
+            tenant_id_ctx.reset(token)
+
+    async def test_wanxiangtai_spend_only_counts(
+        self, session: AsyncSession, tenant_a: Any, product_factory: Any
+    ) -> None:
+        """停用万相台链接只有花费（FK 一行、快照一行）→ 1，同一条链接不重复数。"""
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            style, goods = await self._setup(session, tenant_a, product_factory)
+            off = await _link(session, tenant_a, style, goods, platform="万相台", is_active=False)
+            _ad(
+                session,
+                tenant_a,
+                off.platform_id,
+                C1,
+                cost="12.00",
+                tag="fk",
+                platform_product_id=off.id,
+            )
+            _ad(session, tenant_a, off.platform_id, C2, cost="3.00", tag="snap")
+            await session.flush()
+            assert await _count(session, tenant_a) == 1
+        finally:
+            tenant_id_ctx.reset(token)
+
+    async def test_two_links_and_cross_platform_snapshot(
+        self, session: AsyncSession, tenant_a: Any, product_factory: Any
+    ) -> None:
+        """两条停用链接各有数据 → 2；万相台日报的快照碰上停用千牛链接的 ID 不算千牛那条。"""
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            style, goods = await self._setup(session, tenant_a, product_factory)
+            qn_off = await _link(session, tenant_a, style, goods, is_active=False)
+            ad_off = await _link(
+                session, tenant_a, style, goods, platform="万相台", is_active=False
+            )
+            idle = await _link(session, tenant_a, style, goods, is_active=False)
+            _qianniu(
+                session,
+                tenant_a,
+                qn_off.platform_id,
+                C1,
+                pay="50.00",
+                refund="0",
+                cart=0,
+                tag="qn",
+                platform_product_id=qn_off.id,
+            )
+            _ad(
+                session,
+                tenant_a,
+                ad_off.platform_id,
+                C2,
+                cost="5.00",
+                tag="ad",
+                platform_product_id=ad_off.id,
+            )
+            # 万相台日报的快照恰好是第三条（停用千牛）链接的 ID：平台不同，不算
+            _ad(session, tenant_a, idle.platform_id, C1, cost="1.00", tag="x")
+            await session.flush()
+            assert await _count(session, tenant_a) == 2
+        finally:
+            tenant_id_ctx.reset(token)
+
+    async def test_outside_range_or_unbound_not_counted(
+        self, session: AsyncSession, tenant_a: Any, product_factory: Any
+    ) -> None:
+        """数据只在区间外 → 0；没有归属商品的停用链接 → 0；启用链接 → 0。"""
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            style, goods = await self._setup(session, tenant_a, product_factory)
+            off = await _link(session, tenant_a, style, goods, is_active=False)
+            _qianniu(
+                session,
+                tenant_a,
+                off.platform_id,
+                OUTSIDE,
+                pay="80.00",
+                refund="0",
+                cart=1,
+                tag="out",
+                platform_product_id=off.id,
+            )
+            unbound = await _link(session, tenant_a, style, goods, is_active=False)
+            unbound.goods_main_id = None
+            _qianniu(
+                session,
+                tenant_a,
+                unbound.platform_id,
+                C1,
+                pay="80.00",
+                refund="0",
+                cart=1,
+                tag="unbound",
+                platform_product_id=unbound.id,
+            )
+            await session.flush()
+            assert await _count(session, tenant_a) == 0
+            # 场景有效性：把区间放宽到 OUTSIDE，同一条链接就算上了
+            assert (
+                await ProductionRepository(session).inactive_link_count(
+                    tenant_id=tenant_a.id, date_from=C1, date_to=OUTSIDE, seasons=None
+                )
+                == 1
+            )
+        finally:
+            tenant_id_ctx.reset(token)
+
+    async def test_season_filter_and_deleted_goods(
+        self, session: AsyncSession, tenant_a: Any, product_factory: Any
+    ) -> None:
+        """季节筛掉 → 0、季节命中 → 1；商品已删 → 0。"""
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            style, goods = await self._setup(session, tenant_a, product_factory)
+            off = await _link(session, tenant_a, style, goods, is_active=False)
+            _qianniu(
+                session,
+                tenant_a,
+                off.platform_id,
+                C1,
+                pay="20.00",
+                refund="0",
+                cart=0,
+                tag="s",
+                platform_product_id=off.id,
+            )
+            await session.flush()
+            assert await _count(session, tenant_a, seasons=["秋冬"]) == 0
+            assert await _count(session, tenant_a, seasons=["春夏"]) == 1
+            assert await _count(session, tenant_a, seasons=[]) == 1
+            goods.is_deleted = True
+            await session.flush()
+            assert await _count(session, tenant_a) == 0
+        finally:
+            tenant_id_ctx.reset(token)
