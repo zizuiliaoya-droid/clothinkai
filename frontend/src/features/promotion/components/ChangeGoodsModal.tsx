@@ -1,3 +1,4 @@
+import { LINE_EVENTS_ALL } from "@/features/flow/api";
 import { useEffect } from "react";
 import { Alert, Form, Modal, Select, Typography, message } from "antd";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -39,6 +40,7 @@ export function ChangeGoodsModal({ target, onClose }: Props) {
       onClose();
       form.resetFields();
       void qc.invalidateQueries({ queryKey: ["promotions"] });
+      void qc.invalidateQueries({ queryKey: LINE_EVENTS_ALL });
     },
     onError: (err) => message.error(extractErrorMessage(err)),
   });

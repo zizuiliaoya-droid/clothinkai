@@ -20,13 +20,23 @@ export interface LineDrawerProps {
   bloggerName?: string | null;
   /** 时间线下方的页签（推广列表：单据详情 / 金额改动 / 催发记录）；不传就不出。 */
   tabs?: TabsProps["items"];
+  /** 打开时先显示哪个页签（「金额改动记录」菜单直接切到金额改动）；不传 = 第一个。 */
+  defaultTab?: string;
   /** 头信息右侧的附加内容（如动作按钮）。 */
   extra?: ReactNode;
 }
 
 export const LINE_NOT_FOUND_TEXT = "看不到这条记录（没有权限，或单据已删除）";
 
-export function LineDrawer({ lineId, onClose, goodsName, bloggerName, tabs, extra }: LineDrawerProps) {
+export function LineDrawer({
+  lineId,
+  onClose,
+  goodsName,
+  bloggerName,
+  tabs,
+  defaultTab,
+  extra,
+}: LineDrawerProps) {
   const { token } = theme.useToken();
   const opener = useRef<HTMLElement | null>(null);
   const open = lineId !== null;
@@ -75,7 +85,7 @@ export function LineDrawer({ lineId, onClose, goodsName, bloggerName, tabs, extr
       ) : (
         <Space direction="vertical" size={16} style={{ width: "100%" }}>
           <LineTimeline data={data} />
-          {tabs && tabs.length > 0 && <Tabs items={tabs} />}
+          {tabs && tabs.length > 0 && <Tabs items={tabs} defaultActiveKey={defaultTab} />}
           {data.ui?.actions?.comment?.state === "enabled" && <LineCommentBox lineId={lineId} />}
         </Space>
       )}

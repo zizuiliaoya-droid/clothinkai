@@ -50,6 +50,8 @@ import { GoodsImages } from "@/components/GoodsImages/GoodsImages";
 import { FlowAction } from "@/features/flow/FlowAction";
 import { flowErrorOutcome } from "@/features/flow/flowError";
 import { buildMenuItems } from "@/features/flow/flowMenu";
+import { LineDrawer } from "@/features/flow/LineDrawer";
+import { LINE_ROW_CLASS, LINE_ROW_IGNORE_CLASS, lineRowProps } from "@/features/flow/lineRow";
 import type { UiAction } from "@/features/flow/keys";
 import { negotiationStatusStyle } from "@/features/flow/stageStyle";
 import "./NegotiationPage.css";
@@ -103,6 +105,8 @@ export function NegotiationPage() {
   const [dialog, setDialog] = useState<NegotiationDialog | null>(null);
   const closeDialog = () => setDialog(null);
   const dialogOf = (kind: NegotiationDialog["kind"]) => (dialog?.kind === kind ? dialog : null);
+  // 点一行开主线抽屉（8.3）：没定稿只有谈款段，已定稿按 line_id 显示整条线
+  const [lineRow, setLineRow] = useState<Negotiation | null>(null);
 
   const effectiveFilters = useMemo<NegotiationFilters>(
     () => ({
@@ -195,6 +199,8 @@ export function NegotiationPage() {
       key: "images",
       width: 148,
       fixed: "left",
+      // 点图看大图、悬停博主看 hover 卡，都不开抽屉
+      className: LINE_ROW_IGNORE_CLASS,
       render: (_, row) => (
         <GoodsImages
           images={negotiationImages(row)}
@@ -208,6 +214,7 @@ export function NegotiationPage() {
       dataIndex: "blogger_nickname",
       width: 140,
       fixed: "left",
+      className: LINE_ROW_IGNORE_CLASS,
       render: (name: string | null, row) => (
         <BloggerHoverCard bloggerId={row.blogger_id} bloggerName={name}>
           {name ?? "—"}
@@ -301,6 +308,7 @@ export function NegotiationPage() {
       key: "operations",
       width: 100,
       fixed: "right",
+      className: LINE_ROW_IGNORE_CLASS,
       render: (_, record) => {
         const items = menus.get(record.id) ?? [];
         if (!items.length) return null;
@@ -414,7 +422,8 @@ export function NegotiationPage() {
         loading={isLoading}
         columns={columns}
         dataSource={rows}
-        rowClassName={(r) => (r.overdue ? "negotiation-row-overdue" : "")}
+        rowClassName={(r) => (r.overdue ? `${LINE_ROW_CLASS} negotiation-row-overdue` : LINE_ROW_CLASS)}
+        onRow={(r) => lineRowProps(() => setLineRow(r))}
         scroll={{ x: 1300 }}
         pagination={{
           current: data?.page ?? 1,
@@ -426,6 +435,12 @@ export function NegotiationPage() {
         }}
       />
 
+      <LineDrawer
+        lineId={lineRow?.line_id ?? null}
+        onClose={() => setLineRow(null)}
+        goodsName={lineRow ? lineRow.display_short_name ?? lineRow.style_name : null}
+        bloggerName={lineRow?.blogger_nickname}
+      />
       <NegotiationFormModal target={formTarget} onClose={() => setFormTarget(null)} />
       <ManagerReviewModal target={dialogOf("manager_review")} onClose={closeDialog} />
       <FinalReviewModal target={dialogOf("final_review")} onClose={closeDialog} />

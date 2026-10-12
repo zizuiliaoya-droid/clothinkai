@@ -7,6 +7,8 @@ export function lineEventsKey(lineId: string | null | undefined) {
   return ["line-events", lineId] as const;
 }
 
+/** 所有主线的时间线（前缀）：推广单 / 谈款弹窗不知道抽屉开着哪条线，动作成功后整体标记过期，只有开着的抽屉会重拉。 */
+export const LINE_EVENTS_ALL = ["line-events"] as const;
 /** 一条主线的时间线；看不到这条线的任何单据 → 404 LINE_NOT_FOUND。 */
 export async function getLineEvents(lineId: string): Promise<LineTimelineData> {
   const resp = await apiClient.get<LineTimelineData>(`/api/lines/${lineId}/events`);

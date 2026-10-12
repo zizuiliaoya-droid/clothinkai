@@ -2,6 +2,7 @@
 import { Modal, message } from "antd";
 import { useQueryClient } from "@tanstack/react-query";
 import type { GateMissingItem } from "@/features/flow/keys";
+import { LINE_EVENTS_ALL } from "@/features/flow/api";
 import { flowErrorOutcome } from "@/features/flow/flowError";
 import { selfReviewNotice } from "../negotiationDialogs";
 import type { Negotiation } from "../types";
@@ -11,6 +12,8 @@ export function useNegotiationFeedback() {
   const refresh = () => {
     void qc.invalidateQueries({ queryKey: ["negotiations"] });
     void qc.invalidateQueries({ queryKey: ["negotiation-status-counts"] });
+    // 开着的主线抽屉跟着重拉时间线（6.6）
+    void qc.invalidateQueries({ queryKey: LINE_EVENTS_ALL });
   };
 
   /** 422 缺项 → 返回 missing 交给弹窗标红；其余弹 message（403 缺 scope / 409 顺带刷新），返回 null。 */

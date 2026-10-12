@@ -2,7 +2,6 @@ import { useState } from "react";
 import {
   Button,
   Card,
-  Drawer,
   Dropdown,
   Input,
   Modal,
@@ -22,7 +21,10 @@ import type { ColumnsType } from "antd/es/table";
 import dayjs from "dayjs";
 import { useSearchParams } from "react-router-dom";
 import { listPromotions, reviewPromotion, shipInclude } from "@/features/promotion/api";
+import { LINE_EVENTS_ALL } from "@/features/flow/api";
 import { buildMenuItems } from "@/features/flow/flowMenu";
+import { LineDrawer } from "@/features/flow/LineDrawer";
+import { LINE_ROW_CLASS, LINE_ROW_IGNORE_CLASS, lineRowProps } from "@/features/flow/lineRow";
 import type {
   Promotion,
   PromotionListFilters,
@@ -42,6 +44,9 @@ import { AmountLogPanel } from "@/features/promotion/components/AmountLogPanel";
 import { CancelPromotionModal } from "@/features/promotion/components/CancelPromotionModal";
 import { ChangeGoodsModal } from "@/features/promotion/components/ChangeGoodsModal";
 import { CreatePromotionModal } from "@/features/promotion/components/CreatePromotionModal";
+import { PromotionDetailPanel } from "@/features/promotion/components/PromotionDetailPanel";
+import { UrgeRecordsPanel } from "@/features/promotion/components/UrgeRecordsPanel";
+import { promotionUrgeRecordsKey } from "@/features/urge/api";
 import { MetricsModal } from "@/features/promotion/components/MetricsModal";
 import { PublishModal } from "@/features/promotion/components/PublishModal";
 import { RecallModal } from "@/features/promotion/components/RecallModal";
@@ -100,6 +105,9 @@ const retroColor: Record<string, string> = {
   已完成: "green",
 };
 
+/** 主线抽屉的页签（流程线 6.6、8.4）。 */
+type LineTab = "detail" | "amount" | "urge";
+
 const statusColor: Record<string, string> = {
   未发布: "default",
   已发布: "green",
@@ -141,7 +149,8 @@ export function PromotionListPage() {
   const [retroConfirmTarget, setRetroConfirmTarget] = useState<Promotion | null>(
     null
   );
-  const [amountLogTarget, setAmountLogTarget] = useState<Promotion | null>(null);
+  // 点一行（或「留言」「金额改动记录」菜单）开主线抽屉；tab = 打开时先显示的页签
+  const [lineTarget, setLineTarget] = useState<{ row: Promotion; tab?: LineTab } | null>(null);
   const [recallTarget, setRecallTarget] = useState<Promotion | null>(null);
   // 发货（流程线 8.4）：按行 ui 出菜单项，弹窗在 features/promotion/components/
   const [shipPushTarget, setShipPushTarget] = useState<ShipPushTarget | null>(null);
@@ -149,6 +158,27 @@ export function PromotionListPage() {
   const [receiverTarget, setReceiverTarget] = useState<Promotion | null>(null);
   const [itemsTarget, setItemsTarget] = useState<Promotion | null>(null);
   const flowFeedback = useFlowFeedback();
+  const openLine = (row: Promotion, tab?: LineTab) => {
+    if (row.line_id) setLineTarget({ row, tab });
+  };
+  /** 抽屉页签（6.6）：单据详情 / 金额改动（读不到报价不出）/ 催发记录。 */
+  const lineTabs = (row: Promotion) => [
+    {
+      key: "detail",
+      label: "单据详情",
+      children: (
+        <PromotionDetailPanel
+          promotionId={row.id}
+          onEditReceiver={setReceiverTarget}
+          onEditItems={setItemsTarget}
+        />
+      ),
+    },
+    ...(row.quote_amount != null
+      ? [{ key: "amount", label: "金额改动", children: <AmountLogPanel promotionId={row.id} /> }]
+      : []),
+    { key: "urge", label: "催发记录", children: <UrgeRecordsPanel promotionId={row.id} /> },
+  ];
 
   const { data, isLoading } = useQuery({
     queryKey: ["promotions", filters],
@@ -165,6 +195,7 @@ export function PromotionListPage() {
           : "审核通过，已转待财务付款"
       );
       void qc.invalidateQueries({ queryKey: ["promotions"] });
+      void qc.invalidateQueries({ queryKey: LINE_EVENTS_ALL });
     },
     onError: (err) => message.error(extractErrorMessage(err)),
   });
@@ -203,6 +234,8 @@ export function PromotionListPage() {
               onOk: () => shipIncludeMutation.mutateAsync(record.id).catch(() => undefined),
             }),
         },
+        // 留言在抽屉底部（6.6）：菜单项只负责打开抽屉
+        comment: { label: "留言", onClick: () => openLine(record) },
       },
       edits: {
         receiver: { label: "改收件信息", onClick: () => setReceiverTarget(record) },
@@ -227,6 +260,8 @@ export function PromotionListPage() {
       key: "main_image",
       width: 148,
       fixed: "left",
+      // 点图看大图，不开抽屉
+      className: LINE_ROW_IGNORE_CLASS,
       render: (_, row) => (
         <GoodsImages
           images={promotionImages(row)}
@@ -457,6 +492,7 @@ export function PromotionListPage() {
       title: "操作",
       width: 110,
       fixed: "right",
+      className: LINE_ROW_IGNORE_CLASS,
       render: (_, record) => {
         const flowItems = shipMenuItems(record);
         const legacyItems = [
@@ -558,13 +594,17 @@ export function PromotionListPage() {
             disabled: record.retro_status !== "待确认",
             onClick: () => setRetroConfirmTarget(record),
           },
-          {
-            // 金额改动记录。后端按字段级权限门控 —— 看不到金额的角色会拿到 403，
-            // 所以这里不按角色隐藏菜单项，让后端给出一致的拒绝
-            key: "amount-log",
-            label: "金额改动记录",
-            onClick: () => setAmountLogTarget(record),
-          },
+          // 金额改动记录 = 主线抽屉的一个页签（8.4）：打开抽屉并切过去。
+          // 读不到报价的角色（接口给 null）没有这个页签，菜单项也不出
+          ...(record.line_id && record.quote_amount != null
+            ? [
+                {
+                  key: "amount-log",
+                  label: "金额改动记录",
+                  onClick: () => openLine(record, "amount"),
+                },
+              ]
+            : []),
         ];
         const items: MenuProps["items"] = flowItems.length
           ? [...flowItems, { type: "divider" as const }, ...legacyItems]
@@ -644,6 +684,9 @@ export function PromotionListPage() {
         loading={isLoading}
         columns={columns}
         dataSource={data?.items ?? []}
+        // 点一行（操作列、主图、按钮链接以外）或 Enter 开主线抽屉（8.4）
+        rowClassName={(r) => (r.line_id ? LINE_ROW_CLASS : "")}
+        onRow={(r) => (r.line_id ? lineRowProps(() => openLine(r)) : {})}
         scroll={{ x: 2530 }}
         pagination={{
           current: data?.page ?? 1,
@@ -672,6 +715,10 @@ export function PromotionListPage() {
         promotionId={urgeTarget?.id ?? null}
         title={urgeTarget ? `催发 · ${urgeTarget.internal_code}` : "催发"}
         onClose={() => setUrgeTarget(null)}
+        onUrged={() => {
+          void qc.invalidateQueries({ queryKey: LINE_EVENTS_ALL });
+          if (urgeTarget) void qc.invalidateQueries({ queryKey: promotionUrgeRecordsKey(urgeTarget.id) });
+        }}
       />
 
       <MetricsModal target={metricsTarget} onClose={() => setMetricsTarget(null)} />
@@ -685,19 +732,15 @@ export function PromotionListPage() {
 
       <RecallModal target={recallTarget} onClose={() => setRecallTarget(null)} />
 
-      <Drawer
-        title={
-          amountLogTarget
-            ? `金额改动记录 · ${amountLogTarget.internal_code}`
-            : "金额改动记录"
+      <LineDrawer
+        lineId={lineTarget?.row.line_id ?? null}
+        onClose={() => setLineTarget(null)}
+        goodsName={
+          lineTarget ? lineTarget.row.display_short_name ?? lineTarget.row.style_short_name_snapshot : null
         }
-        width={560}
-        open={!!amountLogTarget}
-        onClose={() => setAmountLogTarget(null)}
-        destroyOnHidden
-      >
-        <AmountLogPanel promotionId={amountLogTarget?.id ?? null} />
-      </Drawer>
+        defaultTab={lineTarget?.tab}
+        tabs={lineTarget ? lineTabs(lineTarget.row) : undefined}
+      />
 
       <PublishModal
         open={publishOpen}
