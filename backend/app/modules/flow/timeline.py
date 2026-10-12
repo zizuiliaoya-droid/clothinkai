@@ -1,4 +1,4 @@
-"""时间线读接口 ``LineEventService.read``（流程线设计 6.5、7.8）。
+"""时间线读接口 ``LineEventService.read`` 与留言 ``comment``（流程线设计 6.5、7.6、7.8）。
 
 路由只要求登录，授权全在这里，三层过滤：
 1. 能不能看到这条线（任一）：线上有推广单且 ``promotion:read``；谈款对当前用户可见（与谈款列表同一个判断）；
@@ -13,6 +13,8 @@
 查询：动作人权限 2 条（``load_flow_actor``）+ 线头 1 条 + 事件 1 条 + 附件 / 动作人名各 1 条（没有就不查）
 + 催发阈值 1 条（线上有推广单时算阶段）+ 第一条事件时间 1 条（只在超 500 条截断时），与事件条数无关；
 列表接口不 join 事件表。
+
+留言 `comment`：第 1 层与读接口同一个判断；再要 `negotiation:write` 或 `promotion:write`、矩阵「留言 / 贴图」可点。
 """
 
 from __future__ import annotations
@@ -21,14 +23,20 @@ import logging
 from datetime import date, datetime, time
 from uuid import UUID
 
+from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.attachment import attachment_service
+from app.core.attachment import Attachment, attachment_service, check_image_payload
+from app.core.exceptions import PermissionDeniedError
 from app.core.security.field_permissions import FieldPermissionContext, can_read_field
 from app.modules.auth.models import User
 from app.modules.auth.repository import PermissionRepository, RoleRepository
 from app.modules.flow.actor import load_flow_actor
-from app.modules.flow.exceptions import LineNotFoundError
+from app.modules.flow.exceptions import (
+    LineCommentEmptyError,
+    LineCommentImageInvalidError,
+    LineNotFoundError,
+)
 from app.modules.flow.line_events import (
     EVENT_GROUP,
     LineEventRepository,
@@ -36,7 +44,7 @@ from app.modules.flow.line_events import (
     attachment_readable,
     filter_payload,
 )
-from app.modules.flow.matrix import FlowActor, FlowDocBase, ui_for
+from app.modules.flow.matrix import FlowActor, FlowDocBase, require, ui_for
 from app.modules.flow.models import LineEvent
 from app.modules.flow.next_step import next_step
 from app.modules.flow.schemas import (
@@ -53,6 +61,7 @@ from app.modules.flow.schemas import (
 from app.modules.flow.timeline_repository import LineHeader, LineReadRepository
 from app.modules.negotiation.enums import NegotiationStatus
 from app.modules.negotiation.flow_doc import build_negotiation_doc
+from app.modules.negotiation.permissions import SCOPE_NEGOTIATION
 from app.modules.negotiation.service import can_see_negotiation
 from app.modules.promotion.enums import ReviewAction
 from app.modules.promotion.flow_doc import build_promotion_doc
@@ -76,6 +85,9 @@ GROUP_LABELS: dict[str, str] = {
 HIDDEN_NEGOTIATION_REASON = "谈款过程只给谈款人和能看全部谈款的人看"
 # 附件签名时长与推广响应一致
 ATTACHMENT_URL_TTL = 900
+# 留言贴图（7.6）：jpg / png / webp、≤ 10MB，一次 1 张，私有桶
+COMMENT_IMAGE_PURPOSE = "line_comment_image"
+COMMENT_IMAGE_MAX_BYTES = 10 * 1024 * 1024
 
 
 def _day_start(value: date) -> datetime:
@@ -185,13 +197,11 @@ class LineEventService:
         self._perms = PermissionRepository(session)
         self._attachment_service = attachment_service
 
-    async def read(self, line_id: UUID, user: User) -> LineTimelineResponse:
+    async def _visible_line(self, line_id: UUID, user: User) -> tuple[FlowActor, LineHeader, bool]:
+        """第 1 层：返回 ``(actor, header, 看得到谈款)``；线上任何单据都看不到 → 404 ``LINE_NOT_FOUND``。"""
         actor = await load_flow_actor(user.id, self._roles, self._perms)
-        tenant_id = user.tenant_id
-        header = await self._lines.header(tenant_id=tenant_id, line_id=line_id)
+        header = await self._lines.header(tenant_id=user.tenant_id, line_id=line_id)
         promotion, negotiation = header.promotion, header.negotiation
-
-        # 第 1 层
         sees_promotion = promotion is not None and actor.perms.has("promotion", "read")
         sees_negotiation = negotiation is not None and can_see_negotiation(
             actor, pr_id=negotiation.pr_id, status=negotiation.status
@@ -199,6 +209,135 @@ class LineEventService:
         sees_settlement = header.has_settlement and actor.perms.has("finance.settlement", "read")
         if not (sees_promotion or sees_negotiation or sees_settlement):
             raise LineNotFoundError(details={"line_id": str(line_id)})
+        return actor, header, sees_negotiation
+
+    async def comment(
+        self,
+        line_id: UUID,
+        user: User,
+        *,
+        text: str | None,
+        image: tuple[str | None, str | None, bytes] | None,
+    ) -> TimelineEvent:
+        """留言 / 贴图（7.6，N11 与推广阶段共用）：写一条 ``line.comment``，返回这条事件（6.5 的形状）。
+
+        判定顺序：第 1 层看不到 → 404；``negotiation:write`` / ``promotion:write`` 都不持 → 403；
+        矩阵「留言 / 贴图」不可点 → 403（与读接口 ``ui.actions.comment`` 同一份快照）；
+        文字（去首尾空白）与图片都空 → 422 ``LINE_COMMENT_EMPTY``；图片不合法 → 422 ``LINE_COMMENT_IMAGE_INVALID``。
+        挂哪一边（6.3）：线上已有推广单只挂 ``promotion_id``，还没有只挂 ``negotiation_id``。
+        图片后端代传私有桶（用途 ``line_comment_image``）；事件写失败整单回滚并删掉已传的对象。
+        """
+        actor, header, _ = await self._visible_line(line_id, user)
+        if not (
+            actor.perms.has(SCOPE_NEGOTIATION, "write") or actor.perms.has("promotion", "write")
+        ):
+            raise PermissionDeniedError(
+                details={"required_scope": f"{SCOPE_NEGOTIATION}:write | promotion:write"}
+            )
+        _, doc = await self._doc(actor, header)
+        require(actor, doc, "comment")
+        note = (text or "").strip() or None
+        if note is None and image is None:
+            raise LineCommentEmptyError()
+        if image is not None:
+            filename, mime_type, data = image
+            problem = check_image_payload(
+                data=data,
+                mime_type=mime_type,
+                filename=filename,
+                max_bytes=COMMENT_IMAGE_MAX_BYTES,
+                label="留言图片",
+            )
+            # mime_type 为 None 时 check_image_payload 必然已给出原因；一并判断是为了收窄类型
+            if problem is not None or mime_type is None:
+                raise LineCommentImageInvalidError(problem)
+
+        promotion, negotiation = header.promotion, header.negotiation
+        if promotion is not None:
+            promotion_id, negotiation_id = promotion.id, None
+        elif negotiation is not None:
+            promotion_id, negotiation_id = None, negotiation.id
+        else:  # 第 1 层已挡住：线上至少有一张单
+            raise LineNotFoundError()
+
+        # (附件 id, r2_key)：rollback 之后 ORM 属性已过期，要先取出来
+        stored: tuple[UUID, str] | None = None
+        try:
+            if image is not None:
+                attachment = await self._store_image(image, user)
+                stored = (attachment.id, attachment.r2_key)
+            event = await self._events.append(
+                tenant_id=user.tenant_id,
+                line_id=line_id,
+                event_type=LineEventType.LINE_COMMENT,
+                actor_id=user.id,
+                note=note,
+                attachment_id=stored[0] if stored is not None else None,
+                promotion_id=promotion_id,
+                negotiation_id=negotiation_id,
+            )
+            seq, created_at = event.seq, event.created_at
+            await self._session.commit()
+        except Exception:
+            await self._session.rollback()
+            if stored is not None:
+                await self._delete_object(stored[1], stored[0])
+            raise
+        attachments = await self._signed_attachments({stored[0]}) if stored is not None else {}
+        names = await self._lines.actor_names({user.id})
+        return TimelineEvent(
+            seq=seq,
+            event_type=LineEventType.LINE_COMMENT.value,
+            group=GROUP_LABELS["comment"],
+            created_at=created_at,
+            actor=TimelineActor(id=user.id, display_name=names.get(user.id, "")),
+            from_state=None,
+            to_state=None,
+            note=note,
+            attachment=attachments.get(stored[0]) if stored is not None else None,
+            payload={},
+        )
+
+    async def _store_image(
+        self, image: tuple[str | None, str | None, bytes], user: User
+    ) -> Attachment:
+        """代传留言贴图到私有桶（调用方已校验），返回 ``ready`` 的附件行。"""
+        filename, mime_type, data = image
+        attachment, _ = await self._attachment_service.create_upload_record(
+            session=self._session,
+            tenant_id=user.tenant_id,
+            created_by=user.id,
+            bucket="private",
+            purpose=COMMENT_IMAGE_PURPOSE,
+            filename=filename,
+            mime_type=str(mime_type),
+            size_bytes=len(data),
+        )
+        await run_in_threadpool(
+            self._attachment_service.upload_bytes,
+            data,
+            bucket="private",
+            key=attachment.r2_key,
+            content_type=str(mime_type),
+        )
+        return await self._attachment_service.mark_uploaded(
+            session=self._session, attachment_id=attachment.id, tenant_id=user.tenant_id
+        )
+
+    async def _delete_object(self, key: str, attachment_id: UUID) -> None:
+        """事务回滚后删掉已传的对象，不留孤儿；删不掉只记日志，原错误照常抛。"""
+        try:
+            await run_in_threadpool(self._attachment_service.delete, "private", key)
+        except Exception:
+            log.warning(
+                "line_comment_image_compensation_delete_failed",
+                extra={"attachment_id": str(attachment_id)},
+            )
+
+    async def read(self, line_id: UUID, user: User) -> LineTimelineResponse:
+        actor, header, sees_negotiation = await self._visible_line(line_id, user)
+        tenant_id = user.tenant_id
+        promotion, negotiation = header.promotion, header.negotiation
 
         rows = await self._events.list_by_line(
             tenant_id=tenant_id, line_id=line_id, newest_first=True, limit=TIMELINE_LIMIT + 1
@@ -353,6 +492,8 @@ class LineEventService:
 
 
 __all__ = [
+    "COMMENT_IMAGE_MAX_BYTES",
+    "COMMENT_IMAGE_PURPOSE",
     "GROUP_LABELS",
     "HIDDEN_NEGOTIATION_REASON",
     "TIMELINE_LIMIT",

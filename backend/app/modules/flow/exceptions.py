@@ -6,6 +6,7 @@
 
 缺端点 scope 仍是现有的 ``PERMISSION_DENIED``，状态机不允许仍是 ``ILLEGAL_STATE_TRANSITION``。
 时间线读接口看不到这条线：``LINE_NOT_FOUND``（404，6.5 第 1 层）。
+留言：``LINE_COMMENT_EMPTY``（文字图片都空）、``LINE_COMMENT_IMAGE_INVALID``（伪图 / 超限），都是 422。
 """
 
 from __future__ import annotations
@@ -61,6 +62,22 @@ class LineNotFoundError(ResourceNotFoundError):
     code = "LINE_NOT_FOUND"
     status_code = 404
     message = "记录不存在"
+
+
+class LineCommentEmptyError(AppException):
+    """留言：文字与图片都空（只有空白也算空，7.6「至少一项」）。"""
+
+    code = "LINE_COMMENT_EMPTY"
+    status_code = 422
+    message = "留言内容和图片至少填一项"
+
+
+class LineCommentImageInvalidError(AppException):
+    """留言贴图不是合法图片（格式 / 大小 / 魔数，``check_image_payload`` 的原因原样给出）。"""
+
+    code = "LINE_COMMENT_IMAGE_INVALID"
+    status_code = 422
+    message = "图片不合法"
 
 
 class LineEventPayloadTooLargeError(AppException):
