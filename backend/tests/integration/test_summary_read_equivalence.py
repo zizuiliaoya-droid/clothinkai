@@ -454,6 +454,56 @@ class TestProductionReport:
         finally:
             tenant_id_ctx.reset(tok)
 
+    async def test_summary_equals_live_with_margin(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        factory: Any,
+        recorder: _SourceRecorder,
+    ) -> None:
+        """毛利三列（``show_margin=True``，管理员）在汇总路径上也要算出来、与实时逐字等（R3 评审 L3）。
+
+        成本读取时现算、不进汇总表；防「只在实时分支挂毛利」——那样汇总路径三列全是 None。
+        """
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            seeded = await _seed(
+                session, tenant_a, product_factory, blogger_factory, promotion_factory, factory
+            )
+            # 两个商品的启用成员都补上成本：A 单品 30，套装 B 两款各 30 → 60
+            await session.execute(
+                update(GoodsStyleItem)
+                .where(
+                    GoodsStyleItem.goods_main_id.in_([seeded["goods_a"].id, seeded["goods_b"].id])
+                )
+                .values(single_goods_cost=Decimal("30.00"))
+            )
+            await session.commit()
+            await _refresh(session, tenant_a, M_LO, M_HI)
+            svc = ProductionService(session)
+            via_summary = await svc.get_report(tenant_a.id, (M_LO, M_HI), show_margin=True)
+            assert recorder.calls[0] == ("production", "summary")
+            via_live = await svc.get_report(
+                tenant_a.id, (M_LO, M_HI), use_summary=False, show_margin=True
+            )
+            assert ("production", "live") in recorder.calls
+            assert _dump(via_summary) == _dump(via_live)
+            # 场景有效性：两行毛利三列都有非零值（不是 None 和 None 比）
+            items = via_summary.items
+            assert len(items) == 2
+            for row in items:
+                assert row.goods_cost_total not in (None, Decimal("0"))
+                assert row.gross_profit not in (None, Decimal("0"))
+                assert row.gross_margin_rate not in (None, Decimal("0"))
+            by_goods = {r.goods_id: r for r in items}
+            assert by_goods[seeded["goods_a"].id].goods_cost_total == Decimal("300.00")
+            assert by_goods[seeded["goods_b"].id].goods_cost_total == Decimal("300.00")
+        finally:
+            tenant_id_ctx.reset(tok)
+
 
 async def _seed_channels(
     session: AsyncSession,
