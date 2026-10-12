@@ -465,7 +465,10 @@ class TestUi:
         manager = await svc.get(pending.id, flow_users.pr_manager)
         assert manager.ui is not None
         assert manager.ui["column"] == "主管待审"
-        assert manager.ui["actions"] == {"manager_review": {"state": "enabled"}}
+        assert manager.ui["actions"] == {
+            "manager_review": {"state": "enabled"},
+            "comment": {"state": "enabled"},
+        }
         admin = await svc.get(pending.id, flow_users.admin)
         assert admin.ui is not None
         assert admin.ui["actions"]["manager_review"] == {
@@ -474,8 +477,11 @@ class TestUi:
         }
         finance = await svc.get(pending.id, flow_users.finance)
         assert finance.ui is not None
-        assert finance.ui["actions"] == {}
+        assert finance.ui["actions"] == {
+            "comment": {"state": "disabled", "reason": "只读角色不能留言"}
+        }
         assert "receiver" not in finance.ui["fields"]
+        assert finance.ui["fields"]["timeline"] == {"state": "read"}
 
 
 # ---------------------------------------------------------------------------
@@ -1391,7 +1397,7 @@ class TestTwoLevelReview:
         ]
         own = await svc.get(n.id, flow_users.pr)
         assert own.ui is not None
-        assert set(own.ui["actions"]) == {"copy"}
+        assert set(own.ui["actions"]) == {"copy", "comment"}
 
     async def test_final_return(
         self, session: AsyncSession, flow_users: Any, world: _World

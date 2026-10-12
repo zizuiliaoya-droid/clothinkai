@@ -1052,17 +1052,24 @@ class TestFlowUi:
         pr = (await svc.get_promotion(promo.id, flow_users.pr)).ui
         assert pr == {
             "column": "A",
-            "actions": {"ship_push": {"state": "disabled", "reason": "需管理员或 PR 主管确认"}},
+            "actions": {
+                "ship_push": {"state": "disabled", "reason": "需管理员或 PR 主管确认"},
+                "comment": {"state": "enabled"},
+            },
             "fields": {
                 "goods_items": {"state": "read"},
                 "receiver": {"state": "edit"},
                 "shipping": {"state": "grey", "hint": "推送后由仓库回填"},
+                "timeline": {"state": "read"},
             },
         }
         # 主管：可点，缺项全是弹窗里能补的
         manager = (await svc.get_promotion(promo.id, flow_users.pr_manager)).ui
         assert manager is not None
-        assert manager["actions"] == {"ship_push": {"state": "enabled", "missing": _ALL_GATES}}
+        assert manager["actions"] == {
+            "ship_push": {"state": "enabled", "missing": _ALL_GATES},
+            "comment": {"state": "enabled"},
+        }
         # 运营只读、财务什么都没有
         ops = (await svc.get_promotion(promo.id, flow_users.operations)).ui
         assert ops is not None
@@ -1070,6 +1077,7 @@ class TestFlowUi:
         assert ops["fields"] == {
             "goods_items": {"state": "read"},
             "shipping": {"state": "grey", "hint": "推送后由仓库回填"},
+            "timeline": {"state": "read"},
         }
         assert (await svc.get_promotion(promo.id, flow_users.finance)).ui == {
             "column": "A",
@@ -1124,7 +1132,10 @@ class TestFlowUi:
         rows = {p.id: p.ui for p in page.items}
         assert rows[partial.id] is not None and rows[full.id] is not None
         assert rows[partial.id]["actions"] == got["actions"]
-        assert rows[full.id]["actions"] == {"ship_push": {"state": "enabled"}}
+        assert rows[full.id]["actions"] == {
+            "ship_push": {"state": "enabled"},
+            "comment": {"state": "enabled"},
+        }
 
     async def test_list_ui_has_edits_not_fields(
         self,
@@ -1143,15 +1154,16 @@ class TestFlowUi:
         )
         rows = {p.id: p.ui for p in page.items}
         # 历史单（发货为空）按 A 列：PR 能改收件；已发货的 C 列只读
-        assert rows[history.id] == {"column": "C", "actions": {}, "edits": ["receiver"]}
-        assert rows[shipped.id] == {"column": "C", "actions": {}, "edits": []}
+        comment = {"comment": {"state": "enabled"}}
+        assert rows[history.id] == {"column": "C", "actions": comment, "edits": ["receiver"]}
+        assert rows[shipped.id] == {"column": "C", "actions": comment, "edits": []}
         manager = await PromotionService(session).list_promotions(
             filters=PromotionListFilters(), page=1, page_size=100, user=flow_users.pr_manager
         )
         row = next(p for p in manager.items if p.id == history.id)
         assert row.ui == {
             "column": "C",
-            "actions": {"ship_include": {"state": "enabled"}},
+            "actions": {"ship_include": {"state": "enabled"}, "comment": {"state": "enabled"}},
             "edits": ["goods_items", "receiver"],
         }
 
@@ -1748,7 +1760,10 @@ class TestShipPush:
         assert resp.ship_pushed_by_name == await _user_name(session, manager.id)
         assert resp.ui is not None
         assert resp.ui["column"] == "B"
-        assert resp.ui["actions"] == {"ship_withdraw": {"state": "enabled"}}
+        assert resp.ui["actions"] == {
+            "ship_withdraw": {"state": "enabled"},
+            "comment": {"state": "enabled"},
+        }
         # 列表与详情同一份发货字段（推送人整页一次查）
         page = await PromotionService(session).list_promotions(
             filters=PromotionListFilters(), page=1, page_size=100, user=manager

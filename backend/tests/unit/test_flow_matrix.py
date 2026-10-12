@@ -60,6 +60,7 @@ from app.modules.flow.matrix import (
     writable_fields,
 )
 from app.modules.negotiation.flow_matrix import (
+    COMMENT_READ_REASON,
     FINAL_OPINION_HINT,
     FINAL_REVIEW_REASON,
     MANAGER_OPINION_HINT,
@@ -1007,8 +1008,11 @@ def test_ship_state_machine() -> None:
     require(pm, b, "ship_withdraw")
 
     history = P_DOCS["催发·历史单"]
-    assert _real_ui(pm, history).actions == {"ship_include": mx.UiAction("enabled")}
-    assert _real_ui("pr", history).actions == {}
+    assert _real_ui(pm, history).actions == {
+        "ship_include": mx.UiAction("enabled"),
+        "comment": mx.UiAction("enabled"),
+    }
+    assert _real_ui("pr", history).actions == {"comment": mx.UiAction("enabled")}
     require(PERSONAS["admin"], history, "ship_include")
     # 已发货的 C 列单、已发布的历史单都不能纳入
     for doc in (P_DOCS["催发"], P_DOCS["待主管审核·历史单"]):
@@ -1024,17 +1028,41 @@ def test_operations_has_no_actions() -> None:
         assert _real_ui("operations", doc).to_dict(view="list")["actions"] == {}, label
 
 
+def test_promotion_comment_any_stage() -> None:
+    """留言 / 贴图（PR-4）：每个阶段状态机都允许；PR / 主管 / 管理员可点，财务、运营、仓库不出现。"""
+    for label, doc in P_DOCS.items():
+        assert "comment" in doc.allowed_actions(), label
+        for who in ("pr", "pr_manager", "admin"):
+            assert _real_ui(who, doc).actions["comment"] == mx.UiAction("enabled"), (label, who)
+        for who in ("finance", "operations", "warehouse"):
+            assert "comment" not in _real_ui(who, doc).actions, (label, who)
+    require(PERSONAS["pr"], P_DOCS["已删除"], "comment")
+    with pytest.raises(AppException) as exc:
+        require(PERSONAS["operations"], P_DOCS["待推送仓库"], "comment")
+    assert _code(exc) == "PERMISSION_DENIED"
+
+
+def test_promotion_timeline_field() -> None:
+    """时间线（PR-4）：财务 A ~ D 列「—」、E 列起读；仓库没有时间线。"""
+    assert _real_ui("finance", P_DOCS["待主管审核"]).fields.get("timeline") is None
+    assert _real_ui("finance", P_DOCS["待财务付款"]).fields["timeline"] == mx.UiField("read")
+    assert _real_ui("operations", P_DOCS["待推送仓库"]).fields["timeline"] == mx.UiField("read")
+    for doc in P_DOCS.values():
+        assert "timeline" not in _real_ui("warehouse", doc).fields
+
+
 def test_real_ui_shape() -> None:
     a = _real_ui("pr_manager", P_DOCS["待推送仓库"])
     assert a.to_dict(view="list") == {
         "column": "A",
-        "actions": {"ship_push": {"state": "enabled"}},
+        "actions": {"ship_push": {"state": "enabled"}, "comment": {"state": "enabled"}},
         "edits": ["goods_items", "receiver"],
     }
     assert a.to_dict(view="detail")["fields"] == {
         "goods_items": {"state": "edit"},
         "receiver": {"state": "edit"},
         "shipping": {"state": "grey", "hint": "推送后由仓库回填"},
+        "timeline": {"state": "read"},
     }
     # 财务在 C 列什么都看不到；E 列只读颜色尺码
     assert _real_ui("finance", P_DOCS["催发"]).to_dict(view="detail") == {
@@ -1043,7 +1071,8 @@ def test_real_ui_shape() -> None:
         "fields": {},
     }
     assert _real_ui("finance", P_DOCS["待财务付款"]).to_dict(view="detail")["fields"] == {
-        "goods_items": {"state": "read"}
+        "goods_items": {"state": "read"},
+        "timeline": {"state": "read"},
     }
 
 
@@ -1185,6 +1214,7 @@ def test_negotiation_delegate() -> None:
     assert _real_ui(delegate, receiving).actions == {
         "receiver_save": mx.UiAction("enabled"),
         "receiver_confirm": mx.UiAction("enabled"),
+        "comment": mx.UiAction("enabled"),
     }
     # 只授了前者：看不到别人的单
     review_only = _granted(pr_b, "negotiation.review:approve")
@@ -1209,13 +1239,13 @@ def test_negotiation_pr_plus_finance() -> None:
     assert ui.actions["manager_review"] == mx.UiAction("disabled", reason=MANAGER_REVIEW_REASON)
     assert ui.fields["receiver"] == mx.UiField("grey", hint=RECEIVER_HINT)
     assert ui.fields["overdue_badge"] == mx.UiField("read")
-    # 不是本人、没有审核权：收货信息只读，按钮不出现
+    # 不是本人、没有审核权：收货信息只读，收货按钮不出现；留言看得到 + 写权限 → 可点
     receiving = _real_ui(both, N_DOCS["待补收货地址"])
-    assert receiving.actions == {}
+    assert receiving.actions == {"comment": mx.UiAction("enabled")}
     assert receiving.fields["receiver"] == mx.UiField("read")
-    # 本人谈的草稿：跟 PR 一样能编辑、提交
+    # 本人谈的草稿：跟 PR 一样能编辑、提交、留言
     own_draft = _own(N_DOCS["草稿"], both)
-    assert set(_real_ui(both, own_draft).actions) == {"edit", "submit"}
+    assert set(_real_ui(both, own_draft).actions) == {"edit", "submit", "comment"}
 
 
 def test_negotiation_star() -> None:
@@ -1368,17 +1398,30 @@ def test_negotiation_read_reasons() -> None:
         with pytest.raises(AppException) as exc:
             require(PERSONAS[who], N_DOCS["待老板审核"], "final_review")
         assert _code(exc) == "PERMISSION_DENIED"
-    # 运营、财务全链路没有按钮
+    # 运营、财务全链路只有一个禁用的留言（5.2「读」）；草稿整张看不到
     for label, doc in N_DOCS.items():
         for who in ("finance", "operations"):
-            assert _real_ui(who, doc).actions == {}, (label, who)
+            expected = (
+                {}
+                if doc.state == "草稿"
+                else {"comment": mx.UiAction("disabled", reason=COMMENT_READ_REASON)}
+            )
+            assert _real_ui(who, doc).actions == expected, (label, who)
+            if doc.state != "草稿":
+                with pytest.raises(AppException) as exc:
+                    require(PERSONAS[who], doc, "comment")
+                assert _code(exc) == "PERMISSION_DENIED", (label, who)
 
 
 def test_negotiation_ui_shape() -> None:
     draft = _real_ui("pr", N_DOCS["草稿"])
     assert draft.to_dict(view="list") == {
         "column": "草稿",
-        "actions": {"edit": {"state": "enabled"}, "submit": {"state": "enabled"}},
+        "actions": {
+            "edit": {"state": "enabled"},
+            "submit": {"state": "enabled"},
+            "comment": {"state": "enabled"},
+        },
         "edits": ["basic", "quote_amount"],
     }
     assert draft.to_dict(view="detail")["fields"] == {
@@ -1387,16 +1430,18 @@ def test_negotiation_ui_shape() -> None:
         "manager_opinion": {"state": "grey", "hint": MANAGER_OPINION_HINT},
         "final_opinion": {"state": "grey", "hint": FINAL_OPINION_HINT},
         "receiver": {"state": "grey", "hint": RECEIVER_HINT},
+        "timeline": {"state": "read"},
         "others_in_progress": {"state": "read"},
     }
-    # 运营看主管待审：只读，服务费与收件不出现
+    # 运营看主管待审：只读（留言禁用），服务费与收件不出现
     assert _real_ui("operations", N_DOCS["主管待审"]).to_dict(view="detail") == {
         "column": "主管待审",
-        "actions": {},
+        "actions": {"comment": {"state": "disabled", "reason": COMMENT_READ_REASON}},
         "fields": {
             "basic": {"state": "read"},
             "manager_opinion": {"state": "read"},
             "final_opinion": {"state": "grey", "hint": FINAL_OPINION_HINT},
+            "timeline": {"state": "read"},
         },
     }
     # 主管看待补收货地址：能代录
@@ -1405,6 +1450,7 @@ def test_negotiation_ui_shape() -> None:
         "actions": {
             "receiver_save": {"state": "enabled"},
             "receiver_confirm": {"state": "enabled"},
+            "comment": {"state": "enabled"},
         },
         "edits": ["receiver"],
     }
@@ -1419,7 +1465,7 @@ def test_negotiation_receiver_follows_field_rules() -> None:
     revoked = replace(pr, field_ctx=replace(pr.field_ctx, revokes=reads))
     ui = _real_ui(revoked, N_DOCS["待补收货地址"])
     assert "receiver" not in ui.fields
-    assert ui.actions == {}
+    assert set(ui.actions) == {"comment"}
     # 服务费撤销读 → 分组不出现
     no_quote = replace(
         pr,

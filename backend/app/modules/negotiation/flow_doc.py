@@ -17,17 +17,18 @@ from app.modules.flow.matrix import FlowDocBase
 from app.modules.negotiation import flow_matrix as _flow_matrix  # noqa: F401  登记 MATRICES
 from app.modules.negotiation.enums import NegotiationStatus
 
-# 3.2 转移表按「从」归：每个状态下状态机允许的动作键。留言（N11）随 PR-4、转交（N12）不进矩阵（11-57）
+# 3.2 转移表按「从」归：每个状态下状态机允许的动作键。留言（N11）任意状态都允许（PR-4）、
+# 转交（N12）不进矩阵（11-57）
 TRANSITIONS: dict[str, frozenset[str]] = {
-    NegotiationStatus.DRAFT.value: frozenset({"edit", "submit"}),  # N2、N3
-    NegotiationStatus.PENDING.value: frozenset({"manager_review"}),  # N4、N5
-    NegotiationStatus.REJECTED.value: frozenset({"copy"}),  # N10（终态，只能复制重谈）
-    NegotiationStatus.FINAL_PENDING.value: frozenset({"final_review"}),  # N6、N7
-    NegotiationStatus.FINAL_RETURNED.value: frozenset({"edit", "submit"}),  # N2、N3
+    NegotiationStatus.DRAFT.value: frozenset({"edit", "submit", "comment"}),  # N2、N3
+    NegotiationStatus.PENDING.value: frozenset({"manager_review", "comment"}),  # N4、N5
+    NegotiationStatus.REJECTED.value: frozenset({"copy", "comment"}),  # N10（终态，只能复制重谈）
+    NegotiationStatus.FINAL_PENDING.value: frozenset({"final_review", "comment"}),  # N6、N7
+    NegotiationStatus.FINAL_RETURNED.value: frozenset({"edit", "submit", "comment"}),  # N2、N3
     NegotiationStatus.RECEIVER_PENDING.value: frozenset(
-        {"receiver_save", "receiver_confirm"}
+        {"receiver_save", "receiver_confirm", "comment"}
     ),  # N8、N9
-    NegotiationStatus.APPROVED.value: frozenset(),  # 终态
+    NegotiationStatus.APPROVED.value: frozenset({"comment"}),  # 终态
 }
 
 
