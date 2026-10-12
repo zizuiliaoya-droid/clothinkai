@@ -542,7 +542,7 @@ async def _seed_channels(
 
 
 # 投产行的冻结键集合：R3 起一行 = （商品, 渠道），多了 channel 与 link_count，
-# 以及 S2 的支付件数 / 站内加购 / 站内加购成本 / 站外加购 / 退货前投产比
+# 以及 S2 的支付件数 / 站内加购 / 站内加购成本 / 站外加购 / 退货前投产比、S3 的近 7 天三列
 _PRODUCTION_ROW_KEYS = {
     "goods_id",
     "goods_code",
@@ -569,6 +569,9 @@ _PRODUCTION_ROW_KEYS = {
     "pre_return_roi",
     "net_roi",
     "unit_deal_cost",
+    "recent7_pay_amount",
+    "recent7_total_spend",
+    "recent7_net_roi",
     "extra",
 }
 
@@ -601,6 +604,10 @@ def _channel_tuple(row: Any) -> tuple[Any, ...]:
     return (str(row.goods_id), row.channel, row.link_count, *_money_tuple(row)[1:])
 
 
+def _period_calls(recorder: _SourceRecorder) -> list[tuple[str, str]]:
+    return [c for c in recorder.calls if c[0] != "production_recent7"]
+
+
 class TestProductionChannels:
     """7e R3：投产接口按（商品, 渠道）出行；内部调用方（BI / 企微 / AI）仍按商品合计。"""
 
@@ -628,14 +635,18 @@ class TestProductionChannels:
             via_summary = await svc.get_report(
                 tenant_a.id, (M_LO, M_HI), exclude_brushing=exclude_brushing
             )
-            assert recorder.calls == [
+            # 近 7 天的数据源随今天而定，另由 TestProductionRecent7 钉，这里只看本期 / 上期
+            assert _period_calls(recorder) == [
                 ("production", "summary"),
                 ("production_previous", "summary"),
             ]
             via_live = await svc.get_report(
                 tenant_a.id, (M_LO, M_HI), exclude_brushing=exclude_brushing, use_summary=False
             )
-            assert recorder.calls[2:] == [("production", "live"), ("production_previous", "live")]
+            assert _period_calls(recorder)[2:] == [
+                ("production", "live"),
+                ("production_previous", "live"),
+            ]
             assert _dump(via_summary) == _dump(via_live)
 
             a_id, b_id = str(seeded["goods_a"].id), str(seeded["goods_b"].id)
@@ -929,6 +940,152 @@ class TestProductionAddCart:
                 "unit_deal_cost",
             ):
                 assert any(getattr(r, field) for r in items), field
+        finally:
+            tenant_id_ctx.reset(tok)
+
+
+# 7e R3 S3：近 7 天 = T-7 ~ T-1（今天不算），不随筛选区间变
+R7_LO, R7_HI = TODAY - timedelta(days=7), TODAY - timedelta(days=1)
+# 两个不同的筛选区间：都盖住两个商品，但结束日不同（近 7 天若按筛选结束日算就会变）
+R7_FILTER_1 = (TODAY - timedelta(days=14), TODAY - timedelta(days=1))
+R7_FILTER_2 = (TODAY - timedelta(days=20), TODAY - timedelta(days=3))
+
+
+async def _seed_recent7(session: AsyncSession, tenant: Any, product_factory: Any) -> dict[str, Any]:
+    """近 7 天场景（日期相对今天）。
+
+    商品 A（春夏）：
+    - 普通千牛 T-8 支付 50（区间前一天，不算）、T-7 支付 1000 / 退款 100、T-1 支付 200、
+      今天支付 999（不算）；普通万相台 T-1 花费 40；T-7 刷单 100；
+      → 近 7 天支付 1100（不剔刷单 1200）、总推广成本 40、净投产比 1000 / 40 = 25（1100 / 40 = 27.5）；
+    - 直播千牛 T-10 支付 10（两个筛选区间里都有这一行）、T-1 支付 30 → 近 7 天 30 / 0 / null。
+    商品 B（秋冬）：只有 T-12 支付 300 → 近 7 天没有数据：0.00 / 0.00 / null。
+    """
+    style_a = await product_factory.style(style_code=f"R7A{uuid4().hex[:5]}")
+    goods_a = await _goods(session, tenant, style_a, code=f"G_R7A_{uuid4().hex[:5]}", season="春夏")
+    qn_norm = await _pp(session, tenant, style_a, goods_a)
+    qn_live = await _pp(session, tenant, style_a, goods_a, channel="直播")
+    ad_norm = await _pp(session, tenant, style_a, goods_a, platform="万相台")
+    style_b = await product_factory.style(style_code=f"R7B{uuid4().hex[:5]}")
+    goods_b = await _goods(session, tenant, style_b, code=f"G_R7B_{uuid4().hex[:5]}", season="秋冬")
+    qn_b = await _pp(session, tenant, style_b, goods_b)
+
+    session.add_all(
+        [
+            _qn(tenant, qn_norm, R7_LO - timedelta(days=1), "50.00", refund="0.00"),
+            _qn(tenant, qn_norm, R7_LO, "1000.00", refund="100.00"),
+            _qn(tenant, qn_norm, R7_HI, "200.00", refund="0.00"),
+            _qn(tenant, qn_norm, TODAY, "999.00", refund="0.00"),
+            _qn(tenant, qn_live, TODAY - timedelta(days=10), "10.00", refund="0.00"),
+            _qn(tenant, qn_live, R7_HI, "30.00", refund="0.00"),
+            _qn(tenant, qn_b, TODAY - timedelta(days=12), "300.00", refund="0.00"),
+            AdDaily(
+                tenant_id=tenant.id,
+                platform_product_id=ad_norm.id,
+                platform_id_snapshot=ad_norm.platform_id,
+                date=R7_HI,
+                cost=Decimal("40.00"),
+                extra={},
+            ),
+            OrderAdjustment(
+                tenant_id=tenant.id,
+                order_type="刷单",
+                style_id=style_a.id,
+                amount=Decimal("100.00"),
+                order_date=R7_LO,
+                exclude_from_roi=True,
+                status="待付款",
+            ),
+        ]
+    )
+    await session.flush()
+    return {"goods_a": goods_a, "goods_b": goods_b}
+
+
+def _recent7_tuple(row: Any) -> tuple[Any, ...]:
+    return (
+        str(row.goods_id),
+        row.channel,
+        row.recent7_pay_amount,
+        row.recent7_total_spend,
+        row.recent7_net_roi,
+    )
+
+
+class TestProductionRecent7:
+    """7e R3 S3：近 7 天三列 + ``recent7_range``（默 10）。"""
+
+    @pytest.mark.parametrize("exclude_brushing", [True, False])
+    async def test_summary_equals_live_hand_computed(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+        recorder: _SourceRecorder,
+        exclude_brushing: bool,
+    ) -> None:
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            seeded = await _seed_recent7(session, tenant_a, product_factory)
+            await session.commit()
+            await _refresh(session, tenant_a, R7_FILTER_2[0], R7_HI)
+
+            svc = ProductionService(session)
+            via_summary = await svc.get_report(
+                tenant_a.id, R7_FILTER_1, exclude_brushing=exclude_brushing
+            )
+            assert ("production", "summary") in recorder.calls
+            assert ("production_recent7", "summary") in recorder.calls
+            via_live = await svc.get_report(
+                tenant_a.id, R7_FILTER_1, exclude_brushing=exclude_brushing, use_summary=False
+            )
+            assert ("production_recent7", "live") in recorder.calls
+            assert _dump(via_summary) == _dump(via_live)
+
+            assert _dump(via_summary)["recent7_range"] == {
+                "date_from": R7_LO.isoformat(),
+                "date_to": R7_HI.isoformat(),
+            }
+            a_id, b_id = str(seeded["goods_a"].id), str(seeded["goods_b"].id)
+            zero = Decimal("0.00")
+            if exclude_brushing:
+                normal = (Decimal("1100.00"), Decimal("40.00"), Decimal("25.0000"))
+            else:
+                normal = (Decimal("1200.00"), Decimal("40.00"), Decimal("27.5000"))
+            assert [_recent7_tuple(r) for r in via_summary.items] == [
+                (a_id, "普通", *normal),
+                # 没有推广成本：净投产比是 null，不是 0
+                (a_id, "直播", Decimal("30.00"), zero, None),
+                # 近 7 天没有数据：金额 0.00、比率 null
+                (b_id, "普通", zero, zero, None),
+            ]
+            # 上一期行不带近 7 天
+            assert via_summary.previous is not None
+            for prev_row in via_summary.previous:
+                assert _recent7_tuple(prev_row)[2:] == (None, None, None)
+        finally:
+            tenant_id_ctx.reset(tok)
+
+    async def test_range_does_not_follow_filter(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+    ) -> None:
+        """两个不同的筛选区间：``recent7_range`` 与三列都一样。"""
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            await _seed_recent7(session, tenant_a, product_factory)
+            await session.commit()
+
+            svc = ProductionService(session)
+            one = await svc.get_report(tenant_a.id, R7_FILTER_1, use_summary=False)
+            two = await svc.get_report(tenant_a.id, R7_FILTER_2, use_summary=False)
+            # 场景有效性：两个区间的本期数确实不同
+            assert [r.pay_amount for r in one.items] != [r.pay_amount for r in two.items]
+            assert _dump(one)["recent7_range"] == _dump(two)["recent7_range"]
+            assert [_recent7_tuple(r) for r in one.items] == [_recent7_tuple(r) for r in two.items]
+            assert one.items[0].recent7_pay_amount == Decimal("1100.00")
         finally:
             tenant_id_ctx.reset(tok)
 

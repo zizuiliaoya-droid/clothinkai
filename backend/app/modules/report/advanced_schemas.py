@@ -167,14 +167,28 @@ class ProductionRow(BaseModel):
     net_roi: Decimal | None = None
     # 推广单件成交成本 = 总推广成本 / 支付件数（7e R3 起，字段名沿用）
     unit_deal_cost: Decimal | None = None
+    # 近 7 天（T-7 ~ T-1，租户时区，不随筛选变；区间见 ProductionReport.recent7_range），
+    # 同刷单开关。只挂在本期行：近 7 天没有数据 → 0.00 / 0.00 / None；上期行三列都是 None
+    recent7_pay_amount: Decimal | None = None
+    recent7_total_spend: Decimal | None = None
+    recent7_net_roi: Decimal | None = None
     # 千牛/站内导入数据按商品汇总的其余指标（对齐 final.xlsx 投产报表 70 列；
     # qianniu_daily.extra + ad_daily.extra 按 platform_product→商品归集，按 extra_metrics 规则聚合）
     extra: dict = Field(default_factory=dict)
 
 
+class Recent7Range(BaseModel):
+    """近 7 天三列的区间：T-7 ~ T-1（租户时区的今天往前 7 天，今天不算）。"""
+
+    date_from: date
+    date_to: date
+
+
 class ProductionReport(BaseModel):
     items: list[ProductionRow]
     previous: list[ProductionRow] | None = None
+    # get_report 恒给；AI 内部包一层按商品合计的行时不给
+    recent7_range: Recent7Range | None = None
 
 
 class ProductionTrendPoint(BaseModel):

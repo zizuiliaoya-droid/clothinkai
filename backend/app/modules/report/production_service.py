@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.attachment import attachment_service
 from app.core.metrics import report_query_duration_seconds
+from app.modules.promotion.urge_calculator import get_today
 from app.modules.report.advanced_repository import (
     PRODUCTION_ADDITIVE_COLUMNS,
     ProductionRepository,
@@ -22,6 +23,7 @@ from app.modules.report.advanced_schemas import (
     ProductionRow,
     ProductionTrend,
     ProductionTrendPoint,
+    Recent7Range,
 )
 from app.modules.report.extra_metrics import aggregate_extra
 from app.modules.report.summary_read import SummaryReadRepository, record_source
@@ -134,13 +136,16 @@ class ProductionService:
     ) -> ProductionReport:
         """投产报表。``use_summary=False`` 强制实时（BI 看板在整体切汇总表之前用）。
 
-        本期与上期各自判断数据源：「最近 30 天」通常被覆盖，它的上一期往往还没有。
+        本期、上期与近 7 天各自判断数据源：「最近 30 天」通常被覆盖，它的上一期往往还没有。
         extra（千牛/万相台导出的其余几十列）汇总表不存，始终实时。
         """
         cur_from, cur_to = time_range
         span = cur_to - cur_from
         prev_to = cur_from - timedelta(days=1)
         prev_from = prev_to - span
+        # 近 7 天（设计 2.3 默 10）：T-7 ~ T-1，按租户时区的今天算，不随筛选变
+        today = get_today()
+        r7_from, r7_to = today - timedelta(days=7), today - timedelta(days=1)
         with report_query_duration_seconds.labels("production").time():
             cur_rows = await self._goods_rows(
                 tenant_id,
@@ -160,15 +165,28 @@ class ProductionService:
                 use_summary=use_summary,
                 metric_label="production_previous",
             )
+            # 同一份 SQL、同刷单开关与季节，数据源同样各自判断
+            recent7_rows = await self._goods_rows(
+                tenant_id,
+                r7_from,
+                r7_to,
+                exclude_brushing=exclude_brushing,
+                seasons=seasons,
+                use_summary=use_summary,
+                metric_label="production_recent7",
+            )
             extra_by_goods = await self._aggregate_extra(tenant_id, cur_from, cur_to)
             links = await self._repo.link_counts(
                 tenant_id=tenant_id,
                 goods_ids=list({r["goods_id"] for r in (*cur_rows, *prev_rows)}),
             )
+        # 按（商品, 渠道）挂到本期行；近 7 天有、本期没有的键丢弃
+        recent7 = {(r["goods_id"], r["channel"]): r for r in recent7_rows}
         items = []
         extra_attached: set[str] = set()
         for r in cur_rows:
             row = self._to_row(r, exclude_brushing, links)
+            self._attach_recent7(row, recent7.get((r["goods_id"], r["channel"])), exclude_brushing)
             # extra 是按商品聚合的（不分渠道），只挂在该商品的第一行（普通在前），
             # 否则直播行会把同一份数再显示 / 导出一遍
             gid = str(r["goods_id"])
@@ -179,6 +197,24 @@ class ProductionService:
         return ProductionReport(
             items=items,
             previous=[self._to_row(r, exclude_brushing, links) for r in prev_rows],
+            recent7_range=Recent7Range(date_from=r7_from, date_to=r7_to),
+        )
+
+    @staticmethod
+    def _attach_recent7(
+        row: ProductionRow, r7: Mapping[str, Any] | None, exclude_brushing: bool
+    ) -> None:
+        """近 7 天三列：金额先归一两位小数再派生（同 ``_to_row``）；没有数据 → 0.00 / 0.00 / None。"""
+        if r7 is None:
+            pay = refund = total_spend = _money(0)
+        else:
+            pay = _money(r7["pay_amount"])
+            refund = _money(r7["refund_amount"])
+            total_spend = _money(r7["promo_cost"]) + _money(r7["ad_spend"])
+        row.recent7_pay_amount = pay
+        row.recent7_total_spend = total_spend
+        row.recent7_net_roi = style_roi.net_roi(
+            pay - refund, total_spend, exclude_brushing=exclude_brushing
         )
 
     async def get_trend(
