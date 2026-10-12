@@ -9,7 +9,8 @@
   必须与 ``DEFAULT_ROLES`` 里显式列出它的角色集合精确相等。生产授权只来自迁移，
   单测用 ``DEFAULT_ROLES``，两边会漂。只比显式授权，不展开通配（admin 的 ``*`` 两边都不算）。
 
-``line_event`` 的序列 USAGE 与 INSERT / SELECT-only 权限断言随 PR-3 加。
+另有 ``line_event`` 只追加（PR-3）：``clothing_app`` 有 INSERT / SELECT、没有 UPDATE / DELETE，
+``seq`` 的隐式序列有 USAGE——漏了序列权限，所有写事件的动作都会失败（事件与业务同事务）。
 """
 
 from __future__ import annotations
@@ -23,7 +24,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.auth.default_roles import DEFAULT_ROLES
 
 # 每个流程线 PR 建的新表加到这里（PR-2 起：promotion_item、negotiation_item、line_event……）
-RLS_TABLES: tuple[str, ...] = ("import_conflict", "promotion_item")
+RLS_TABLES: tuple[str, ...] = (
+    "import_conflict",
+    "promotion_item",
+    # PR-3（063）
+    "line_event",
+    "negotiation_item",
+)
 
 # 每个流程线 PR 新增 / 改授权的 scope 加到这里。
 # 现有两条：一条只授给单个角色，一条授给多个角色。
@@ -43,6 +50,9 @@ ROLE_SCOPES: tuple[str, ...] = (
     "report.export:read",
     "report.store_daily:write",
     "report.summary:refresh",
+    # 7e R2（062）只加汇总列、不改授权，这里没有条目
+    # PR-3（063）；negotiation_final:approve 只入册不绑角色，见 test_migration_063_state
+    "negotiation_all:read",
 )
 
 _APP_ROLE = "clothing_app"
@@ -153,3 +163,40 @@ class TestMigrationGrantsMatchDefaultRoles:
         assert in_code, f"DEFAULT_ROLES 里没有角色显式持有 {scope}"
         assert in_db, f"库里 role_permission 没有角色持有 {scope}"
         assert in_db == in_code
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+class TestLineEventAppendOnlyPrivileges:
+    async def _table_priv(self, session: AsyncSession, priv: str) -> bool:
+        return bool(
+            (
+                await session.execute(
+                    text(
+                        "SELECT has_table_privilege(CAST(:r AS text), 'public.line_event', "
+                        "CAST(:p AS text))"
+                    ),
+                    {"r": _APP_ROLE, "p": priv},
+                )
+            ).scalar_one()
+        )
+
+    async def test_insert_select_only(self, session: AsyncSession) -> None:
+        got = {
+            p: await self._table_priv(session, p) for p in ("INSERT", "SELECT", "UPDATE", "DELETE")
+        }
+        assert got == {"INSERT": True, "SELECT": True, "UPDATE": False, "DELETE": False}
+
+    async def test_seq_sequence_usage(self, session: AsyncSession) -> None:
+        seq = (
+            await session.execute(text("SELECT pg_get_serial_sequence('public.line_event', 'seq')"))
+        ).scalar_one()
+        # 场景有效性：seq 确实是 identity，有隐式序列
+        assert seq == "public.line_event_seq_seq"
+        usage = (
+            await session.execute(
+                text("SELECT has_sequence_privilege(CAST(:r AS text), CAST(:s AS text), 'USAGE')"),
+                {"r": _APP_ROLE, "s": seq},
+            )
+        ).scalar_one()
+        assert usage is True

@@ -280,6 +280,15 @@ class Promotion(TenantScopedModel):
     ship_waybill: Mapped[str | None] = mapped_column(String(128), nullable=True)
     shipped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    # --- 主线号（流程线 M2） ---
+    line_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        nullable=False,
+        server_default=text("gen_random_uuid()"),
+    )
+    """谈款定稿建的单继承谈款的号（service 显式传）；直接新建、导入的单由库发号（eager_defaults 回读）。
+    ``uq_promotion_line`` 同时保证「一条主线只有一张推广单」（防重复建单的第二道闸）。"""
+
     # --- 通用 ---
     is_active: Mapped[bool] = mapped_column(nullable=False, server_default=text("true"))
 
@@ -417,6 +426,7 @@ class Promotion(TenantScopedModel):
             text("created_at DESC"),
             postgresql_where=text("ship_status IS NOT NULL"),
         ),
+        Index("uq_promotion_line", "tenant_id", "line_id", unique=True),
         # GIN trgm 索引在 alembic migration 中通过 op.execute 创建：
         # idx_promotion_internal_code_trgm
         # idx_promotion_style_code_snapshot_trgm

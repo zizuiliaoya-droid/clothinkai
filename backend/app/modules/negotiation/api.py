@@ -16,11 +16,17 @@ from app.modules.negotiation.enums import NegotiationStatus
 from app.modules.negotiation.schemas import (
     BloggerCooperationHistory,
     NegotiationCreate,
+    NegotiationFinalReviewRequest,
+    NegotiationGoodsMembers,
     NegotiationListFilters,
     NegotiationListResponse,
+    NegotiationReassignRequest,
+    NegotiationReceiverConfirm,
+    NegotiationReceiverUpdate,
     NegotiationResponse,
     NegotiationReviewRequest,
     NegotiationUpdate,
+    OthersInProgressItem,
 )
 from app.modules.negotiation.service import NegotiationService
 from app.modules.promotion.enums import CooperationMode
@@ -29,6 +35,8 @@ router = APIRouter(prefix="/api/negotiations", tags=["negotiation"])
 
 SCOPE = "negotiation"
 SCOPE_REVIEW = "negotiation.review"
+# 老板定稿 / 退回：独立一级域（主管哪天被授 negotiation.*:* 也拿不到老板权，4.1）
+SCOPE_FINAL = "negotiation_final"
 
 
 def _svc(session: SessionDep) -> NegotiationService:
@@ -46,7 +54,9 @@ async def create_negotiation(
     session: SessionDep,
     user: CurrentActiveUser,
 ) -> NegotiationResponse:
-    """新建谈款单（落草稿）。置换模式的博主服务费会被强制为 0。"""
+    """新建谈款单（N1，落草稿）。持 ``*`` → 403 ``star_create``；不传商品按现有规则推定并写回；
+    按商品成员建颜色尺码明细。置换模式的博主服务费会被强制为 0。响应带 ``others_in_progress``（只提示不拦）。
+    """
     return await _svc(session).create(payload, user)
 
 
@@ -66,10 +76,12 @@ async def list_negotiations(
     keyword: Annotated[
         str | None, Query(max_length=64, description="博主昵称 / 款号 / 款名")
     ] = None,
+    overdue_only: Annotated[bool, Query(description="只看主管待审超 36 小时的")] = False,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
 ) -> NegotiationListResponse:
-    items, total = await _svc(session).list_negotiations(
+    """按可见范围过滤（PR 只看自己的、草稿只回本人的）；行带 ``ui``，响应带页级 ``ui.actions.create``。"""
+    return await _svc(session).list_negotiations(
         user=user,
         filters=NegotiationListFilters(
             status=negotiation_status,
@@ -78,11 +90,11 @@ async def list_negotiations(
             pr_id=pr_id,
             cooperation_mode=cooperation_mode,
             keyword=keyword,
+            overdue_only=overdue_only,
         ),
         page=page,
         page_size=page_size,
     )
-    return NegotiationListResponse(items=items, total=total, page=page, page_size=page_size)
 
 
 @router.get(
@@ -94,7 +106,7 @@ async def negotiation_status_counts(
     session: SessionDep,
     user: CurrentActiveUser,
 ) -> dict[str, int]:
-    """各状态单据数，给前端 Tab 做角标。"""
+    """各状态单据数（与列表同一可见范围）+「主管待审超时」，给前端 Tab 做角标。"""
     return await _svc(session).status_counts(user)
 
 
@@ -109,12 +121,51 @@ async def blogger_cooperation_history(
     user: CurrentActiveUser,
     limit: Annotated[int, Query(ge=1, le=20)] = 5,
 ) -> BloggerCooperationHistory:
-    """博主最近 N 次合作款式，给悬浮卡用。
+    """博主最近 N 次合作款式，给悬浮卡用；另带最近 5 条谈款驳回记录与驳回总数（7c-7）。
 
-    取的是推广单而不是谈款单 —— 要看的是实际推了什么、效果如何，
-    草稿和被驳回的谈款没真推出去。
+    合作取的是推广单而不是谈款单 —— 要看的是实际推了什么、效果如何，
+    草稿和被驳回的谈款没真推出去。驳回记录跨 PR、不按可见范围过滤，
+    ``negotiation_id`` 只给看得到那张的人，服务费按字段规则裁剪。
     """
     return await _svc(session).blogger_history(blogger_id, user, limit=limit)
+
+
+@router.get(
+    "/blogger/{blogger_id}/others-in-progress",
+    response_model=list[OthersInProgressItem],
+    dependencies=[require_permission(SCOPE, "read")],
+)
+async def blogger_others_in_progress(
+    blogger_id: UUID,
+    session: SessionDep,
+    user: CurrentActiveUser,
+    exclude_negotiation_id: UUID | None = None,
+) -> list[OthersInProgressItem]:
+    """同一博主有别的 PR 在谈（7c-16）：只回同事姓名、状态、更新时间，不回 id 与内容；不受可见范围限制。
+
+    「在谈」= 草稿 / 主管待审 / 待老板审核 / 老板退回 / 待补收货地址，且 PR ≠ 当前用户；
+    ``exclude_negotiation_id`` 编辑时排除自己这张。
+    """
+    return await _svc(session).others_in_progress(
+        blogger_id, user, exclude_negotiation_id=exclude_negotiation_id
+    )
+
+
+@router.get(
+    "/goods-members",
+    response_model=NegotiationGoodsMembers,
+    dependencies=[require_permission(SCOPE, "write")],
+)
+async def negotiation_goods_members(
+    session: SessionDep,
+    style_id: UUID,
+    goods_main_id: UUID | None = None,
+) -> NegotiationGoodsMembers:
+    """新建 / 换商品时明细该有哪几行（偏差 3）：不传 ``goods_main_id`` 按 N1 推定，套装按启用成员。
+
+    PR 没有 ``product.goods:read``，套装成员从这里拿；只读、不带编码。
+    """
+    return await _svc(session).goods_members(style_id=style_id, goods_main_id=goods_main_id)
 
 
 @router.get(
@@ -141,7 +192,7 @@ async def update_negotiation(
     session: SessionDep,
     user: CurrentActiveUser,
 ) -> NegotiationResponse:
-    """编辑草稿。只有草稿与被驳回的单据能改；改完被驳回的单会回到草稿。"""
+    """编辑（N2）：只在草稿 / 老板退回、本人；改完状态不变，重提走提交。换商品时明细整组重建。"""
     return await _svc(session).update(negotiation_id, payload, user)
 
 
@@ -155,7 +206,9 @@ async def submit_negotiation(
     session: SessionDep,
     user: CurrentActiveUser,
 ) -> NegotiationResponse:
-    """提交审核。会清掉上一轮的审核痕迹，避免界面上留着旧的驳回意见。"""
+    """提交（N3）：草稿 / 老板退回 → 主管待审。缺项一次全报（``FLOW_GATE_MISSING``）；
+    清空本轮两级审核（旧意见留在时间线事件里）。响应带 ``others_in_progress``（只提示不拦）。
+    """
     return await _svc(session).submit(negotiation_id, user)
 
 
@@ -170,12 +223,99 @@ async def review_negotiation(
     session: SessionDep,
     user: CurrentActiveUser,
 ) -> NegotiationResponse:
-    """主管审核。
+    """主管审核（N4 / N5）：主管待审 → 待老板审核 / 审核驳回（终态）。
 
-    通过则在同一事务里生成推广单（建单人记在谈款单的对接 PR 身上，不是审核人）。
-    驳回必须填审核意见 —— PR 得知道要改什么。禁止审核自己提交的单。
+    通过不再建推广单（老板定稿后确认收货信息时才建）。驳回必须填审核意见 —— PR 得知道要改什么。
+    持 ``*`` → 403 ``star_first_level``（管理员不能代做第一级）；禁止审核自己谈的单。
     """
     return await _svc(session).review(negotiation_id, payload, user)
+
+
+@router.post(
+    "/{negotiation_id}/final-review",
+    response_model=NegotiationResponse,
+    dependencies=[require_permission(SCOPE_FINAL, "approve")],
+)
+async def final_review_negotiation(
+    negotiation_id: UUID,
+    payload: NegotiationFinalReviewRequest,
+    session: SessionDep,
+    user: CurrentActiveUser,
+) -> NegotiationResponse:
+    """老板定稿 / 退回（N6 / N7）：待老板审核 → 待补收货地址 / 老板退回。
+
+    退回时意见必填；审核人 ≠ 谈款人、≠ 本轮主管（``same_reviewer``）。
+    """
+    return await _svc(session).final_review(negotiation_id, payload, user)
+
+
+@router.put(
+    "/{negotiation_id}/receiver",
+    response_model=NegotiationResponse,
+    dependencies=[require_permission(SCOPE, "write")],
+)
+async def save_negotiation_receiver(
+    negotiation_id: UUID,
+    payload: NegotiationReceiverUpdate,
+    session: SessionDep,
+    user: CurrentActiveUser,
+) -> NegotiationResponse:
+    """保存收货信息（N8）：只在待补收货地址；本人，或持 ``negotiation.review:approve`` 的人代录
+    （主管、代理人、管理员），其他人 → 403 ``not_owner``。只改传了的项，电话校验并规范化。
+    """
+    return await _svc(session).save_receiver(negotiation_id, payload, user)
+
+
+@router.post(
+    "/{negotiation_id}/confirm-receiver",
+    response_model=NegotiationResponse,
+    dependencies=[require_permission(SCOPE, "write")],
+)
+async def confirm_negotiation_receiver(
+    negotiation_id: UUID,
+    payload: NegotiationReceiverConfirm,
+    session: SessionDep,
+    user: CurrentActiveUser,
+) -> NegotiationResponse:
+    """确认收货信息（N9）= 定稿，同事务建推广单（建单人仍是谈款 PR）。三项以 body 为准、缺项一次全报；
+    返回谈款（带 ``promotion_id``、``promotion_internal_code``）；重复确认 → 409「已定稿，推广单已生成」。
+    """
+    return await _svc(session).confirm_receiver(negotiation_id, payload, user)
+
+
+@router.post(
+    "/{negotiation_id}/copy",
+    response_model=NegotiationResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[require_permission(SCOPE, "write")],
+)
+async def copy_negotiation(
+    negotiation_id: UUID,
+    session: SessionDep,
+    user: CurrentActiveUser,
+) -> NegotiationResponse:
+    """复制为新谈款（N10）：只在审核驳回、原单本人；返回新草稿（新 ``line_id``、``copied_from_id`` 指回原单）。
+    复制博主、商品、颜色尺码、模式、平台、服务费、备注、约定发布时间，不复制审核与收货。
+    """
+    return await _svc(session).copy(negotiation_id, user)
+
+
+@router.post(
+    "/{negotiation_id}/reassign",
+    response_model=NegotiationResponse,
+    dependencies=[require_permission(SCOPE, "write")],
+)
+async def reassign_negotiation(
+    negotiation_id: UUID,
+    payload: NegotiationReassignRequest,
+    session: SessionDep,
+    user: CurrentActiveUser,
+) -> NegotiationResponse:
+    """管理员转交（N12，11-57；首版只开接口、界面不出按钮）：主管待审 / 待老板审核 / 老板退回 / 待补收货地址
+    换对接 PR，状态不变。不持 ``*`` → 403 ``admin_only``；草稿 → 404；其余状态 → 422；
+    新 PR 停用、没有 ``negotiation:write``、持 ``*``、= 原 PR 或本轮审核人 → 422 ``INVALID_NEGOTIATION_ASSIGNEE``。
+    """
+    return await _svc(session).reassign(negotiation_id, payload, user)
 
 
 __all__ = ["router"]

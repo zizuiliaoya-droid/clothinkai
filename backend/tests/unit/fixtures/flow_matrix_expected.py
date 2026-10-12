@@ -11,16 +11,24 @@
 
 PR-2 起每个 PR 把它碰到的行加进来（设计 10.1）。本表手写、不从矩阵代码推导：值照设计 5.3 / 细化 §6 逐列抄，
 角色顺序是设计的 PR / 主管 / 管理员 / 财务 / 运营 / 仓库（6 个字），展开时 pr2 = pr（PR 列不区分本人，偏差 §2-5）。
+
+谈款（PR-3，设计 5.2）：角色顺序是 PR（本人）/ 主管 / 管理员 / 财务 / 运营（5 个字）；别的 PR 与仓库整张单据「—」，
+展开时 pr2、warehouse 一律「隐」。另有「主管待审·主管自建」：谈款人是主管本人（11-24），那一格的第 1 个字是
+pr 这个 persona——此时他不是本人，所以全是「隐」。
 """
 
 from __future__ import annotations
 
+from datetime import date
+from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
+from app.modules.negotiation.flow_doc import NegotiationDoc
 from app.modules.promotion.flow_doc import PromotionDoc, WarehouseDoc
 
 PR_ID = UUID(int=1)
+MANAGER_ID = UUID(int=3)  # 期望表里的主管（谈款的本轮主管审核人；「主管自建」的谈款人）
 PERSONA_ORDER = ("pr", "pr2", "pr_manager", "admin", "finance", "operations", "warehouse")
 
 # 3.8 的 22 个阶段按 5.3 的列（与 stage_calculator 的常量对照着抄，不 import，免得两边一起错）
@@ -97,7 +105,54 @@ _WAREHOUSE_DOCS: dict[str, Any] = {
     stage: _warehouse_doc(stage, col) for col in "BCDEFGH" for stage in COLUMNS[col]
 }
 
-DOCS: dict[str, dict[str, Any]] = {"promotion": _PROMOTION_DOCS, "warehouse": _WAREHOUSE_DOCS}
+# 谈款 7 态（5.2 的列序，与 NegotiationStatus 对照着抄，不 import）
+NEGOTIATION_STATES: tuple[str, ...] = (
+    "草稿",
+    "主管待审",
+    "审核驳回",
+    "待老板审核",
+    "老板退回",
+    "待补收货地址",
+    "已定稿",
+)
+SELF_BUILT = "主管待审·主管自建"
+# 主管审过的状态：快照带本轮主管审核人
+_MANAGER_REVIEWED = {"审核驳回", "待老板审核", "老板退回", "待补收货地址", "已定稿"}
+
+
+def _negotiation_doc(state: str, **override: Any) -> NegotiationDoc:
+    kw: dict[str, Any] = {
+        "stage": state,
+        "state": state,
+        "column": state,
+        "owner_id": PR_ID,
+        "negotiator_id": PR_ID,
+        "reviewed_by": MANAGER_ID if state in _MANAGER_REVIEWED else None,
+        "blogger_id": UUID(int=11),
+        "style_id": UUID(int=12),
+        "items_complete": True,
+        "cooperation_mode": "寄拍",
+        "platform": "小红书",
+        "scheduled_publish_date": date(2026, 10, 20),
+        "quote_amount": Decimal("500.00"),
+        "receiver_name": "张三",
+        "receiver_phone": "13812345678",
+        "receiver_address": "杭州市某路 1 号",
+    }
+    kw.update(override)
+    return NegotiationDoc(**kw)
+
+
+_NEGOTIATION_DOCS: dict[str, Any] = {s: _negotiation_doc(s) for s in NEGOTIATION_STATES}
+_NEGOTIATION_DOCS[SELF_BUILT] = _negotiation_doc(
+    "主管待审", owner_id=MANAGER_ID, negotiator_id=MANAGER_ID
+)
+
+DOCS: dict[str, dict[str, Any]] = {
+    "promotion": _PROMOTION_DOCS,
+    "warehouse": _WAREHOUSE_DOCS,
+    "negotiation": _NEGOTIATION_DOCS,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -157,7 +212,90 @@ def _expand(
     return out
 
 
+# 谈款：(行类型, 行键) → {阶段标签: 5 个字 PR/主管/管理员/财务/运营}；没列到的格全是「隐」
+_ALL_READ = "读读读读读"
+_NEG_ROWS: dict[tuple[str, str], dict[str, str]] = {
+    ("field", "basic"): {
+        "草稿": "改隐隐隐隐",
+        "主管待审": _ALL_READ,
+        "审核驳回": _ALL_READ,
+        "待老板审核": _ALL_READ,
+        "老板退回": "改读读读读",
+        "待补收货地址": _ALL_READ,
+        "已定稿": _ALL_READ,
+        SELF_BUILT: "隐读读读读",
+    },
+    # 运营看不到服务费（字段规则 promotion.quote_amount）
+    ("field", "quote_amount"): {
+        "草稿": "改隐隐隐隐",
+        "主管待审": "读读读读隐",
+        "审核驳回": "读读读读隐",
+        "待老板审核": "读读读读隐",
+        "老板退回": "改读读读隐",
+        "待补收货地址": "读读读读隐",
+        "已定稿": "读读读读隐",
+        SELF_BUILT: "隐读读读隐",
+    },
+    ("field", "manager_opinion"): {
+        "草稿": "灰隐隐隐隐",
+        "主管待审": "读改读读读",
+        "审核驳回": _ALL_READ,
+        "待老板审核": _ALL_READ,
+        "老板退回": _ALL_READ,
+        "待补收货地址": _ALL_READ,
+        "已定稿": _ALL_READ,
+        SELF_BUILT: "隐读读读读",  # 主管不能审自己建的
+    },
+    ("field", "final_opinion"): {
+        "草稿": "灰隐隐隐隐",
+        "主管待审": "灰灰灰灰灰",
+        "待老板审核": "读读改读读",
+        "老板退回": _ALL_READ,
+        "待补收货地址": _ALL_READ,
+        "已定稿": _ALL_READ,
+        SELF_BUILT: "隐灰灰灰灰",
+    },
+    # 收货三项：财务、运营过不了字段规则 promotion.receiver_*
+    ("field", "receiver"): {
+        "草稿": "灰隐隐隐隐",
+        "主管待审": "灰灰灰隐隐",
+        "待老板审核": "灰灰灰隐隐",
+        "老板退回": "灰灰灰隐隐",
+        "待补收货地址": "改改改隐隐",
+        "已定稿": "读读读隐隐",
+        SELF_BUILT: "隐灰灰隐隐",
+    },
+    ("field", "overdue_badge"): {"主管待审": "读读读隐隐", SELF_BUILT: "隐读读隐隐"},
+    ("field", "others_in_progress"): {"草稿": "读隐隐隐隐", "老板退回": "读隐隐隐隐"},
+    ("action", "edit"): {"草稿": "改隐隐隐隐", "老板退回": "改读读隐隐"},
+    ("action", "submit"): {"草稿": "改隐隐隐隐", "老板退回": "改读读隐隐"},
+    # 管理员「读」（NoStar）；主管自建时主管「读」（不能审自己谈的单）
+    ("action", "manager_review"): {"主管待审": "读改读隐隐", SELF_BUILT: "隐读读隐隐"},
+    ("action", "final_review"): {"待老板审核": "读读改隐隐"},
+    ("action", "receiver_save"): {"待补收货地址": "改改改隐隐"},
+    ("action", "receiver_confirm"): {"待补收货地址": "改改改隐隐"},
+    ("action", "copy"): {"审核驳回": "改隐隐隐隐"},
+}
+
+
+def _expand_negotiation(
+    docs: dict[str, Any], rows: dict[tuple[str, str], dict[str, str]]
+) -> dict[tuple[str, str, str, str], str]:
+    out: dict[tuple[str, str, str, str], str] = {}
+    for (kind, key), values in rows.items():
+        for label, five in values.items():
+            assert len(five) == 5, (key, label, five)
+            assert label in docs, label
+        for label in docs:
+            five = values.get(label, "隐" * 5)
+            seven = five[0] + "隐" + five[1:] + "隐"  # pr2、warehouse 整张单据「—」
+            for persona, level in zip(PERSONA_ORDER, seven, strict=True):
+                out[(label, persona, kind, key)] = level
+    return out
+
+
 EXPECTED: dict[str, dict[tuple[str, str, str, str], str]] = {
     "promotion": _expand(_PROMOTION_DOCS, _PROMOTION_ROWS),
     "warehouse": _expand(_WAREHOUSE_DOCS, _WAREHOUSE_ROWS),
+    "negotiation": _expand_negotiation(_NEGOTIATION_DOCS, _NEG_ROWS),
 }

@@ -2,14 +2,16 @@
 
 框架层用本文件里的玩具矩阵 + 玩具单据验证（借推广单的键）：
 精确状态先判、灰格、隐、in_dialog、取最宽、``*`` 与 ``NoStar``、子状态谓词、防死键、``require`` 顺序、PATCH 字段。
-真实矩阵（PR-2 起：推广单收件 / 颜色尺码 / 发货信息与发货动作、仓库回填）逐格比冻结期望表，
-再测 ★ 缺项与 ``require`` 一致、状态机、``writable_fields``。错误一律比 ``exc.code``，不只比异常类型。
+真实矩阵（PR-2 起：推广单收件 / 颜色尺码 / 发货信息与发货动作、仓库回填；PR-3：谈款 5.2）逐格比冻结期望表，
+再测 ★ 缺项与 ``require`` 一致、状态机、``writable_fields``、三种非默认情况（代理人、兼任、持 ``*``）。
+谈款 7 态 × 动作的状态机在 ``test_negotiation_transitions.py``。错误一律比 ``exc.code``，不只比异常类型。
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, replace
+from decimal import Decimal
 from typing import Any, ClassVar
 from uuid import UUID, uuid4
 
@@ -41,6 +43,7 @@ from app.modules.flow.matrix import (
     Level,
     Matrix,
     NoStar,
+    NotFirstReviewer,
     NotPrOwner,
     Owner,
     Row,
@@ -56,8 +59,18 @@ from app.modules.flow.matrix import (
     ui_for,
     writable_fields,
 )
+from app.modules.negotiation.flow_matrix import (
+    FINAL_OPINION_HINT,
+    FINAL_REVIEW_REASON,
+    MANAGER_OPINION_HINT,
+    MANAGER_REVIEW_REASON,
+    NEGOTIATION_STAGES,
+    OWNER_REASON,
+    RECEIVER_HINT,
+    STAR_FIRST_LEVEL_REASON,
+)
 from app.modules.promotion.stage_calculator import PROMOTION_STAGES
-from tests.unit.fixtures.flow_matrix_expected import DOCS, EXPECTED
+from tests.unit.fixtures.flow_matrix_expected import DOCS, EXPECTED, MANAGER_ID
 
 # ---------------------------------------------------------------------------
 # persona：按 DEFAULT_ROLES 构造（与迁移 seed 的角色权限同一份来源）
@@ -85,7 +98,7 @@ def actor(*codes: str, user_id: UUID | None = None) -> FlowActor:
 PERSONAS: dict[str, FlowActor] = {
     "pr": actor("pr", user_id=PR_ID),
     "pr2": actor("pr"),
-    "pr_manager": actor("pr_manager"),
+    "pr_manager": actor("pr_manager", user_id=MANAGER_ID),
     "admin": actor("admin"),
     "finance": actor("finance"),
     "operations": actor("operations"),
@@ -345,7 +358,7 @@ def test_key_constants_counts_and_unique() -> None:
 
 
 def test_rule_items_use_registered_rules() -> None:
-    assert {Owner.rule, NotPrOwner.rule, NoStar.rule} <= set(FLOW_RULES)
+    assert {Owner.rule, NotPrOwner.rule, NoStar.rule, NotFirstReviewer.rule} <= set(FLOW_RULES)
 
 
 # ---------------------------------------------------------------------------
@@ -369,10 +382,20 @@ def test_expected_table_covers_registered_matrices() -> None:
 
 
 def test_real_matrices_registered() -> None:
-    """PR-2：推广单与仓库行两张表（import ``promotion.flow_doc`` 即登记）。"""
-    assert set(MATRICES) == {"promotion", "warehouse"}
-    for kind in MATRICES:
+    """PR-2：推广单与仓库行（import ``promotion.flow_doc`` 即登记）；PR-3：谈款（``negotiation.flow_doc``）。"""
+    assert set(MATRICES) == {"promotion", "warehouse", "negotiation"}
+    for kind in ("promotion", "warehouse"):
         assert MATRICES[kind].stages == PROMOTION_STAGES, kind
+    assert MATRICES["negotiation"].stages == NEGOTIATION_STAGES
+    assert NEGOTIATION_STAGES == (
+        "草稿",
+        "主管待审",
+        "审核驳回",
+        "待老板审核",
+        "老板退回",
+        "待补收货地址",
+        "已定稿",
+    )
 
 
 def test_real_matrices_match_expected() -> None:
@@ -386,6 +409,12 @@ def test_real_matrices_match_expected() -> None:
     assert set(promotion_grid.values()) == {"改", "读", "灰", "隐"}
     for name in PERSONAS:
         assert any(v != "隐" for (_l, p, _k, _r), v in promotion_grid.items() if p == name), name
+    # 谈款：四种取值都出现；别的 PR、仓库整张「—」，其余每个 persona 至少一格不是「隐」
+    neg_grid = render_grid(MATRICES["negotiation"], DOCS["negotiation"], PERSONAS)
+    assert set(neg_grid.values()) == {"改", "读", "灰", "隐"}
+    for name in PERSONAS:
+        seen = any(v != "隐" for (_l, p, _k, _r), v in neg_grid.items() if p == name)
+        assert seen is (name not in ("pr2", "warehouse")), name
 
 
 def test_real_matrices_have_no_dead_rows() -> None:
@@ -591,16 +620,16 @@ def test_actions_follow_constant_order(toy: Matrix) -> None:
 
 def test_unregistered_kind_raises() -> None:
     @dataclass(frozen=True, kw_only=True)
-    class NegDoc(FlowDocBase):
-        kind: ClassVar[str] = "negotiation"
+    class SettleDoc(FlowDocBase):
+        kind: ClassVar[str] = "settlement"
 
         def allowed_actions(self) -> frozenset[str]:
             return frozenset()
 
-    doc = NegDoc(stage="草稿", state="草稿")
+    doc = SettleDoc(stage="待付款", state="待付款")
     for call in (
         lambda: ui_for(PERSONAS["pr"], doc),
-        lambda: require(PERSONAS["pr"], doc, "edit"),
+        lambda: require(PERSONAS["pr"], doc, "reject"),
         lambda: writable_fields(PERSONAS["pr"], doc),
     ):
         with pytest.raises(KeyError):
@@ -1099,3 +1128,301 @@ def test_new_capabilities() -> None:
     # ShipIn 用在没有 ship_status 的单据上是写错了
     with pytest.raises(AttributeError):
         ShipIn(None).matches(TOY_DOCS["待推送"])
+
+
+# ---------------------------------------------------------------------------
+# 真实矩阵：谈款（PR-3，设计 5.2）。逐格在 test_real_matrices_match_expected；
+# 这里是 5.4 的三种非默认情况、★ 缺项与 require 一致、悬停原因与 ui 形状
+# ---------------------------------------------------------------------------
+
+N_DOCS = DOCS["negotiation"]
+_SUBMIT_MISSING_ALL = [
+    {"key": "blogger_id", "label": "博主"},
+    {"key": "style_id", "label": "商品"},
+    {"key": "goods_items", "label": "颜色尺码"},
+    {"key": "cooperation_mode", "label": "合作模式"},
+    {"key": "platform", "label": "平台"},
+    {"key": "scheduled_publish_date", "label": "约定发布时间"},
+    {"key": "quote_amount", "label": "服务费"},
+]
+
+
+def _granted(who: FlowActor, *scopes: str) -> FlowActor:
+    """个人授权（``user_permission_override`` effect = grant）之后的同一个人。"""
+    return replace(
+        who,
+        perms=EffectivePermissions(
+            user_id=who.perms.user_id, scopes=who.perms.scopes | set(scopes)
+        ),
+    )
+
+
+def _own(doc: FlowDocBase, who: FlowActor) -> FlowDocBase:
+    return replace(doc, owner_id=who.user_id, negotiator_id=who.user_id)
+
+
+def test_negotiation_delegate() -> None:
+    """临时授权的代理人（PR + negotiation.review:approve + negotiation_all:read）：审别人的「改」、审自己的「读」；
+    只授了审核权、没授看全部 → 别人的单整张看不到。"""
+    pr_b = actor("pr")
+    delegate = _granted(pr_b, "negotiation.review:approve", "negotiation_all:read")
+    pending = N_DOCS["主管待审"]
+    ui = _real_ui(delegate, pending)
+    assert ui.actions["manager_review"] == mx.UiAction("enabled")
+    assert ui.fields["manager_opinion"] == mx.UiField("edit")
+    require(delegate, pending, "manager_review")
+    # 代理人自己谈的单：不能自审
+    mine = _own(pending, delegate)
+    assert _real_ui(delegate, mine).actions["manager_review"] == mx.UiAction(
+        "disabled", reason=NotPrOwner().reason
+    )
+    with pytest.raises(AppException) as exc:
+        require(delegate, mine, "manager_review")
+    assert _code(exc) == "FLOW_ACTION_FORBIDDEN"
+    assert exc.value.details["rule"] == "self_review"
+    # PR 不在时代录 / 代确认收货信息（N8、N9）
+    receiving = N_DOCS["待补收货地址"]
+    assert _real_ui(delegate, receiving).actions == {
+        "receiver_save": mx.UiAction("enabled"),
+        "receiver_confirm": mx.UiAction("enabled"),
+    }
+    # 只授了前者：看不到别人的单
+    review_only = _granted(pr_b, "negotiation.review:approve")
+    assert _real_ui(review_only, pending).to_dict(view="detail") == {
+        "column": "主管待审",
+        "actions": {},
+        "fields": {},
+    }
+    # 未授权的普通 PR 乙同样整张「—」
+    assert _real_ui(pr_b, pending).to_dict(view="detail")["fields"] == {}
+
+
+def test_negotiation_pr_plus_finance() -> None:
+    """兼任 PR + 财务（不是本人）：财务给「看全部」、PR 给写权限与收件读，合起来取最宽。"""
+    both = actor("pr", "finance")
+    pending = N_DOCS["主管待审"]
+    ui = _real_ui(both, pending)
+    # 财务单独：主管审核不出现、收件隐；PR 单独：整张看不到。合起来：主管审核「读」、收件「灰」
+    assert "manager_review" not in _real_ui("finance", pending).actions
+    assert "receiver" not in _real_ui("finance", pending).fields
+    assert _real_ui("pr2", pending).fields == {}
+    assert ui.actions["manager_review"] == mx.UiAction("disabled", reason=MANAGER_REVIEW_REASON)
+    assert ui.fields["receiver"] == mx.UiField("grey", hint=RECEIVER_HINT)
+    assert ui.fields["overdue_badge"] == mx.UiField("read")
+    # 不是本人、没有审核权：收货信息只读，按钮不出现
+    receiving = _real_ui(both, N_DOCS["待补收货地址"])
+    assert receiving.actions == {}
+    assert receiving.fields["receiver"] == mx.UiField("read")
+    # 本人谈的草稿：跟 PR 一样能编辑、提交
+    own_draft = _own(N_DOCS["草稿"], both)
+    assert set(_real_ui(both, own_draft).actions) == {"edit", "submit"}
+
+
+def test_negotiation_star() -> None:
+    """持 ``*``：第一级「读」（NoStar，Q3）、老板一级「改」、看不到任何人的草稿；超管 platform_admin 与管理员同一列。"""
+    admin = PERSONAS["admin"]
+    pending = N_DOCS["主管待审"]
+    assert _real_ui(admin, pending).actions["manager_review"] == mx.UiAction(
+        "disabled", reason=STAR_FIRST_LEVEL_REASON
+    )
+    with pytest.raises(AppException) as exc:
+        require(admin, pending, "manager_review")
+    assert _code(exc) == "FLOW_ACTION_FORBIDDEN"
+    assert exc.value.details == {"rule": "star_first_level", "reason": STAR_FIRST_LEVEL_REASON}
+    assert _real_ui(admin, N_DOCS["待老板审核"]).actions["final_review"] == mx.UiAction("enabled")
+    require(admin, N_DOCS["待老板审核"], "final_review")
+    assert _real_ui(admin, N_DOCS["草稿"]).to_dict(view="detail") == {
+        "column": "草稿",
+        "actions": {},
+        "fields": {},
+    }
+
+    uid = uuid4()
+    platform_admin = FlowActor(
+        user_id=uid,
+        perms=EffectivePermissions(user_id=str(uid), scopes=frozenset({"*"})),
+        field_ctx=FieldPermissionContext(
+            role_codes=frozenset({"platform_admin"}),
+            grants=frozenset(),
+            revokes=frozenset(),
+            is_superuser=True,
+        ),
+    )
+    matrix = MATRICES["negotiation"]
+    as_admin = render_grid(matrix, N_DOCS, {"x": admin})
+    as_platform = render_grid(matrix, N_DOCS, {"x": platform_admin})
+    assert as_platform == as_admin
+
+
+def test_negotiation_same_reviewer() -> None:
+    """主管被单独授了老板权：自己过了第一级，第二级不能再是他（N6 / N7，same_reviewer）。"""
+    boss_manager = _granted(PERSONAS["pr_manager"], "negotiation_final:approve")
+    doc = N_DOCS["待老板审核"]
+    assert doc.reviewed_by == boss_manager.user_id
+    assert _real_ui(boss_manager, doc).actions["final_review"] == mx.UiAction(
+        "disabled", reason=NotFirstReviewer().reason
+    )
+    with pytest.raises(AppException) as exc:
+        require(boss_manager, doc, "final_review")
+    assert _code(exc) == "FLOW_ACTION_FORBIDDEN"
+    assert exc.value.details == {"rule": "same_reviewer", "reason": NotFirstReviewer().reason}
+    # 第一级是别人审的 / 审核人账号已删（SET NULL）→ 能定稿
+    for reviewed_by in (uuid4(), None):
+        other = replace(doc, reviewed_by=reviewed_by)
+        assert _real_ui(boss_manager, other).actions["final_review"] == mx.UiAction("enabled")
+        require(boss_manager, other, "final_review")
+    # 老板一级也不能审自己谈的单
+    with pytest.raises(AppException) as exc:
+        require(PERSONAS["admin"], _own(doc, PERSONAS["admin"]), "final_review")
+    assert exc.value.details["rule"] == "self_review"
+    # NotFirstReviewer 用在没有 reviewed_by 的单据上是写错了
+    with pytest.raises(AttributeError):
+        NotFirstReviewer().ok(PERSONAS["admin"], TOY_DOCS["待推送"])
+
+
+def test_negotiation_submit_gates_match_require() -> None:
+    """★¹：缺项都在编辑弹窗里补 → 按钮 enabled、missing 照给；require 返回同一份、按矩阵顺序。"""
+    pr = PERSONAS["pr"]
+    empty = replace(
+        N_DOCS["草稿"],
+        blogger_id=None,
+        style_id=None,
+        items_complete=False,
+        cooperation_mode=None,
+        platform=None,
+        scheduled_publish_date=None,
+        quote_amount=None,
+    )
+    ui = _real_ui(pr, empty).actions["submit"]
+    assert ui.state == "enabled"
+    assert ui.to_dict()["missing"] == _SUBMIT_MISSING_ALL
+    with pytest.raises(AppException) as exc:
+        require(pr, empty, "submit")
+    assert _code(exc) == "FLOW_GATE_MISSING"
+    assert exc.value.details["missing"] == _SUBMIT_MISSING_ALL
+    # 老板退回重提同一份卡点
+    with pytest.raises(AppException) as exc:
+        require(pr, replace(empty, stage="老板退回", state="老板退回", column="老板退回"), "submit")
+    assert exc.value.details["missing"] == _SUBMIT_MISSING_ALL
+    # 服务费 0 不算缺（置换压 0；寄拍 / 送拍也可以 0）；只缺约定发布时间 → 一项
+    only_date = replace(N_DOCS["草稿"], scheduled_publish_date=None, quote_amount=Decimal("0"))
+    with pytest.raises(AppException) as exc:
+        require(pr, only_date, "submit")
+    assert exc.value.details["missing"] == [
+        {"key": "scheduled_publish_date", "label": "约定发布时间"}
+    ]
+    require(pr, replace(N_DOCS["草稿"], quote_amount=Decimal("0")), "submit")
+    # 编辑没有卡点
+    require(pr, empty, "edit")
+
+
+def test_negotiation_receiver_gates_match_require() -> None:
+    """★⁴：三项非空、电话格式；都在收货弹窗里填。保存收货信息不卡。"""
+    doc = replace(N_DOCS["待补收货地址"], receiver_phone="12345", receiver_address="")
+    expected = [
+        {"key": "receiver_phone", "label": "收件电话"},
+        {"key": "receiver_address", "label": "收件地址"},
+    ]
+    for who in ("pr", "pr_manager", "admin"):
+        ui = _real_ui(who, doc).actions["receiver_confirm"]
+        assert ui.state == "enabled", who
+        assert ui.to_dict()["missing"] == expected, who
+        with pytest.raises(AppException) as exc:
+            require(PERSONAS[who], doc, "receiver_confirm")
+        assert _code(exc) == "FLOW_GATE_MISSING"
+        assert exc.value.details["missing"] == expected
+        require(PERSONAS[who], doc, "receiver_save")
+    require(
+        PERSONAS["pr_manager"],
+        replace(doc, receiver_phone="0571-88888888", receiver_address="x"),
+        "receiver_confirm",
+    )
+    # 别的 PR → not_owner；财务、运营 → 缺权限
+    with pytest.raises(AppException) as exc:
+        require(PERSONAS["pr2"], doc, "receiver_save")
+    assert exc.value.details == {"rule": "not_owner", "reason": OWNER_REASON}
+    for who in ("finance", "operations"):
+        with pytest.raises(AppException) as exc:
+            require(PERSONAS[who], doc, "receiver_save")
+        assert _code(exc) == "PERMISSION_DENIED", who
+
+
+def test_negotiation_read_reasons() -> None:
+    """「读」的悬停原因与 require 的 403 同一份：老板退回时主管 / 管理员看得到编辑但不能代改。"""
+    returned = N_DOCS["老板退回"]
+    for who in ("pr_manager", "admin"):
+        for key in ("edit", "submit"):
+            assert _real_ui(who, returned).actions[key] == mx.UiAction(
+                "disabled", reason=OWNER_REASON
+            ), (who, key)
+        with pytest.raises(AppException) as exc:
+            require(PERSONAS[who], returned, "edit")
+        assert exc.value.details == {"rule": "not_owner", "reason": OWNER_REASON}
+    assert _real_ui("pr", N_DOCS["主管待审"]).actions["manager_review"] == mx.UiAction(
+        "disabled", reason=MANAGER_REVIEW_REASON
+    )
+    for who in ("pr", "pr_manager"):
+        assert _real_ui(who, N_DOCS["待老板审核"]).actions["final_review"] == mx.UiAction(
+            "disabled", reason=FINAL_REVIEW_REASON
+        ), who
+        with pytest.raises(AppException) as exc:
+            require(PERSONAS[who], N_DOCS["待老板审核"], "final_review")
+        assert _code(exc) == "PERMISSION_DENIED"
+    # 运营、财务全链路没有按钮
+    for label, doc in N_DOCS.items():
+        for who in ("finance", "operations"):
+            assert _real_ui(who, doc).actions == {}, (label, who)
+
+
+def test_negotiation_ui_shape() -> None:
+    draft = _real_ui("pr", N_DOCS["草稿"])
+    assert draft.to_dict(view="list") == {
+        "column": "草稿",
+        "actions": {"edit": {"state": "enabled"}, "submit": {"state": "enabled"}},
+        "edits": ["basic", "quote_amount"],
+    }
+    assert draft.to_dict(view="detail")["fields"] == {
+        "basic": {"state": "edit"},
+        "quote_amount": {"state": "edit"},
+        "manager_opinion": {"state": "grey", "hint": MANAGER_OPINION_HINT},
+        "final_opinion": {"state": "grey", "hint": FINAL_OPINION_HINT},
+        "receiver": {"state": "grey", "hint": RECEIVER_HINT},
+        "others_in_progress": {"state": "read"},
+    }
+    # 运营看主管待审：只读，服务费与收件不出现
+    assert _real_ui("operations", N_DOCS["主管待审"]).to_dict(view="detail") == {
+        "column": "主管待审",
+        "actions": {},
+        "fields": {
+            "basic": {"state": "read"},
+            "manager_opinion": {"state": "read"},
+            "final_opinion": {"state": "grey", "hint": FINAL_OPINION_HINT},
+        },
+    }
+    # 主管看待补收货地址：能代录
+    assert _real_ui("pr_manager", N_DOCS["待补收货地址"]).to_dict(view="list") == {
+        "column": "待补收货地址",
+        "actions": {
+            "receiver_save": {"state": "enabled"},
+            "receiver_confirm": {"state": "enabled"},
+        },
+        "edits": ["receiver"],
+    }
+
+
+def test_negotiation_receiver_follows_field_rules() -> None:
+    """谈款收件复用 promotion.receiver_* 字段规则：三项读都撤销 → 分组不出现，按钮也不出现。"""
+    pr = PERSONAS["pr"]
+    reads = frozenset(
+        f"field.promotion.{f}:read" for f in ("receiver_name", "receiver_phone", "receiver_address")
+    )
+    revoked = replace(pr, field_ctx=replace(pr.field_ctx, revokes=reads))
+    ui = _real_ui(revoked, N_DOCS["待补收货地址"])
+    assert "receiver" not in ui.fields
+    assert ui.actions == {}
+    # 服务费撤销读 → 分组不出现
+    no_quote = replace(
+        pr,
+        field_ctx=replace(pr.field_ctx, revokes=frozenset({"field.promotion.quote_amount:read"})),
+    )
+    assert "quote_amount" not in _real_ui(no_quote, N_DOCS["主管待审"]).fields

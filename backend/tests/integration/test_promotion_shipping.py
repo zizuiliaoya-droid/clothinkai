@@ -944,6 +944,42 @@ class TestGoodsMembers:
             (suit.pants.id, "阔腿裤", "阔腿裤"),
         ]
 
+    async def test_members_carry_style_main_image(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        suit: _Suit,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """推广列表主图列（PR-3 S14）：每个成员带自己的款式主图，没图为 null；详情与列表一致。"""
+        from app.core import attachment as att_mod
+
+        class _FakeSigner:
+            def generate_presigned_url(self, _op: str, **kw: Any) -> str:
+                return f"https://fake-r2.local/{kw['Params']['Key']}"
+
+        monkeypatch.setattr(att_mod.attachment_service, "_client", _FakeSigner(), raising=False)
+        key = f"k/{uuid4().hex[:6]}/pants"
+        suit.pants.main_image_key = key
+        await session.flush()
+        promo = await promotion_factory.promotion(
+            style=suit.top,
+            blogger=await blogger_factory.blogger(),
+            pr=flow_users.pr,
+            goods_main_id=suit.goods.id,
+        )
+        svc = PromotionService(session)
+        expected = [(suit.top.id, None), (suit.pants.id, f"https://fake-r2.local/{key}")]
+        detail = await svc.get_promotion(promo.id, flow_users.pr)
+        assert [(m.style_id, m.style_main_image_url) for m in detail.goods_members] == expected
+        page = await svc.list_promotions(
+            filters=PromotionListFilters(), page=1, page_size=100, user=flow_users.pr
+        )
+        row = next(p for p in page.items if p.id == promo.id)
+        assert [(m.style_id, m.style_main_image_url) for m in row.goods_members] == expected
+
 
 # ---------------------------------------------------------------------------
 # SKU 删除前的引用计数：promotion.sku_id 与 promotion_item.sku_id 按推广单去重（7.8）
@@ -973,10 +1009,10 @@ class TestSkuReferences:
             style=top, blogger=blogger, pr=flow_users.pr, sku_id=sku.id
         )
         refs = await SkuService(session).check_references(sku.id)
-        assert refs == {"promotion_count": 3, "order_count": 0}
+        assert refs == {"promotion_count": 3, "order_count": 0, "negotiation_item_count": 0}
         # 只被套装另一款的明细引用
         refs = await SkuService(session).check_references(suit.pants_sku.id)
-        assert refs == {"promotion_count": 0, "order_count": 0}
+        assert refs == {"promotion_count": 0, "order_count": 0, "negotiation_item_count": 0}
         await promotion_factory.promotion(
             style=top,
             blogger=blogger,
@@ -984,7 +1020,7 @@ class TestSkuReferences:
             items=[(top, sku), (suit.pants, suit.pants_sku)],
         )
         refs = await SkuService(session).check_references(suit.pants_sku.id)
-        assert refs == {"promotion_count": 1, "order_count": 0}
+        assert refs == {"promotion_count": 1, "order_count": 0, "negotiation_item_count": 0}
 
 
 # ---------------------------------------------------------------------------
@@ -1145,7 +1181,7 @@ class TestFlowUi:
                 pr_id=flow_users.pr2.id,
                 promotion_id=negotiated.id,
                 cooperation_mode="送拍",
-                status="审核通过",
+                status="已定稿",
             )
         )
         await session.flush()

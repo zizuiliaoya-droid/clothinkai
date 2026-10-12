@@ -83,7 +83,10 @@ async def create_promotion(
     勾了才写「待发货」（流程线 S1，11-58）。
     """
     return await service.create_promotion(
-        payload, user, ship_status=ShipStatus.PENDING if payload.need_shipping else None
+        payload,
+        user,
+        ship_status=ShipStatus.PENDING if payload.need_shipping else None,
+        reviewed_negotiation_copy=False,
     )
 
 

@@ -61,6 +61,12 @@ async def _batch(ctx: dict[str, Any], kw: dict[str, Any]) -> Any:
     return await ctx["import_batch_factory"].batch(**kw)
 
 
+async def _negotiation(ctx: dict[str, Any], kw: dict[str, Any]) -> Any:
+    return await ctx["negotiation_factory"].negotiation(
+        style=ctx["style"], blogger=ctx["blogger"], pr=ctx["pr"], **kw
+    )
+
+
 # (报错里的工厂名, 调用, 正例 kwarg：建出来的对象上同名属性应等于传入值)
 CASES: list[tuple[str, Call, dict[str, Any]]] = [
     ("factory.user", _user, {"display_name": "张三"}),
@@ -72,6 +78,7 @@ CASES: list[tuple[str, Call, dict[str, Any]]] = [
     ("attachment_factory.attachment", _attachment, {"filename": "a.png"}),
     ("settlement_factory.settlement", _settlement, {"note_title": "标题甲"}),
     ("import_batch_factory.batch", _batch, {"original_filename": "b.csv"}),
+    ("negotiation_factory.negotiation", _negotiation, {"remark": "备注甲"}),
 ]
 IDS = [c[0] for c in CASES]
 
@@ -86,8 +93,11 @@ async def ctx(
     attachment_factory: Any,
     settlement_factory: Any,
     import_batch_factory: Any,
+    negotiation_factory: Any,
 ) -> dict[str, Any]:
     return {
+        "negotiation_factory": negotiation_factory,
+        "pr": await factory.user(tenant_a),
         "factory": factory,
         "tenant_a": tenant_a,
         "product_factory": product_factory,
@@ -179,3 +189,114 @@ async def test_shipping_kwargs_applied(ctx: dict[str, Any], session: Any) -> Non
         )
     ).all()
     assert [tuple(r) for r in rows] == [(style.id, sku.id, 0)]
+
+
+def _negotiation_known(ctx: dict[str, Any]) -> frozenset[str]:
+    known: frozenset[str] = ctx["negotiation_factory"]._KNOWN_KWARGS["negotiation"]
+    return known
+
+
+async def test_negotiation_known_kwargs_match_columns(ctx: dict[str, Any]) -> None:
+    """谈款工厂的白名单 = 表的列（去掉参数给的三列）+ ``items``：加列漏补进工厂就红。"""
+    from app.modules.negotiation.models import Negotiation
+    from tests.conftest import _NEGOTIATION_ARG_COLUMNS
+
+    known = _negotiation_known(ctx)
+    columns = {c.name for c in Negotiation.__table__.columns} - _NEGOTIATION_ARG_COLUMNS
+    assert "items" in known
+    assert known - {"items"} == columns
+
+
+async def test_negotiation_kwargs_applied(ctx: dict[str, Any], session: Any) -> None:
+    """谈款工厂：每一列都给非默认值，漏补就会是默认值 / None；``items`` 按顺序插、sku 可空。"""
+    from datetime import UTC, date, datetime
+    from decimal import Decimal
+    from uuid import uuid4
+
+    from sqlalchemy import select
+
+    from app.modules.negotiation.models import Negotiation, NegotiationItem
+    from app.modules.product.goods_models import GoodsMain
+
+    pf, users = ctx["product_factory"], ctx["factory"]
+    style, style2 = ctx["style"], await pf.style()
+    sku = await pf.sku(style)
+    goods = GoodsMain(
+        tenant_id=ctx["tenant_a"].id, goods_code=f"G{uuid4().hex[:8]}", goods_title="商品甲"
+    )
+    session.add(goods)
+    await session.flush()
+    manager = await users.user(ctx["tenant_a"])
+    boss = await users.user(ctx["tenant_a"])
+    other_pr = await users.user(ctx["tenant_a"])
+    source = await _negotiation(ctx, {"status": "审核驳回"})
+    at = datetime(2026, 6, 1, 8, 0, tzinfo=UTC)
+    cols: dict[str, Any] = {
+        "id": uuid4(),
+        "created_at": at,
+        "updated_at": at,
+        "goods_main_id": goods.id,
+        "pr_id": other_pr.id,
+        "promotion_id": None,
+        "line_id": uuid4(),
+        "copied_from_id": source.id,
+        "cooperation_mode": "送拍",
+        "platform": "抖音",
+        "scheduled_publish_date": date(2026, 6, 20),
+        "quote_amount": Decimal("888.00"),
+        "remark": "备注乙",
+        "status": "待补收货地址",
+        "submitted_at": at,
+        "reviewed_by": manager.id,
+        "reviewed_at": at,
+        "review_opinion": "主管意见",
+        "final_reviewed_by": boss.id,
+        "final_reviewed_at": at,
+        "final_review_opinion": "老板意见",
+        "receiver_name": "张三",
+        "receiver_phone": "13800000000",
+        "receiver_address": "上海市某区某路 1 号",
+        "receiver_confirmed_at": at,
+        "receiver_confirmed_by": manager.id,
+    }
+    # 用例本身也要覆盖全部列，否则新列漏测
+    assert set(cols) == _negotiation_known(ctx) - {"items"}
+    n = await _negotiation(ctx, {**cols, "items": [(style, sku), (style2, None)]})
+    # expire_all 之后再读 ORM 属性会 MissingGreenlet：要比的 id 先取出来
+    nid, style_id, style2_id, sku_id = n.id, style.id, style2.id, sku.id
+    session.expire_all()
+    fresh = (await session.execute(select(Negotiation).where(Negotiation.id == nid))).scalar_one()
+    for k, v in cols.items():
+        assert getattr(fresh, k) == v, k
+    rows = (
+        await session.execute(
+            select(NegotiationItem.style_id, NegotiationItem.sku_id, NegotiationItem.sort_order)
+            .where(NegotiationItem.negotiation_id == nid)
+            .order_by(NegotiationItem.sort_order)
+        )
+    ).all()
+    assert [tuple(r) for r in rows] == [(style_id, sku_id, 0), (style2_id, None, 1)]
+
+
+async def test_negotiation_defaults_and_finalized(ctx: dict[str, Any]) -> None:
+    """不传时：草稿、寄拍、库发 line_id；已定稿带推广单、推广单继承 line_id；不给 PR 直接报错。"""
+    from uuid import uuid4
+
+    draft = await _negotiation(ctx, {})
+    assert (draft.status, draft.cooperation_mode, draft.pr_id) == ("草稿", "寄拍", ctx["pr"].id)
+    assert draft.line_id is not None
+
+    p = await _promotion(ctx, {})
+    assert p.line_id is not None  # 不传 line_id 由库发号
+    shared = p.line_id
+    finalized = await _negotiation(
+        ctx, {"status": "已定稿", "promotion_id": p.id, "line_id": shared}
+    )
+    assert finalized.line_id == shared
+
+    line = uuid4()
+    p2 = await _promotion(ctx, {"line_id": line})
+    assert p2.line_id == line
+
+    with pytest.raises(TypeError, match="pr 或 pr_id"):
+        await ctx["negotiation_factory"].negotiation(style=ctx["style"], blogger=ctx["blogger"])

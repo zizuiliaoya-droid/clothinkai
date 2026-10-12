@@ -63,6 +63,12 @@ OPS_PLATFORM_LINK_WRITE = "ops.platform_link:write"
 NEGOTIATION_READ = "negotiation:read"
 NEGOTIATION_WRITE = "negotiation:write"
 NEGOTIATION_REVIEW = "negotiation.review:approve"
+# 流程线 PR-3 谈款两级审核（迁移 063）。都是独立一级域，现有任何通配都碰不到：
+# - 看全部谈款（草稿除外）：negotiation:read PR 也有，分不出「只看自己」和「看全部」
+# - 老板定稿 / 退回：只入册、不绑角色，管理员靠 *；叫 negotiation.final:approve 的话，
+#   哪天有人给主管加 negotiation.*:*，主管就顺带拿到老板权
+NEGOTIATION_ALL_READ = "negotiation_all:read"
+NEGOTIATION_FINAL_APPROVE = "negotiation_final:approve"
 # 催发任务（PRD 改动 2）。这里两个一级域的分法是故意的：
 #
 # promotion.urge:* 挂在 promotion 下**正是想要的** —— 催发是 PR 的日常工作，
@@ -201,6 +207,7 @@ DEFAULT_ROLES: tuple[RoleSpec, ...] = (
             NEGOTIATION_READ,
             NEGOTIATION_WRITE,
             NEGOTIATION_REVIEW,
+            NEGOTIATION_ALL_READ,
             PRODUCT_STYLE_READ,
             # 催发任务本身由 promotion.*:* 覆盖；阈值配置是独立域，要显式给
             URGE_CONFIG_READ,
@@ -234,8 +241,9 @@ DEFAULT_ROLES: tuple[RoleSpec, ...] = (
             "finance.settlement:read",
             "finance.order_adjustment:write",
             "finance.balance:write",
-            # 谈款：PRD 要求财务只读查看
+            # 谈款：PRD 要求财务只读查看（看全部，草稿除外）
             NEGOTIATION_READ,
+            NEGOTIATION_ALL_READ,
             # 催发进度只读：财务要知道一单为什么迟迟没发出来
             URGE_READ,
             # 结款页 API 实际使用的作用域（migration 029 同步授予现存库）
@@ -271,6 +279,7 @@ DEFAULT_ROLES: tuple[RoleSpec, ...] = (
             OPS_PLATFORM_LINK_READ,
             OPS_PLATFORM_LINK_WRITE,
             NEGOTIATION_READ,
+            NEGOTIATION_ALL_READ,
         ),
     ),
     RoleSpec(

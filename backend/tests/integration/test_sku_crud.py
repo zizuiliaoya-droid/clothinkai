@@ -365,9 +365,47 @@ class TestSoftDeleteSku:
             svc = SkuService(session)
 
             refs = await svc.check_references(sku.id)
-            assert refs == {"promotion_count": 1, "order_count": 1}
+            assert refs == {"promotion_count": 1, "order_count": 1, "negotiation_item_count": 0}
             with pytest.raises(SkuHasReferenceError):
                 await svc.soft_delete_sku(sku.id, user)
             assert sku.is_deleted is False
+        finally:
+            tenant_id_ctx.reset(token)
+
+    async def test_negotiation_item_reference_blocks_delete(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        admin_role: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        negotiation_factory: Any,
+    ) -> None:
+        """只被谈款明细引用（被驳回的也算）也不能删：按谈款去重计数（流程线 7.8）。"""
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            style = await product_factory.style()
+            sku = await product_factory.sku(style)
+            other = await product_factory.sku(style)
+            blogger = await blogger_factory.blogger()
+            user = await factory.user(tenant_a, roles=[admin_role])
+            for status in ("草稿", "审核驳回"):
+                await negotiation_factory.negotiation(
+                    style=style, blogger=blogger, pr=user, status=status, items=[(style, sku)]
+                )
+            # 没选颜色尺码的明细行不算引用任何 SKU
+            await negotiation_factory.negotiation(
+                style=style, blogger=blogger, pr=user, items=[(style, None)]
+            )
+            svc = SkuService(session)
+            refs = await svc.check_references(sku.id)
+            assert refs == {"promotion_count": 0, "order_count": 0, "negotiation_item_count": 2}
+            with pytest.raises(SkuHasReferenceError) as exc:
+                await svc.soft_delete_sku(sku.id, user)
+            assert exc.value.details["negotiation_item_count"] == 2
+            assert sku.is_deleted is False
+            assert (await svc.check_references(other.id))["negotiation_item_count"] == 0
+            await svc.soft_delete_sku(other.id, user)
         finally:
             tenant_id_ctx.reset(token)

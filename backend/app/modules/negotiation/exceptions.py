@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from app.core.exceptions import (
     AppException,
+    IllegalStateTransitionError,
     ResourceNotFoundError,
     ValidationError,
 )
@@ -13,29 +14,15 @@ class NegotiationNotFoundError(ResourceNotFoundError):
     code = "NEGOTIATION_NOT_FOUND"
 
 
-class NegotiationNotEditableError(AppException):
-    """只有草稿和被驳回的单据能改。
+class NegotiationStateConflictError(IllegalStateTransitionError):
+    """条件 UPDATE 影响 0 行：别人刚处理过（流程线 7.1，409）。
 
-    提交审核后 PR 不该再动内容（否则主管看到的和审的不是一回事）；
-    审核通过后推广单已经建出来了，改谈款信息也同步不过去。
+    状态机不允许仍是父类的 422 ``ILLEGAL_STATE_TRANSITION``；测试比 ``exc.code``，不只比异常类型。
     """
 
-    code = "NEGOTIATION_NOT_EDITABLE"
+    code = "NEGOTIATION_STATE_CONFLICT"
     status_code = 409
-
-
-class NegotiationNotSubmittableError(AppException):
-    """只有草稿和被驳回的单据能提交审核。"""
-
-    code = "NEGOTIATION_NOT_SUBMITTABLE"
-    status_code = 409
-
-
-class NegotiationNotReviewableError(AppException):
-    """只有待审核的单据能审。"""
-
-    code = "NEGOTIATION_NOT_REVIEWABLE"
-    status_code = 409
+    message = "谈款单刚被别人处理过，请刷新后再试"
 
 
 class NegotiationSelfReviewForbiddenError(AppException):
@@ -46,12 +33,6 @@ class NegotiationSelfReviewForbiddenError(AppException):
 
     code = "NEGOTIATION_SELF_REVIEW_FORBIDDEN"
     status_code = 403
-
-
-class NegotiationReviewOpinionRequiredError(ValidationError):
-    """驳回时审核意见必填 —— PR 得知道要改什么。"""
-
-    code = "NEGOTIATION_REVIEW_OPINION_REQUIRED"
 
 
 class InvalidNegotiationBloggerError(ValidationError):
@@ -66,14 +47,18 @@ class InvalidNegotiationGoodsError(ValidationError):
     code = "INVALID_NEGOTIATION_GOODS"
 
 
+class InvalidNegotiationAssigneeError(ValidationError):
+    """转交（N12）的新 PR 不合规：停用 / 不存在、没有 ``negotiation:write``、持 ``*``、= 原 PR 或本轮审核人（422）。"""
+
+    code = "INVALID_NEGOTIATION_ASSIGNEE"
+
+
 __all__ = [
+    "InvalidNegotiationAssigneeError",
     "InvalidNegotiationBloggerError",
     "InvalidNegotiationGoodsError",
     "InvalidNegotiationStyleError",
-    "NegotiationNotEditableError",
     "NegotiationNotFoundError",
-    "NegotiationNotReviewableError",
-    "NegotiationNotSubmittableError",
-    "NegotiationReviewOpinionRequiredError",
     "NegotiationSelfReviewForbiddenError",
+    "NegotiationStateConflictError",
 ]

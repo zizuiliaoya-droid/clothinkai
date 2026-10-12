@@ -16,6 +16,7 @@ import { bloggerCooperationHistory } from "@/features/negotiation/api";
 import type { BloggerCooperationItem } from "@/features/negotiation/types";
 import { bloggerRetrospectives } from "@/features/promotion/api";
 import { DisplayNameCell } from "@/components/DisplayNameCell/DisplayNameCell";
+import { NegotiationRejections } from "./NegotiationRejections";
 
 const modeColor: Record<string, string> = {
   寄拍: "blue",
@@ -37,6 +38,8 @@ const publishColor: Record<string, string> = {
  * （总推广成本 ÷ 7 天点赞数，录完 7 天数据之后才有值，口径在后端 calculate_cpl）。
  *
  * 数据取自推广单而不是谈款单：草稿和被驳回的谈款没真推出去，不算历史合作。
+ *
+ * 中间是谈款驳回记录（流程线 8.7、7c-7）：所有 PR 的主管驳回单，同一个 history 接口带回来。
  *
  * 下半部分是历史复盘（PRD 改动 4）：跨单据沉淀在博主档案里，不随单据关闭丢失。
  * 只展示主管确认过的 —— 没过确认的是草稿，会误导下次选博主的人。
@@ -175,6 +178,10 @@ export function BloggerHoverCard({
           />
         )}
       </div>
+
+      <Divider style={{ margin: "12px 0" }} />
+
+      <NegotiationRejections data={data} loading={isLoading} />
 
       <Divider style={{ margin: "12px 0" }} />
 

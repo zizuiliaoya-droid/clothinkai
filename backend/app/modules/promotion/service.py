@@ -28,6 +28,12 @@ from app.core.metrics import (
     promotion_search_results_count,
 )
 from app.modules.auth.models import User
+from app.modules.flow.line_events import (
+    PROMOTION_SOURCE_DIRECT,
+    PROMOTION_SOURCE_NEGOTIATION,
+    LineEventRepository,
+    LineEventType,
+)
 from app.modules.flow.matrix import Level, cell_level, ensure_patch_allowed
 from app.modules.product.models import Sku
 from app.modules.promotion.domain import (
@@ -112,6 +118,10 @@ class PromotionService(
         *,
         autocommit: bool = True,
         ship_status: ShipStatus | None = None,
+        line_id: UUID | None = None,
+        negotiation_id: UUID | None = None,
+        actor_id: UUID | None = None,
+        reviewed_negotiation_copy: bool = False,
     ) -> PromotionResponse:
         """EP05-S02 创建推广 + 自动 internal_code + 重复检测.
 
@@ -121,6 +131,15 @@ class PromotionService(
                 否则中间失败会留下「审核通过但没有推广单」的单据。
             ship_status: 发货状态初值（流程线 S1）。HTTP 新建按 ``need_shipping`` 传「待发货」或 None，
                 谈款审核通过传「待发货」；None = 历史单口径，不进待推送队列（11-58）。
+            line_id: 主线号（流程线 6.2）。谈款定稿传谈款的号；None = 库默认值发号（直接新建）。
+                ``uq_promotion_line`` 保证一条线只有一张推广单，重复会在 flush 时 IntegrityError。
+            negotiation_id: 来自哪张谈款（只进 ``promotion.created`` 的 payload，事件只挂推广单）。
+            actor_id: 事件的动作人；None = ``user``。谈款路径 ``user`` 是对接 PR（建单人），
+                动作人是确认的那个人。
+            reviewed_negotiation_copy: 只有谈款定稿传 True：服务费、收件三项是从两级审过的谈款复制的，
+                不算 ``user``（谈款 PR）的新写入，跳过按 ``user`` 的字段写权限（评审 L2、11-57 ①：
+                PR 被收角色后主管仍能代确认）；确认人的写权限由谈款那边先查过。电话规范化照做。
+                直接新建（``POST /``）传 False，检查不变。
         """
         # 0. 退役键最先判（流程线 7.3）
         self._reject_retired_source_extra_keys(payload)
@@ -183,8 +202,12 @@ class PromotionService(
             raise InvalidBloggerReferenceError(f"博主 {payload.blogger_id} 不存在或已删除")
 
         # 2. 字段写权限（quote_amount 可写）；收件三项过写权限并规范化电话
-        await self._check_amount_write_permission(payload, user)
-        payload = await self._normalize_receiver(payload, user)
+        #    谈款定稿复制的是审过的条款，不按谈款 PR 查写权限（评审 L2）
+        if not reviewed_negotiation_copy:
+            await self._check_amount_write_permission(payload, user)
+        payload = await self._normalize_receiver(
+            payload, user, check_write=not reviewed_negotiation_copy
+        )
 
         # 3. 取 tenant_code 用于 internal_code 前缀
         tenant_code = await self._get_tenant_code(user.tenant_id)
@@ -257,12 +280,34 @@ class PromotionService(
             settlement_status=SettlementStatus.NOT_REVIEWED.value,
             is_active=True,
         )
+        if line_id is not None:
+            # 不传就别赋 None：显式 None 会盖掉库默认值 gen_random_uuid()
+            promotion.line_id = line_id
         self._repo.add(promotion)
         await self._session.flush()
         if item_rows is not None:
             await self._items_repo.replace(
                 tenant_id=user.tenant_id, promotion_id=promotion.id, rows=item_rows
             )
+
+        # 时间线（流程线 6.2、6.3）：同事务写 promotion.created，只挂推广单；line_id 用 flush 回读的值
+        created_payload: dict[str, Any] = {
+            "source": (
+                PROMOTION_SOURCE_NEGOTIATION
+                if negotiation_id is not None
+                else PROMOTION_SOURCE_DIRECT
+            )
+        }
+        if negotiation_id is not None:
+            created_payload["negotiation_id"] = str(negotiation_id)
+        await LineEventRepository(self._session).append(
+            tenant_id=promotion.tenant_id,
+            line_id=promotion.line_id,
+            event_type=LineEventType.PROMOTION_CREATED,
+            actor_id=actor_id if actor_id is not None else user.id,
+            promotion_id=promotion.id,
+            payload=created_payload,
+        )
 
         # 7. 重复检测（EP05-S04 warning，非阻塞）
         duplicates = await self._repo.find_active_duplicate(
@@ -344,7 +389,7 @@ class PromotionService(
 
         # 字段写权限；收件三项过写权限并规范化电话（之后的比对与落库都用规范化值）
         await self._check_amount_write_permission(payload, user)
-        payload = await self._normalize_receiver(payload, user)
+        payload = await self._normalize_receiver(payload, user, check_write=True)
 
         # 合作模式：空值可以补一次（历史导入数据没有这个信息），有值就锁死。
         # PRD 的「生成后不可修改」靠这里拦，不靠前端禁用 —— 接口直接传值一样挡住。

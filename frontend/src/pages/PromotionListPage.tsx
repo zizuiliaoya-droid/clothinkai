@@ -20,6 +20,7 @@ import { DownOutlined, PlusOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnsType } from "antd/es/table";
 import dayjs from "dayjs";
+import { useSearchParams } from "react-router-dom";
 import { listPromotions, reviewPromotion, shipInclude } from "@/features/promotion/api";
 import { buildMenuItems } from "@/features/flow/flowMenu";
 import type {
@@ -28,7 +29,7 @@ import type {
   RetroStatus,
   ShipStatusFilter,
 } from "@/features/promotion/types";
-import { itemSpecLines, shipDetailLines } from "@/features/promotion/shipDisplay";
+import { itemSpecLines, promotionImages, shipDetailLines } from "@/features/promotion/shipDisplay";
 import { shipStatusStyle } from "@/features/flow/stageStyle";
 import { goodsDisplayName } from "@/features/product/api";
 import {
@@ -61,7 +62,7 @@ import { useFlowFeedback } from "@/features/promotion/components/useFlowFeedback
 import { extractErrorMessage } from "@/services/apiClient";
 import { useAuthStore } from "@/stores/authStore";
 import { ImportUploadButton } from "@/components/ImportUploadButton";
-import { StyleImageThumbnail } from "@/components/StyleImageThumbnail/StyleImageThumbnail";
+import { GoodsImages } from "@/components/GoodsImages/GoodsImages";
 import { DisplayNameCell } from "@/components/DisplayNameCell/DisplayNameCell";
 import { UrgeModal } from "@/components/UrgeModal/UrgeModal";
 import { PLATFORMS } from "@/features/common/platforms";
@@ -114,9 +115,13 @@ export function PromotionListPage() {
   const canManagePaymentQr = Boolean(
     user?.roles.some((r) => ["admin", "platform_admin", "pr", "pr_manager"].includes(r))
   );
+  // 谈款定稿后「去推广管理」带 ?keyword=内部编码 过来（流程线 8.3）
+  const [searchParams] = useSearchParams();
+  const initialKeyword = searchParams.get("keyword")?.trim() || undefined;
   const [filters, setFilters] = useState<PromotionListFilters>({
     page: 1,
     page_size: 10,
+    keyword: initialKeyword,
   });
   // 各弹窗的表单与提交都在 features/promotion/components/ 里，页面只管开哪个、对哪条单
   const [open, setOpen] = useState(false);
@@ -217,12 +222,17 @@ export function PromotionListPage() {
   const columns: ColumnsType<Promotion> = [
     { title: "内部编码", dataIndex: "internal_code", width: 150, fixed: "left" },
     {
+      // 7c-15：成员款式主图并排（套装每个成员 1 张，缺图不占位，都没有显示「暂无主图」），64px；宽度放得下 2 张
       title: "主图",
-      dataIndex: "style_main_image_url",
-      width: 68,
+      key: "main_image",
+      width: 148,
       fixed: "left",
-      render: (src: string | null, row) => (
-        <StyleImageThumbnail src={src} alt={`${row.style_code_snapshot} 款式主图`} />
+      render: (_, row) => (
+        <GoodsImages
+          images={promotionImages(row)}
+          displayName={row.display_short_name ?? row.style_short_name_snapshot}
+          size={64}
+        />
       ),
     },
     { title: "货号", dataIndex: "style_code_snapshot", width: 110, fixed: "left" },
@@ -594,6 +604,7 @@ export function PromotionListPage() {
       <Space style={{ marginBottom: 16 }} wrap>
         <Input.Search
           placeholder="搜索内部编码 / 货号 / 商品简称 / 商品编码"
+          defaultValue={initialKeyword}
           allowClear
           style={{ width: 300 }}
           onSearch={(v) =>

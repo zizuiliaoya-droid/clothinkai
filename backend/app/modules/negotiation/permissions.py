@@ -22,16 +22,31 @@ SCOPE_NEGOTIATION_WRITE = "negotiation:write"
 SCOPE_NEGOTIATION_REVIEW = "negotiation.review"
 SCOPE_NEGOTIATION_REVIEW_APPROVE = "negotiation.review:approve"
 
+# 流程线 M2（迁移 063）。都是独立一级域：叫 negotiation.final:approve 的话，哪天有人给主管加
+# negotiation.*:*，主管就顺带拿到老板权；negotiation:read PR 也有，分不出「只看自己」和「看全部」。
+SCOPE_NEGOTIATION_FINAL = "negotiation_final"
+SCOPE_NEGOTIATION_FINAL_APPROVE = "negotiation_final:approve"
+"""老板定稿 / 退回（N6、N7）。只入册不绑角色，管理员靠 ``*``。"""
+SCOPE_NEGOTIATION_ALL = "negotiation_all"
+SCOPE_NEGOTIATION_ALL_READ = "negotiation_all:read"
+"""看全部谈款（草稿除外，7c-10）：pr_manager、finance、operations。"""
+
 NEGOTIATION_PERMISSIONS: list[tuple[str, str, str]] = [
     ("negotiation", "read", "查看谈款单"),
     ("negotiation", "write", "新建 / 编辑草稿 / 提交审核"),
     ("negotiation.review", "approve", "审核谈款单（通过 / 驳回）"),
+    ("negotiation_final", "approve", "老板定稿 / 退回谈款"),
+    ("negotiation_all", "read", "查看全部谈款（草稿除外）"),
 ]
 
 
 __all__ = [
     "NEGOTIATION_PERMISSIONS",
     "SCOPE_NEGOTIATION",
+    "SCOPE_NEGOTIATION_ALL",
+    "SCOPE_NEGOTIATION_ALL_READ",
+    "SCOPE_NEGOTIATION_FINAL",
+    "SCOPE_NEGOTIATION_FINAL_APPROVE",
     "SCOPE_NEGOTIATION_READ",
     "SCOPE_NEGOTIATION_REVIEW",
     "SCOPE_NEGOTIATION_REVIEW_APPROVE",

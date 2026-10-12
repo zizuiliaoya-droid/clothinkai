@@ -55,6 +55,8 @@ export interface GoodsMember {
   display_short_name: string;
   /** 款式全称（悬停显示）。 */
   goods_title: string;
+  /** 该成员款式主图的签名 URL（推广列表主图列并排显示）；没有图为 null。旧缓存没有这个键。 */
+  style_main_image_url?: string | null;
 }
 
 /** 写入明细的一行：推广单入口每行都要有 sku_id，款式集合 = 归属商品的启用成员（后端校验）。 */

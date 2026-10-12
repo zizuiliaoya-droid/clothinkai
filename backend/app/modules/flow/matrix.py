@@ -8,8 +8,8 @@
   用 ``when=(SettlementIn(...),)`` 这类谓词收窄，取第一个命中的格；都不命中 = 隐
 - ``Cell`` 依次判 ``edit`` → 改、``read`` → 读、``grey`` → 灰，都不成立 → 隐。每级是一组判断的「且」；
   ``None`` = 这一级没人，空元组 = 所有人
-- 判断分两类：能力项（``Scope``、``FieldWrite``，不满足 = 缺权限）与规则项（``Owner``、``NotPrOwner``、``NoStar``，
-  不满足 = ``FLOW_ACTION_FORBIDDEN``，带 ``rule`` 与 ``reason``）。``AnyOf`` 是「或」，两类都能组合：
+- 判断分两类：能力项（``Scope``、``ExplicitScope``、``FieldWrite``，不满足 = 缺权限）与规则项（``Owner``、``NotPrOwner``、``NoStar``、
+  ``NotFirstReviewer``，不满足 = ``FLOW_ACTION_FORBIDDEN``，带 ``rule`` 与 ``reason``）。``AnyOf`` 是「或」，两类都能组合：
   设计按角色列写的格子（「PR 本人改 / 主管改 / 管理员改」）写成 ``AnyOf(Owner(), Scope("promotion.review", "approve"))``；
   全部不满足时按第一个规则项归类（没有规则项 = 缺权限）
 - 多角色逐格取最宽：``perms`` 本来就是各角色权限的并集，判断对并集做，自然落在能达到的最高一级。
@@ -25,7 +25,8 @@
    没入矩阵的沿用现状
 
 PR-1 只有类型与三个出口；PR-2 起各单据模块在 import 时把自己的表 ``MATRICES.update(...)`` 进来
-（推广单 / 仓库行：``promotion/flow_matrix.py``，由 ``promotion/flow_doc.py`` import 保证注册）。
+（推广单 / 仓库行：``promotion/flow_matrix.py``，由 ``promotion/flow_doc.py`` import 保证注册；
+谈款：``negotiation/flow_matrix.py``，由 ``negotiation/flow_doc.py`` import 保证注册）。
 改矩阵必须同时改设计 5.2 / 5.3 与 ``tests/unit/fixtures/flow_matrix_expected.py``。
 """
 
@@ -238,6 +239,21 @@ class Scope(Capability):
 
 
 @dataclass(frozen=True)
+class ExplicitScope(Capability):
+    """显式持有 ``scope:action`` 这条本身：角色或个人授予了它、且没被个人撤销（有效权限已扣掉撤销）。
+
+    通配不算——``*`` 与 ``module.*:action`` / ``module.*:*`` 都命中不了。谈款第一级审核
+    （设计 3.2 / 4.1「显式持有且不持 ``*``」，评审 L4）；持 ``*`` 的人要靠排在前面的 ``NoStar`` 给出规则原因。
+    """
+
+    scope: str
+    action: str = "read"
+
+    def ok(self, actor: FlowActor, doc: FlowDocBase) -> bool:
+        return f"{self.scope}:{self.action}" in actor.perms.scopes
+
+
+@dataclass(frozen=True)
 class FieldWrite(Capability):
     entity: str
     field: str
@@ -339,6 +355,22 @@ class NoStar(Rule):
 
     def ok(self, actor: FlowActor, doc: FlowDocBase) -> bool:
         return not actor.is_star
+
+
+@dataclass(frozen=True)
+class NotFirstReviewer(Rule):
+    """≠ 本轮第一级审核人：老板一级不能和主管一级是同一人（谈款 N6 / N7，Q3）。
+
+    读快照的 ``reviewed_by``，不给默认值（用在没有这个属性的单据上是写错了，当场 AttributeError）；
+    为空（审核人账号已删，FK SET NULL）时没有可比的人，放行。
+    """
+
+    reason: str = "两级审核不能由同一人完成"
+    rule: ClassVar[str] = "same_reviewer"
+
+    def ok(self, actor: FlowActor, doc: FlowDocBase) -> bool:
+        reviewed_by = doc.reviewed_by  # type: ignore[attr-defined]
+        return reviewed_by is None or reviewed_by != actor.user_id
 
 
 # ---------------------------------------------------------------------------

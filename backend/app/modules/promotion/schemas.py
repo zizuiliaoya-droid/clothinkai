@@ -484,6 +484,8 @@ class GoodsMemberResponse(BaseModel):
     """款式简称，没填（或全空白）回落款式名。"""
     goods_title: str
     """款式全称（悬停显示）。"""
+    style_main_image_url: str | None = None
+    """该成员款式主图的签名 URL（推广列表主图列并排显示）；没有图或签名失败为 null。"""
 
 
 class PromotionResponse(BaseModel):
@@ -504,6 +506,8 @@ class PromotionResponse(BaseModel):
     goods_main_id: UUID | None = None
     blogger_id: UUID
     pr_id: UUID | None = None
+    line_id: UUID | None = None
+    """主线号（流程线 6.2）：只由系统写，任何更新接口都不接受；前端靠它开时间线抽屉（PR-4）。"""
 
     # 快照字段
     style_code_snapshot: str

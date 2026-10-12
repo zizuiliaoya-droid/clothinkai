@@ -1,0 +1,9 @@
+/* 谈款页：主管待审超 36 小时的行浅红底（流程线设计 8.3）。超时另有文字 Tag，颜色不是唯一信息。
+   多一层 .ant-table-wrapper 压过 antd 的单元格底色（含固定列）；hover 加深一档。 */
+.ant-table-wrapper .ant-table-tbody > tr.negotiation-row-overdue > td {
+  background: #fff1f0;
+}
+
+.ant-table-wrapper .ant-table-tbody > tr.negotiation-row-overdue:hover > td {
+  background: #ffe4e0;
+}

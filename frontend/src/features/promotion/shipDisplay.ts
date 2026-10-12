@@ -1,6 +1,7 @@
 // 推广列表的颜色尺码小字与发货悬停内容（流程线 8.4）。纯函数，vitest 测；不出现 SKU 编码（规-1）。
 
 import dayjs from "dayjs";
+import type { GoodsImage } from "@/features/product/types";
 import type { Promotion, PromotionItem } from "./types";
 
 /** 「黑色 / M」；缺一项只显示另一项，都没有回「—」。 */
@@ -36,6 +37,30 @@ export function itemSpecLines(row: {
   }
   const legacy = (row.legacy_color_spec ?? "").trim();
   return legacy ? { lines: [legacy], legacy: true } : null;
+}
+
+/**
+ * 主图列（流程线 8.4、7c-15）：每个成员款式的主图按成员顺序并排（同款去重、没图的不占位），交给 GoodsImages，
+ * 都没有时它显示「暂无主图」。接口没给 goods_members（旧缓存）时回落推广单款式主图。
+ * GoodsMember 不带款号（规-1），alt 的后半用成员简称。
+ */
+export function promotionImages(
+  row: Pick<Promotion, "goods_members" | "style_id" | "style_main_image_url" | "display_short_name" | "style_short_name_snapshot">
+): GoodsImage[] {
+  const members = row.goods_members ?? [];
+  if (members.length === 0) {
+    if (!row.style_main_image_url) return [];
+    const name = row.display_short_name ?? row.style_short_name_snapshot;
+    return [{ style_id: row.style_id, style_code: name, url: row.style_main_image_url, source: "upload" }];
+  }
+  const seen = new Set<string>();
+  const images: GoodsImage[] = [];
+  for (const m of members) {
+    if (!m.style_main_image_url || seen.has(m.style_id)) continue;
+    seen.add(m.style_id);
+    images.push({ style_id: m.style_id, style_code: m.display_short_name, url: m.style_main_image_url, source: "upload" });
+  }
+  return images;
 }
 
 const fmt = (v: string | null | undefined) => (v ? dayjs(v).format("YYYY-MM-DD HH:mm") : "—");

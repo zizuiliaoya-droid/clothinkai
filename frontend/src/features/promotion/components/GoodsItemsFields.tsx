@@ -16,9 +16,11 @@ type Props = {
   /** 旧单预选：对哪个款式按原文预选、原文是什么；不预选传 null。 */
   legacy: { styleId: string; spec: string } | null;
   disabled?: boolean;
+  /** 谈款编辑弹窗：保存草稿不卡，只标星号不校验（提交时由弹窗自查缺项）。 */
+  optional?: boolean;
 };
 
-export function GoodsItemsFields({ form, members, legacy, disabled }: Props) {
+export function GoodsItemsFields({ form, members, legacy, disabled, optional }: Props) {
   const { token } = theme.useToken();
   const [preselected, setPreselected] = useState<string | null>(null);
   const queries = useQueries({
@@ -61,7 +63,8 @@ export function GoodsItemsFields({ form, members, legacy, disabled }: Props) {
             key={m.style_id}
             name={itemFieldName(m.style_id)}
             label={label}
-            rules={[{ required: true, message: "必填" }]}
+            required
+            rules={optional ? [] : [{ required: true, message: "必填" }]}
             extra={
               preselected === m.style_id ? (
                 <span style={{ color: token.colorTextSecondary }}>按录入信息预选，请核对</span>

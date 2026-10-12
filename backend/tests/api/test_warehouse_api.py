@@ -709,7 +709,8 @@ class TestExport:
         cols = [
             c.name
             for c in Promotion.__table__.columns
-            if c.computed is None and c.name not in {"id", "internal_code"}
+            # line_id 有唯一索引（061），由库逐行发号
+            if c.computed is None and c.name not in {"id", "internal_code", "line_id"}
         ]
         col_sql = ", ".join(cols)
         await session.execute(

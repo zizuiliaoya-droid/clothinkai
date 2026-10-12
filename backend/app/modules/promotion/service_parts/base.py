@@ -317,19 +317,23 @@ class PromotionServiceBase:
                 details={"keys": keys},
             )
 
-    async def _normalize_receiver(self, payload: _PayloadT, user: User) -> _PayloadT:
+    async def _normalize_receiver(
+        self, payload: _PayloadT, user: User, *, check_write: bool
+    ) -> _PayloadT:
         """收件三项：字段写权限（越权的全列出来）→ 电话校验与规范化 → 去空白后空串 = 清空。
 
         只处理这次传了的（``model_fields_set``）；清空也算写，同样要写权限。
+        ``check_write=False`` 只给谈款定稿建单（评审 L2：复制审过的谈款，不按 ``user`` 查写权限）。
         返回带规范化值的副本，后面的比对、落库都用它。
         """
         fields = [f for f in RECEIVER_FIELDS if f in payload.model_fields_set]
         if not fields:
             return payload
-        ctx = await build_field_perm_context(user.id, self._roles, self._perms)
-        denied = [f for f in fields if not can_write_field("promotion", f, ctx)]
-        if denied:
-            raise FieldPermissionDenied(fields=denied, entity="promotion")
+        if check_write:
+            ctx = await build_field_perm_context(user.id, self._roles, self._perms)
+            denied = [f for f in fields if not can_write_field("promotion", f, ctx)]
+            if denied:
+                raise FieldPermissionDenied(fields=denied, entity="promotion")
         normalized: dict[str, str | None] = {}
         for field in fields:
             value: str | None = getattr(payload, field)
@@ -444,19 +448,31 @@ class PromotionServiceBase:
         self,
         promotion: Promotion,
         members: builtins.list[UUID],
-        style_names: Mapping[UUID, tuple[str, str | None]],
+        style_names: Mapping[UUID, tuple[str, str | None, str | None]],
     ) -> builtins.list[GoodsMemberResponse]:
-        """成员款式 → 响应（品名规则同 ``_item_responses``；查不到款式回落建单快照的简称）。"""
+        """成员款式 → 响应（品名、主图规则同 ``_item_responses``；查不到款式回落建单快照的简称）。"""
         responses: builtins.list[GoodsMemberResponse] = []
         for style_id in members:
-            name, short_name = style_names.get(
-                style_id, (promotion.style_short_name_snapshot, None)
+            name, short_name, image_key = style_names.get(
+                style_id, (promotion.style_short_name_snapshot, None, None)
             )
+            image_url: str | None = None
+            if image_key:
+                try:
+                    image_url = self._attachment_service.get_signed_url(
+                        "private", image_key, expires_in=3600
+                    )
+                except Exception:
+                    log.warning(
+                        "promotion_goods_member_image_url_failed",
+                        extra={"style_id": str(style_id)},
+                    )
             responses.append(
                 GoodsMemberResponse(
                     style_id=style_id,
                     display_short_name=normalize_goods_short_name(short_name) or name,
                     goods_title=name,
+                    style_main_image_url=image_url,
                 )
             )
         return responses
@@ -544,7 +560,7 @@ class PromotionServiceBase:
         negotiators: Mapping[UUID, UUID] | None = None,
         members_by_goods: Mapping[UUID, builtins.list[UUID]] | None = None,
         user_names: Mapping[UUID, str] | None = None,
-        style_names: Mapping[UUID, tuple[str, str | None]] | None = None,
+        style_names: Mapping[UUID, tuple[str, str | None, str | None]] | None = None,
     ) -> PromotionResponse:
         """组装响应：字段权限过滤 + 衍生字段计算 + 矩阵 ``ui``.
 
@@ -741,6 +757,7 @@ class PromotionServiceBase:
             goods_main_id=promotion.goods_main_id,
             blogger_id=promotion.blogger_id,
             pr_id=promotion.pr_id,
+            line_id=promotion.line_id,
             style_code_snapshot=promotion.style_code_snapshot,
             style_short_name_snapshot=promotion.style_short_name_snapshot,
             display_short_name=resolved_display_short_name,
