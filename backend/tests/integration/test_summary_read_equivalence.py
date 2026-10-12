@@ -890,6 +890,75 @@ class TestProductionChannels:
         finally:
             tenant_id_ctx.reset(tok)
 
+    @pytest.mark.parametrize("exclude_brushing", [True, False])
+    async def test_streaming_only_goods_with_brushing(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+        recorder: _SourceRecorder,
+        exclude_brushing: bool,
+    ) -> None:
+        """简报第 3 节：只有直播链接的商品有刷单 → 「普通（只有刷单）+ 直播」两行，两路逐字相等。
+
+        商品只有一条直播千牛链接（D1 支付 500 / 退款 20 / 加购 5 / 3 件），D1 刷单 200。
+        刷单记普通行（设计 2.3）：剔刷单时普通行支付 −200、不剔时 0；普通行没有千牛链接。
+        """
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            style = await product_factory.style(style_code=f"SO{uuid4().hex[:6]}")
+            goods = await _goods(
+                session, tenant_a, style, code=f"G_SO_{uuid4().hex[:5]}", season="春夏"
+            )
+            qn_live = await _pp(session, tenant_a, style, goods, channel="直播")
+            session.add_all(
+                [
+                    _qn(tenant_a, qn_live, D1, "500.00", refund="20.00", add_cart=5, pay_orders=3),
+                    OrderAdjustment(
+                        tenant_id=tenant_a.id,
+                        order_type="刷单",
+                        style_id=style.id,
+                        amount=Decimal("200.00"),
+                        order_date=D1,
+                        exclude_from_roi=True,
+                        status="待付款",
+                    ),
+                ]
+            )
+            await session.commit()
+            await _refresh(session, tenant_a, M_LO, M_HI)
+
+            svc = ProductionService(session)
+            via_summary = await svc.get_report(
+                tenant_a.id, (M_LO, M_HI), exclude_brushing=exclude_brushing
+            )
+            assert recorder.calls[0] == ("production", "summary")
+            via_live = await svc.get_report(
+                tenant_a.id, (M_LO, M_HI), exclude_brushing=exclude_brushing, use_summary=False
+            )
+            assert ("production", "live") in recorder.calls
+            assert _dump(via_summary) == _dump(via_live)
+
+            gid, zero = str(goods.id), Decimal("0.00")
+            normal_pay = Decimal("-200.00") if exclude_brushing else zero
+            # 场景有效性：两行、键唯一、普通在前；剔刷单时普通行支付为负，直播行有销售
+            keys = [(str(r.goods_id), r.channel) for r in via_summary.items]
+            assert keys == [(gid, "普通"), (gid, "直播")]
+            assert len(set(keys)) == len(keys)
+            assert [_channel_tuple(r) for r in via_summary.items] == [
+                (gid, "普通", 0, normal_pay, zero, 0, zero, zero),
+                (gid, "直播", 1, Decimal("500.00"), Decimal("20.00"), 5, zero, zero),
+            ]
+            assert [r.pay_orders for r in via_summary.items] == [0, 3]
+
+            # 内部调用方按商品合计：一行，支付 = 500 − 刷单
+            goods_rows = await svc.get_goods_rows(
+                tenant_a.id, (M_LO, M_HI), exclude_brushing=exclude_brushing, use_summary=False
+            )
+            assert [r.pay_amount for r in goods_rows] == [Decimal("500.00") + normal_pay]
+        finally:
+            tenant_id_ctx.reset(tok)
+
 
 async def _seed_add_cart(
     session: AsyncSession, tenant: Any, product_factory: Any
