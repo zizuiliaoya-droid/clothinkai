@@ -658,7 +658,7 @@ async def promotion_factory(session: AsyncSession, tenant_a: Any) -> Any:
                     "shipped_at",
                     "ship_pushed_at",
                     "ship_pushed_by",
-                    # 流程线 M2（061）主线号；不传由库发号
+                    # 流程线 M2（063）主线号；不传由库发号
                     "line_id",
                     # [(style, sku), …]：按顺序插 promotion_item（不校验成员 / 归属，造数用）
                     "items",
