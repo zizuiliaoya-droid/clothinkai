@@ -55,6 +55,7 @@ from app.modules.credential.api import router as credential_router
 from app.modules.design.api import router as design_router
 from app.modules.finance.api import router as finance_router
 from app.modules.finance.order_adjustment_api import router as order_adjustment_router
+from app.modules.flow.api import router as line_router
 from app.modules.importer.api import router as import_router
 from app.modules.negotiation.api import router as negotiation_router
 from app.modules.product.api import router as product_router
@@ -473,6 +474,7 @@ def create_app() -> FastAPI:
     app.include_router(platform_product_router)  # U10b 平台商品映射 /api/platform-products
     app.include_router(goods_router)  # 商品 / 套装管理 /api/goods
     app.include_router(negotiation_router)  # 谈款审核 /api/negotiations
+    app.include_router(line_router)  # 流程线时间线 /api/lines/{line_id}/events
     app.include_router(urge_router)  # 催发任务 /api/urge
     app.include_router(credential_router)  # U12 平台凭据 /api/credentials
     app.include_router(crawler_router)  # U13 采集 Worker /api/crawler/tasks

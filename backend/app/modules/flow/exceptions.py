@@ -5,13 +5,14 @@
 - ``FLOW_GATE_MISSING``（422）：★ 卡点缺项；``details.missing`` 与 ``ui`` 里的缺项逐条相同
 
 缺端点 scope 仍是现有的 ``PERMISSION_DENIED``，状态机不允许仍是 ``ILLEGAL_STATE_TRANSITION``。
+时间线读接口看不到这条线：``LINE_NOT_FOUND``（404，6.5 第 1 层）。
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 
-from app.core.exceptions import AppException, PermissionDeniedError
+from app.core.exceptions import AppException, PermissionDeniedError, ResourceNotFoundError
 
 # 7.1 表里 FLOW_ACTION_FORBIDDEN 的 rule 取值（admin_only 是 N12 转交）
 FLOW_RULES: tuple[str, ...] = (
@@ -52,6 +53,14 @@ class FlowGateMissingError(AppException):
             details={"missing": items},
         )
         self.missing = tuple(missing)
+
+
+class LineNotFoundError(ResourceNotFoundError):
+    """时间线：这条线不存在，或当前用户看不到线上的任何单据（6.5 第 1 层，回 404 不回 403，免得暴露单据存在）。"""
+
+    code = "LINE_NOT_FOUND"
+    status_code = 404
+    message = "记录不存在"
 
 
 class LineEventPayloadTooLargeError(AppException):

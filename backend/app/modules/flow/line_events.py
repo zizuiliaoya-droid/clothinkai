@@ -7,7 +7,7 @@
   写不进去就让整个动作失败（时间线是业务留痕，不吞异常）
 
 - ``PAYLOAD_FIELD_RULES`` / ``ATTACHMENT_FIELD_RULES`` / ``filter_payload``：6.5 第 3 层（payload 键白名单、收款码类附件）
-读接口（``LineEventService.read``）随 PR-4。
+读接口 ``LineEventService.read`` 在 ``flow/timeline.py``（6.5）。
 """
 
 from __future__ import annotations
@@ -362,13 +362,27 @@ class LineEventRepository:
         await self._session.flush()
         return event
 
-    async def list_by_line(self, *, tenant_id: UUID, line_id: UUID) -> list[LineEvent]:
-        """一条主线的全部事件，按 ``seq`` 排（同一事务的几条 ``created_at`` 可能相同，6.4）。"""
+    async def list_by_line(
+        self,
+        *,
+        tenant_id: UUID,
+        line_id: UUID,
+        newest_first: bool = False,
+        limit: int | None = None,
+    ) -> list[LineEvent]:
+        """一条主线的事件，按 ``seq`` 排（同一事务的几条 ``created_at`` 可能相同，6.4）。
+
+        读接口用 ``newest_first=True``（最新在上）+ ``limit``（上限 + 1，多出来那条只用来判 ``truncated``），
+        走 ``idx_line_event_line (tenant_id, line_id, seq)``。
+        """
+        order = LineEvent.seq.desc() if newest_first else LineEvent.seq
         stmt = (
             select(LineEvent)
             .where(LineEvent.tenant_id == tenant_id, LineEvent.line_id == line_id)
-            .order_by(LineEvent.seq)
+            .order_by(order)
         )
+        if limit is not None:
+            stmt = stmt.limit(limit)
         return list((await self._session.execute(stmt)).scalars().all())
 
 
