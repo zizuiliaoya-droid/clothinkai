@@ -28,6 +28,7 @@ from app.modules.auth.models import Tenant, User
 from app.modules.auth.repository import PermissionRepository, RoleRepository
 from app.modules.blogger.repository import BloggerRepository
 from app.modules.flow.actor import load_flow_actor
+from app.modules.flow.line_events import LineEventRepository, LineEventType
 from app.modules.flow.matrix import FlowActor, View, ui_for
 from app.modules.product.models import Sku
 from app.modules.product.repository import SkuRepository, StyleRepository
@@ -250,21 +251,25 @@ class PromotionServiceBase:
         return [PromotionAmountLogResponse(**r) for r in rows]
 
     async def _close_urge_task(
-        self, promotion_id: UUID, user: User, reason: UrgeCloseReason
+        self, promotion: Promotion, user: User, reason: UrgeCloseReason
     ) -> None:
-        """发布 / 取消时顺手关掉催发任务（PRD 改动 2）。
+        """发布 / 取消时顺手关掉催发任务（PRD 改动 2），关掉了就写 ``urge.closed``。
 
         在 service 内部局部 import：``urge.service`` 用到 ``promotion.urge_calculator``，
         模块级互引会绕回来。
 
-        **故意吞掉异常**：没有催发任务、任务已关闭、甚至催发模块出问题，都不该让
+        **关任务故意吞掉异常**：没有催发任务、任务已关闭、甚至催发模块出问题，都不该让
         「发布推广单」这个主流程失败 —— 催发任务只是辅助视图。失败记一条 warning
         由自动扫描的 ``find_stale_open_tasks`` 兜底收口。
+
+        **事件不吞**（流程线 6.4）：``urge.closed`` 写在 try 之外，写不进去整个动作失败。
         """
         from app.modules.urge.service import UrgeService
 
+        promotion_id = promotion.id
+        task_id: UUID | None = None
         try:
-            await UrgeService(self._session).close_for_promotion(
+            task_id = await UrgeService(self._session).close_for_promotion(
                 promotion_id=promotion_id,
                 tenant_id=user.tenant_id,
                 reason=reason,
@@ -273,6 +278,15 @@ class PromotionServiceBase:
             log.warning(
                 "urge_task_auto_close_failed",
                 extra={"promotion_id": str(promotion_id), "reason": reason.value},
+            )
+        if task_id is not None:
+            await LineEventRepository(self._session).append(
+                tenant_id=promotion.tenant_id,
+                line_id=promotion.line_id,
+                event_type=LineEventType.URGE_CLOSED,
+                actor_id=user.id,
+                promotion_id=promotion_id,
+                payload={"urge_task_id": str(task_id), "close_reason": reason.value},
             )
 
     @staticmethod

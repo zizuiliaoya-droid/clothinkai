@@ -109,6 +109,16 @@ class UrgeTaskRepository:
         )
         return (await self._session.execute(stmt)).scalar_one_or_none()
 
+    async def promotion_line_id(self, *, tenant_id: UUID, promotion_id: UUID) -> UUID:
+        """推广单的主线号（写 ``line_event`` 用；批量路径在候选 SQL 里一并取，不走这里）。"""
+        value = (
+            await self._session.execute(
+                text("SELECT line_id FROM promotion WHERE tenant_id = :t AND id = :p"),
+                {"t": tenant_id, "p": promotion_id},
+            )
+        ).scalar_one()
+        return UUID(str(value))
+
     # ----------------------- 建任务 ----------------------- #
 
     async def ensure_task(
@@ -370,7 +380,7 @@ class UrgeTaskRepository:
             await self._session.execute(
                 text(
                     """
-                    SELECT p.id AS promotion_id, p.blogger_id, p.pr_id
+                    SELECT p.id AS promotion_id, p.blogger_id, p.pr_id, p.line_id
                     FROM promotion p
                     WHERE p.tenant_id = :tenant_id
                       AND p.style_id = :style_id
@@ -406,7 +416,7 @@ class UrgeTaskRepository:
             await self._session.execute(
                 text(
                     """
-                    SELECT p.id AS promotion_id, p.blogger_id, p.pr_id,
+                    SELECT p.id AS promotion_id, p.blogger_id, p.pr_id, p.line_id,
                            p.scheduled_publish_date
                     FROM promotion p
                     WHERE p.tenant_id = :tenant_id
@@ -437,7 +447,8 @@ class UrgeTaskRepository:
             await self._session.execute(
                 text(
                     """
-                    SELECT t.id AS task_id, p.publish_status
+                    SELECT t.id AS task_id, p.publish_status,
+                           p.id AS promotion_id, p.line_id
                     FROM urge_task t
                     JOIN promotion p ON p.id = t.promotion_id
                     WHERE t.tenant_id = :tenant_id
