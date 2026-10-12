@@ -298,6 +298,64 @@ class TestPromotionImportedEvent:
             ImportAdapterRegistry.clear()
             await _cleanup(Maker, suffix, batch_id)
 
+    async def test_batch_with_initiator_writes_actor(self, engine: Any, monkeypatch) -> None:
+        """批次有发起人（生产路径：页面上传）→ imported 的 actor_id = 发起人，payload 不带 system。"""
+        suffix = uuid4().hex[:8]
+        csv_bytes = (
+            "款式编码,小红书ID,报价金额,平台,合作日期\n"
+            f"ST{suffix}A,xhs{suffix}A,500.00,小红书,2026-06-01\n"
+        ).encode()
+        Maker = _use_test_engine(engine, monkeypatch, csv_bytes)
+        batch_id = uuid4()
+        tenant_id = await _seed(Maker, suffix, batch_id)
+        user_id = uuid4()
+        async with Maker() as s:
+            await s.execute(
+                text(
+                    'INSERT INTO "user" (id, tenant_id, username, password_hash, display_name, '
+                    "status, password_must_change, failed_login_count, created_at, updated_at) "
+                    "VALUES (:id, :tid, :u, 'x', '导入人', 'active', false, 0, NOW(), NOW())"
+                ),
+                {"id": user_id, "tid": tenant_id, "u": f"imppr_{suffix}"},
+            )
+            await s.execute(
+                text("UPDATE import_batch SET created_by = :u WHERE id = :id"),
+                {"u": user_id, "id": batch_id},
+            )
+            await s.commit()
+        try:
+            result = await _run_import_batch(batch_id, only_failed=False)
+            assert result["imported"] == 1
+            assert result["failed"] == 0
+
+            async with Maker() as check:
+                events = (
+                    await check.execute(
+                        text(
+                            "SELECT e.actor_id, e.payload FROM line_event e "
+                            "JOIN promotion p ON p.id = e.promotion_id "
+                            "WHERE p.style_code_snapshot = :code "
+                            "AND e.event_type = 'promotion.imported'"
+                        ),
+                        {"code": f"ST{suffix}A"},
+                    )
+                ).fetchall()
+            assert len(events) == 1
+            assert events[0].actor_id == user_id
+            assert events[0].payload == {
+                "source": PROMOTION_SOURCE_IMPORT,
+                "batch_id": str(batch_id),
+                "row_number": 1,
+            }
+            assert "system" not in events[0].payload
+            assert_payload_registered(events[0].payload)
+        finally:
+            ImportAdapterRegistry.clear()
+            await _cleanup(Maker, suffix, batch_id)
+            async with Maker() as c:
+                await c.execute(text('DELETE FROM "user" WHERE id = :u'), {"u": user_id})
+                await c.commit()
+
     async def test_hook_error_fails_the_row(self, engine: Any, monkeypatch) -> None:
         """钩子抛错 → 该行失败：推广单与 import_job(success) 都不落、失败明细有原因（I_ERR）。"""
         suffix = uuid4().hex[:8]
