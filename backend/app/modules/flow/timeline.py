@@ -10,6 +10,8 @@
 
 ``legacy``（上线前记录）：这条线第一条事件之前、按单据字段推出来的时间点（无事件 = 全部），同样过第 2 层
 （分组 + 谈款行级）；只出动作与原因，不带金额、收件。``next_step``：有推广单按推广阶段，否则按看得到的谈款状态。
+推广单头（``promotion``）与推广侧 ``next_step`` 只给第 1 层经推广单或结款单进来的人；只靠谈款进来的
+``promotion = null``，线上已有推广单时 ``next_step = null``。
 查询：动作人权限 2 条（``load_flow_actor``）+ 线头 1 条 + 事件 1 条 + 附件 / 动作人名各 1 条（没有就不查）
 + 催发阈值 1 条（线上有推广单时算阶段）+ 第一条事件时间 1 条（只在超 500 条截断时），与事件条数无关；
 列表接口不 join 事件表。
@@ -197,8 +199,14 @@ class LineEventService:
         self._perms = PermissionRepository(session)
         self._attachment_service = attachment_service
 
-    async def _visible_line(self, line_id: UUID, user: User) -> tuple[FlowActor, LineHeader, bool]:
-        """第 1 层：返回 ``(actor, header, 看得到谈款)``；线上任何单据都看不到 → 404 ``LINE_NOT_FOUND``。"""
+    async def _visible_line(
+        self, line_id: UUID, user: User
+    ) -> tuple[FlowActor, LineHeader, bool, bool]:
+        """第 1 层：返回 ``(actor, header, 看得到谈款, 看得到推广单头)``；线上任何单据都看不到 → 404。
+
+        推广单头（编号、阶段与推广侧 ``next_step``）只给经推广单（``promotion:read``）或结款单
+        （``finance.settlement:read``）进来的人；只靠谈款进来的（默认财务）看不到（设计 5.3 A ~ D 列财务「—」）。
+        """
         actor = await load_flow_actor(user.id, self._roles, self._perms)
         header = await self._lines.header(tenant_id=user.tenant_id, line_id=line_id)
         promotion, negotiation = header.promotion, header.negotiation
@@ -209,7 +217,7 @@ class LineEventService:
         sees_settlement = header.has_settlement and actor.perms.has("finance.settlement", "read")
         if not (sees_promotion or sees_negotiation or sees_settlement):
             raise LineNotFoundError(details={"line_id": str(line_id)})
-        return actor, header, sees_negotiation
+        return actor, header, sees_negotiation, sees_promotion or sees_settlement
 
     async def comment(
         self,
@@ -227,7 +235,7 @@ class LineEventService:
         挂哪一边（6.3）：线上已有推广单只挂 ``promotion_id``，还没有只挂 ``negotiation_id``。
         图片后端代传私有桶（用途 ``line_comment_image``）；事件写失败整单回滚并删掉已传的对象。
         """
-        actor, header, _ = await self._visible_line(line_id, user)
+        actor, header, _, _ = await self._visible_line(line_id, user)
         if not (
             actor.perms.has(SCOPE_NEGOTIATION, "write") or actor.perms.has("promotion", "write")
         ):
@@ -335,7 +343,9 @@ class LineEventService:
             )
 
     async def read(self, line_id: UUID, user: User) -> LineTimelineResponse:
-        actor, header, sees_negotiation = await self._visible_line(line_id, user)
+        actor, header, sees_negotiation, sees_promotion_head = await self._visible_line(
+            line_id, user
+        )
         tenant_id = user.tenant_id
         promotion, negotiation = header.promotion, header.negotiation
 
@@ -409,11 +419,16 @@ class LineEventService:
 
         stage, doc = await self._doc(actor, header)
         comment = ui_for(actor, doc).actions.get("comment")
-        step = next_step(
-            promotion_stage=stage,
-            negotiation_status=(
-                negotiation.status if negotiation is not None and sees_negotiation else None
-            ),
+        # 线上已有推广单、他又看不到推广单头：不给下一步（谈款「已定稿」那格本来也是 None）
+        step = (
+            None
+            if promotion is not None and not sees_promotion_head
+            else next_step(
+                promotion_stage=stage,
+                negotiation_status=(
+                    negotiation.status if negotiation is not None and sees_negotiation else None
+                ),
+            )
         )
         return LineTimelineResponse(
             line_id=line_id,
@@ -426,7 +441,7 @@ class LineEventService:
                 TimelinePromotion(
                     id=promotion.id, internal_code=promotion.internal_code, stage=stage
                 )
-                if promotion is not None and stage is not None
+                if promotion is not None and stage is not None and sees_promotion_head
                 else None
             ),
             next_step=(

@@ -11,6 +11,8 @@
 - ``legacy``：只有字段的旧单读出各时间点（日期按 00:00 Asia/Shanghai）；只出第一条事件之前的点（截断时另查第一条，
   注入 L_CUT、L_TRUNC）；过分组（财务只见结款两点，注入 L_GROUP）与谈款行级（PR 乙看不到谈款的点，注入 L_ROW）
 - ``next_step``：有推广单按推广阶段，否则按谈款状态（注入 NS_NEG）
+- 推广单头只给经推广单 / 结款单进来的人：财务只靠谈款进来 → ``promotion``、``next_step`` 为 null；经结款单照常有
+  （注入 L2_HEAD、L2_STEP）
 """
 
 from __future__ import annotations
@@ -365,6 +367,106 @@ class TestLayerOne:
         assert [(e.event_type, e.payload) for e in resp.events] == [
             ("review.approved", {"payable": "500.00"})
         ]
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+class TestPromotionHeaderEntry:
+    """推广单头与推广侧 ``next_step`` 只给经推广单（``promotion:read``）或结款单（``finance.settlement:read``）
+    入口进来的人（设计 5.3：A ~ D 列财务是「—」）；只靠谈款进来的 → ``promotion = null``，已有推广单时
+    ``next_step = null``（注入 L2_HEAD、L2_STEP）。"""
+
+    async def _finalized_line(
+        self,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        negotiation_factory: Any,
+    ) -> tuple[Any, Any, Any, Any]:
+        style = await product_factory.style()
+        blogger = await blogger_factory.blogger()
+        promo = await promotion_factory.promotion(
+            style=style, blogger=blogger, pr=flow_users.pr, ship_status="待发货"
+        )
+        neg = await negotiation_factory.negotiation(
+            style=style,
+            blogger=blogger,
+            pr=flow_users.pr,
+            status="已定稿",
+            promotion_id=promo.id,
+            line_id=promo.line_id,
+        )
+        return style, blogger, promo, neg
+
+    async def test_finance_via_negotiation_gets_no_promotion_header(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        line: _Line,
+        signed: list[str],
+    ) -> None:
+        svc = LineEventService(session)
+        fin = await svc.read(line.line_id, flow_users.finance)
+        assert fin.promotion is None
+        assert fin.next_step is None
+        # 谈款照常：谈款头与谈款段事件都在
+        assert fin.negotiation is not None and fin.negotiation.status == "已定稿"
+        types = {e.event_type for e in fin.events}
+        assert {"negotiation.submitted", "negotiation.finalized"} <= types
+        # 对照：同一条线管理员 / 主管 / PR 照常有推广单头
+        for user in (flow_users.admin, flow_users.pr_manager, flow_users.pr):
+            resp = await svc.read(line.line_id, user)
+            assert resp.promotion is not None and resp.promotion.id == line.promotion_id, user
+
+    async def test_stage_a_to_d_next_step_by_entry(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        negotiation_factory: Any,
+        signed: list[str],
+    ) -> None:
+        """推广单在「待推送仓库」（A 列）：PR 有下一步，财务（只靠谈款）推广头与下一步都是 null。"""
+        _, _, promo, _ = await self._finalized_line(
+            flow_users, product_factory, blogger_factory, promotion_factory, negotiation_factory
+        )
+        svc = LineEventService(session)
+        own = await svc.read(promo.line_id, flow_users.pr)
+        assert own.promotion is not None and own.promotion.stage == "待推送仓库"
+        assert own.next_step is not None
+        fin = await svc.read(promo.line_id, flow_users.finance)
+        assert (fin.promotion, fin.next_step) == (None, None)
+        assert fin.negotiation is not None
+        # 路由层同样不带推广编号
+        resp = await _call(session, flow_users.finance, f"/api/lines/{promo.line_id}/events")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert (body["promotion"], body["next_step"]) == (None, None)
+        assert promo.internal_code not in resp.text
+
+    async def test_finance_via_settlement_keeps_promotion_header(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        negotiation_factory: Any,
+        settlement_factory: Any,
+        signed: list[str],
+    ) -> None:
+        style, blogger, promo, _ = await self._finalized_line(
+            flow_users, product_factory, blogger_factory, promotion_factory, negotiation_factory
+        )
+        await settlement_factory.settlement(
+            style=style, blogger=blogger, promotion=promo, pr=flow_users.pr
+        )
+        fin = await LineEventService(session).read(promo.line_id, flow_users.finance)
+        assert fin.promotion is not None and fin.promotion.id == promo.id
+        assert fin.promotion.internal_code == promo.internal_code
+        assert fin.next_step is not None
 
 
 @pytest.mark.usefixtures("tenant_ctx")

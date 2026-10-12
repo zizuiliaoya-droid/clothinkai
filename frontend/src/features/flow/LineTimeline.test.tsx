@@ -183,6 +183,19 @@ describe("LineDrawer 留言框", () => {
     await waitFor(() => expect(api.getLineEvents).toHaveBeenCalledTimes(2));
   });
 
+  it("只靠谈款进来（promotion = null）→ 抽屉头只有谈款信息，不出推广编号与下一步", async () => {
+    api.getLineEvents.mockResolvedValue(
+      data({ promotion: null, next_step: null, hidden_segments: [], negotiation: { id: "n1", status: "已定稿" } }),
+    );
+    render(wrap(<LineDrawer lineId="L1" onClose={vi.fn()} goodsName="上衣" />));
+    await screen.findByText("推送仓库发货");
+    expect(screen.getByText("谈款")).toBeTruthy();
+    expect(screen.getByText("已定稿")).toBeTruthy();
+    expect(screen.queryByText("TG-0001")).toBeNull();
+    expect(screen.queryByText("待仓库发货")).toBeNull();
+    expect(screen.queryByText(/^下一步/)).toBeNull();
+  });
+
   it("看不到这条线（404）→ 提示文字，不出时间线", async () => {
     api.getLineEvents.mockRejectedValue({ response: { status: 404, data: { code: "LINE_NOT_FOUND" } } });
     render(wrap(<LineDrawer lineId="L1" onClose={vi.fn()} />));
