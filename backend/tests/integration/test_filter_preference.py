@@ -96,6 +96,29 @@ class TestFilterRoundtrip:
         finally:
             tenant_id_ctx.reset(tok)
 
+    async def test_store_three_pages_independent(
+        self, session: AsyncSession, tenant_a: Any, factory: Any, admin_role: Any
+    ) -> None:
+        """7e R4 店铺拆成日 / 周 / 月三页，各记各的筛选。"""
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            user = await factory.user(tenant_a, roles=[admin_role])
+            svc = UserPreferenceService(session)
+            presets = {
+                "store_daily": "last_7d",
+                "store_weekly": "last_30d",
+                "store_monthly": "last_month",
+            }
+            # 走接口函数：白名单在接口层校验
+            for code, preset in presets.items():
+                assert await save_filter_preference(code, user, svc, {"preset": preset}) == {
+                    "ok": True
+                }
+            for code, preset in presets.items():
+                assert await get_filter_preference(code, user, svc) == {"preset": preset}, code
+        finally:
+            tenant_id_ctx.reset(tok)
+
     async def test_users_do_not_share_filters(
         self, session: AsyncSession, tenant_a: Any, factory: Any, admin_role: Any
     ) -> None:

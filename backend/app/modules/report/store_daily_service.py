@@ -6,7 +6,7 @@ from collections import defaultdict
 from collections.abc import Mapping
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from sqlalchemy import func, text
@@ -20,11 +20,16 @@ from app.modules.report.advanced_repository import StoreDailyRepository
 from app.modules.report.advanced_schemas import (
     StoreDailyManualUpdate,
     StoreDailyRow,
+    StoreReport,
 )
 from app.modules.report.domain import bucket_start
 from app.modules.report.extra_metrics import aggregate_extra
+from app.modules.report.store_buckets import bucket_store_rows
 from app.modules.report.summary_read import SummaryReadRepository, record_source
 from app.modules.report.work_progress_models import StoreDaily
+
+# 新三页的 record_source / 耗时标签（旧接口仍用 store_daily）
+_REPORT_LABELS = {"day": "store_daily", "week": "store_weekly", "month": "store_monthly"}
 
 
 def _sum_optional(current: Decimal | None, value: Decimal | None) -> Decimal | None:
@@ -72,6 +77,50 @@ class StoreDailyService:
         for row in result:
             row.extra = extra_by_bucket.get(str(row.date), {})
         return result
+
+    async def get_store_report(
+        self,
+        tenant_id: UUID,
+        time_range: tuple[date, date],
+        granularity: Literal["day", "week", "month"],
+    ) -> StoreReport:
+        """店铺日明细 / 周汇总 / 月度汇总（7e R4，设计 2.4）。
+
+        整个请求区间只判一次来源（一个响应只有一种来源）：汇总读 ``shop_daily_summary``、
+        实时读 ``StoreDailyRepository.aggregate``，两路都是日行且已 LEFT JOIN ``store_daily``；
+        周 / 月由 ``bucket_store_rows`` 在日行上逐天套默 13 与仅退款后分桶，**不读**周 / 月汇总表。
+        """
+        label = _REPORT_LABELS[granularity]
+        date_from, date_to = time_range
+        rows = await self._read_day_rows(tenant_id, date_from, date_to, label)
+        items = bucket_store_rows(rows, granularity, date_from, date_to)
+        extra_by_bucket = await self._aggregate_extra(tenant_id, date_from, date_to, granularity)
+        for item in items:
+            item.extra = extra_by_bucket.get(str(bucket_start(item.date_from, granularity)), {})
+        return StoreReport(
+            granularity=granularity,
+            date_from=date_from,
+            date_to=date_to,
+            items=items,
+            recorded_days=sum(i.refund_only_days for i in items),
+            total_days=sum(i.day_count for i in items),
+        )
+
+    async def _read_day_rows(
+        self, tenant_id: UUID, date_from: date, date_to: date, label: str
+    ) -> list[Mapping[str, Any]]:
+        """``[date_from, date_to]`` 的店铺日行：区间被汇总表完整覆盖就读汇总，否则实时。"""
+        fresh = await self._summary.freshness(tenant_id, date_from, date_to)
+        with report_query_duration_seconds.labels(label).time():
+            if fresh.source == "summary":
+                record_source(label, "summary")
+                return await self._summary.store_daily(
+                    tenant_id=tenant_id, date_from=date_from, date_to=date_to
+                )
+            record_source(label, "live")
+            return await self._repo.aggregate(
+                tenant_id=tenant_id, date_from=date_from, date_to=date_to
+            )
 
     async def _aggregate_extra(
         self, tenant_id: UUID, date_from: date, date_to: date, granularity: str

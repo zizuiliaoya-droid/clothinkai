@@ -767,3 +767,143 @@ class TestProductionMargin:
         # A：6 × 30.50 = 183.00；B：3 × 45.00 = 135.00
         assert _margin(items[str(a.goods.id)]) == ("183.00", "717.00", "0.7967")
         assert _margin(items[str(b.goods.id)]) == ("135.00", "365.00", "0.7300")
+
+
+# ----------------------- 店铺日 / 周 / 月（7e R4，设计 2.4） ----------------------- #
+
+_STORE_PAGES = ("daily", "weekly", "monthly")
+_STORE_LABELS = {"daily": "store_daily", "weekly": "store_weekly", "monthly": "store_monthly"}
+# 旧接口 /store-daily 的行键（保留一个版本，结构不变）
+_LEGACY_STORE_KEYS = {
+    "date",
+    "visitors",
+    "pay_amount",
+    "pay_orders",
+    "ad_spend_total",
+    "zhitongche_spend",
+    "yinli_spend",
+    "extra",
+}
+# 上月第一个不在 1 号的周三（区间从周三起、不是整月）
+_AFTER_FIRST = _M_LO + timedelta(days=1)
+_WED = _AFTER_FIRST + timedelta(days=(2 - _AFTER_FIRST.weekday()) % 7)
+
+
+def _store(page: str, lo: Any, hi: Any) -> str:
+    return f"/api/reports/store/{page}?preset=custom&date_from={lo}&date_to={hi}"
+
+
+@pytest.fixture
+def store_recorder(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str]]:
+    """拦截店铺 service 的 record_source，记下每次读取走了哪条路径。"""
+    import app.modules.report.store_daily_service as store_mod
+
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(store_mod, "record_source", lambda r, s: calls.append((r, s)))
+    return calls
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+class TestStoreReport:
+    @pytest.mark.parametrize("page", _STORE_PAGES)
+    async def test_finance_forbidden(
+        self, session: AsyncSession, flow_users: Any, page: str
+    ) -> None:
+        """财务没有店铺读权限：三页都 403（菜单也不该出，见前端）。"""
+        resp = await _call(session, flow_users.finance, "GET", _store(page, _M_LO, _M_HI))
+        assert (resp.status_code, resp.json()["code"]) == (403, "PERMISSION_DENIED")
+        assert resp.json()["details"]["required_scope"] == "report.store_daily"
+
+    @pytest.mark.parametrize("page", _STORE_PAGES)
+    async def test_pr_manager_reads(
+        self, session: AsyncSession, flow_users: Any, page: str
+    ) -> None:
+        resp = await _call(session, flow_users.pr_manager, "GET", _store(page, _M_LO, _M_HI))
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["granularity"] == {"daily": "day", "weekly": "week", "monthly": "month"}[page]
+        assert (body["date_from"], body["date_to"]) == (str(_M_LO), str(_M_HI))
+        assert set(body) == {
+            "granularity",
+            "date_from",
+            "date_to",
+            "items",
+            "recorded_days",
+            "total_days",
+        }
+
+    @pytest.mark.parametrize("page", _STORE_PAGES)
+    @pytest.mark.parametrize(
+        ("query", "code"),
+        [
+            ("preset=custom&date_from=2025-01-01&date_to=2026-01-03", "REPORT_INVALID_TIME_RANGE"),
+            ("preset=custom&date_from=2026-03-02&date_to=2026-03-01", "REPORT_INVALID_TIME_RANGE"),
+            ("preset=last_year", "REPORT_INVALID_TIME_PRESET"),
+        ],
+        ids=["span_over_366", "from_after_to", "unknown_preset"],
+    )
+    async def test_invalid_range_422(
+        self, session: AsyncSession, flow_users: Any, page: str, query: str, code: str
+    ) -> None:
+        resp = await _call(
+            session, flow_users.pr_manager, "GET", f"/api/reports/store/{page}?{query}"
+        )
+        assert (resp.status_code, resp.json()["code"]) == (422, code)
+
+    async def test_new_rows_real_bounds_legacy_unchanged(
+        self, session: AsyncSession, flow_users: Any
+    ) -> None:
+        """周三手填一项：新周表行上是实际起（周三）；旧接口仍是原来 8 个键、date = 桶首日（周一）。"""
+        ops = flow_users.operations
+        put = await _call(
+            session, ops, "PUT", f"/api/reports/store-daily/{_WED}", {"zhitongche_spend": "40.00"}
+        )
+        assert put.status_code == 200, put.text
+        hi = _WED + timedelta(days=6)
+
+        weekly = await _call(session, ops, "GET", _store("weekly", _WED, hi))
+        assert weekly.status_code == 200, weekly.text
+        (row,) = weekly.json()["items"]
+        assert (row["date_from"], row["date_to"]) == (str(_WED), str(_WED + timedelta(days=4)))
+        assert (row["zhitongche_spend"], row["internal_spend"]) == ("40.00", "40.00")
+        assert weekly.json()["total_days"] == 1
+
+        legacy_q = f"preset=custom&date_from={_WED}&date_to={hi}"
+        for granularity, first_date in (("day", _WED), ("week", _WED - timedelta(days=2))):
+            legacy = await _call(
+                session,
+                ops,
+                "GET",
+                f"/api/reports/store-daily?{legacy_q}&granularity={granularity}",
+            )
+            assert legacy.status_code == 200, legacy.text
+            rows = legacy.json()
+            assert rows, granularity
+            assert all(set(r) == _LEGACY_STORE_KEYS for r in rows), rows[0]
+            assert rows[0]["date"] == str(first_date)
+            assert rows[0]["zhitongche_spend"] == "40.00"
+
+    async def test_one_source_per_response(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        store_recorder: list[tuple[str, str]],
+    ) -> None:
+        """整段只判一次来源：只覆盖了前 7 天时，跨两周以上的请求整段实时、只记一次。"""
+        from app.modules.report.summary_refresh_service import SummaryRefreshService
+
+        await SummaryRefreshService(session).refresh(
+            tenant_id=flow_users.tenant.id, date_from=_M_LO, date_to=_M_LO + timedelta(days=6)
+        )
+        await session.commit()
+        mgr = flow_users.pr_manager
+        for page in _STORE_PAGES:
+            store_recorder.clear()
+            covered = await _call(session, mgr, "GET", _store(page, _M_LO, _M_LO + timedelta(6)))
+            assert covered.status_code == 200, covered.text
+            # 场景有效性：被覆盖的区间真的走汇总
+            assert store_recorder == [(_STORE_LABELS[page], "summary")], page
+            store_recorder.clear()
+            partial = await _call(session, mgr, "GET", _store(page, _M_LO, _M_LO + timedelta(20)))
+            assert partial.status_code == 200, partial.text
+            assert store_recorder == [(_STORE_LABELS[page], "live")], page

@@ -22,7 +22,9 @@ FILTER_PAGE_CODES: frozenset[str] = frozenset(
     {
         "product_roi",  # 投产报表
         "pr_work_progress",  # 工作进度表
-        "store_daily",  # 店铺数据
+        "store_daily",  # 店铺日明细（7e R4 前是店铺数据）
+        "store_weekly",  # 店铺周汇总
+        "store_monthly",  # 店铺月度汇总
         "bi_dashboard",  # BI 看板
     }
 )

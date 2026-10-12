@@ -26,6 +26,7 @@ from app.modules.report.advanced_schemas import (
     ReportFreshnessOut,
     StoreDailyManualUpdate,
     StoreDailyRow,
+    StoreReport,
     TargetCreate,
     TargetWithActual,
 )
@@ -123,10 +124,53 @@ async def list_targets(
 # ----------------------------- 店铺数据 ----------------------------- #
 
 
+_STORE_READ = [require_permission("report.store_daily", "read")]
+
+
+@router.get("/store/daily", response_model=StoreReport, dependencies=_STORE_READ)
+async def get_store_report_daily(
+    user: CurrentActiveUser,
+    service: StoreDailyServiceDep,
+    preset: _PresetQ = "last_30d",
+    date_from: _FromQ = None,
+    date_to: _ToQ = None,
+) -> StoreReport:
+    """店铺日明细（7e R4）：一天一行，``date_from`` = ``date_to``。"""
+    tr = resolve_time_range(preset, date_from, date_to)
+    return await service.get_store_report(user.tenant_id, tr, "day")
+
+
+@router.get("/store/weekly", response_model=StoreReport, dependencies=_STORE_READ)
+async def get_store_report_weekly(
+    user: CurrentActiveUser,
+    service: StoreDailyServiceDep,
+    preset: _PresetQ = "last_30d",
+    date_from: _FromQ = None,
+    date_to: _ToQ = None,
+) -> StoreReport:
+    """店铺周汇总：ISO 周 ∩ 请求区间一行，行上是实际起止。"""
+    tr = resolve_time_range(preset, date_from, date_to)
+    return await service.get_store_report(user.tenant_id, tr, "week")
+
+
+@router.get("/store/monthly", response_model=StoreReport, dependencies=_STORE_READ)
+async def get_store_report_monthly(
+    user: CurrentActiveUser,
+    service: StoreDailyServiceDep,
+    preset: _PresetQ = "last_30d",
+    date_from: _FromQ = None,
+    date_to: _ToQ = None,
+) -> StoreReport:
+    """店铺月度汇总：自然月 ∩ 请求区间一行，行上是实际起止。"""
+    tr = resolve_time_range(preset, date_from, date_to)
+    return await service.get_store_report(user.tenant_id, tr, "month")
+
+
 @router.get(
     "/store-daily",
     response_model=list[StoreDailyRow],
-    dependencies=[require_permission("report.store_daily", "read")],
+    dependencies=_STORE_READ,
+    deprecated=True,
 )
 async def get_store_daily(
     user: CurrentActiveUser,
@@ -139,7 +183,10 @@ async def get_store_daily(
         Query(pattern=r"^(day|week|month|year)$", description="统计粒度"),
     ] = "day",
 ) -> list[StoreDailyRow]:
-    """店铺数据；按周 / 月 / 年时 date 是桶首日（不传 = 按日，旧调用不变）。"""
+    """店铺数据；按周 / 月 / 年时 date 是桶首日（不传 = 按日，旧调用不变）。
+
+    7e R4 起由 ``/store/{daily,weekly,monthly}`` 取代，保留一个版本，返回结构不变。
+    """
     tr = resolve_time_range(preset, date_from, date_to)
     return await service.get_dashboard(user.tenant_id, tr, granularity=granularity)
 
