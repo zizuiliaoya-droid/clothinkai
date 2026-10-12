@@ -1523,6 +1523,73 @@ class TestReviewerRules:
             )
         assert exc.value.code == "PERMISSION_DENIED"
 
+    @pytest.mark.parametrize("wildcard", ["negotiation.*:approve", "negotiation.*:*"])
+    async def test_wildcard_is_not_first_level(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        flow_users: Any,
+        world: _World,
+        wildcard: str,
+    ) -> None:
+        """只靠 ``negotiation.*`` 通配拿到审核权的人做第一级 → 403 ``PERMISSION_DENIED``，``ui``「主管审核」禁用
+        并写明原因（设计 3.2 / 4.1「显式持有」，评审 L4）；显式持有的主管照常能审。"""
+        await _ensure_permission(session, wildcard)
+        await _override(session, tenant_a, flow_users.pr, wildcard)
+        await _override(session, tenant_a, flow_users.pr, "negotiation_all:read")
+        svc = NegotiationService(session)
+        # 场景有效性：通配确实被 has() 命中（路由层的 require_permission 放行），只是没有显式持有
+        actor = await svc._flow_actor(flow_users.pr)
+        assert actor.perms.has("negotiation.review", "approve")
+        assert "negotiation.review:approve" not in actor.perms.scopes
+
+        n = await world.make(flow_users.pr2, "主管待审")
+        seen = await svc.get(n.id, flow_users.pr)
+        assert seen.ui is not None
+        assert seen.ui["actions"]["manager_review"] == {
+            "state": "disabled",
+            "reason": "需 PR 主管审核",
+        }
+        with pytest.raises(PermissionDeniedError) as exc:
+            await svc.review(n.id, _APPROVE, flow_users.pr)
+        assert (exc.value.code, exc.value.status_code) == ("PERMISSION_DENIED", 403)
+        assert (await svc.get(n.id, flow_users.pr2)).status == "主管待审"
+        assert await _events(session, n.id) == []
+
+        resp = await svc.review(n.id, _APPROVE, flow_users.pr_manager)
+        assert (resp.status, resp.reviewed_by) == ("待老板审核", flow_users.pr_manager.id)
+
+    async def test_revoked_explicit_not_restored_by_wildcard(
+        self, session: AsyncSession, tenant_a: Any, flow_users: Any, world: _World
+    ) -> None:
+        """主管被个人撤销 ``negotiation.review:approve``、另有个人授予的 ``negotiation.*:approve`` → 仍然 403（评审 L4）。"""
+        await _ensure_permission(session, "negotiation.*:approve")
+        await _override(session, tenant_a, flow_users.pr_manager, "negotiation.*:approve")
+        await _override(
+            session, tenant_a, flow_users.pr_manager, "negotiation.review:approve", effect="revoke"
+        )
+        svc = NegotiationService(session)
+        n = await world.make(flow_users.pr, "主管待审")
+        seen = await svc.get(n.id, flow_users.pr_manager)
+        assert seen.ui is not None
+        assert seen.ui["actions"]["manager_review"] == {
+            "state": "disabled",
+            "reason": "需 PR 主管审核",
+        }
+        with pytest.raises(PermissionDeniedError):
+            await svc.review(n.id, _APPROVE, flow_users.pr_manager)
+        assert (await svc.get(n.id, flow_users.pr)).status == "主管待审"
+
+
+async def _ensure_permission(session: AsyncSession, scope: str) -> None:
+    """权限目录里没有的 scope（如 ``negotiation.*:approve``）先补一条，``_override`` 才找得到。"""
+    found = (
+        await session.execute(select(Permission).where(Permission.scope == scope))
+    ).scalar_one_or_none()
+    if found is None:
+        session.add(Permission(scope=scope, name=f"测试用 {scope}", category="function"))
+        await session.flush()
+
 
 # ---------------------------------------------------------------------------
 # S8 收货信息与定稿建单（N8、N9；9.3 B「并发防重复建单」「复制到推广单」「PR 不在时」）

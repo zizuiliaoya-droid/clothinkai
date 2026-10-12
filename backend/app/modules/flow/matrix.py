@@ -8,7 +8,7 @@
   用 ``when=(SettlementIn(...),)`` 这类谓词收窄，取第一个命中的格；都不命中 = 隐
 - ``Cell`` 依次判 ``edit`` → 改、``read`` → 读、``grey`` → 灰，都不成立 → 隐。每级是一组判断的「且」；
   ``None`` = 这一级没人，空元组 = 所有人
-- 判断分两类：能力项（``Scope``、``FieldWrite``，不满足 = 缺权限）与规则项（``Owner``、``NotPrOwner``、``NoStar``、
+- 判断分两类：能力项（``Scope``、``ExplicitScope``、``FieldWrite``，不满足 = 缺权限）与规则项（``Owner``、``NotPrOwner``、``NoStar``、
   ``NotFirstReviewer``，不满足 = ``FLOW_ACTION_FORBIDDEN``，带 ``rule`` 与 ``reason``）。``AnyOf`` 是「或」，两类都能组合：
   设计按角色列写的格子（「PR 本人改 / 主管改 / 管理员改」）写成 ``AnyOf(Owner(), Scope("promotion.review", "approve"))``；
   全部不满足时按第一个规则项归类（没有规则项 = 缺权限）
@@ -236,6 +236,21 @@ class Scope(Capability):
 
     def ok(self, actor: FlowActor, doc: FlowDocBase) -> bool:
         return actor.perms.has(self.scope, self.action)
+
+
+@dataclass(frozen=True)
+class ExplicitScope(Capability):
+    """显式持有 ``scope:action`` 这条本身：角色或个人授予了它、且没被个人撤销（有效权限已扣掉撤销）。
+
+    通配不算——``*`` 与 ``module.*:action`` / ``module.*:*`` 都命中不了。谈款第一级审核
+    （设计 3.2 / 4.1「显式持有且不持 ``*``」，评审 L4）；持 ``*`` 的人要靠排在前面的 ``NoStar`` 给出规则原因。
+    """
+
+    scope: str
+    action: str = "read"
+
+    def ok(self, actor: FlowActor, doc: FlowDocBase) -> bool:
+        return f"{self.scope}:{self.action}" in actor.perms.scopes
 
 
 @dataclass(frozen=True)

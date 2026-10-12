@@ -7,7 +7,8 @@ import 本模块即把 ``MATRICES["negotiation"]`` 登记进 ``flow.matrix``；`
 - 看得到 = 本人，或持 ``negotiation_all:read``（主管、财务、运营；管理员靠 ``*``）；草稿只认本人（3.2 可见范围），
   所以别的 PR、仓库整列「—」（这里就是「隐」）
 - PR、主管、管理员持 ``negotiation:write``，财务、运营没有：表里「读/读/读/隐/隐」这类格用它区分
-- 主管一级 = ``negotiation.review:approve`` + 不持 ``*``（``NoStar``）+ ≠ 谈款人；老板一级 = ``negotiation_final:approve``
+- 主管一级 = 不持 ``*``（``NoStar``）+ **显式**持 ``negotiation.review:approve``（``ExplicitScope``，
+  ``negotiation.*`` 通配不算，评审 L4）+ ≠ 谈款人；老板一级 = ``negotiation_final:approve``
   （只入册不绑角色，管理员靠 ``*``）+ ≠ 谈款人 + ≠ 本轮主管（``NotFirstReviewer``）
 - 收货信息：本人，或持 ``negotiation.review:approve`` 的人（主管、临时代理人；管理员靠 ``*``，N8）
 - 服务费、收件三项先过字段规则（谈款复用 ``promotion.quote_amount`` / ``promotion.receiver_*``，4.6）
@@ -24,6 +25,7 @@ from app.modules.flow.matrix import (
     MATRICES,
     AnyOf,
     Cell,
+    ExplicitScope,
     FieldRead,
     FieldWrite,
     Gate,
@@ -54,6 +56,8 @@ NEGOTIATION_STAGES: tuple[str, ...] = tuple(s.value for s in NegotiationStatus)
 
 _WRITE = Scope(SCOPE_NEGOTIATION, "write")
 _REVIEW = Scope(SCOPE_NEGOTIATION_REVIEW, "approve")
+"""代录收货信息用（N8，管理员靠 ``*``）；第一级审核用下面的显式版。"""
+_REVIEW_EXPLICIT = ExplicitScope(SCOPE_NEGOTIATION_REVIEW, "approve")
 _FINAL = Scope(SCOPE_NEGOTIATION_FINAL, "approve")
 _ALL = Scope(SCOPE_NEGOTIATION_ALL, "read")
 
@@ -75,8 +79,9 @@ _QUOTE_WRITE = FieldWrite("promotion", "quote_amount")
 _RECEIVER_READ = AnyOf(*(FieldRead("promotion", f) for f in RECEIVER_FIELDS))
 _RECEIVER_WRITE = AnyOf(*(FieldWrite("promotion", f) for f in RECEIVER_FIELDS))
 
-# 两级审核的「改」：看得到 + scope + 规则（顺序决定「读」的原因：先缺 scope 的用格的 reason）
-_MANAGER_EDIT = (_SEE, _REVIEW, _NO_STAR, _NOT_NEGOTIATOR)
+# 两级审核的「改」：看得到 + scope + 规则（顺序决定「读」的原因：先缺 scope 的用格的 reason）。
+# 主管一级 NoStar 排在显式 scope 前：持 ``*`` 的人没有显式授予，排后面就会落成缺权限而不是 star_first_level
+_MANAGER_EDIT = (_SEE, _NO_STAR, _REVIEW_EXPLICIT, _NOT_NEGOTIATOR)
 _FINAL_EDIT = (_SEE, _FINAL, _NOT_NEGOTIATOR, _NOT_FIRST_REVIEWER)
 # 收货信息的「改」：持写权限的本人或主管 / 代理人 / 管理员，且字段规则读写都过
 _RECEIVER_EDIT = (_SEE, _WRITE, _OWNER_OR_REVIEWER, _RECEIVER_READ, _RECEIVER_WRITE)
