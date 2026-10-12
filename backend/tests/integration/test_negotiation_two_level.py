@@ -607,6 +607,37 @@ class TestReceiverSuggestion:
             "source_label": "谈款定稿 · 10-02",
         }
 
+    async def test_fields_trimmed_per_field_rule(
+        self, session: AsyncSession, tenant_a: Any, flow_users: Any, world: _World
+    ) -> None:
+        """预填三项逐项过字段读规则，和详情里收件三项的投影一致（评审 L3）。"""
+        await world.make(flow_users.pr2, "已定稿", **_RECEIVER)
+        n = await world.make(flow_users.pr, "待补收货地址", **_RECEIVER)
+        svc = NegotiationService(session)
+
+        # 没有撤销：三项都有
+        full = await svc.get(n.id, flow_users.pr_manager)
+        assert full.receiver_suggestion is not None
+        assert {k: getattr(full.receiver_suggestion, k) for k in _RECEIVER} == _RECEIVER
+
+        # 撤了电话的读权限：详情和预填里的电话都是 null，姓名、地址照常有
+        await _override(
+            session,
+            tenant_a,
+            flow_users.pr_manager,
+            "field.promotion.receiver_phone:read",
+            "revoke",
+        )
+        trimmed = await svc.get(n.id, flow_users.pr_manager)
+        expected = {**_RECEIVER, "receiver_phone": None}
+        assert {k: getattr(trimmed, k) for k in _RECEIVER} == expected
+        assert trimmed.receiver_suggestion is not None
+        assert {k: getattr(trimmed.receiver_suggestion, k) for k in _RECEIVER} == expected
+        # 场景有效性：别人没被撤，仍能看到电话
+        other = await svc.get(n.id, flow_users.pr)
+        assert other.receiver_suggestion is not None
+        assert other.receiver_suggestion.receiver_phone == _RECEIVER["receiver_phone"]
+
     async def test_none_and_only_when_receiver_pending(
         self, session: AsyncSession, flow_users: Any, world: _World
     ) -> None:

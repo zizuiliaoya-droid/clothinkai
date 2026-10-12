@@ -386,15 +386,19 @@ class NegotiationService:
         return {"actions": actions}
 
     async def _receiver_suggestion(
-        self, *, tenant_id: UUID, blogger_id: UUID
+        self, *, tenant_id: UUID, blogger_id: UUID, actor: FlowActor
     ) -> ReceiverSuggestion | None:
+        """预填三项逐项过字段读规则（读不到给 null），和 ``_to_response`` 里收件三项的投影一致。"""
         row = await self._repo.receiver_suggestion(tenant_id=tenant_id, blogger_id=blogger_id)
         if row is None:
             return None
+        ctx = actor.field_ctx
+        trimmed = {
+            field: row[field] if can_read_field("promotion", field, ctx) else None
+            for field in RECEIVER_FIELDS
+        }
         return ReceiverSuggestion(
-            receiver_name=row["receiver_name"],
-            receiver_phone=row["receiver_phone"],
-            receiver_address=row["receiver_address"],
+            **trimmed,
             source=row["source"],
             source_label=_suggestion_label(row),
         )
@@ -1280,7 +1284,7 @@ class NegotiationService:
             and save.get("state") == "enabled"
         ):
             response.receiver_suggestion = await self._receiver_suggestion(
-                tenant_id=user.tenant_id, blogger_id=row["blogger_id"]
+                tenant_id=user.tenant_id, blogger_id=row["blogger_id"], actor=actor
             )
         return response
 
