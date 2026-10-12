@@ -572,6 +572,9 @@ _PRODUCTION_ROW_KEYS = {
     "recent7_pay_amount",
     "recent7_total_spend",
     "recent7_net_roi",
+    "goods_cost_total",
+    "gross_profit",
+    "gross_margin_rate",
     "extra",
 }
 

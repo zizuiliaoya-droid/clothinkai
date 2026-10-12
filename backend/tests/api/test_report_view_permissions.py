@@ -463,6 +463,7 @@ _CAPS_EXPECTED: dict[str, dict[str, Any]] = {
         "publish_progress": "own",
         "bi": "personal",
         "production": False,
+        "production_margin": False,
         "store_read": False,
         "store_write": False,
         "export": [],
@@ -473,6 +474,7 @@ _CAPS_EXPECTED: dict[str, dict[str, Any]] = {
         "publish_progress": "all",
         "bi": "full",
         "production": True,
+        "production_margin": False,
         "store_read": True,
         "store_write": False,
         "export": _ALL_EXPORTS,
@@ -483,6 +485,7 @@ _CAPS_EXPECTED: dict[str, dict[str, Any]] = {
         "publish_progress": "all",
         "bi": "full",
         "production": True,
+        "production_margin": True,
         "store_read": True,
         "store_write": True,
         "export": _ALL_EXPORTS,
@@ -493,6 +496,7 @@ _CAPS_EXPECTED: dict[str, dict[str, Any]] = {
         "publish_progress": None,
         "bi": "full",
         "production": False,
+        "production_margin": False,
         "store_read": False,
         "store_write": False,
         "export": ["work-progress"],
@@ -503,6 +507,7 @@ _CAPS_EXPECTED: dict[str, dict[str, Any]] = {
         "publish_progress": "all",
         "bi": "full",
         "production": True,
+        "production_margin": False,
         "store_read": True,
         "store_write": True,
         "export": _ALL_EXPORTS,
@@ -513,6 +518,7 @@ _CAPS_EXPECTED: dict[str, dict[str, Any]] = {
         "publish_progress": None,
         "bi": None,
         "production": False,
+        "production_margin": False,
         "store_read": False,
         "store_write": False,
         "export": [],
@@ -547,6 +553,20 @@ class TestCapabilities:
         assert resp.status_code == 200, resp.text
         assert resp.json()["export"] == ["work-progress", "production"]
         assert resp.json()["production"] is True
+        # 能看投产不等于能看毛利（只管理员）
+        assert resp.json()["production_margin"] is False
+
+    async def test_margin_needs_production_read(self) -> None:
+        """毛利标记 = 投产读 且 F1 可见：超管字段上下文、但没有投产读 → false。"""
+        from app.core.security.field_permissions import FieldPermissionContext
+        from app.core.security.permissions import EffectivePermissions
+        from app.modules.report.capabilities_api import build_capabilities
+
+        superuser = FieldPermissionContext(frozenset(), frozenset(), frozenset(), is_superuser=True)
+        without = EffectivePermissions(user_id="u", scopes=frozenset({"report.bi:read"}))
+        with_prod = EffectivePermissions(user_id="u", scopes=frozenset({"report.production:read"}))
+        assert build_capabilities(without, superuser).production_margin is False
+        assert build_capabilities(with_prod, superuser).production_margin is True
 
     async def test_requires_login(self, session: AsyncSession) -> None:
         from app.core.db import get_session
@@ -562,3 +582,151 @@ class TestCapabilities:
         finally:
             app.dependency_overrides.pop(get_session, None)
         assert resp.status_code == 401
+
+
+# ----------------------- 单品投产毛利三列（7e R3，F1） ----------------------- #
+
+_MARGIN_KEYS = ("goods_cost_total", "gross_profit", "gross_margin_rate")
+
+
+def _margin(row: dict[str, Any]) -> tuple[Any, ...]:
+    return tuple(row[k] for k in _MARGIN_KEYS)
+
+
+def _by_goods(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    return {r["goods_id"]: r for r in rows}
+
+
+@pytest.fixture
+async def margin_seeded(session: AsyncSession, flow_users: Any, product_factory: Any) -> Any:
+    """A：启用成员成本 30.00 + 20.50、另有一个停用成员没有成本，本期与上期都有销售；
+    B：两个启用成员里一个没有成本，本期有销售。"""
+    from types import SimpleNamespace
+
+    from app.modules.collect.models import QianniuDaily
+    from app.modules.product.goods_models import GoodsMain, GoodsStyleItem
+    from app.modules.product.platform_product_models import PlatformProduct
+
+    tenant = flow_users.tenant
+
+    async def goods(members: list[tuple[str | None, bool]]) -> Any:
+        code = f"MG{uuid4().hex[:8]}"
+        g = GoodsMain(
+            tenant_id=tenant.id,
+            goods_code=code,
+            goods_title=f"{code} 商品",
+            season="春夏",
+            is_suit=len(members) > 1,
+        )
+        session.add(g)
+        await session.flush()
+        items = []
+        styles = []
+        for idx, (cost, active) in enumerate(members):
+            style = await product_factory.style(style_code=f"MS{uuid4().hex[:8]}")
+            styles.append(style)
+            item = GoodsStyleItem(
+                tenant_id=tenant.id,
+                goods_main_id=g.id,
+                style_id=style.id,
+                sort_order=idx,
+                single_goods_cost=Decimal(cost) if cost is not None else None,
+                is_active=active,
+            )
+            session.add(item)
+            items.append(item)
+        pp = PlatformProduct(
+            tenant_id=tenant.id,
+            platform="千牛",
+            platform_id=f"P{uuid4().hex[:10]}",
+            style_id=styles[0].id,
+            goods_main_id=g.id,
+            channel="普通",
+            is_active=True,
+        )
+        session.add(pp)
+        await session.flush()
+        return SimpleNamespace(goods=g, items=items, pp=pp)
+
+    def qn(pp: Any, day: Any, pay: str, refund: str, orders: int) -> QianniuDaily:
+        return QianniuDaily(
+            tenant_id=tenant.id,
+            platform_product_id=pp.id,
+            platform_id_snapshot=pp.platform_id,
+            date=day,
+            visitors=100,
+            pay_amount=Decimal(pay),
+            pay_orders=orders,
+            refund_amount=Decimal(refund),
+        )
+
+    a = await goods([("30.00", True), ("20.50", True), (None, False)])
+    b = await goods([("40.00", True), (None, True)])
+    session.add_all(
+        [
+            qn(a.pp, _M_LO + timedelta(days=2), "1000.00", "100.00", 6),
+            # 上一期（环比区间）
+            qn(a.pp, _M_LO - timedelta(days=3), "200.00", "0.00", 2),
+            qn(b.pp, _M_LO + timedelta(days=4), "500.00", "0.00", 3),
+        ]
+    )
+    await session.flush()
+    return SimpleNamespace(users=flow_users, a=a, b=b)
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+class TestProductionMargin:
+    """毛利三列只给管理员（10-10 业务答复）；成本读取时现算，任一启用成员缺成本 → 三列 null。"""
+
+    async def test_admin_hand_computed(self, session: AsyncSession, margin_seeded: Any) -> None:
+        resp = await _call(session, margin_seeded.users.admin, "GET", _PROD)
+        assert resp.status_code == 200, resp.text
+        items = _by_goods(resp.json()["items"])
+        a, b = str(margin_seeded.a.goods.id), str(margin_seeded.b.goods.id)
+        # A：实际销售 900.00；总成本 6 × (30.00 + 20.50) = 303.00（停用成员缺成本不影响）
+        assert _margin(items[a]) == ("303.00", "597.00", "0.6633")
+        # B：一个启用成员没有成本 → 三列都 null，不当 0
+        assert _margin(items[b]) == (None, None, None)
+        # 上期同规则：200.00 − 2 × 50.50
+        assert _margin(_by_goods(resp.json()["previous"])[a]) == ("101.00", "99.00", "0.4950")
+
+    @pytest.mark.parametrize("role", ["pr_manager", "operations"])
+    async def test_non_admin_null_rest_equal(
+        self, session: AsyncSession, margin_seeded: Any, role: str
+    ) -> None:
+        """运营能看成本价、主管看得到销售额：毛利三列都给 null，其余列与管理员逐字相同。"""
+        users = margin_seeded.users
+        admin = await _call(session, users.admin, "GET", _PROD)
+        other = await _call(session, getattr(users, role), "GET", _PROD)
+        assert admin.status_code == other.status_code == 200, other.text
+        for part in ("items", "previous"):
+            rows = other.json()[part]
+            assert rows, part
+            assert all(_margin(r) == (None, None, None) for r in rows), part
+
+        def strip(body: dict[str, Any]) -> dict[str, Any]:
+            return {
+                k: [{c: v for c, v in r.items() if c not in _MARGIN_KEYS} for r in body[k]]
+                if k in ("items", "previous")
+                else body[k]
+                for k in body
+            }
+
+        assert strip(other.json()) == strip(admin.json())
+        # 场景有效性：管理员那边确实有数
+        assert any(_margin(r)[0] is not None for r in admin.json()["items"])
+
+    async def test_cost_change_takes_effect(
+        self, session: AsyncSession, margin_seeded: Any
+    ) -> None:
+        """成本不进汇总表、读取时现算：改成员成本、补上缺的成本，下一次请求就变。"""
+        a, b = margin_seeded.a, margin_seeded.b
+        a.items[0].single_goods_cost = Decimal("10.00")
+        b.items[1].single_goods_cost = Decimal("5.00")
+        await session.flush()
+        resp = await _call(session, margin_seeded.users.admin, "GET", _PROD)
+        assert resp.status_code == 200, resp.text
+        items = _by_goods(resp.json()["items"])
+        # A：6 × 30.50 = 183.00；B：3 × 45.00 = 135.00
+        assert _margin(items[str(a.goods.id)]) == ("183.00", "717.00", "0.7967")
+        assert _margin(items[str(b.goods.id)]) == ("135.00", "365.00", "0.7300")

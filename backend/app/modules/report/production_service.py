@@ -133,11 +133,14 @@ class ProductionService:
         exclude_brushing: bool = True,
         seasons: Sequence[str] | None = None,
         use_summary: bool = True,
+        show_margin: bool = False,
     ) -> ProductionReport:
         """投产报表。``use_summary=False`` 强制实时（BI 看板在整体切汇总表之前用）。
 
         本期、上期与近 7 天各自判断数据源：「最近 30 天」通常被覆盖，它的上一期往往还没有。
         extra（千牛/万相台导出的其余几十列）汇总表不存，始终实时。
+        ``show_margin``：毛利三列给不给（调用方按 ``field_mask.production_margin_visible`` 传；
+        默认 False = 漏传就看不到）。为假时不查成本，三列都是 None；本期与上期同规则。
         """
         cur_from, cur_to = time_range
         span = cur_to - cur_from
@@ -176,9 +179,13 @@ class ProductionService:
                 metric_label="production_recent7",
             )
             extra_by_goods = await self._aggregate_extra(tenant_id, cur_from, cur_to)
-            links = await self._repo.link_counts(
-                tenant_id=tenant_id,
-                goods_ids=list({r["goods_id"] for r in (*cur_rows, *prev_rows)}),
+            goods_ids = list({r["goods_id"] for r in (*cur_rows, *prev_rows)})
+            links = await self._repo.link_counts(tenant_id=tenant_id, goods_ids=goods_ids)
+            # 成本读取时现算（不进汇总表）：汇总 / 实时两路共用这一条
+            unit_costs = (
+                await self._repo.goods_unit_costs(tenant_id=tenant_id, goods_ids=goods_ids)
+                if show_margin
+                else None
             )
         # 按（商品, 渠道）挂到本期行；近 7 天有、本期没有的键丢弃
         recent7 = {(r["goods_id"], r["channel"]): r for r in recent7_rows}
@@ -194,10 +201,21 @@ class ProductionService:
                 row.extra = extra_by_goods.get(gid, {})
                 extra_attached.add(gid)
             items.append(row)
+        previous = [self._to_row(r, exclude_brushing, links) for r in prev_rows]
+        if unit_costs is not None:
+            for row in (*items, *previous):
+                self._attach_margin(row, unit_costs.get(row.goods_id))
         return ProductionReport(
             items=items,
-            previous=[self._to_row(r, exclude_brushing, links) for r in prev_rows],
+            previous=previous,
             recent7_range=Recent7Range(date_from=r7_from, date_to=r7_to),
+        )
+
+    @staticmethod
+    def _attach_margin(row: ProductionRow, unit_cost: Decimal | None) -> None:
+        """毛利三列（只在 ``show_margin`` 时调）；成本缺 → 三列都 None。"""
+        row.goods_cost_total, row.gross_profit, row.gross_margin_rate = style_roi.gross_margin(
+            row.confirmed_amount, row.pay_orders, unit_cost
         )
 
     @staticmethod

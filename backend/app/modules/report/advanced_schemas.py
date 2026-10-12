@@ -172,6 +172,12 @@ class ProductionRow(BaseModel):
     recent7_pay_amount: Decimal | None = None
     recent7_total_spend: Decimal | None = None
     recent7_net_roi: Decimal | None = None
+    # 毛利三列（默 12，只给管理员；其他角色 None）：销售货品总成本 = 支付件数 × 当前单品货品成本
+    # （启用成员 single_goods_cost 之和，读取时现算）；单品毛利 = 实际销售金额 − 总成本；
+    # 单品利润率 = 毛利 / 实际销售金额。任一启用成员没有成本 → 三列都 None
+    goods_cost_total: Decimal | None = None
+    gross_profit: Decimal | None = None
+    gross_margin_rate: Decimal | None = None
     # 千牛/站内导入数据按商品汇总的其余指标（对齐 final.xlsx 投产报表 70 列；
     # qianniu_daily.extra + ad_daily.extra 按 platform_product→商品归集，按 extra_metrics 规则聚合）
     extra: dict = Field(default_factory=dict)
@@ -241,6 +247,8 @@ class ReportCapabilities(BaseModel):
     publish_progress: Literal["all", "own"] | None
     bi: Literal["full", "personal"] | None
     production: bool
+    production_margin: bool
+    """单品投产毛利三列给不给（= ``production`` 且字段规则 F1 可见，只管理员）；false 时页面不渲染这三列。"""
     store_read: bool
     store_write: bool
     export: list[str]

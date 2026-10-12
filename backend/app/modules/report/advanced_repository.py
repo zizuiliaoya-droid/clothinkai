@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
+from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
@@ -760,6 +761,36 @@ class ProductionRepository:
             await self._s.execute(sql, {"tenant_id": tenant_id, "goods_ids": list(goods_ids)})
         ).mappings()
         return {(r["goods_id"], r["channel"]): int(r["n"]) for r in rows}
+
+    async def goods_unit_costs(
+        self, *, tenant_id: UUID, goods_ids: Sequence[UUID]
+    ) -> dict[UUID, Decimal | None]:
+        """商品 → 当前单品货品成本（7e R3 毛利，默 12；读取时现算，改价立即生效）。
+
+        = 启用成员 ``goods_style_item.single_goods_cost`` 之和，同商品列表的 ``total_cost``。
+        任一启用成员没有成本、或没有启用成员 → None（不当 0）；不在返回里的商品按 None 处理。
+        """
+        if not goods_ids:
+            return {}
+        sql = text(
+            """
+            SELECT gi.goods_main_id AS goods_id,
+                   SUM(gi.single_goods_cost) AS unit_cost,
+                   COUNT(*) FILTER (WHERE gi.single_goods_cost IS NULL) AS missing
+            FROM goods_style_item gi
+            WHERE gi.tenant_id = :tenant_id
+              AND gi.is_active = true
+              AND gi.goods_main_id = ANY(CAST(:goods_ids AS uuid[]))
+            GROUP BY gi.goods_main_id
+            """
+        )
+        rows = (
+            await self._s.execute(sql, {"tenant_id": tenant_id, "goods_ids": list(goods_ids)})
+        ).mappings()
+        return {
+            r["goods_id"]: (None if int(r["missing"]) > 0 else Decimal(str(r["unit_cost"])))
+            for r in rows
+        }
 
     async def daily_trend_by_goods(
         self,

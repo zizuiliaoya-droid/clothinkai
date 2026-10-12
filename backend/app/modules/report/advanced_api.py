@@ -37,7 +37,7 @@ from app.modules.report.deps import (
     WorkProgressServiceDep,
 )
 from app.modules.report.domain import resolve_time_range
-from app.modules.report.field_mask import build_field_perm_context
+from app.modules.report.field_mask import build_field_perm_context, production_margin_visible
 from app.modules.report.pr_scope import resolve_pr_scope
 from app.modules.report.summary_read import SummaryReadRepository
 from app.modules.report.work_progress_service import _month_range
@@ -175,6 +175,7 @@ async def update_store_daily(
 async def get_production(
     user: CurrentActiveUser,
     service: ProductionServiceDep,
+    session: SessionDep,
     preset: _PresetQ = "last_30d",
     date_from: _FromQ = None,
     date_to: _ToQ = None,
@@ -183,11 +184,13 @@ async def get_production(
 ) -> ProductionReport:
     # 类目筛选已下线（8a-3，J12）：旧客户端带 category 被 FastAPI 忽略，结果与不带一致
     tr = resolve_time_range(preset, date_from, date_to)
+    field_ctx = await build_field_perm_context(user.id, session)
     return await service.get_report(
         user.tenant_id,
         tr,
         exclude_brushing=exclude_brushing,
         seasons=season,
+        show_margin=production_margin_visible(field_ctx),
     )
 
 

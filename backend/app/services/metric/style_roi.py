@@ -6,11 +6,12 @@ exclude_brushing 是口径标识；刷单金额由上游聚合在计算 confirme
 
 from __future__ import annotations
 
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from app.services.metric.common import safe_div
 
 _Q4 = Decimal("0.0001")
+_CENT = Decimal("0.01")
 
 
 def return_rate(
@@ -68,8 +69,25 @@ def offsite_add_cart(paired_all_cart: int, paired_ad_cart: int, paired_days: int
     return max(paired_all_cart - paired_ad_cart, 0)
 
 
+def gross_margin(
+    confirmed_amount: Decimal, pay_orders: int, unit_cost: Decimal | None
+) -> tuple[Decimal | None, Decimal | None, Decimal | None]:
+    """毛利三列 ``(销售货品总成本, 单品毛利, 单品利润率)``（默 12）。
+
+    销售货品总成本 = 支付件数 × 当前单品货品成本；单品毛利 = 实际销售金额 − 销售货品总成本；
+    单品利润率 = 单品毛利 / 实际销售金额（分母 ≤ 0 → None）。``unit_cost`` 为 None
+    （任一启用成员没有成本）→ 三列都是 None，不当 0。
+    """
+    if unit_cost is None:
+        return None, None, None
+    cost_total = (unit_cost * pay_orders).quantize(_CENT, rounding=ROUND_HALF_UP)
+    profit = (confirmed_amount - cost_total).quantize(_CENT, rounding=ROUND_HALF_UP)
+    return cost_total, profit, safe_div(profit, confirmed_amount, quantize=_Q4)
+
+
 __all__ = [
     "add_to_cart_cost",
+    "gross_margin",
     "net_roi",
     "offsite_add_cart",
     "pre_return_roi",

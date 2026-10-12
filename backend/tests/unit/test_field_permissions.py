@@ -59,6 +59,31 @@ class TestRegistryValues:
     def test_settlement_amount_no_write(self) -> None:
         assert FIELD_PERMISSION_REGISTRY["settlement"]["amount"].writable_roles == frozenset()
 
+    def test_report_production_margin_admin_only(self) -> None:
+        # 7e R3（10-10 业务答复）：单品投产毛利只给管理员，比成本价（含运营 / 财务）更严
+        rule = FIELD_PERMISSION_REGISTRY["report"]["production_margin"]
+        assert rule.visible_roles == frozenset({"admin"})
+        assert rule.writable_roles == frozenset()
+        assert rule.visible_roles <= FIELD_PERMISSION_REGISTRY["sku"]["cost_price"].visible_roles
+
+    @pytest.mark.parametrize(
+        ("roles", "superuser", "expected"),
+        [
+            ({"admin"}, False, True),
+            (set(), True, True),  # platform_admin：持 '*'
+            ({"pr_manager"}, False, False),
+            ({"operations"}, False, False),
+            ({"finance"}, False, False),
+            ({"merchandiser"}, False, False),
+            ({"pr"}, False, False),
+        ],
+    )
+    def test_report_production_margin_read(
+        self, roles: set[str], superuser: bool, expected: bool
+    ) -> None:
+        ctx = _ctx(roles, superuser=superuser)
+        assert can_read_field("report", "production_margin", ctx) is expected
+
     def test_rule_is_frozen(self) -> None:
         # FieldRule 是 @dataclass(frozen=True)，改属性抛 FrozenInstanceError
         with pytest.raises(FrozenInstanceError):

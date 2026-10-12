@@ -87,3 +87,39 @@ class TestOffsiteAddCart:
 
     def test_normal_difference(self) -> None:
         assert style_roi.offsite_add_cart(20, 9, 1) == 11
+
+
+class TestGrossMargin:
+    """毛利三列（默 12）：总成本 = 支付件数 × 单品成本；毛利 = 实际销售 − 总成本；利润率 = 毛利 / 实际销售。"""
+
+    def test_normal(self) -> None:
+        assert style_roi.gross_margin(Decimal("900.00"), 6, Decimal("50.50")) == (
+            Decimal("303.00"),
+            Decimal("597.00"),
+            Decimal("0.6633"),
+        )
+
+    def test_missing_cost_is_all_none(self) -> None:
+        # 任一启用成员没有成本 → 三列都 null，不当 0
+        assert style_roi.gross_margin(Decimal("900.00"), 6, None) == (None, None, None)
+
+    def test_zero_cost_is_not_missing(self) -> None:
+        # 成本录了 0 是真 0（不是缺）
+        assert style_roi.gross_margin(Decimal("100.00"), 2, Decimal("0")) == (
+            Decimal("0.00"),
+            Decimal("100.00"),
+            Decimal("1.0000"),
+        )
+
+    @pytest.mark.parametrize("confirmed", [Decimal("0.00"), Decimal("-50.00")])
+    def test_rate_none_when_sales_not_positive(self, confirmed: Decimal) -> None:
+        # 实际销售 ≤ 0（只有刷单的普通行等）→ 利润率 null，总成本与毛利照算
+        cost, profit, rate = style_roi.gross_margin(confirmed, 3, Decimal("10.00"))
+        assert (cost, profit, rate) == (Decimal("30.00"), confirmed - Decimal("30.00"), None)
+
+    def test_negative_margin(self) -> None:
+        assert style_roi.gross_margin(Decimal("100.00"), 4, Decimal("40.00")) == (
+            Decimal("160.00"),
+            Decimal("-60.00"),
+            Decimal("-0.6000"),
+        )
