@@ -73,6 +73,8 @@ def test_event_type_names_fit_column_and_follow_naming() -> None:
         (LineEventType.FREIGHT_PAID, "settlement"),
         (LineEventType.PROMOTION_SETTLED, "settlement"),
         (LineEventType.RETRO_EDITED, "retro"),
+        (LineEventType.RETRO_CONFIRMED, "retro"),
+        (LineEventType.RETRO_RETURNED, "retro"),
     ],
 )
 def test_event_group_follows_design_table(event_type: LineEventType, group: str) -> None:
