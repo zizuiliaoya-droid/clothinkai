@@ -65,7 +65,11 @@ beforeAll(() => {
   }
 });
 
-beforeEach(() => storeMock.mockReset());
+// 块体写法：mockReset() 返回 mock 本身，简写箭头会把它当 beforeEach 的返回值，
+// vitest 视为清理函数在用例后再调一次 mock（mock 设成拒绝时用例会因此失败）
+beforeEach(() => {
+  storeMock.mockReset();
+});
 afterEach(cleanup);
 
 function row(over: Partial<StoreReportRow>): StoreReportRow {
@@ -204,6 +208,22 @@ describe("StoreReportView 已录 x / y 天", () => {
     const body = tableBody(container);
     expect(await within(body).findByText("2026-09")).toBeTruthy();
     expect(within(body).getByText("已录 1 / 20 天")).toBeTruthy();
+  });
+});
+
+describe("StoreReportView 无权限（7e R4 S7）", () => {
+  it.each([
+    ["day", "店铺日明细"],
+    ["week", "店铺周汇总"],
+    ["month", "店铺月度汇总"],
+  ] as const)("%s 接口 403：显示「没有权限查看%s」，不出表格", async (granularity, title) => {
+    storeMock.mockRejectedValue(
+      Object.assign(new Error("403"), { response: { status: 403, data: { code: "PERMISSION_DENIED" } } })
+    );
+    const { container } = renderView(granularity);
+    expect(await screen.findByText(`没有权限查看${title}`)).toBeTruthy();
+    expect(container.querySelector(".ant-table")).toBeNull();
+    expect(screen.queryByText(/仅退款已录/)).toBeNull();
   });
 });
 

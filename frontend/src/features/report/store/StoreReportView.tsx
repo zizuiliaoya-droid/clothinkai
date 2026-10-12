@@ -20,6 +20,8 @@ import {
   useReportCapabilities,
 } from "@/features/report/useReportCapabilities";
 import { extractErrorMessage } from "@/services/apiClient";
+import { isForbiddenError } from "@/features/warehouse/shipmentForm";
+import { ReportForbidden } from "@/features/report/components/ReportForbidden";
 import {
   ReportCardTitle,
   ReportFreshness,
@@ -64,11 +66,13 @@ export function StoreReportView({ granularity }: { granularity: StoreGranularity
   const { preset } = filters;
   const range = toDateRange(filters.date_from, filters.date_to);
   const { dateFrom: df, dateTo: dt, enabled } = useReportTimeRange(preset, range);
-  const { data: report, isLoading } = useQuery({
+  const { data: report, isLoading, error } = useQuery({
     // 前缀 store-daily：手动刷新汇总后 ReportFreshness 按它作废
     queryKey: ["store-daily", granularity, preset, df, dt],
     // 等偏好回填完再查，避免先用默认值查一次、回填后又查一次。
     enabled: enabled && ready,
+    // 403 重试没有意义，直接显示无权限
+    retry: (count, err) => !isForbiddenError(err) && count < 1,
     queryFn: () => getStoreReport(granularity, { preset, date_from: df, date_to: dt }),
   });
   // 导出按钮按 capabilities 出现（持 report.export:read 且能读这张表）；能力没回来前不显示
@@ -86,6 +90,11 @@ export function StoreReportView({ granularity }: { granularity: StoreGranularity
     return granularity === "day" ? items : [...items].reverse();
   }, [report, granularity]);
   const columns = useMemo(() => buildStoreColumns(granularity, rows), [granularity, rows]);
+
+  // 菜单按 capabilities 已隐藏；直接输入 URL 进来、接口 403 时给明确提示，不显示空表
+  if (isForbiddenError(error)) {
+    return <ReportForbidden name={page.title} />;
+  }
 
   return (
     <Card

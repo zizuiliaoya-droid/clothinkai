@@ -14,6 +14,8 @@ import { useQuery } from "@tanstack/react-query";
 import type { ColumnsType } from "antd/es/table";
 import { getPublishCards, getPublishSummary } from "@/features/report/api";
 import type { StyleCard } from "@/features/report/types";
+import { ReportForbidden } from "@/features/report/components/ReportForbidden";
+import { isForbiddenError } from "@/features/warehouse/shipmentForm";
 
 const PRESETS = [
   { label: "近7天", value: "last_7d" },
@@ -30,14 +32,17 @@ export function PublishProgressPage() {
   const [keyword, setKeyword] = useState<string | undefined>();
   const [page, setPage] = useState(1);
 
-  const { data: summary } = useQuery({
+  // 403 重试没有意义，直接显示无权限（7e R4：原来 403 时统计卡显示成全 0）
+  const { data: summary, error: summaryError } = useQuery({
     queryKey: ["publish-summary", preset],
     queryFn: () => getPublishSummary({ preset }),
+    retry: (count, err) => !isForbiddenError(err) && count < 1,
   });
-  const { data: cards, isLoading } = useQuery({
+  const { data: cards, isLoading, error: cardsError } = useQuery({
     queryKey: ["publish-cards", preset, keyword, page],
     queryFn: () =>
       getPublishCards({ preset, keyword, page, page_size: 12 }),
+    retry: (count, err) => !isForbiddenError(err) && count < 1,
   });
 
   // Layer2 商品卡片（表格呈现）
@@ -56,6 +61,11 @@ export function PublishProgressPage() {
     { title: "超时率", dataIndex: "overdue_rate", width: 90, render: pct },
     { title: "点赞成本", dataIndex: "cpl", width: 100, render: money },
   ];
+
+  // 菜单按 capabilities 已隐藏；直接输入 URL 进来、接口 403 时给明确提示，不显示全 0 的统计卡
+  if (isForbiddenError(summaryError) || isForbiddenError(cardsError)) {
+    return <ReportForbidden name="发文进度表" />;
+  }
 
   return (
     <Space direction="vertical" size={16} style={{ width: "100%" }}>
