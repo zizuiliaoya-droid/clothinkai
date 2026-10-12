@@ -163,6 +163,29 @@ async def close_urge_task(
     return await _svc(session).close_task(task_id, user, reason=payload.reason)
 
 
+@router.post(
+    "/tasks/{task_id}/complete",
+    response_model=UrgeTaskDetailResponse,
+    dependencies=[require_permission(SCOPE_URGE, "write")],
+)
+async def complete_urge_task(
+    task_id: UUID,
+    session: SessionDep,
+    user: CurrentActiveUser,
+    note: Annotated[str | None, Form(max_length=2000)] = None,
+    file: Annotated[UploadFile | None, File()] = None,
+) -> UrgeTaskDetailResponse:
+    """标记完成（流程线 3.9 U1）：只在进行中，截图必传。
+
+    ``file`` 在路由上可选、由 service 判必传：这样没图拿到的是 ``URGE_COMPLETE_SCREENSHOT_REQUIRED``
+    而不是笼统的 VALIDATION_ERROR，而且先判状态（已关闭 409）再判截图。
+    """
+    shot: tuple[str | None, str | None, bytes] | None = None
+    if file is not None:
+        shot = (file.filename, file.content_type, await file.read())
+    return await _svc(session).complete_task(task_id, user, note=note, screenshot=shot)
+
+
 # ---------------------------------------------------------------------------
 # 发起催发
 # ---------------------------------------------------------------------------
