@@ -421,6 +421,18 @@ async def _process_one_row(
                 outcome = RowOutcome(
                     resource_id=rid, kind=RowKind.INSERTED if inserted else RowKind.UPDATED
                 )
+            # 流程线 6.2：新插入的行调适配器的可选钩子（只有 manual_promotion 实现，写 promotion.imported）。
+            # 与插入、import_job(success) 同一个 per-row 事务；抛错走下面的失败路径，整行失败
+            after_insert = getattr(adapter, "after_insert", None)
+            if after_insert is not None and outcome.kind is RowKind.INSERTED:
+                await after_insert(
+                    app_s,
+                    outcome.resource_id,
+                    tenant_id=tenant_id,
+                    actor_id=actor_id,
+                    batch_id=batch_id,
+                    row_number=row_number,
+                )
             await _upsert_job(
                 app_s,
                 batch_id=batch_id,

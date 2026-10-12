@@ -185,6 +185,8 @@ EVENT_GROUP: dict[LineEventType, str] = {
 # 推广单 promotion.created 的来源（payload.source；上线后核对 SQL 按「直接新建」筛）
 PROMOTION_SOURCE_DIRECT = "直接新建"
 PROMOTION_SOURCE_NEGOTIATION = "谈款定稿"
+# promotion.imported 的来源（导入站外推广，每行一条）
+PROMOTION_SOURCE_IMPORT = "导入站外推广"
 
 
 class PayloadContainer:
@@ -394,6 +396,7 @@ __all__ = [
     "PAYLOAD_FIELD_RULES",
     "PAYLOAD_MAX_BYTES",
     "PROMOTION_SOURCE_DIRECT",
+    "PROMOTION_SOURCE_IMPORT",
     "PROMOTION_SOURCE_NEGOTIATION",
     "LineEventRepository",
     "LineEventType",
