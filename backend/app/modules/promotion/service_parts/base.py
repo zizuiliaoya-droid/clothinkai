@@ -317,19 +317,23 @@ class PromotionServiceBase:
                 details={"keys": keys},
             )
 
-    async def _normalize_receiver(self, payload: _PayloadT, user: User) -> _PayloadT:
+    async def _normalize_receiver(
+        self, payload: _PayloadT, user: User, *, check_write: bool
+    ) -> _PayloadT:
         """收件三项：字段写权限（越权的全列出来）→ 电话校验与规范化 → 去空白后空串 = 清空。
 
         只处理这次传了的（``model_fields_set``）；清空也算写，同样要写权限。
+        ``check_write=False`` 只给谈款定稿建单（评审 L2：复制审过的谈款，不按 ``user`` 查写权限）。
         返回带规范化值的副本，后面的比对、落库都用它。
         """
         fields = [f for f in RECEIVER_FIELDS if f in payload.model_fields_set]
         if not fields:
             return payload
-        ctx = await build_field_perm_context(user.id, self._roles, self._perms)
-        denied = [f for f in fields if not can_write_field("promotion", f, ctx)]
-        if denied:
-            raise FieldPermissionDenied(fields=denied, entity="promotion")
+        if check_write:
+            ctx = await build_field_perm_context(user.id, self._roles, self._perms)
+            denied = [f for f in fields if not can_write_field("promotion", f, ctx)]
+            if denied:
+                raise FieldPermissionDenied(fields=denied, entity="promotion")
         normalized: dict[str, str | None] = {}
         for field in fields:
             value: str | None = getattr(payload, field)

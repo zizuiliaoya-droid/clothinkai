@@ -26,7 +26,12 @@ from sqlalchemy import event, select
 from sqlalchemy import text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import AppException, IllegalStateTransitionError, PermissionDeniedError
+from app.core.exceptions import (
+    AppException,
+    FieldPermissionDenied,
+    IllegalStateTransitionError,
+    PermissionDeniedError,
+)
 from app.core.tenancy import tenant_id_ctx
 from app.modules.auth.models import Permission, User, UserPermissionOverride
 from app.modules.flow.exceptions import FlowActionForbiddenError, FlowGateMissingError
@@ -52,7 +57,12 @@ from app.modules.negotiation.service import FINALIZED_CONFLICT_MESSAGE, Negotiat
 from app.modules.product.goods_models import GoodsMain, GoodsStyleItem
 from app.modules.promotion.enums import CooperationMode
 from app.modules.promotion.exceptions import InvalidReceiverPhoneError
-from app.modules.promotion.schemas import GoodsItemIn, PromotionShipPushRequest, PromotionUpdate
+from app.modules.promotion.schemas import (
+    GoodsItemIn,
+    PromotionCreate,
+    PromotionShipPushRequest,
+    PromotionUpdate,
+)
 from app.modules.promotion.service import PromotionService
 from app.modules.promotion.urge_calculator import get_today
 from tests.concurrency import committed, default_tenant_id, run_concurrently
@@ -119,11 +129,13 @@ async def _goods(
     return goods
 
 
-async def _override(session: AsyncSession, tenant: Any, user: Any, scope: str) -> None:
+async def _override(
+    session: AsyncSession, tenant: Any, user: Any, scope: str, effect: str = "grant"
+) -> None:
     perm = (await session.execute(select(Permission).where(Permission.scope == scope))).scalar_one()
     session.add(
         UserPermissionOverride(
-            tenant_id=tenant.id, user_id=user.id, permission_id=perm.id, effect="grant"
+            tenant_id=tenant.id, user_id=user.id, permission_id=perm.id, effect=effect
         )
     )
     await session.flush()
@@ -1850,6 +1862,85 @@ class TestReceiverProxy:
         assert denied.value.code == "PERMISSION_DENIED"
         assert (await svc.get(n.id, flow_users.pr)).status == "待补收货地址"
         assert await _promotion_count(session, n.line_id) == 0
+
+    @pytest.mark.parametrize(
+        "lost",
+        ["roles", "field.promotion.quote_amount:write", "field.promotion.receiver_phone:write"],
+    )
+    async def test_proxy_confirm_after_pr_lost_permissions(
+        self, session: AsyncSession, tenant_a: Any, flow_users: Any, world: _World, lost: str
+    ) -> None:
+        """谈款 PR 被收了角色 / 个人撤销了服务费或收件写权限（离职、调岗）后，主管照样代确认（评审 L2、11-57 ①）：
+        定稿复制的是两级审过的谈款，字段写权限只看确认人；建单人仍是谈款 PR，确认人另记。"""
+        n = await _receiver_pending(world, flow_users.pr, flow_users)
+        if lost == "roles":
+            await session.execute(
+                sa_text("DELETE FROM user_role WHERE user_id = :id"), {"id": flow_users.pr.id}
+            )
+        else:
+            await _override(session, tenant_a, flow_users.pr, lost, "revoke")
+        done = await NegotiationService(session).confirm_receiver(
+            n.id, _confirm(), flow_users.pr_manager
+        )
+        assert (done.status, done.pr_id, done.receiver_confirmed_by) == (
+            "已定稿",
+            flow_users.pr.id,
+            flow_users.pr_manager.id,
+        )
+        row = await _promotion_row(session, done.promotion_id)
+        assert (row[0], row[4], row[11]) == (flow_users.pr.id, "13812345678", Decimal("500.00"))
+
+    async def test_confirmer_without_receiver_write(
+        self, session: AsyncSession, tenant_a: Any, flow_users: Any, world: _World
+    ) -> None:
+        """确认人自己被撤了一项收件写权限 → 403 ``FIELD_PERMISSION_DENIED``，什么都不写（字段写权限看确认人）。"""
+        n = await _receiver_pending(world, flow_users.pr, flow_users)
+        await _override(
+            session,
+            tenant_a,
+            flow_users.pr_manager,
+            "field.promotion.receiver_phone:write",
+            "revoke",
+        )
+        with pytest.raises(FieldPermissionDenied) as exc:
+            await NegotiationService(session).confirm_receiver(
+                n.id, _confirm(), flow_users.pr_manager
+            )
+        assert (exc.value.status_code, exc.value.fields) == (403, ("receiver_phone",))
+        assert (await NegotiationService(session).get(n.id, flow_users.pr)).status == "待补收货地址"
+        assert await _promotion_count(session, n.line_id) == 0
+
+    @pytest.mark.parametrize(
+        ("scope", "field"),
+        [
+            ("field.promotion.quote_amount:write", "quote_amount"),
+            ("field.promotion.receiver_name:write", "receiver_name"),
+        ],
+    )
+    async def test_direct_create_still_checks_fields(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        flow_users: Any,
+        world: _World,
+        scope: str,
+        field: str,
+    ) -> None:
+        """直接新建推广（``POST /api/promotions/``）的字段写权限不变：撤了就 403。"""
+        await _override(session, tenant_a, flow_users.pr, scope, "revoke")
+        with pytest.raises(FieldPermissionDenied) as exc:
+            await PromotionService(session).create_promotion(
+                PromotionCreate(
+                    cooperation_mode=CooperationMode.GIFT,
+                    style_id=world.style.id,
+                    blogger_id=world.blogger.id,
+                    platform="小红书",
+                    quote_amount=Decimal("100.00"),
+                    receiver_name="张三",
+                ),
+                flow_users.pr,
+            )
+        assert exc.value.fields == (field,)
 
 
 @pytest.mark.usefixtures("tenant_ctx")

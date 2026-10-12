@@ -138,7 +138,7 @@ class PromotionShippingMixin(PromotionServiceBase):
         doc = await self._promotion_doc(promotion)
         require(actor, doc, "ship_push", gates=False)
 
-        payload = await self._normalize_receiver(payload, user)
+        payload = await self._normalize_receiver(payload, user, check_write=True)
         rows = (
             await self._validate_goods_items(
                 goods_main_id=promotion.goods_main_id,

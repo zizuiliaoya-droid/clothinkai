@@ -1045,6 +1045,8 @@ class NegotiationService:
                 line_id=line_id,
                 negotiation_id=negotiation_id,
                 actor_id=user.id,
+                # 字段写权限只看确认人（上面的 _require_receiver_write）；不再按谈款 PR 查（评审 L2）
+                reviewed_negotiation_copy=True,
             )
         except IntegrityError as exc:
             # 事务已失效：先回滚再抛；要用的 id 都是调用前取出的
