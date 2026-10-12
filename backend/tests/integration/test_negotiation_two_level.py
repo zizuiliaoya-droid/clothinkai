@@ -1852,6 +1852,82 @@ class TestReceiverProxy:
         assert await _promotion_count(session, n.line_id) == 0
 
 
+@pytest.mark.usefixtures("tenant_ctx")
+class TestReceiverReassignRace:
+    """转交与保存收货 / 定稿并发（评审 L1）：原 PR 的请求读完谈款之后、条件 UPDATE 之前，
+    管理员把单转给别的 PR 并提交 → 条件 UPDATE 带 ``pr_id`` 落空 → 409，整笔回滚（推广单也不留）。
+    打桩在 ``_load_for_action`` 之后用原生 SQL 改 ``pr_id`` 再提交，会话里已读到的谈款仍是原 PR（同两条连接的时序）。
+    """
+
+    @staticmethod
+    def _reassign_after_load(monkeypatch: pytest.MonkeyPatch, new_pr_id: Any) -> None:
+        original = NegotiationService._load_for_action
+
+        async def _load_then_reassign(
+            self: NegotiationService, negotiation_id: Any, user: Any
+        ) -> Any:
+            loaded = await original(self, negotiation_id, user)
+            await self._session.execute(
+                sa_text("UPDATE negotiation SET pr_id = :pr WHERE id = :id"),
+                {"pr": new_pr_id, "id": negotiation_id},
+            )
+            await self._session.commit()
+            return loaded
+
+        monkeypatch.setattr(NegotiationService, "_load_for_action", _load_then_reassign)
+
+    @staticmethod
+    async def _negotiation_row(session: AsyncSession, negotiation_id: Any) -> Any:
+        return (
+            await session.execute(
+                sa_text(
+                    "SELECT pr_id, status, receiver_name, promotion_id FROM negotiation"
+                    " WHERE id = :id"
+                ),
+                {"id": negotiation_id},
+            )
+        ).one()
+
+    async def test_confirm_conflicts_after_reassign(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        world: _World,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        n = await _receiver_pending(world, flow_users.pr, flow_users)
+        nid, line_id, new_pr = n.id, n.line_id, flow_users.pr2.id
+        self._reassign_after_load(monkeypatch, new_pr)
+        with pytest.raises(NegotiationStateConflictError) as exc:
+            await NegotiationService(session).confirm_receiver(nid, _confirm(), flow_users.pr)
+        assert (exc.value.code, exc.value.status_code) == ("NEGOTIATION_STATE_CONFLICT", 409)
+        assert await _promotion_count(session, line_id) == 0
+        row = await self._negotiation_row(session, nid)
+        assert (row[0], row[1], row[3]) == (new_pr, "待补收货地址", None)
+        assert [e for e in await _events(session, nid) if e[0] == "negotiation.finalized"] == []
+
+    async def test_save_conflicts_after_reassign(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        world: _World,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        n = await _receiver_pending(world, flow_users.pr, flow_users)
+        nid, new_pr = n.id, flow_users.pr2.id
+        self._reassign_after_load(monkeypatch, new_pr)
+        with pytest.raises(NegotiationStateConflictError) as exc:
+            await NegotiationService(session).save_receiver(
+                nid, NegotiationReceiverUpdate(receiver_name="原 PR 晚到"), flow_users.pr
+            )
+        assert (exc.value.code, exc.value.status_code) == ("NEGOTIATION_STATE_CONFLICT", 409)
+        row = await self._negotiation_row(session, nid)
+        assert (row[0], row[1], row[2]) == (new_pr, "待补收货地址", None)
+        assert [
+            e for e in await _events(session, nid) if e[0] == "negotiation.receiver_saved"
+        ] == []
+
+
 # ---------------------------------------------------------------------------
 # S8 并发：30 条独立连接同时确认同一张 → 恰好 1 张推广单、29 个 409、0 个别的错（9.3 B「并发防重复建单」）
 # ---------------------------------------------------------------------------

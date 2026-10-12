@@ -952,12 +952,13 @@ class NegotiationService:
                 diff[field] = {"before": before, "after": after}
         if not diff:
             return await self.get(negotiation_id, user)
-        tenant_id, line_id = negotiation.tenant_id, negotiation.line_id
+        tenant_id, line_id, pr_id = negotiation.tenant_id, negotiation.line_id, negotiation.pr_id
         updated = await self._repo.update_state(
             negotiation_id=negotiation_id,
             tenant_id=tenant_id,
             from_statuses=(NegotiationStatus.RECEIVER_PENDING.value,),
             values={field: change["after"] for field, change in diff.items()},
+            pr_id=pr_id,  # 读完之后被转交（N12）→ 0 行 409（评审 L1）
         )
         if updated is None:
             raise NegotiationStateConflictError(details={"negotiation_id": str(negotiation_id)})
@@ -1020,7 +1021,7 @@ class NegotiationService:
                 details={"pr_id": str(negotiation.pr_id)},
             )
         items = _finalize_items(views, members)
-        tenant_id, line_id = negotiation.tenant_id, negotiation.line_id
+        tenant_id, line_id, pr_id = negotiation.tenant_id, negotiation.line_id, negotiation.pr_id
         try:
             # 建单人 = 谈款 PR（这单是他谈的，后续催发、结款找他）；promotion.created 的动作人 = 确认的人
             promotion = await PromotionService(self._session).create_promotion(
@@ -1059,6 +1060,7 @@ class NegotiationService:
             tenant_id=tenant_id,
             from_statuses=(NegotiationStatus.RECEIVER_PENDING.value,),
             to_status=NegotiationStatus.APPROVED.value,
+            pr_id=pr_id,  # 读完之后被转交（N12）→ 0 行 409，推广单跟着回滚（评审 L1）
             values={
                 "receiver_name": name,
                 "receiver_phone": phone,
