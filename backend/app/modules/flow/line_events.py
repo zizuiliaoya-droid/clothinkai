@@ -244,6 +244,7 @@ PAYLOAD_FIELD_RULES: dict[str, tuple[str, str] | PayloadContainer | None] = {
     "is_active": None,
     "source_extra": None,
     "amount_fields": None,
+    "changed_fields": None,
     "publish_url": None,
     "actual_publish_date": None,
     "by_cancel": None,

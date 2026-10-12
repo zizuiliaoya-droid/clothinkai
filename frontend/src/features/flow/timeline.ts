@@ -186,6 +186,7 @@ const KEY_LABELS: Record<string, string> = {
   is_active: "启用",
   source_extra: "其他信息",
   amount_fields: "改了金额",
+  changed_fields: "改了（内容过长，未记前后值）",
   publish_url: "发布链接",
   actual_publish_date: "实际发布日期",
   by_cancel: "因取消推广撤回",
@@ -260,12 +261,17 @@ function formatValue(key: string, value: unknown): string {
   if (key === "amount_fields" && Array.isArray(value)) {
     return value.map((f) => AMOUNT_FIELD_LABELS[String(f)] ?? "金额").join("、");
   }
+  if (key === "changed_fields" && Array.isArray(value)) {
+    return value.map((f) => KEY_LABELS[String(f)] ?? "其他字段").join("、");
+  }
   if (typeof value === "boolean") return value ? "是" : "否";
   if (typeof value === "string" || typeof value === "number") return String(value);
   return "已修改";
 }
 
-function isChange(v: unknown): v is { before: unknown; after: unknown } {
+const TRUNCATED_MARK = "（已截断）";
+
+function isChange(v: unknown): v is { before: unknown; after: unknown; truncated?: unknown } {
   return typeof v === "object" && v !== null && "before" in v && "after" in v;
 }
 
@@ -285,7 +291,10 @@ export function describeDiff(payload: Record<string, unknown> | null | undefined
         lines.push(`${label}：已更换`);
         continue;
       }
-      lines.push(`${label}：${formatValue(key, change.before)} → ${formatValue(key, change.after)}`);
+      // 后端把超长文本截到 200 字，截过的一侧在 truncated 里
+      const cut = new Set(Array.isArray(change.truncated) ? change.truncated : []);
+      const side = (s: "before" | "after") => `${formatValue(key, change[s])}${cut.has(s) ? TRUNCATED_MARK : ""}`;
+      lines.push(`${label}：${side("before")} → ${side("after")}`);
     }
   }
   for (const [key, value] of Object.entries(payload)) {

@@ -47,7 +47,7 @@ from app.modules.promotion.service import PromotionService
 from app.modules.promotion.urge_calculator import get_today
 from app.modules.urge.service import UrgeService
 from tests.flow_event_helpers import assert_payload_registered, events_of
-from tests.integration.test_promotion_shipping import _goods
+from tests.integration.test_promotion_shipping import _call, _goods
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
@@ -972,6 +972,75 @@ class TestPatch:
             "diff": {"source_extra": {"before": {"寄样备注": None}, "after": {"寄样备注": "加急"}}}
         }
         _check_registered([first, second])
+
+    async def test_long_remark_is_clipped_not_rejected(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        """L1：约 3,000 字的备注改成另一段 → 200、落库；diff 前后值各截到 200 字并标出截断（注入 L1_CLIP）。"""
+        old, new = "旧" * 3000, "新" * 2999 + "尾"
+        promo = await _promo(
+            flow_users, product_factory, blogger_factory, promotion_factory, remark=old
+        )
+        line_id, pid = promo.line_id, promo.id
+        resp = await _call(
+            session, flow_users.pr, "PATCH", f"/api/promotions/{pid}", {"remark": new}
+        )
+        assert resp.status_code == 200, resp.text
+        stored = (
+            await session.execute(
+                sa_text("SELECT remark FROM promotion WHERE id = :pid"), {"pid": pid}
+            )
+        ).scalar_one()
+        assert stored == new
+        (event,) = await events_of(session, line_id=line_id)
+        assert event.event_type == _T.PROMOTION_UPDATED.value
+        assert event.payload == {
+            "diff": {
+                "remark": {
+                    "before": "旧" * 200,
+                    "after": "新" * 200,
+                    "truncated": ["before", "after"],
+                }
+            }
+        }
+        _check_registered([event])
+
+    async def test_huge_source_extra_falls_back_to_field_names(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        """L1：``source_extra`` 20 个键各 1,000 字，截完仍超 8 KB → 200，事件只记字段名、不带值（注入 L1_NAMES）。"""
+        promo = await _promo(flow_users, product_factory, blogger_factory, promotion_factory)
+        line_id, pid = promo.line_id, promo.id
+        extra = {f"自定义{i:02d}": "长" * 1000 for i in range(20)}
+        resp = await _call(
+            session,
+            flow_users.pr,
+            "PATCH",
+            f"/api/promotions/{pid}",
+            {"source_extra": extra, "remark": "补充"},
+        )
+        assert resp.status_code == 200, resp.text
+        stored = (
+            await session.execute(
+                sa_text("SELECT source_extra FROM promotion WHERE id = :pid"), {"pid": pid}
+            )
+        ).scalar_one()
+        assert stored == extra
+        (event,) = await events_of(session, line_id=line_id)
+        assert event.event_type == _T.PROMOTION_UPDATED.value
+        assert event.payload == {"changed_fields": ["remark", "source_extra"]}
+        assert "长" not in json.dumps(event.payload, ensure_ascii=False)
+        _check_registered([event])
 
 
 class _Suit:

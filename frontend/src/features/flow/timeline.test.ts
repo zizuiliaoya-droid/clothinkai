@@ -87,6 +87,20 @@ describe("describeDiff", () => {
     ]);
   });
 
+  it("长文本截过的一侧标「（已截断）」；超限只记字段名时列中文字段名", () => {
+    expect(
+      describeDiff({
+        diff: {
+          remark: { before: "旧备注", after: "新备注", truncated: ["after"] },
+          note_title: { before: "甲", after: "乙", truncated: ["before", "after"] },
+        },
+      })
+    ).toEqual(["备注：旧备注 → 新备注（已截断）", "笔记标题：甲（已截断） → 乙（已截断）"]);
+    expect(describeDiff({ changed_fields: ["remark", "source_extra", "unknown"] })).toEqual([
+      "改了（内容过长，未记前后值）：备注、其他信息、其他字段",
+    ]);
+  });
+
   it("没有可显示的内容 → 空数组", () => {
     expect(describeDiff({})).toEqual([]);
     expect(describeDiff(null)).toEqual([]);

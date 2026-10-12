@@ -28,7 +28,12 @@ from app.modules.auth.models import Tenant, User
 from app.modules.auth.repository import PermissionRepository, RoleRepository
 from app.modules.blogger.repository import BloggerRepository
 from app.modules.flow.actor import load_flow_actor
-from app.modules.flow.line_events import LineEventRepository, LineEventType
+from app.modules.flow.line_events import (
+    PAYLOAD_MAX_BYTES,
+    LineEventRepository,
+    LineEventType,
+    payload_size,
+)
 from app.modules.flow.matrix import FlowActor, View, ui_for
 from app.modules.product.models import Sku
 from app.modules.product.repository import SkuRepository, StyleRepository
@@ -103,6 +108,40 @@ _PayloadT = TypeVar("_PayloadT", PromotionCreate, PromotionUpdate, PromotionShip
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+# promotion.updated 的 diff 里字符串值（前值、后值各自）最多留几个字（L1：备注、source_extra 无长度上限）
+DIFF_TEXT_MAX_CHARS = 200
+
+
+def _clip_text(value: Any) -> tuple[Any, bool]:
+    """超长字符串截到前 ``DIFF_TEXT_MAX_CHARS`` 字；dict（``source_extra``）逐值截。返回 (值, 是否截过)。"""
+    if isinstance(value, str) and len(value) > DIFF_TEXT_MAX_CHARS:
+        return value[:DIFF_TEXT_MAX_CHARS], True
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        cut = False
+        for k, v in value.items():
+            out[k], c = _clip_text(v)
+            cut = cut or c
+        return out, cut
+    return value, False
+
+
+def _clip_diff(diff: Mapping[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """diff 条目的前后值各自截断；截过的一侧记进条目的 ``truncated``（``["before", "after"]`` 的子集）。"""
+    out: dict[str, dict[str, Any]] = {}
+    for field, change in diff.items():
+        entry: dict[str, Any] = {}
+        truncated: builtins.list[str] = []
+        for side in ("before", "after"):
+            entry[side], cut = _clip_text(change.get(side))
+            if cut:
+                truncated.append(side)
+        if truncated:
+            entry["truncated"] = truncated
+        out[field] = entry
+    return out
 
 
 def _assert_not_future_publish_date(actual: date | None) -> None:
@@ -330,7 +369,8 @@ class PromotionServiceBase:
         """PATCH 的时间线（流程线 6.3、D13），各自没变化就不写：
 
         - ``promotion.updated``：非金额、非收件字段的 ``diff``（``source_extra`` 只列改了的键）；
-          金额只进 ``amount_fields`` 名单（净变更，明细看金额改动页签，不重复记 promotion_amount_log）
+          金额只进 ``amount_fields`` 名单（净变更，明细看金额改动页签，不重复记 promotion_amount_log）。
+          diff 的字符串值各截到 200 字（条目带 ``truncated``），截完仍超 8 KB 就只记 ``changed_fields``
         - ``ship.receiver_changed``：收件三项的 ``diff``，读时逐项过收件字段规则
         明细变化由调用方另写 ``ship.items_changed``（要在改明细之前取前值）。
         """
@@ -356,9 +396,13 @@ class PromotionServiceBase:
         ]
         updated_payload: dict[str, Any] = {}
         if diff:
-            updated_payload["diff"] = diff
+            # 长文本截断（L1）：PATCH 不能因为事件 payload 超 8 KB 失败
+            updated_payload["diff"] = _clip_diff(diff)
         if amount_fields:
             updated_payload["amount_fields"] = amount_fields
+        if "diff" in updated_payload and payload_size(updated_payload) > PAYLOAD_MAX_BYTES:
+            # 截完仍超限（如 source_extra 键很多）：只记改了哪些字段名，不带值（同金额的写法）
+            updated_payload["changed_fields"] = sorted(updated_payload.pop("diff"))
         if updated_payload:
             await events.append(
                 tenant_id=promotion.tenant_id,
