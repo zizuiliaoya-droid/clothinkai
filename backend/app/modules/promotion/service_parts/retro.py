@@ -11,6 +11,7 @@ from app.core.metrics import (
     promotion_state_transitions_total,
 )
 from app.modules.auth.models import User
+from app.modules.flow.line_events import LineEventRepository, LineEventType
 from app.modules.promotion.enums import (
     RetroStatus,
     SettlementStatus,
@@ -159,6 +160,24 @@ class PromotionRetroMixin(PromotionServiceBase):
                 status_field="retro",
             ).inc()
 
+            # 时间线（流程线 6.3）：promotion.metrics_recorded，附件 = 7 天数据截图；
+            # 在 try 里：写失败整笔回滚、截图照删
+            await LineEventRepository(self._session).append(
+                tenant_id=promotion.tenant_id,
+                line_id=promotion.line_id,
+                event_type=LineEventType.PROMOTION_METRICS_RECORDED,
+                actor_id=user.id,
+                promotion_id=promotion_id,
+                from_state=RetroStatus.NOT_STARTED.value,
+                to_state=RetroStatus.PENDING_RETRO.value,
+                attachment_id=attachment_id,
+                payload={
+                    "like_count": payload.like_count,
+                    "collect_count": payload.collect_count,
+                    "comment_count": payload.comment_count,
+                },
+            )
+
             await self._audit.log(
                 action="promotion.record_metrics",
                 resource="promotion",
@@ -210,9 +229,10 @@ class PromotionRetroMixin(PromotionServiceBase):
             action="submit_retro",
         )
 
+        retrospective_id = uuid4()
         self._repo.add_retrospective(
             BloggerRetrospective(
-                id=uuid4(),
+                id=retrospective_id,
                 tenant_id=user.tenant_id,
                 blogger_id=promotion.blogger_id,
                 promotion_id=promotion_id,
@@ -238,6 +258,19 @@ class PromotionRetroMixin(PromotionServiceBase):
             to_state=RetroStatus.PENDING_CONFIRM.value,
             status_field="retro",
         ).inc()
+
+        # 时间线（流程线 6.3）：retro.written，note = 复盘全文；打回重写再追加一条（子表也是追加）
+        await LineEventRepository(self._session).append(
+            tenant_id=promotion.tenant_id,
+            line_id=promotion.line_id,
+            event_type=LineEventType.RETRO_WRITTEN,
+            actor_id=user.id,
+            promotion_id=promotion_id,
+            from_state=RetroStatus.PENDING_RETRO.value,
+            to_state=RetroStatus.PENDING_CONFIRM.value,
+            note=payload.content,
+            payload={"retrospective_id": str(retrospective_id)},
+        )
 
         await self._audit.log(
             action="promotion.submit_retro",
@@ -326,6 +359,21 @@ class PromotionRetroMixin(PromotionServiceBase):
             to_state=to_state,
             status_field="retro",
         ).inc()
+
+        # 时间线（计划 D12）：旧复盘的确认 / 打回，note = 主管意见；PR-7 复盘 3 态之后不再写
+        await LineEventRepository(self._session).append(
+            tenant_id=promotion.tenant_id,
+            line_id=promotion.line_id,
+            event_type=(
+                LineEventType.RETRO_CONFIRMED if payload.approve else LineEventType.RETRO_RETURNED
+            ),
+            actor_id=user.id,
+            promotion_id=promotion_id,
+            from_state=RetroStatus.PENDING_CONFIRM.value,
+            to_state=to_state,
+            note=payload.opinion or None,
+            payload={"retrospective_id": str(retro.id)},
+        )
 
         await self._audit.log(
             action=f"promotion.{action_name}",

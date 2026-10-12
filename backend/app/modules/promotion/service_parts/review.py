@@ -10,6 +10,7 @@ from app.core.metrics import (
     promotion_state_transitions_total,
 )
 from app.modules.auth.models import User
+from app.modules.flow.line_events import LineEventRepository, LineEventType
 from app.modules.promotion.enums import (
     CooperationMode,
     PublishStatus,
@@ -151,6 +152,30 @@ class PromotionReviewMixin(PromotionServiceBase):
             status_field="settlement",
         ).inc()
 
+        # 时间线（流程线 6.3）：review.approved（应付、去向）/ rejected（驳回原因、分类）；
+        # 写在审计与结款事件之前，后面失败事件跟着回滚（6.4）
+        review_payload: dict[str, Any]
+        if payload.action == ReviewAction.APPROVE:
+            review_event = LineEventType.REVIEW_APPROVED
+            review_payload = {"destination": to_state}
+            if updated.quote_amount is not None:
+                # 金额存字符串（6.3）；读时过服务费字段规则（运营删）
+                review_payload["payable"] = str(updated.quote_amount)
+        else:
+            review_event = LineEventType.REVIEW_REJECTED
+            review_payload = {"reject_category": reject_category}
+        await LineEventRepository(self._session).append(
+            tenant_id=promotion.tenant_id,
+            line_id=promotion.line_id,
+            event_type=review_event,
+            actor_id=user.id,
+            promotion_id=promotion_id,
+            from_state=SettlementStatus.PENDING_REVIEW.value,
+            to_state=to_state,
+            note=payload.review_reason if payload.action == ReviewAction.REJECT else None,
+            payload=review_payload,
+        )
+
         await self._audit.log(
             action=f"promotion.review.{payload.action.value}",
             resource="promotion",
@@ -267,6 +292,25 @@ class PromotionReviewMixin(PromotionServiceBase):
             to_state=SettlementStatus.PENDING_REVIEW.value,
             status_field="settlement",
         ).inc()
+
+        # 时间线（流程线 6.3、7.3）：每轮一条 review.resubmitted（7a 的两列只留最近一轮），
+        # note = 重提说明，diff 只列这次真改了的发布链接 / 日期
+        diff = {
+            key: {"before": before[key], "after": after[key]}
+            for key in ("publish_url", "actual_publish_date")
+            if key in after
+        }
+        await LineEventRepository(self._session).append(
+            tenant_id=promotion.tenant_id,
+            line_id=promotion.line_id,
+            event_type=LineEventType.REVIEW_RESUBMITTED,
+            actor_id=user.id,
+            promotion_id=promotion_id,
+            from_state=SettlementStatus.REJECTED.value,
+            to_state=SettlementStatus.PENDING_REVIEW.value,
+            note=payload.note,
+            payload={"diff": diff} if diff else None,
+        )
 
         await self._audit.log(
             action="promotion.resubmit",

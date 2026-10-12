@@ -7,12 +7,14 @@
 - 系统写的事件 ``actor_id = NULL``、payload 带 ``system``（自动扫描 = ``urge_scan``）；自动催发不逐天记（11-22）
 
 S7：发布、取消（待打单多一条 ``ship.withdrawn``）、催发（手动催 / 批量催 / 手动关闭 / 扫描建任务与收口）。
+S8：旧召回（发起 / 成功 / 失败）、旧推广审核（通过 / 驳回）与重提、录 7 天数据、旧复盘（写 / 确认 / 打回）。
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterator
 from datetime import timedelta
+from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -22,7 +24,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.audit import AuditService
 from app.core.tenancy import tenant_id_ctx
 from app.modules.flow.line_events import LineEventRepository, LineEventType
-from app.modules.promotion.schemas import PromotionCancelRequest, PromotionPublishRequest
+from app.modules.flow.timeline import LineEventService
+from app.modules.promotion.enums import RejectReasonCategory, ReviewAction
+from app.modules.promotion.schemas import (
+    PromotionCancelRequest,
+    PromotionMetricsRequest,
+    PromotionPublishRequest,
+    PromotionRecallStartRequest,
+    PromotionResubmitRequest,
+    PromotionReviewRequest,
+    RetrospectiveConfirmRequest,
+    RetrospectiveSubmitRequest,
+)
 from app.modules.promotion.service import PromotionService
 from app.modules.promotion.urge_calculator import get_today
 from app.modules.urge.service import UrgeService
@@ -431,3 +444,297 @@ class TestUrge:
             "system": "urge_scan",
         }
         _check_registered(due_events + stale_new)
+
+
+# ---------------------------------------------------------------------------
+# 旧召回（S8；召回闭环与运费随 PR-8）
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+class TestRecall:
+    async def test_start_then_success(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        promo = await _promo(
+            flow_users, product_factory, blogger_factory, promotion_factory, publish_status="已发布"
+        )
+        line_id, pid = promo.line_id, promo.id
+        svc = PromotionService(session)
+        await svc.start_recall(
+            pid, PromotionRecallStartRequest(recall_reason="博主删帖"), flow_users.pr
+        )
+        await svc.recall_success(pid, flow_users.pr_manager)
+
+        events = await events_of(session, line_id=line_id)
+        assert _types(events) == [_T.RECALL_STARTED.value, _T.RECALL_SUCCEEDED.value]
+        started, succeeded = events
+        assert (started.from_state, started.to_state) == ("未召回", "召回中")
+        assert started.note == "博主删帖" and started.actor_id == flow_users.pr.id
+        assert (succeeded.from_state, succeeded.to_state) == ("召回中", "召回成功")
+        assert succeeded.actor_id == flow_users.pr_manager.id and succeeded.note is None
+        assert {e.promotion_id for e in events} == {pid}
+        assert all(e.negotiation_id is None and e.payload == {} for e in events)
+
+    async def test_retry_after_failure(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        promo = await _promo(
+            flow_users, product_factory, blogger_factory, promotion_factory, publish_status="已取消"
+        )
+        line_id, pid = promo.line_id, promo.id
+        svc = PromotionService(session)
+        await svc.start_recall(pid, PromotionRecallStartRequest(), flow_users.pr)
+        await svc.recall_failure(pid, flow_users.pr)
+        await svc.start_recall(
+            pid, PromotionRecallStartRequest(recall_reason="再试"), flow_users.pr
+        )
+
+        events = await events_of(session, line_id=line_id)
+        assert _types(events) == [
+            _T.RECALL_STARTED.value,
+            _T.RECALL_FAILED.value,
+            _T.RECALL_STARTED.value,
+        ]
+        assert events[0].note is None
+        assert (events[1].from_state, events[1].to_state) == ("召回中", "召回失败")
+        assert (events[2].from_state, events[2].note) == ("召回失败", "再试")
+
+
+# ---------------------------------------------------------------------------
+# 旧推广审核与重提（S8；结款链随 PR-6）
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+class TestReview:
+    async def test_approve_writes_payable_and_destination(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        cross_unit_event_bus: Any,
+    ) -> None:
+        """应付过服务费规则：财务（经结款单进来）看得到，运营删（6.5 第 3 层，经读接口）。"""
+        promo = await _promo(
+            flow_users,
+            product_factory,
+            blogger_factory,
+            promotion_factory,
+            publish_status="已发布",
+            settlement_status="待核查",
+            cooperation_mode="送拍",
+        )
+        line_id, pid = promo.line_id, promo.id
+        await PromotionService(session).review(
+            pid, PromotionReviewRequest(action=ReviewAction.APPROVE), flow_users.pr_manager
+        )
+
+        events = await events_of(session, line_id=line_id, event_type=_T.REVIEW_APPROVED)
+        assert len(events) == 1
+        approved = events[0]
+        assert (approved.from_state, approved.to_state) == ("待核查", "待付款")
+        assert approved.actor_id == flow_users.pr_manager.id and approved.promotion_id == pid
+        assert approved.note is None
+        assert approved.payload == {"destination": "待付款", "payable": "500.00"}
+        _check_registered(events)
+
+        svc = LineEventService(session)
+        finance = {e.event_type: e for e in (await svc.read(line_id, flow_users.finance)).events}
+        assert finance["review.approved"].payload == {"destination": "待付款", "payable": "500.00"}
+        ops = {e.event_type: e for e in (await svc.read(line_id, flow_users.operations)).events}
+        assert ops["review.approved"].payload == {"destination": "待付款"}
+
+    async def test_barter_approve_goes_paid(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        promo = await _promo(
+            flow_users,
+            product_factory,
+            blogger_factory,
+            promotion_factory,
+            publish_status="已发布",
+            settlement_status="待核查",
+            cooperation_mode="置换",
+            quote_amount=Decimal("0.00"),
+        )
+        line_id = promo.line_id
+        await PromotionService(session).review(
+            promo.id, PromotionReviewRequest(action=ReviewAction.APPROVE), flow_users.pr_manager
+        )
+        (approved,) = await events_of(session, line_id=line_id)
+        assert approved.event_type == _T.REVIEW_APPROVED.value
+        assert approved.to_state == "已付款"
+        assert approved.payload == {"destination": "已付款", "payable": "0.00"}
+
+    async def test_reject_then_resubmit(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        old_date = get_today() - timedelta(days=3)
+        promo = await _promo(
+            flow_users,
+            product_factory,
+            blogger_factory,
+            promotion_factory,
+            publish_status="已发布",
+            settlement_status="待核查",
+            publish_url="https://old.example/1",
+            actual_publish_date=old_date,
+        )
+        line_id, pid = promo.line_id, promo.id
+        svc = PromotionService(session)
+        reject = PromotionReviewRequest(
+            action=ReviewAction.REJECT,
+            review_reason="流量太差",
+            review_reason_category=RejectReasonCategory.TRAFFIC_REDO,
+        )
+        await svc.review(pid, reject, flow_users.pr_manager)
+        # 第一轮重提改了链接（日期同值不算改）；第二轮什么都没改
+        await svc.resubmit(
+            pid,
+            PromotionResubmitRequest(
+                note="已补发", publish_url="https://new.example/2", actual_publish_date=old_date
+            ),
+            flow_users.pr,
+        )
+        await svc.review(pid, reject, flow_users.pr_manager)
+        await svc.resubmit(pid, PromotionResubmitRequest(note="再看看"), flow_users.pr)
+
+        events = await events_of(session, line_id=line_id)
+        assert _types(events) == [
+            _T.REVIEW_REJECTED.value,
+            _T.REVIEW_RESUBMITTED.value,
+            _T.REVIEW_REJECTED.value,
+            _T.REVIEW_RESUBMITTED.value,
+        ]
+        rejected, first, _, second = events
+        assert (rejected.from_state, rejected.to_state) == ("待核查", "已驳回")
+        assert rejected.note == "流量太差" and rejected.actor_id == flow_users.pr_manager.id
+        assert rejected.payload == {"reject_category": "流量差补发"}
+        assert (first.from_state, first.to_state) == ("已驳回", "待核查")
+        assert first.note == "已补发" and first.actor_id == flow_users.pr.id
+        assert first.payload == {
+            "diff": {
+                "publish_url": {"before": "https://old.example/1", "after": "https://new.example/2"}
+            }
+        }
+        assert second.note == "再看看" and second.payload == {}
+        assert {e.promotion_id for e in events} == {pid}
+        _check_registered(events)
+
+
+# ---------------------------------------------------------------------------
+# 录 7 天数据与旧复盘（S8；复盘 3 态随 PR-7）
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+class TestRetro:
+    async def test_metrics_written_returned_confirmed(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from app.core import attachment as att_mod
+
+        monkeypatch.setattr(att_mod.attachment_service, "_client", _FakeS3(), raising=False)
+        promo = await _promo(
+            flow_users,
+            product_factory,
+            blogger_factory,
+            promotion_factory,
+            publish_status="已发布",
+            settlement_status="已付款",
+        )
+        line_id, pid = promo.line_id, promo.id
+        svc = PromotionService(session)
+
+        await svc.record_metrics(
+            pid,
+            PromotionMetricsRequest(like_count=120, collect_count=30, comment_count=8),
+            flow_users.pr,
+            screenshot=("m.png", "image/png", _PNG),
+        )
+        await svc.submit_retrospective(
+            pid, RetrospectiveSubmitRequest(content="第一版复盘"), flow_users.pr
+        )
+        await svc.confirm_retrospective(
+            pid,
+            RetrospectiveConfirmRequest(approve=False, opinion="写细一点"),
+            flow_users.pr_manager,
+        )
+        await svc.submit_retrospective(
+            pid, RetrospectiveSubmitRequest(content="第二版复盘"), flow_users.pr
+        )
+        await svc.confirm_retrospective(
+            pid, RetrospectiveConfirmRequest(approve=True), flow_users.pr_manager
+        )
+
+        events = await events_of(session, line_id=line_id)
+        assert _types(events) == [
+            _T.PROMOTION_METRICS_RECORDED.value,
+            _T.RETRO_WRITTEN.value,
+            _T.RETRO_RETURNED.value,
+            _T.RETRO_WRITTEN.value,
+            _T.RETRO_CONFIRMED.value,
+        ]
+        metrics, written1, returned, written2, confirmed = events
+        metrics_att = (
+            await session.execute(
+                sa_text("SELECT metrics_attachment_id FROM promotion WHERE id = :p"), {"p": pid}
+            )
+        ).scalar_one()
+        assert metrics_att is not None and metrics.attachment_id == metrics_att
+        assert (metrics.from_state, metrics.to_state) == ("未开始", "待复盘")
+        assert metrics.payload == {"like_count": 120, "collect_count": 30, "comment_count": 8}
+        assert metrics.actor_id == flow_users.pr.id
+
+        retro_ids = {
+            content: str(rid)
+            for rid, content in (
+                await session.execute(
+                    sa_text(
+                        "SELECT id, content FROM blogger_retrospective WHERE promotion_id = :p"
+                    ),
+                    {"p": pid},
+                )
+            ).all()
+        }
+        assert (written1.from_state, written1.to_state) == ("待复盘", "待确认")
+        assert written1.note == "第一版复盘" and written1.actor_id == flow_users.pr.id
+        assert written1.payload == {"retrospective_id": retro_ids["第一版复盘"]}
+        assert (returned.from_state, returned.to_state) == ("待确认", "待复盘")
+        assert returned.note == "写细一点" and returned.actor_id == flow_users.pr_manager.id
+        assert returned.payload == {"retrospective_id": retro_ids["第一版复盘"]}
+        assert written2.payload == {"retrospective_id": retro_ids["第二版复盘"]}
+        assert (confirmed.from_state, confirmed.to_state) == ("待确认", "已完成")
+        assert confirmed.note is None
+        assert confirmed.payload == {"retrospective_id": retro_ids["第二版复盘"]}
+        assert {e.promotion_id for e in events} == {pid}
+        _check_registered(events)
