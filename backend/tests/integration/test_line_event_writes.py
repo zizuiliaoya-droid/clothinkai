@@ -1042,6 +1042,100 @@ class TestPatch:
         assert "长" not in json.dumps(event.payload, ensure_ascii=False)
         _check_registered([event])
 
+    @staticmethod
+    async def _mode_patch(
+        session: AsyncSession, user: Any, promo: Any, body: dict[str, Any]
+    ) -> tuple[Any, str | None]:
+        """C1：经 HTTP PATCH，再模拟请求结束（没提交的改动随会话回滚丢掉），从库里读合作模式。
+
+        前置数据先 commit、id 先取出来：rollback 之后 ORM 对象全部过期。
+        """
+        pid = promo.id
+        await session.commit()
+        resp = await _call(session, user, "PATCH", f"/api/promotions/{pid}", body)
+        await session.rollback()
+        stored = (
+            await session.execute(
+                sa_text("SELECT cooperation_mode FROM promotion WHERE id = :pid"), {"pid": pid}
+            )
+        ).scalar_one()
+        return resp, stored
+
+    async def test_fill_mode_only_is_persisted_with_event(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        """C1：主管只补合作模式（空 → 寄拍）→ 200、落库、写 ``promotion.updated``（diff 带 cooperation_mode，注入 C1_EARLY）。"""
+        promo = await _promo(
+            flow_users, product_factory, blogger_factory, promotion_factory, cooperation_mode=None
+        )
+        line_id = promo.line_id
+        resp, stored = await self._mode_patch(
+            session, flow_users.pr_manager, promo, {"cooperation_mode": "寄拍"}
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["cooperation_mode"] == "寄拍"
+        assert stored == "寄拍"
+        (event,) = await events_of(session, line_id=line_id)
+        assert event.event_type == _T.PROMOTION_UPDATED.value
+        assert event.payload["diff"] == {"cooperation_mode": {"before": None, "after": "寄拍"}}
+        _check_registered([event])
+
+    async def test_fill_mode_with_other_field_still_works(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        """C1：合作模式和备注一起补 → 照旧两样都落库，diff 两个键都有。"""
+        promo = await _promo(
+            flow_users, product_factory, blogger_factory, promotion_factory, cooperation_mode=None
+        )
+        line_id, pid = promo.line_id, promo.id
+        resp, stored = await self._mode_patch(
+            session, flow_users.pr_manager, promo, {"cooperation_mode": "送拍", "remark": "补齐"}
+        )
+        assert resp.status_code == 200, resp.text
+        assert stored == "送拍"
+        remark = (
+            await session.execute(
+                sa_text("SELECT remark FROM promotion WHERE id = :pid"), {"pid": pid}
+            )
+        ).scalar_one()
+        assert remark == "补齐"
+        (event,) = await events_of(session, line_id=line_id)
+        assert event.payload["diff"] == {
+            "cooperation_mode": {"before": None, "after": "送拍"},
+            "remark": {"before": None, "after": "补齐"},
+        }
+        _check_registered([event])
+
+    async def test_change_existing_mode_still_409(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        """C1：已有值改成别的值照旧 409 ``COOPERATION_MODE_IMMUTABLE``，库里不变、不写事件。"""
+        promo = await _promo(
+            flow_users, product_factory, blogger_factory, promotion_factory, cooperation_mode="寄拍"
+        )
+        line_id = promo.line_id
+        resp, stored = await self._mode_patch(
+            session, flow_users.pr_manager, promo, {"cooperation_mode": "置换"}
+        )
+        assert (resp.status_code, resp.json()["code"]) == (409, "COOPERATION_MODE_IMMUTABLE")
+        assert stored == "寄拍"
+        assert await events_of(session, line_id=line_id) == []
+
 
 class _Suit:
     def __init__(self) -> None:

@@ -384,7 +384,7 @@ class PromotionServiceBase:
             for k, v in changes.items()
             if k not in AMOUNT_LOG_FIELDS and k not in RECEIVER_FIELDS
         }
-        # 合作模式在算 changes 之前就补上了（空值补一次），changes 里看不到，按前值比
+        # 合作模式在算 changes 之前就补上了（空值补一次）；update_promotion 已按前值补进 changes，这里同口径兜底
         if mode_before != promotion.cooperation_mode:
             diff["cooperation_mode"] = {"before": mode_before, "after": promotion.cooperation_mode}
         if "source_extra" in diff:

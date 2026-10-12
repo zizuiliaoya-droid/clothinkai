@@ -443,6 +443,13 @@ class PromotionService(
             )
 
         changes = compute_promotion_changes(promotion, payload)
+        # 合作模式在上面已经补到实例上，compute 拿补后的值比，看不出变化；按前值补进 changes，
+        # 否则只补合作模式的 PATCH 会在下面提前返回、不提交，也不写时间线和审计（C1）
+        if mode_before != promotion.cooperation_mode:
+            changes["cooperation_mode"] = {
+                "before": mode_before,
+                "after": promotion.cooperation_mode,
+            }
         if not changes:
             return await self._to_response(promotion, user)
 
