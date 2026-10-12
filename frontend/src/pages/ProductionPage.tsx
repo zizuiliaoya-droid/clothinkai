@@ -8,7 +8,6 @@ import {
   Statistic,
   Switch,
   Table,
-  Tag,
   message,
 } from "antd";
 import { DownloadOutlined } from "@ant-design/icons";
@@ -31,13 +30,11 @@ import {
 } from "@/features/report/useReportFilters";
 import type { ProductionRow, TimeGranularity } from "@/features/report/types";
 import { goodsDisplayName } from "@/features/product/api";
-import { GoodsNameCell } from "@/components/GoodsNameCell/GoodsNameCell";
 import { MiniLineChart } from "@/components/MiniLineChart/MiniLineChart";
 import {
   ReportCardTitle,
   ReportFreshness,
 } from "@/components/ReportFreshness/ReportFreshness";
-import { StyleImageThumbnail } from "@/components/StyleImageThumbnail/StyleImageThumbnail";
 import {
   ReportTimeRangeFilter,
   useReportTimeRange,
@@ -47,10 +44,12 @@ import {
   canExportReport,
   useReportCapabilities,
 } from "@/features/report/useReportCapabilities";
+import {
+  buildProductionColumns,
+  productionColumnsWidth,
+  productionRowKey,
+} from "@/features/report/productionColumns";
 
-const money = (v: string | null) => (v == null ? "—" : `¥${v}`);
-const pct = (v: string | null) =>
-  v == null ? "—" : `${(Number(v) * 100).toFixed(1)}%`;
 const TREND_GRANULARITY: Array<{ label: string; value: TimeGranularity }> = [
   { label: "按日", value: "day" },
   { label: "按周", value: "week" },
@@ -135,67 +134,13 @@ export function ProductionPage() {
     onError: (error) => message.error(extractErrorMessage(error, "导出失败")),
   });
 
-  // 列对齐 final.xlsx「投产报表」核心派生指标
-  const baseColumns: ColumnsType<ProductionRow> = [
-    {
-      title: "主图",
-      dataIndex: "main_image_url",
-      width: 68,
-      fixed: "left",
-      render: (src: string | null, row) => (
-        <StyleImageThumbnail
-          src={src}
-          alt={`${goodsDisplayName(row.goods_title, row.goods_short_name)} 商品主图`}
-        />
-      ),
-    },
-    {
-      // 不显示商品编码（补充 2）；导出 Excel 仍保留「商品编码」列
-      title: "商品",
-      dataIndex: "goods_short_name",
-      width: 220,
-      fixed: "left",
-      ellipsis: { showTitle: false },
-      render: (_: string | null, row: ProductionRow) => (
-        <>
-          {row.is_suit && (
-            <Tag color="purple" style={{ marginInlineEnd: 4 }}>
-              套装
-            </Tag>
-          )}
-          <GoodsNameCell goodsTitle={row.goods_title} shortName={row.goods_short_name} />
-        </>
-      ),
-    },
-    {
-      title: "含款号",
-      dataIndex: "style_codes",
-      width: 140,
-      render: (codes: string[]) => (codes?.length ? codes.join("、") : "—"),
-    },
-    { title: "支付金额", dataIndex: "pay_amount", width: 110, render: money },
-    { title: "退款金额", dataIndex: "refund_amount", width: 110, render: money },
-    { title: "退货退款率", dataIndex: "return_rate", width: 110, render: pct },
-    { title: "待确认收货金额", dataIndex: "confirmed_amount", width: 130, render: money },
-    { title: "站外推广费", dataIndex: "promo_cost", width: 120, render: money },
-    { title: "站内投放", dataIndex: "ad_spend", width: 110, render: money },
-    { title: "推广总花费", dataIndex: "total_spend", width: 120, render: money },
-    { title: "总加购数", dataIndex: "add_cart_count", width: 100 },
-    { title: "加购成本", dataIndex: "add_cart_cost", width: 110, render: money },
-    { title: "净投产比", dataIndex: "net_roi", width: 100, render: (v) => (v == null ? "—" : v) },
-    { title: "推广单件成交成本", dataIndex: "unit_deal_cost", width: 150, render: money },
-    {
-      title: "趋势",
-      key: "trend",
-      width: 80,
-      fixed: "right",
-      render: (_: unknown, row: ProductionRow) => (
-        <Button type="link" size="small" onClick={() => setTrendGoods(row)}>
-          折线图
-        </Button>
-      ),
-    },
-  ];
+  // 列定义与导出共用（features/report/productionColumns.ts ↔ 后端 production_columns.py）
+  const baseColumns = buildProductionColumns({
+    recent7Range: data?.recent7_range,
+    // S9 接 capabilities.production_margin；接上前不渲染毛利三列（非管理员本来就是 null）
+    showMargin: false,
+    onTrend: setTrendGoods,
+  });
 
   // 动态展开千牛/站内导入按款式汇总的其余指标（对齐 final.xlsx 投产报表全列）
   const extraKeys = Array.from(
@@ -214,7 +159,7 @@ export function ProductionPage() {
   }));
 
   const columns = [...baseColumns, ...extraColumns];
-  const scrollX = 1500 + extraColumns.length * 130;
+  const scrollX = productionColumnsWidth(baseColumns) + extraColumns.length * 130;
   const trendPoints = trend?.points ?? [];
   const latestTrendPoint = trendPoints.length
     ? trendPoints[trendPoints.length - 1]
@@ -273,7 +218,7 @@ export function ProductionPage() {
         )}
       </Space>
       <Table
-        rowKey="goods_id"
+        rowKey={productionRowKey}
         size="small"
         loading={isLoading}
         columns={columns}
@@ -339,7 +284,7 @@ export function ProductionPage() {
                 data: trendPoints.map((point) => Number(point.refund_amount)),
               },
               {
-                name: "确认金额",
+                name: "实际销售金额",
                 color: "#389e0d",
                 data: trendPoints.map((point) => Number(point.confirmed_amount)),
               },
