@@ -3,10 +3,12 @@
 // 后端按「ISO 周（自然月）∩ 请求区间」分桶，行上带实际起止；日表升序，周 / 月倒序（最新在上）。
 // 日表标题旁显示整段「仅退款已录 x / y 天」，周 / 月在每行的仅退款率下面显示。
 // 日表行内编辑（S8）：只在 capabilities.store_write 时出；一次一行，只发改了的字段，成功后作废店铺查询。
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+// 下钻（S9）：月表点行 → 周表、周表点行 → 日表，带行上实际起止。
+import { type MouseEvent, useEffect, useId, useMemo, useRef, useState } from "react";
 import { Alert, Button, Card, Space, Table, Typography, message } from "antd";
 import { DownloadOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useNavigate } from "react-router-dom";
 import type { FilterPageCode } from "@/features/preference/api";
 import { exportReport, getStoreReport, updateStoreDaily } from "@/features/report/api";
 import { TIME_PRESETS, type ReportFilterSchema } from "@/features/report/reportFilters";
@@ -32,7 +34,7 @@ import {
   useReportTimeRange,
 } from "@/components/ReportTimeRangeFilter/ReportTimeRangeFilter";
 import { recordedDaysLabel } from "./storeFormat";
-import { buildStoreColumns, storeColumnsWidth } from "./storeColumns";
+import { buildStoreColumns, storeColumnsWidth, storeDrillHref } from "./storeColumns";
 import type { StoreManualEditing } from "./StoreManualCells";
 import {
   MANUAL_AMOUNT_ERROR,
@@ -169,6 +171,19 @@ export function StoreReportView({ granularity }: { granularity: StoreGranularity
       }
     : undefined;
   const columns = buildStoreColumns(granularity, rows, edit);
+  // 下钻（S9）：周 / 月整行可点，跳下一级并带行上实际起止；点在周期链接上时由链接自己跳，不重复压栈
+  const navigate = useNavigate();
+  const onRow =
+    granularity === "day"
+      ? undefined
+      : (r: StoreReportRow) => ({
+          onClick: (e: MouseEvent<HTMLElement>) => {
+            if ((e.target as HTMLElement).closest("a")) return;
+            const href = storeDrillHref(r, granularity);
+            if (href) navigate(href);
+          },
+          style: { cursor: "pointer" },
+        });
 
   // 菜单按 capabilities 已隐藏；直接输入 URL 进来、接口 403 时给明确提示，不显示空表
   if (isForbiddenError(error)) {
@@ -235,6 +250,7 @@ export function StoreReportView({ granularity }: { granularity: StoreGranularity
         loading={isLoading}
         columns={columns}
         dataSource={rows}
+        onRow={onRow}
         scroll={{ x: storeColumnsWidth(columns) }}
         pagination={false}
       />

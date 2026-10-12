@@ -3,7 +3,7 @@
 // 周行「已录 x / y 天」；改名后没有「访客数」「支付订单数」；页面文字里没有商品编码；日表行内编辑（S8）。
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ReportCapabilities,
@@ -225,6 +225,71 @@ describe("StoreReportView 已录 x / y 天", () => {
   });
 });
 
+function LocationProbe() {
+  const location = useLocation();
+  return <div data-testid="location">{`${location.pathname}${location.search}`}</div>;
+}
+/** 下钻用：/store/x 渲染视图，其他路径显示当前地址。 */
+function renderWithRoutes(granularity: StoreGranularity) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={client}>
+      <MemoryRouter initialEntries={["/store/x"]}>
+        <Routes>
+          <Route path="/store/x" element={<StoreReportView granularity={granularity} />} />
+          <Route path="*" element={<LocationProbe />} />
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>
+  );
+}
+// 2026-09-02 是周三：区间从周三开始，月行和首个周行的实际起点都是 09-02，不是 09-01 / 08-31
+const MONTH_ROW = { date_from: "2026-09-02", date_to: "2026-09-30", day_count: 20 };
+const WEEK_ROW = { date_from: "2026-09-02", date_to: "2026-09-06", day_count: 3 };
+describe("StoreReportView 下钻（7e R4 S9）", () => {
+  it("月表：周期链接到周表，带行上实际起止", async () => {
+    storeMock.mockResolvedValue(report("month", [row(MONTH_ROW)]));
+    const { container } = renderView("month");
+    const link = await within(tableBody(container)).findByRole("link", { name: "2026-09" });
+    expect(link.getAttribute("href")).toBe(
+      "/store/weekly?preset=custom&date_from=2026-09-02&date_to=2026-09-30"
+    );
+  });
+  it("周表：周期链接到日表，带行上实际起止", async () => {
+    storeMock.mockResolvedValue(report("week", [row(WEEK_ROW)]));
+    const { container } = renderView("week");
+    const link = await within(tableBody(container)).findByRole("link", { name: "09-02 ~ 09-06" });
+    expect(link.getAttribute("href")).toBe(
+      "/store/daily?preset=custom&date_from=2026-09-02&date_to=2026-09-06"
+    );
+  });
+  it("日表：周期不是链接、点行不跳", async () => {
+    storeMock.mockResolvedValue(report("day", [row({})]));
+    const { container } = renderWithRoutes("day");
+    const body = tableBody(container);
+    fireEvent.click(await within(body).findByText("2026-09-02"));
+    expect(within(body).queryAllByRole("link")).toHaveLength(0);
+    expect(screen.queryByTestId("location")).toBeNull();
+  });
+  it.each([
+    ["month", MONTH_ROW, "/store/weekly?preset=custom&date_from=2026-09-02&date_to=2026-09-30"],
+    ["week", WEEK_ROW, "/store/daily?preset=custom&date_from=2026-09-02&date_to=2026-09-06"],
+  ] as const)("%s 表：点整行（非链接格）同样跳下一级", async (granularity, over, href) => {
+    storeMock.mockResolvedValue(report(granularity, [row(over)]));
+    const { container } = renderWithRoutes(granularity);
+    const body = tableBody(container);
+    fireEvent.click(await within(body).findByText("¥1200.00"));
+    expect((await screen.findByTestId("location")).textContent).toBe(href);
+  });
+  it("点周期链接跳下一级", async () => {
+    storeMock.mockResolvedValue(report("week", [row(WEEK_ROW)]));
+    const { container } = renderWithRoutes("week");
+    fireEvent.click(await within(tableBody(container)).findByRole("link", { name: "09-02 ~ 09-06" }));
+    expect((await screen.findByTestId("location")).textContent).toBe(
+      "/store/daily?preset=custom&date_from=2026-09-02&date_to=2026-09-06"
+    );
+  });
+});
 describe("StoreReportView 无权限（7e R4 S7）", () => {
   it.each([
     ["day", "店铺日明细"],

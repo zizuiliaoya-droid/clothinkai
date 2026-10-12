@@ -1,14 +1,19 @@
 // @vitest-environment jsdom
-// 单品投产列定义（7e R3 S8）：页面列键顺序 = 后端 production_columns.PRODUCTION_PAGE_KEYS；
-// 一行 = 商品 × 渠道，同商品两渠道在表格里是两个不同的行键。
-import { cleanup, fireEvent, render } from "@testing-library/react";
+// 单品投产列定义（7e R3 S8）：页面列键顺序与列名 = 后端快照 production_columns.snapshot.json
+// （7e R4 S9：不再手抄，列名只许例外表里的列不同）；一行 = 商品 × 渠道，同商品两渠道在表格里是两个不同的行键。
+// 后端改了列定义：在 backend 跑 UPDATE_REPORT_SNAPSHOT=1 pytest tests/unit/test_production_columns.py 重写快照，再改这边。
+import { cleanup, fireEvent, render, within } from "@testing-library/react";
 import { Table } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { ProductionRow } from "@/features/report/types";
+import snapshot from "../../../../backend/app/modules/report/production_columns.snapshot.json";
 import {
   PRODUCTION_PAGE_KEYS,
+  PRODUCTION_TITLE_EXCEPTIONS,
   buildProductionColumns,
+  productionColumnTitle,
+  productionColumnsWidth,
   productionRowKey,
 } from "./productionColumns";
 
@@ -34,33 +39,9 @@ beforeAll(() => {
 
 afterEach(cleanup);
 
-// 照抄 backend/tests/unit/test_production_columns.py 的 _PAGE_KEYS：两边任一改动都要同步改
-const BACKEND_PAGE_KEYS = [
-  "goods_short_name",
-  "style_codes",
-  "pay_amount",
-  "pay_orders",
-  "refund_amount",
-  "return_rate",
-  "confirmed_amount",
-  "promo_cost",
-  "ad_spend",
-  "total_spend",
-  "pre_return_roi",
-  "net_roi",
-  "unit_deal_cost",
-  "add_cart_count",
-  "add_cart_cost",
-  "ad_add_cart_count",
-  "ad_add_cart_cost",
-  "offsite_add_cart",
-  "recent7_pay_amount",
-  "recent7_total_spend",
-  "recent7_net_roi",
-  "goods_cost_total",
-  "gross_profit",
-  "gross_margin_rate",
-];
+// 后端常量导出的快照（backend tests/unit/test_production_columns.py 守「文件 = 常量」），
+// 这里守「文件 = 前端列定义」：只改一边就有一边的测试红（R3 评审 L5）
+const BACKEND_PAGE_KEYS = snapshot.map((c) => c.key);
 
 const GOODS_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 
@@ -114,8 +95,20 @@ function columnKeys(columns: ColumnsType<ProductionRow>): string[] {
 const RANGE = { date_from: "2026-10-05", date_to: "2026-10-11" };
 
 describe("productionColumns 列定义", () => {
-  it("页面键常量与后端 PRODUCTION_PAGE_KEYS 逐项相同", () => {
+  it("页面键常量与后端快照逐项相同（顺序也比）", () => {
+    expect(BACKEND_PAGE_KEYS).toHaveLength(24);
     expect([...PRODUCTION_PAGE_KEYS]).toEqual(BACKEND_PAGE_KEYS);
+  });
+
+  it("列名 = 快照表头，只有例外表里的列不同（L1）", () => {
+    const differing = snapshot
+      .filter((c) => productionColumnTitle(c.key as (typeof PRODUCTION_PAGE_KEYS)[number]) !== c.header)
+      .map((c) => c.key);
+    expect(differing).toEqual(Object.keys(PRODUCTION_TITLE_EXCEPTIONS));
+    expect(differing).toEqual(["goods_short_name", "pay_orders"]);
+    // 例外两列：页面「商品」「支付件数」，导出「商品简称」「支付件数（不扣刷单）」
+    expect(productionColumnTitle("goods_short_name")).toBe("商品");
+    expect(productionColumnTitle("pay_orders")).toBe("支付件数");
   });
 
   it("列顺序 = 页面键（主图在最前、趋势在最后，都是页面专有列）", () => {
@@ -208,13 +201,31 @@ describe("productionColumns 显示（S9）", () => {
     expect(live?.querySelector('[data-testid="offsite-add-cart-empty"]')).toBeNull();
   });
 
-  it("支付件数列头带说明「剔除刷单开关不扣件数」", async () => {
+  it("支付件数列头带说明「剔除刷单开关不扣件数」：悬停列头文字出 Tooltip，读屏读隐藏说明", async () => {
     const cols = buildProductionColumns({ recent7Range: RANGE, showMargin: false, onTrend: () => {} });
-    const { getByLabelText, findByText } = render(
+    const { container, findByText } = render(
       <Table rowKey={productionRowKey} columns={cols} dataSource={[row({})]} pagination={false} />
     );
-    fireEvent.mouseEnter(getByLabelText("支付件数说明"));
+    const thead = container.querySelector("thead") as HTMLElement;
+    expect(thead.textContent).toContain("支付件数（剔除刷单开关不扣件数）");
+    fireEvent.mouseEnter(within(thead).getByText("支付件数"));
     expect(await findByText("剔除刷单开关不扣件数")).toBeTruthy();
+  });
+
+  it("列头里没有可聚焦元素（横向滚动的测量行也没有），Tab 不多停（L4）", () => {
+    const cols = buildProductionColumns({ recent7Range: RANGE, showMargin: true, onTrend: () => {} });
+    const { container } = render(
+      <Table
+        rowKey={productionRowKey}
+        columns={cols}
+        dataSource={[row({})]}
+        scroll={{ x: productionColumnsWidth(cols) }}
+        pagination={false}
+      />
+    );
+    expect(container.querySelectorAll("thead").length).toBeGreaterThan(0);
+    expect(container.querySelectorAll("thead [tabindex]")).toHaveLength(0);
+    expect(container.querySelectorAll('[aria-hidden="true"] [tabindex]')).toHaveLength(0);
   });
 });
 

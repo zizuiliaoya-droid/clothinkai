@@ -1,9 +1,9 @@
 // 单品投产列定义（7e R3，报表视图设计 2.3「页面与导出共用一份列定义」）。
 //
 // 同步来源：backend/app/modules/report/production_columns.py 的 PRODUCTION_COLUMNS（page=True 的列）。
-// PRODUCTION_PAGE_KEYS 必须与后端 PRODUCTION_PAGE_KEYS 逐项相同（backend/tests/unit/test_production_columns.py
-// 的 _PAGE_KEYS 与同目录 productionColumns.test.tsx 各钉一份）；列名同后端表头，只有「商品」一列例外
-// （页面把名称、渠道、链接数画在一列里，导出拆成商品简称 / 商品名称 / 渠道 / 链接数）。
+// 后端把这些列导出成同目录的 production_columns.snapshot.json（[{key, header}]，后端测试守「文件 = 常量」），
+// 同目录 productionColumns.test.tsx 读同一个文件守「文件 = 这里」：PRODUCTION_PAGE_KEYS 逐项（含顺序）相同；
+// 列名同快照表头，只有 PRODUCTION_TITLE_EXCEPTIONS 里的列有意不同（见那里的说明）。
 // 主图、趋势是页面专有列，不在键常量里。要渲染 JSX 的格子在 components/ProductionCells.tsx。
 import { createElement } from "react";
 import type { ColumnsType } from "antd/es/table";
@@ -45,6 +45,15 @@ export const PRODUCTION_PAGE_KEYS = [
 
 export type ProductionPageKey = (typeof PRODUCTION_PAGE_KEYS)[number];
 
+/**
+ * 页面列名与导出表头（快照 header）有意不同的列，值是原因。其余列两边逐字相同，测试守。
+ */
+export const PRODUCTION_TITLE_EXCEPTIONS: Partial<Record<ProductionPageKey, string>> = {
+  goods_short_name:
+    "页面「商品」一列画名称、渠道、链接数；导出拆成商品简称 / 商品名称 / 渠道 / 千牛链接数",
+  pay_orders: "页面「支付件数」+ 列头说明（剔除刷单开关不扣件数）；导出「支付件数（不扣刷单）」",
+};
+
 /** 行键：一行 = 商品 × 渠道（同商品普通 / 直播两行不能撞键）。 */
 export function productionRowKey(row: Pick<ProductionRow, "goods_id" | "channel">): string {
   return `${row.goods_id}|${row.channel}`;
@@ -62,7 +71,7 @@ interface ColumnSpec {
   group?: "recent7";
 }
 
-// 列名同后端 production_columns.py 的 header（商品一列除外，见文件头）
+// 列名同后端 production_columns.py 的 header（PRODUCTION_TITLE_EXCEPTIONS 里的列除外）
 const SPECS: Record<ProductionPageKey, ColumnSpec> = {
   goods_short_name: { title: "商品", kind: "text", width: 220 },
   style_codes: { title: "含款号", kind: "codes", width: 140 },
@@ -89,6 +98,11 @@ const SPECS: Record<ProductionPageKey, ColumnSpec> = {
   gross_profit: { title: "单品毛利", kind: "money", width: 110, margin: true },
   gross_margin_rate: { title: "单品利润率", kind: "rate", width: 110, margin: true },
 };
+
+/** 页面列名（纯文字；支付件数列头另带说明）。 */
+export function productionColumnTitle(key: ProductionPageKey): string {
+  return SPECS[key].title;
+}
 
 const money = (v: string | null) => (v == null ? "—" : `¥${v}`);
 const pct = (v: string | null) => (v == null ? "—" : `${(Number(v) * 100).toFixed(1)}%`);

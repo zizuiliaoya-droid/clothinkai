@@ -2,8 +2,10 @@
 //
 // 列名：「访客数」改名「商品访客数合计」（默 16，悬停说明会重复计）；「支付订单数」改正为「支付件数」。
 // 比率都在后端分桶求和后现算，分母为 0 / 负时为 null，这里显示「—」。「其中直播」两列只展示。
+// 下钻（S9）：月行 → 周表、周行 → 日表，带行上实际起止（storeDrillHref）。
 // 日表能写时（S8）手填三项与仅退款在编辑行里换成金额框，末尾多一列「操作」。
 import type { ColumnsType } from "antd/es/table";
+import { Link } from "react-router-dom";
 import { HeaderHint } from "../components/HeaderHint";
 import type { StoreGranularity, StoreReportRow } from "../types";
 import { RefundOnlyRateCell } from "./StoreCells";
@@ -21,6 +23,20 @@ export function storePeriodLabel(row: StoreReportRow, granularity: StoreGranular
   if (granularity === "month") return row.date_from.slice(0, 7);
   if (granularity === "week") return `${row.date_from.slice(5)} ~ ${row.date_to.slice(5)}`;
   return row.date_from;
+}
+
+/**
+ * 下钻地址：月行 → 周表、周行 → 日表，带行上的实际起止（桶 ∩ 请求区间，不是桶首日 / 整月）；日行没有下一级。
+ * 下一级页面由 useReportFilters 从 URL 读起止（不写进筛选记忆）。
+ */
+export function storeDrillHref(row: StoreReportRow, granularity: StoreGranularity): string | null {
+  if (granularity === "day") return null;
+  const params = new URLSearchParams({
+    preset: "custom",
+    date_from: row.date_from,
+    date_to: row.date_to,
+  });
+  return `/store/${granularity === "month" ? "weekly" : "daily"}?${params.toString()}`;
 }
 
 function extraColumns(rows: StoreReportRow[]): ColumnsType<StoreReportRow> {
@@ -71,7 +87,12 @@ export function buildStoreColumns(
       key: "period",
       width: granularity === "week" ? 140 : 120,
       fixed: "left",
-      render: (_: unknown, r: StoreReportRow) => storePeriodLabel(r, granularity),
+      // 周 / 月：周期是链接（键盘下钻走它）；整行点击由 StoreReportView 的 onRow 处理
+      render: (_: unknown, r: StoreReportRow) => {
+        const href = storeDrillHref(r, granularity);
+        const label = storePeriodLabel(r, granularity);
+        return href ? <Link to={href}>{label}</Link> : label;
+      },
     },
     {
       title: <HeaderHint label="商品访客数合计" hint={VISITORS_HINT} />,
