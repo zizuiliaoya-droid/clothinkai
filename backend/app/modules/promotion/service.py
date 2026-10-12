@@ -375,9 +375,21 @@ class PromotionService(
         promotion = await self._repo.get_by_id(promotion_id)
         if promotion is None:
             raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
-        # 顺序（流程线 7.1）：404 → 退役键 422 → 已入矩阵的字段（越权全列 403）→ 字段写权限 → 其余校验
+        # 顺序（流程线 7.1）：404 → 退役键 422 → 合作模式改成另一个值 409 → 已入矩阵的字段（越权全列 403）
+        # → 字段写权限 → 其余校验
         self._reject_retired_source_extra_keys(payload)
         managed = PROMOTION_MATRIX.patch_groups.keys() & payload.model_fields_set
+        if "cooperation_mode" in managed:
+            attempted = payload.cooperation_mode.value if payload.cooperation_mode else None
+            if attempted is not None and promotion.cooperation_mode not in (None, attempted):
+                # 有值之后任何人都不能改成另一个值（²³），先于矩阵：主管、管理员也是 409 而不是 403
+                raise CooperationModeImmutableError(
+                    "合作模式在单据生成后不可修改",
+                    details={"current": promotion.cooperation_mode, "attempted": attempted},
+                )
+            if attempted is None or attempted == promotion.cooperation_mode:
+                # 传 null 或同值是空操作（下面也不落库），不按「改合作模式」判权
+                managed = managed - {"cooperation_mode"}
         if managed:
             ensure_patch_allowed(
                 await self._flow_actor(user), await self._promotion_doc(promotion), managed

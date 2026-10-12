@@ -1053,14 +1053,20 @@ class TestFlowUi:
         )
         svc = PromotionService(session)
         pr = (await svc.get_promotion(promo.id, flow_users.pr)).ui
+        # PR-5 起归属商品、合作信息、合作模式、服务费入矩阵：PR 都是「读」（11-16）
         assert pr == {
             "column": "A",
             "actions": {
                 "ship_push": {"state": "disabled", "reason": "需管理员或 PR 主管确认"},
+                "urge": {"state": "enabled"},
                 "comment": {"state": "enabled"},
             },
             "fields": {
+                "goods": {"state": "read"},
                 "goods_items": {"state": "read"},
+                "cooperation": {"state": "read"},
+                "cooperation_mode": {"state": "read"},
+                "quote_amount": {"state": "read"},
                 "receiver": {"state": "edit"},
                 "shipping": {"state": "grey", "hint": "推送后由仓库回填"},
                 "timeline": {"state": "read"},
@@ -1071,14 +1077,19 @@ class TestFlowUi:
         assert manager is not None
         assert manager["actions"] == {
             "ship_push": {"state": "enabled", "missing": _ALL_GATES},
+            "urge": {"state": "enabled"},
             "comment": {"state": "enabled"},
+            "deactivate": {"state": "enabled"},
         }
         # 运营只读、财务什么都没有
         ops = (await svc.get_promotion(promo.id, flow_users.operations)).ui
         assert ops is not None
         assert ops["actions"] == {}
         assert ops["fields"] == {
+            "goods": {"state": "read"},
             "goods_items": {"state": "read"},
+            "cooperation": {"state": "read"},
+            "cooperation_mode": {"state": "read"},
             "shipping": {"state": "grey", "hint": "推送后由仓库回填"},
             "timeline": {"state": "read"},
         }
@@ -1137,7 +1148,9 @@ class TestFlowUi:
         assert rows[partial.id]["actions"] == got["actions"]
         assert rows[full.id]["actions"] == {
             "ship_push": {"state": "enabled"},
+            "urge": {"state": "enabled"},
             "comment": {"state": "enabled"},
+            "deactivate": {"state": "enabled"},
         }
 
     async def test_list_ui_has_edits_not_fields(
@@ -1157,17 +1170,30 @@ class TestFlowUi:
         )
         rows = {p.id: p.ui for p in page.items}
         # 历史单（发货为空）按 A 列：PR 能改收件；已发货的 C 列只读
-        comment = {"comment": {"state": "enabled"}}
-        assert rows[history.id] == {"column": "C", "actions": comment, "edits": ["receiver"]}
-        assert rows[shipped.id] == {"column": "C", "actions": comment, "edits": []}
+        actions = {"urge": {"state": "enabled"}, "comment": {"state": "enabled"}}
+        assert rows[history.id] == {"column": "C", "actions": actions, "edits": ["receiver"]}
+        assert rows[shipped.id] == {"column": "C", "actions": actions, "edits": []}
         manager = await PromotionService(session).list_promotions(
             filters=PromotionListFilters(), page=1, page_size=100, user=flow_users.pr_manager
         )
         row = next(p for p in manager.items if p.id == history.id)
         assert row.ui == {
             "column": "C",
-            "actions": {"ship_include": {"state": "enabled"}, "comment": {"state": "enabled"}},
-            "edits": ["goods_items", "receiver"],
+            "actions": {
+                "ship_include": {"state": "enabled"},
+                "urge": {"state": "enabled"},
+                "comment": {"state": "enabled"},
+                "deactivate": {"state": "enabled"},
+            },
+            # 模式为空：主管可补一次
+            "edits": [
+                "goods",
+                "goods_items",
+                "cooperation",
+                "cooperation_mode",
+                "quote_amount",
+                "receiver",
+            ],
         }
 
     async def test_negotiator_from_negotiation_else_pr(
@@ -1765,7 +1791,9 @@ class TestShipPush:
         assert resp.ui["column"] == "B"
         assert resp.ui["actions"] == {
             "ship_withdraw": {"state": "enabled"},
+            "urge": {"state": "enabled"},
             "comment": {"state": "enabled"},
+            "deactivate": {"state": "enabled"},
         }
         # 列表与详情同一份发货字段（推送人整页一次查）
         page = await PromotionService(session).list_promotions(
@@ -2243,7 +2271,7 @@ class TestChangeGoods:
         )
         assert await _db_items(session, promo.id) == [(suit.top.id, suit.top_sku.id, 0)]
 
-    async def test_pr_still_can_change_goods(
+    async def test_pr_cannot_change_goods(
         self,
         session: AsyncSession,
         tenant_a: Any,
@@ -2252,15 +2280,22 @@ class TestChangeGoods:
         promotion_factory: Any,
         suit: _Suit,
     ) -> None:
-        """PR 改归属的写权限到 PR-5 才收（偏差 §2-6）；本 PR 只断言明细按 11-53 处理。"""
-        promo, _ = await self._single_promotion(
+        """PR-5 起 PR 改归属商品 → 403（11-53，归属商品入矩阵）；明细不动。"""
+        promo, single = await self._single_promotion(
             session, tenant_a, flow_users, blogger_factory, promotion_factory, suit, "待发货"
         )
-        resp = await PromotionService(session).update_promotion(
-            promo.id, PromotionUpdate(goods_main_id=suit.goods.id), flow_users.pr
-        )
-        assert resp.goods_main_id == suit.goods.id
-        assert await _db_items(session, promo.id) == []
+        with pytest.raises(FieldPermissionDenied) as exc_info:
+            await PromotionService(session).update_promotion(
+                promo.id, PromotionUpdate(goods_main_id=suit.goods.id), flow_users.pr
+            )
+        assert exc_info.value.details["fields"] == ["goods_main_id"]
+        assert await _db_items(session, promo.id) == [(suit.top.id, suit.top_sku.id, 0)]
+        goods = (
+            await session.execute(
+                sa_text("SELECT goods_main_id FROM promotion WHERE id = :pid"), {"pid": promo.id}
+            )
+        ).scalar_one()
+        assert goods == single.id
 
     async def test_goods_and_sku_together_keeps_main_row(
         self,

@@ -877,7 +877,8 @@ class TestPatch:
             PromotionUpdate(
                 remark="博主要求周五前到", receiver_name="李四", receiver_phone="13800000000"
             ),
-            flow_users.pr,
+            # PR-5 起备注归合作信息，PR 只读（11-16）：由主管改
+            flow_users.pr_manager,
         )
         events = await events_of(session, line_id=line_id)
         assert _types(events) == [_T.PROMOTION_UPDATED.value, _T.SHIP_RECEIVER_CHANGED.value]
@@ -889,7 +890,7 @@ class TestPatch:
         assert receiver.payload == {"diff": {"receiver_name": {"before": "张三", "after": "李四"}}}
         for e in events:
             assert e.promotion_id == pid and e.negotiation_id is None
-            assert e.actor_id == flow_users.pr.id
+            assert e.actor_id == flow_users.pr_manager.id
             assert (e.from_state, e.to_state) == (None, None)
         _check_registered(events)
 
@@ -918,7 +919,7 @@ class TestPatch:
         )
         line_id = promo.line_id
         await PromotionService(session).update_promotion(
-            promo.id, PromotionUpdate(quote_amount=Decimal("666.00")), flow_users.pr
+            promo.id, PromotionUpdate(quote_amount=Decimal("666.00")), flow_users.pr_manager
         )
         (event,) = await events_of(session, line_id=line_id)
         assert event.event_type == _T.PROMOTION_UPDATED.value
@@ -988,7 +989,7 @@ class TestPatch:
         )
         line_id, pid = promo.line_id, promo.id
         resp = await _call(
-            session, flow_users.pr, "PATCH", f"/api/promotions/{pid}", {"remark": new}
+            session, flow_users.pr_manager, "PATCH", f"/api/promotions/{pid}", {"remark": new}
         )
         assert resp.status_code == 200, resp.text
         stored = (
@@ -1024,7 +1025,7 @@ class TestPatch:
         extra = {f"自定义{i:02d}": "长" * 1000 for i in range(20)}
         resp = await _call(
             session,
-            flow_users.pr,
+            flow_users.pr_manager,
             "PATCH",
             f"/api/promotions/{pid}",
             {"source_extra": extra, "remark": "补充"},

@@ -19,6 +19,8 @@ from app.modules.promotion.stage_calculator import STAGE_COLUMN
 
 _UNPUBLISHED = PublishStatus.UNPUBLISHED.value
 _NOT_RECALLED = RecallStatus.NOT_RECALLED.value
+# 能催发的发布状态，与 urge.service._URGEABLE_PUBLISH_STATUS / _load_urgeable_promotion 一致
+_URGEABLE = frozenset({PublishStatus.UNPUBLISHED.value, PublishStatus.ABNORMAL.value})
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -38,6 +40,8 @@ class PromotionDoc(FlowDocBase):
     receiver_address: str | None
     items_complete: bool
     """颜色尺码明细齐：款式集合 = 归属商品的启用成员（单品 1 行、套装每个成员 1 行）。"""
+    cooperation_mode: str | None
+    """合作模式；为空时主管 / 管理员可补一次（5.3 ²³，谓词 ``ModeIn``）。"""
 
     def _open_unpublished(self) -> bool:
         return (
@@ -47,8 +51,16 @@ class PromotionDoc(FlowDocBase):
         )
 
     def allowed_actions(self) -> frozenset[str]:
-        """细化 §6 的状态机列。PR-2 有发货三个动作、PR-4 有留言（任何阶段都允许），其余动作随各自的 PR 入矩阵。"""
+        """细化 §6 的状态机列。PR-2 有发货三个动作、PR-4 有留言（任何阶段都允许）、PR-5 有催发与停用，
+        其余动作随各自的 PR 入矩阵。
+
+        「标记完成」（``urge_complete``）不在这里：它的状态在催发任务上（进行中才能点），按钮只在催发页。
+        """
         allowed: set[str] = {"comment"}
+        if self.is_active and self.publish_status in _URGEABLE:
+            allowed.add("urge")
+        if self.is_active and self.publish_status != PublishStatus.DELETED.value:
+            allowed.add("deactivate")
         if self.ship_status == ShipStatus.PENDING.value and self._open_unpublished():
             allowed.add("ship_push")
         if self.ship_status == ShipStatus.PRINTING.value:
@@ -99,6 +111,7 @@ def build_promotion_doc(
         receiver_phone=promotion.receiver_phone,
         receiver_address=promotion.receiver_address,
         items_complete=items_complete,
+        cooperation_mode=promotion.cooperation_mode,
     )
 
 

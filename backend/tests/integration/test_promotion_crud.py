@@ -542,14 +542,15 @@ class TestUpdatePromotion:
         session: AsyncSession,
         tenant_a: Any,
         factory: Any,
-        pr_role: Any,
+        pr_manager_role: Any,
         product_factory: Any,
         blogger_factory: Any,
         promotion_factory: Any,
     ) -> None:
         token = tenant_id_ctx.set(tenant_a.id)
         try:
-            user = await factory.user(tenant_a, roles=[pr_role])
+            # 流程线 PR-5 起服务费入矩阵：PR 只读，主管改（PR 被拒见 test_promotion_patch_groups）
+            user = await factory.user(tenant_a, roles=[pr_manager_role])
             style = await product_factory.style()
             blogger = await blogger_factory.blogger()
             promotion = await promotion_factory.promotion(
