@@ -25,6 +25,13 @@ from app.modules.auth.models import AuditLog, Permission, UserPermissionOverride
 from app.modules.product.goods_models import GoodsMain, GoodsStyleItem
 from app.modules.promotion.enums import ShipCourier
 from app.modules.promotion.models import Promotion
+from app.modules.promotion.schemas import (
+    GoodsItemIn,
+    PromotionShipPushRequest,
+    PromotionShipWithdrawRequest,
+    PromotionUpdate,
+)
+from app.modules.promotion.service import PromotionService
 
 pytestmark = [pytest.mark.api, pytest.mark.asyncio]
 
@@ -450,6 +457,86 @@ class TestList:
         admin = await _call(session, flow_users.admin, "GET", _LIST, params=params)
         row = next(r for r in admin.json()["items"] if r["id"] == str(promo.id))
         assert row["ui"] == {"actions": {"ship_fill": {"state": "enabled"}}}
+
+
+# ---------------------------------------------------------------------------
+# 「地址已更新 / 明细已更新」（7.4 末尾，PR-4 S11）：同一条线最后一次 ship.receiver_changed
+# （明细看 ship.items_changed）的 seq 大于最后一次 ship.pushed（没有按 0），且还在待打单
+# ---------------------------------------------------------------------------
+
+
+async def _flags(session: AsyncSession, flow_users: Any, promo: Promotion) -> tuple[bool, bool]:
+    resp = await _call(
+        session,
+        flow_users.warehouse,
+        "GET",
+        _LIST,
+        params={"bucket": "全部", "keyword": promo.internal_code},
+    )
+    assert resp.status_code == 200, resp.text
+    (row,) = (r for r in resp.json()["items"] if r["id"] == str(promo.id))
+    return row["receiver_updated_after_push"], row["items_updated_after_push"]
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+class TestUpdatedAfterPush:
+    async def test_lifecycle(
+        self, session: AsyncSession, seed: _Seed, flow_users: Any, product_factory: Any
+    ) -> None:
+        """推送 → 假；改收件 → 地址真；改明细 → 明细真；撤回再推 → 都假；再改收件后回填（已发货）→ 都假。"""
+        style = await product_factory.style(short_name="上衣")
+        sku = await product_factory.sku(style, color="黑色", size="M")
+        sku2 = await product_factory.sku(style, color="白色", size="L")
+        promo = await seed.promotion(
+            style=style, sku_id=sku.id, items=[(style, sku)], ship_status="待发货", **_RECEIVER
+        )
+        pid, manager, pr = promo.id, flow_users.pr_manager, flow_users.pr
+        svc = PromotionService(session)
+        await svc.ship_push(pid, PromotionShipPushRequest(), manager)
+        assert await _flags(session, flow_users, promo) == (False, False)
+
+        await svc.update_promotion(pid, PromotionUpdate(receiver_address="上海市某路 2 号"), pr)
+        assert await _flags(session, flow_users, promo) == (True, False)
+        await svc.replace_items(
+            pid, [GoodsItemIn(style_id=style.id, sku_id=sku2.id)], flow_users.admin
+        )
+        assert await _flags(session, flow_users, promo) == (True, True)
+
+        await svc.ship_withdraw(pid, PromotionShipWithdrawRequest(reason="改地址"), manager)
+        await svc.ship_push(pid, PromotionShipPushRequest(), manager)
+        assert await _flags(session, flow_users, promo) == (False, False)
+
+        await svc.update_promotion(pid, PromotionUpdate(receiver_name="李四"), pr)
+        assert await _flags(session, flow_users, promo) == (True, False)
+        filled = await _call(
+            session,
+            flow_users.warehouse,
+            "PATCH",
+            _fill_path(pid),
+            {"courier": "顺丰", "waybill": "SF1"},
+        )
+        assert filled.status_code == 200, filled.text
+        body = filled.json()
+        assert (body["receiver_updated_after_push"], body["items_updated_after_push"]) == (
+            False,
+            False,
+        )
+        assert await _flags(session, flow_users, promo) == (False, False)
+
+    async def test_without_pushed_event_counts_from_zero(
+        self, session: AsyncSession, seed: _Seed, flow_users: Any
+    ) -> None:
+        """PR-4 之前推送的单没有 ship.pushed 事件：之后改收件 → 地址已更新；没改过的 → 假。"""
+        pushed_at = datetime.now(UTC) - timedelta(days=1)
+        changed = await seed.promotion(ship_status="待打单", ship_pushed_at=pushed_at, **_RECEIVER)
+        untouched = await seed.promotion(
+            ship_status="待打单", ship_pushed_at=pushed_at, **_RECEIVER
+        )
+        await PromotionService(session).update_promotion(
+            changed.id, PromotionUpdate(receiver_phone="13900000000"), flow_users.pr
+        )
+        assert await _flags(session, flow_users, changed) == (True, False)
+        assert await _flags(session, flow_users, untouched) == (False, False)
 
 
 # ---------------------------------------------------------------------------

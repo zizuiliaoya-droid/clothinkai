@@ -6,6 +6,7 @@
 - ``first_event_at``：这条线第一条事件的时间（``legacy`` 的截止点；只在事件被 500 条上限截断时才查）
 - ``attachments``：过了第 2、3 层的附件一次批量取
 - ``actor_names``：事件动作人的显示名一次批量取
+- ``ship_update_flags``：仓库页「地址已更新 / 明细已更新」，一页一查（7.4 末尾）
 """
 
 from __future__ import annotations
@@ -13,15 +14,17 @@ from __future__ import annotations
 from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import date, datetime
+from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, literal, select
+from sqlalchemy import and_, func, literal, select
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.attachment import Attachment
 from app.modules.auth.models import User
 from app.modules.finance.models import Settlement
+from app.modules.flow.line_events import LineEventType
 from app.modules.flow.models import LineEvent
 from app.modules.negotiation.models import Negotiation
 from app.modules.promotion.models import Promotion
@@ -40,6 +43,12 @@ class AttachmentRef:
     id: UUID
     r2_key: str
     mime_type: str
+
+
+@dataclass(frozen=True)
+class ShipUpdateFlags:
+    receiver: bool
+    items: bool
 
 
 class LineReadRepository:
@@ -103,5 +112,47 @@ class LineReadRepository:
             r.id: r.display_name or r.username for r in (await self._session.execute(stmt)).all()
         }
 
+    async def ship_update_flags(
+        self, *, tenant_id: UUID, line_ids: Collection[UUID]
+    ) -> dict[UUID, ShipUpdateFlags]:
+        """每条线最后一次 ``ship.receiver_changed`` / ``ship.items_changed`` 的 ``seq`` 是否大于最后一次
+        ``ship.pushed``（没有推送事件按 0：PR-4 之前推送的单没有 pushed 事件）。
 
-__all__ = ["AttachmentRef", "LineHeader", "LineReadRepository"]
+        「还在待打单」由调用方判（只传待打单的线）；没有这三类事件的线不在返回里（= 都是 false）。
+        """
+        if not line_ids:
+            return {}
+
+        def last(event_type: LineEventType) -> Any:
+            return func.max(LineEvent.seq).filter(LineEvent.event_type == event_type.value)
+
+        stmt = (
+            select(
+                LineEvent.line_id,
+                last(LineEventType.SHIP_PUSHED),
+                last(LineEventType.SHIP_RECEIVER_CHANGED),
+                last(LineEventType.SHIP_ITEMS_CHANGED),
+            )
+            .where(
+                LineEvent.tenant_id == tenant_id,
+                LineEvent.line_id.in_(list(line_ids)),
+                LineEvent.event_type.in_(
+                    [
+                        LineEventType.SHIP_PUSHED.value,
+                        LineEventType.SHIP_RECEIVER_CHANGED.value,
+                        LineEventType.SHIP_ITEMS_CHANGED.value,
+                    ]
+                ),
+            )
+            .group_by(LineEvent.line_id)
+        )
+        out: dict[UUID, ShipUpdateFlags] = {}
+        for line_id, pushed, receiver, items in (await self._session.execute(stmt)).all():
+            base = pushed or 0
+            out[line_id] = ShipUpdateFlags(
+                receiver=(receiver or 0) > base, items=(items or 0) > base
+            )
+        return out
+
+
+__all__ = ["AttachmentRef", "LineHeader", "LineReadRepository", "ShipUpdateFlags"]
