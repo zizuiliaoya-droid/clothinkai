@@ -716,6 +716,43 @@ class TestProductionMargin:
         # 场景有效性：管理员那边确实有数
         assert any(_margin(r)[0] is not None for r in admin.json()["items"])
 
+    @pytest.mark.parametrize(
+        ("role", "expected"),
+        [
+            ("admin", (303.0, 597.0, 0.6633)),
+            ("pr_manager", (None, None, None)),
+            ("operations", (None, None, None)),
+        ],
+    )
+    async def test_export_same_rule(
+        self, session: AsyncSession, margin_seeded: Any, role: str, expected: tuple[Any, ...]
+    ) -> None:
+        """导出同页面规则：三列表头都在；非管理员单元格为空，管理员有数。列序 = 共用列定义。"""
+        import io
+
+        from openpyxl import load_workbook
+
+        from app.modules.report.production_columns import PRODUCTION_COLUMNS
+
+        user = getattr(margin_seeded.users, role)
+        resp = await _call(session, user, "GET", _export("production"))
+        assert resp.status_code == 200, resp.text
+        sheet = load_workbook(io.BytesIO(resp.content)).active
+        rows = list(sheet.iter_rows(values_only=True))
+        header = list(rows[0])
+        fixed = header[: len(PRODUCTION_COLUMNS)]
+        assert fixed[:4] == ["商品编码", "商品简称", "商品名称", "渠道"]
+        recent7 = [h for h in fixed if h.startswith("近 7 天")]
+        assert len(recent7) == 3 and all(h.startswith("近 7 天（") for h in recent7), recent7
+        margin_idx = [header.index(h) for h in ("销售货品总成本", "单品毛利", "单品利润率")]
+        by_code = {r[0]: r for r in rows[1:]}
+        a_row = by_code[margin_seeded.a.goods.goods_code]
+        assert a_row[header.index("渠道")] == "普通"
+        got = tuple(None if a_row[i] in (None, "") else a_row[i] for i in margin_idx)
+        assert got == expected
+        # 非毛利列与角色无关：A 的支付金额都是 1000
+        assert a_row[header.index("支付金额")] == 1000.0
+
     async def test_cost_change_takes_effect(
         self, session: AsyncSession, margin_seeded: Any
     ) -> None:
