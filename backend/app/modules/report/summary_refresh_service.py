@@ -70,7 +70,11 @@ from app.modules.report.advanced_repository import (
     WorkProgressRepository,
 )
 from app.modules.report.exceptions import SummaryRefreshBusyError
+from app.modules.report.summary_invalidation import summary_lock_key
 from app.modules.report.summary_models import (
+    PR_PROGRESS_METRICS,
+    ROI_METRICS,
+    SHOP_METRICS,
     ProductRoiSummary,
     PrWorkProgressSummary,
     ShopDailySummary,
@@ -82,46 +86,25 @@ from app.modules.urge.service import UrgeService
 # product_roi_summary 直接落盘的指标列（与 daily_trend_by_goods 的输出同名）。
 # confirmed_amount / total_spend / net_roi 不在这里：前两个是加法派生，最后一个是
 # 比率。比率落盘会把除零语义固化进数据，那个语义现在由 safe_div 一处决定。
-_ROI_METRICS = (
-    "pay_amount",
-    "brushing_amount",
-    "refund_amount",
-    "add_cart_count",
-    "promo_cost",
-    "ad_spend",
-)
+# 清单只在 summary_models.ROI_METRICS 定义一次（062），刷新与读取共用。
+_ROI_METRICS = ROI_METRICS
 
-# pr_work_progress_summary 落盘的计数列（14 个，与 aggregate_by_pr 的输出一一对应）。
+# pr_work_progress_summary 落盘的指标列（与 aggregate_by_pr 的输出一一对应），
+# 清单只在 summary_models.PR_PROGRESS_METRICS 定义一次（062），刷新与读取共用。
 # 档期内 / 催发 / 重要催发 / 超时 4 个由 urge_status 派生、依赖「今天」，存的是
 # **刷新时刻**的状态 —— 见 _refresh_pr_progress 与 migration 054 的 docstring。
-_PR_COUNTERS = (
-    "quote_count",
-    "in_schedule_count",
-    "urge_count",
-    "important_urge_count",
-    "overdue_count",
-    "publish_count",
-    "info_complete_count",
-    "cancel_count",
-    "recall_due_count",
-    "recall_success_count",
-    "effective_quote_count",
-    "hit_count",
-    "like_count",
-    "cost",
-)
+_PR_COUNTERS = PR_PROGRESS_METRICS
 
-_SHOP_METRICS = ("visitors", "pay_amount", "pay_orders")
+# 店铺三张表落盘的指标列，清单只在 summary_models.SHOP_METRICS 定义一次（062），
+# 日表刷新、周 / 月二次聚合与汇总读取共用。
+_SHOP_METRICS = SHOP_METRICS
 
-# 租户级刷新锁。键带命名空间前缀，与 import_tasks 按 batch_id 取的锁不会撞
-# （两边都是 hashtextextended 到 bigint 键空间，字符串不同即可）。
+# 租户级刷新锁。键与覆盖失效 helper 共用（summary_lock_key），失效那边阻塞等这把锁。
 # CAST 必须写：同一参数类型推断不出来时 asyncpg 会报 IndeterminateDatatype。
 _LOCK_SQL = text("SELECT pg_try_advisory_xact_lock(hashtextextended(CAST(:key AS text), 0))")
 
-
-def _lock_key(tenant_id: UUID) -> str:
-    """刷新锁的键。单独成函数是为了让测试拿同一个键去占锁，不在测试里再写一遍格式。"""
-    return f"report_summary:{tenant_id}"
+# 旧名保留：测试拿同一个键去占锁
+_lock_key = summary_lock_key
 
 
 # 覆盖记录：区间内每一天一行，不论那天有没有数据。
@@ -266,6 +249,7 @@ class SummaryRefreshService:
                 "id": uuid4(),
                 "tenant_id": tenant_id,
                 "goods_main_id": r["goods_id"],
+                "channel": r["channel"],
                 "stat_date": r["date"],
                 "refreshed_at": now,
                 **{m: r[m] for m in _ROI_METRICS},
@@ -303,17 +287,24 @@ class SummaryRefreshService:
         while day <= date_to:
             # aggregate_by_pr 按区间聚合，没有「按日分组」的形态。与其给它加一个
             # granularity 参数（= 改一条 18 个 FILTER 的 SQL，风险远大于收益），
-            # 不如把区间收成一天逐日调用：落盘的 14 个计数全是可加的（每张推广单
+            # 不如把区间收成一天逐日调用：落盘的指标全是可加的（每张推广单
             # 只有一个合作日期，按天切开再加回去不重不漏），读取时 SUM 回去就是
-            # 任意区间的结果。
+            # 任意区间的结果。by_goods=True：按（PR, 归属商品）落盘（062），
+            # 读取时 SUM 掉商品维度，季节筛选 JOIN 归属商品。
             rows = await self._work.aggregate_by_pr(
-                tenant_id=tenant_id, date_from=day, date_to=day, today=today, thresholds=thresholds
+                tenant_id=tenant_id,
+                date_from=day,
+                date_to=day,
+                today=today,
+                thresholds=thresholds,
+                by_goods=True,
             )
             payload.extend(
                 {
                     "id": uuid4(),
                     "tenant_id": tenant_id,
                     "pr_id": r["pr_id"],
+                    "goods_main_id": r["goods_main_id"],
                     "stat_date": day,
                     "refreshed_at": now,
                     **{c: 0 if r[c] is None else r[c] for c in _PR_COUNTERS},
@@ -341,7 +332,7 @@ class SummaryRefreshService:
         rows = await self._store.aggregate(
             tenant_id=tenant_id, date_from=date_from, date_to=date_to
         )
-        # aggregate 还返回 store_daily 的 3 个手填广告消耗，这里**不取** ——
+        # aggregate 还返回 store_daily 的 4 个手填列（3 个广告消耗 + 仅退款），这里**不取** ——
         # 那是人工 override 层，读取时 LEFT JOIN 过去即时生效，
         # 存进汇总表反而要等下一次刷新才看得到自己刚填的值。
         payload = [
@@ -378,7 +369,7 @@ class SummaryRefreshService:
     ) -> int:
         """从 ``shop_daily_summary`` 二次聚合出周/月。
 
-        不另写一条按周/月分桶的聚合 SQL：周月就是日的加总，三个指标都可加，
+        不另写一条按周/月分桶的聚合 SQL：周月就是日的加总，SHOP_METRICS 都可加，
         从已经校验过口径的日表再 SUM 一次，天然与日表一致 —— 下钻「月 → 周 → 日」时
         各层数字对得上（PRD 投产模块要求的下钻）。
 
@@ -402,9 +393,10 @@ class SummaryRefreshService:
         agg = (
             select(
                 bucket.label("bucket"),
-                func.coalesce(func.sum(ShopDailySummary.visitors), 0).label("visitors"),
-                func.coalesce(func.sum(ShopDailySummary.pay_amount), 0).label("pay_amount"),
-                func.coalesce(func.sum(ShopDailySummary.pay_orders), 0).label("pay_orders"),
+                *(
+                    func.coalesce(func.sum(getattr(ShopDailySummary, m)), 0).label(m)
+                    for m in _SHOP_METRICS
+                ),
             )
             .where(
                 ShopDailySummary.tenant_id == tenant_id,

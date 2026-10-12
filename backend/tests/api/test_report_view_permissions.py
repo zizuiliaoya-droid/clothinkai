@@ -435,6 +435,23 @@ class TestExport:
         assert (resp.status_code, resp.json()["code"]) == (403, "PERMISSION_DENIED")
         assert resp.json()["details"]["required_scope"] == "report.export"
 
+    async def test_read_own_with_export_grant_still_forbidden(
+        self, session: AsyncSession, flow_users: Any
+    ) -> None:
+        """pr 个人授予 ``report.export:read``、只持 ``work_progress:read_own``：导出工作进度仍 403。"""
+        pr = flow_users.pr
+        # 场景有效性：pr 能看工作进度（只持 read_own）
+        assert (await _call(session, pr, "GET", f"{_WP}?month={_MONTH}")).status_code == 200
+        await _override(session, pr, "report.export:read", "grant")
+        resp = await _call(session, pr, "GET", _export("work-progress"))
+        assert (resp.status_code, resp.json()["code"]) == (403, "PERMISSION_DENIED")
+        # 过了路由的 report.export 关，挡在 service 的工作进度 read 上
+        details = resp.json()["details"]
+        assert (details["required_scope"], details["required_action"]) == (
+            "report.work_progress",
+            "read",
+        )
+
 
 _CAPS = "/api/reports/capabilities"
 _ALL_EXPORTS = ["work-progress", "production", "store-daily"]

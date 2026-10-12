@@ -15,6 +15,7 @@ from app.modules.report.pr_scope import (
     PrScope,
     PrScopeKind,
     parse_pr_param,
+    pr_scope_from_param,
     resolve_pr_scope,
 )
 
@@ -96,6 +97,18 @@ class TestPrScopeFilters:
             " AND pr_id = CAST(:scope_pr_id AS uuid)",
             {"scope_pr_id": _ME},
         )
+
+    @pytest.mark.parametrize("param", [None, UNASSIGNED, _ME])
+    def test_param_round_trip(self, param: UUID | str | None) -> None:
+        """R2 下推：service 把 scope 转回 ``PrParam`` 传给仓储，仓储再转回 scope，不能走样。"""
+        scope = pr_scope_from_param(param)  # type: ignore[arg-type]
+        assert scope.as_param() == param
+        assert pr_scope_from_param(scope.as_param()) == scope
+
+    def test_from_param_kinds(self) -> None:
+        assert pr_scope_from_param(None) == PR_SCOPE_ALL
+        assert pr_scope_from_param(UNASSIGNED) == PrScope(PrScopeKind.UNASSIGNED)
+        assert pr_scope_from_param(_ME) == PrScope(PrScopeKind.PR, _ME)
 
     @pytest.mark.parametrize(
         ("kind", "pr_id"),

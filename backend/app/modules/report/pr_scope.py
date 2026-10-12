@@ -61,11 +61,23 @@ class PrScope:
             return f" AND {column} IS NULL", {}
         return f" AND {column} = CAST(:scope_pr_id AS uuid)", {"scope_pr_id": self.pr_id}
 
+    def as_param(self) -> PrParam:
+        """反过来转成 ``PrParam``，传给收 ``pr_id`` 参数的仓储方法（7e R2 下推到 SQL）。"""
+        if self.kind is PrScopeKind.ALL:
+            return None
+        if self.kind is PrScopeKind.UNASSIGNED:
+            return UNASSIGNED
+        return self.pr_id
+
 
 PR_SCOPE_ALL = PrScope(PrScopeKind.ALL)
 
 
-def _from_requested(requested: PrParam) -> PrScope:
+def pr_scope_from_param(requested: PrParam) -> PrScope:
+    """``PrParam`` → ``PrScope``：None = 全部、``unassigned`` = 未分配、UUID = 该 PR。
+
+    只做转换、不判权：判权在 :func:`resolve_pr_scope`。
+    """
     if requested is None:
         return PR_SCOPE_ALL
     if requested == UNASSIGNED:
@@ -87,7 +99,7 @@ def resolve_pr_scope(
     ``also_full``：另外哪些 (scope, action) 也算「看全部」（下钻接口给 ``report.bi:read``）。
     """
     if perms.has(scope_prefix, "read") or any(perms.has(s, a) for s, a in also_full):
-        return _from_requested(requested)
+        return pr_scope_from_param(requested)
     if perms.has(scope_prefix, "read_own"):
         return PrScope(PrScopeKind.PR, user_id)
     raise PermissionDeniedError(
@@ -117,5 +129,6 @@ __all__ = [
     "PrScope",
     "PrScopeKind",
     "parse_pr_param",
+    "pr_scope_from_param",
     "resolve_pr_scope",
 ]

@@ -123,3 +123,38 @@ class TestImportChainIsSelfSufficient:
         assert "PERSIST_READY" in proc.stdout, (
             f"models 自身的 import 链不自洽\n" f"stdout={proc.stdout}\nstderr={proc.stderr[-2000:]}"
         )
+
+
+class TestMetricTuplesMatchColumns:
+    """指标元组是刷新与读取的单一来源（062）：必须 = 模型列去掉键列与 refreshed_at。
+
+    在函数里 import：本模块顶部刻意不碰 app（见上方注释）。
+    """
+
+    _COMMON = frozenset({"id", "tenant_id", "created_at", "updated_at", "refreshed_at"})
+
+    def _metric_columns(self, model: object, keys: set[str]) -> set[str]:
+        return {c.name for c in model.__table__.columns} - self._COMMON - keys  # type: ignore[attr-defined]
+
+    def test_tuples(self) -> None:
+        from app.modules.report.summary_models import (
+            PR_PROGRESS_METRICS,
+            ROI_METRICS,
+            SHOP_METRICS,
+            ProductRoiSummary,
+            PrWorkProgressSummary,
+            ShopDailySummary,
+            ShopMonthSummary,
+            ShopWeekSummary,
+        )
+
+        cases = [
+            (ROI_METRICS, ProductRoiSummary, {"goods_main_id", "channel", "stat_date"}),
+            (PR_PROGRESS_METRICS, PrWorkProgressSummary, {"pr_id", "goods_main_id", "stat_date"}),
+            (SHOP_METRICS, ShopDailySummary, {"stat_date"}),
+            (SHOP_METRICS, ShopWeekSummary, {"week_start"}),
+            (SHOP_METRICS, ShopMonthSummary, {"period_month"}),
+        ]
+        for metrics, model, keys in cases:
+            assert len(set(metrics)) == len(metrics), model
+            assert set(metrics) == self._metric_columns(model, keys), model

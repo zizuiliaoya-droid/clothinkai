@@ -41,13 +41,18 @@ from app.core.db import as_mappings
 from app.core.metrics import report_summary_reads_total
 from app.modules.promotion.urge_calculator import DEFAULT_TENANT_TZ
 from app.modules.report.advanced_repository import (
-    GOODS_META_COLUMNS,
-    GOODS_META_GROUP_BY,
+    PRODUCTION_ADDITIVE_COLUMNS,
     bucket_expr,
+    goods_channel_select,
     goods_filter_clauses,
 )
+from app.modules.report.pr_scope import PrParam, pr_scope_from_param
+from app.modules.report.summary_models import PR_PROGRESS_METRICS, SHOP_METRICS
 
 Source = Literal["summary", "live"]
+
+# 店铺手填层（store_daily）读取时 LEFT JOIN 的列，与 StoreDailyRepository.aggregate 同名
+_STORE_MANUAL_COLUMNS = ("ad_spend_total", "zhitongche_spend", "yinli_spend", "refund_only_amount")
 
 
 @dataclass(frozen=True)
@@ -105,24 +110,6 @@ _URGE_DRIFT_SQL = text(
     """
 )
 
-# 工作进度 14 个计数（与 aggregate_by_pr 的输出一一对应）
-_PR_SUM_COLUMNS = (
-    "quote_count",
-    "in_schedule_count",
-    "urge_count",
-    "important_urge_count",
-    "overdue_count",
-    "publish_count",
-    "info_complete_count",
-    "cancel_count",
-    "recall_due_count",
-    "recall_success_count",
-    "effective_quote_count",
-    "hit_count",
-    "like_count",
-    "cost",
-)
-
 
 class SummaryReadRepository:
     def __init__(self, session: AsyncSession) -> None:
@@ -173,33 +160,31 @@ class SummaryReadRepository:
         exclude_brushing: bool,
         seasons: Sequence[str] | None = None,
     ) -> list[Mapping[str, Any]]:
+        """按（商品, 渠道）出行；外层过滤与排序与实时共用 ``goods_channel_select``。"""
         filter_sql, filter_params = goods_filter_clauses(seasons)
+        sums = ",\n".join(
+            f"COALESCE(SUM(s.{c}), 0) AS {c}"
+            for c in PRODUCTION_ADDITIVE_COLUMNS
+            if c != "pay_amount"
+        )
         sql = text(
             f"""
-            SELECT
-              {GOODS_META_COLUMNS},
-              -- 汇总表存含刷单原值，剔刷单口径在这里减（052 docstring）
-              COALESCE(SUM(s.pay_amount), 0)
-                - CASE WHEN :exclude_brushing
-                       THEN COALESCE(SUM(s.brushing_amount), 0)
-                       ELSE 0 END AS pay_amount,
-              COALESCE(SUM(s.refund_amount), 0) AS refund_amount,
-              COALESCE(SUM(s.add_cart_count), 0) AS add_cart_count,
-              COALESCE(SUM(s.promo_cost), 0) AS promo_cost,
-              COALESCE(SUM(s.ad_spend), 0) AS ad_spend
-            FROM goods_main g
-            JOIN product_roi_summary s
-              ON s.goods_main_id = g.id
-             AND s.tenant_id = g.tenant_id
-             AND s.stat_date BETWEEN :date_from AND :date_to
-            WHERE g.tenant_id = :tenant_id AND g.is_deleted = false
-              {filter_sql}
-            GROUP BY {GOODS_META_GROUP_BY}
-            -- 与实时路径同一个 HAVING：看的是含刷单的销售原值，不是扣过刷单的
-            HAVING COALESCE(SUM(s.pay_amount), 0) > 0
-                OR COALESCE(SUM(s.promo_cost), 0) > 0
-                OR COALESCE(SUM(s.ad_spend), 0) > 0
-            ORDER BY pay_amount DESC, goods_code
+            WITH per_channel AS (
+              SELECT s.goods_main_id AS goods_id, s.channel AS channel,
+                     -- 外层 HAVING 看含刷单的销售原值，不是扣过刷单的
+                     COALESCE(SUM(s.pay_amount), 0) AS pay_raw,
+                     -- 汇总表存含刷单原值，剔刷单口径在这里减（052 docstring）
+                     COALESCE(SUM(s.pay_amount), 0)
+                       - CASE WHEN :exclude_brushing
+                              THEN COALESCE(SUM(s.brushing_amount), 0)
+                              ELSE 0 END AS pay_amount,
+                     {sums}
+              FROM product_roi_summary s
+              WHERE s.tenant_id = :tenant_id
+                AND s.stat_date BETWEEN :date_from AND :date_to
+              GROUP BY s.goods_main_id, s.channel
+            ),
+            {goods_channel_select(filter_sql)}
             """
         )
         params = {
@@ -269,9 +254,22 @@ class SummaryReadRepository:
     # 工作进度 ⇄ WorkProgressRepository.aggregate_by_pr
     # ------------------------------------------------------------------ #
     async def work_progress_by_pr(
-        self, *, tenant_id: UUID, date_from: date, date_to: date
+        self,
+        *,
+        tenant_id: UUID,
+        date_from: date,
+        date_to: date,
+        seasons: Sequence[str] | None = None,
+        pr_id: PrParam = None,
     ) -> list[Mapping[str, Any]]:
-        sums = ",\n".join(f"COALESCE(SUM(s.{c}), 0) AS {c}" for c in _PR_SUM_COLUMNS)
+        """⇄ ``aggregate_by_pr(by_goods=False, seasons, pr_id)``：把商品维度 SUM 掉，排序同实时。
+
+        季节 = 归属商品季节命中（商品为空的行 JOIN 不上，与实时「没归属商品的单不算」一致）。
+        """
+        sums = ",\n".join(f"COALESCE(SUM(s.{c}), 0) AS {c}" for c in PR_PROGRESS_METRICS)
+        scope_sql, scope_params = pr_scope_from_param(pr_id).sql("s.pr_id")
+        season_sql, season_params = goods_filter_clauses(seasons)
+        goods_join = "LEFT JOIN goods_main g ON g.id = s.goods_main_id" if seasons else ""
         sql = text(
             f"""
             SELECT
@@ -279,14 +277,23 @@ class SummaryReadRepository:
               COALESCE(u.display_name, u.username, '未分配') AS pr_name,
               {sums}
             FROM pr_work_progress_summary s
+            {goods_join}
             LEFT JOIN "user" u ON u.id = s.pr_id
             WHERE s.tenant_id = :tenant_id
               AND s.stat_date BETWEEN :date_from AND :date_to
+              {scope_sql}
+              {season_sql}
             GROUP BY s.pr_id, u.display_name, u.username
             ORDER BY quote_count DESC, pr_name, pr_id
             """
         )
-        params = {"tenant_id": tenant_id, "date_from": date_from, "date_to": date_to}
+        params = {
+            "tenant_id": tenant_id,
+            "date_from": date_from,
+            "date_to": date_to,
+            **scope_params,
+            **season_params,
+        }
         return as_mappings((await self._s.execute(sql, params)).mappings().all())
 
     # ------------------------------------------------------------------ #
@@ -295,24 +302,31 @@ class SummaryReadRepository:
     async def store_daily(
         self, *, tenant_id: UUID, date_from: date, date_to: date
     ) -> list[Mapping[str, Any]]:
-        # store_daily 是人工 override 层（3 个广告消耗），读取时 LEFT JOIN 过去即时生效，
-        # 不进汇总表 —— 手填完不用等下一次刷新
+        # store_daily 是人工 override 层（3 个广告消耗 + 仅退款），读取时 LEFT JOIN 过去即时
+        # 生效，不进汇总表 —— 手填完不用等下一次刷新。只读日表，周 / 月在 service 里分桶。
+        #
+        # 日期轴 = 汇总日表 ∪ 区间内 store_daily（计划决定 8）：刷新之后才手填、又没有
+        # 其他来源的日子，汇总日表里没有行；实时路径的并集里有它，这里不并就少一天。
+        metrics = ",\n              ".join(f"COALESCE(s.{m}, 0) AS {m}" for m in SHOP_METRICS)
+        manual = ",\n              ".join(f"sd.{c} AS {c}" for c in _STORE_MANUAL_COLUMNS)
         sql = text(
-            """
-            SELECT
-              s.stat_date AS date,
-              s.visitors AS visitors,
-              s.pay_amount AS pay_amount,
-              s.pay_orders AS pay_orders,
-              sd.ad_spend_total AS ad_spend_total,
-              sd.zhitongche_spend AS zhitongche_spend,
-              sd.yinli_spend AS yinli_spend
-            FROM shop_daily_summary s
+            f"""
+            WITH days AS (
+              SELECT s.stat_date AS d FROM shop_daily_summary s
+              WHERE s.tenant_id = :tenant_id AND s.stat_date BETWEEN :date_from AND :date_to
+              UNION
+              SELECT sd.date FROM store_daily sd
+              WHERE sd.tenant_id = :tenant_id AND sd.date BETWEEN :date_from AND :date_to
+            )
+            SELECT days.d AS date,
+              {metrics},
+              {manual}
+            FROM days
+            LEFT JOIN shop_daily_summary s
+              ON s.tenant_id = :tenant_id AND s.stat_date = days.d
             LEFT JOIN store_daily sd
-              ON sd.tenant_id = s.tenant_id AND sd.date = s.stat_date
-            WHERE s.tenant_id = :tenant_id
-              AND s.stat_date BETWEEN :date_from AND :date_to
-            ORDER BY s.stat_date
+              ON sd.tenant_id = :tenant_id AND sd.date = days.d
+            ORDER BY days.d
             """
         )
         params = {"tenant_id": tenant_id, "date_from": date_from, "date_to": date_to}

@@ -15,6 +15,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.collect.data_quality_service import DataQualityService
+from app.modules.importer.adapters.lenient_parse import to_optional_int
 from app.modules.importer.registry import ImportAdapterRegistry
 from app.modules.product.platform_product_service import PlatformProductService
 
@@ -30,6 +31,12 @@ _DEFAULT_COLUMNS = [
     {"source_col": "点击量", "target_field": "clicks", "type": "int"},
     {"source_col": "总成交金额", "target_field": "gmv", "type": "decimal"},
 ]
+
+# 站内加购（062）：投产报表的逐日配对加购要用。同千牛 055 的理由不放进 _DEFAULT_COLUMNS
+# —— 那份清单会被租户映射整体替换，放进去一配映射就静默丢了。按标准表头兜底，映射里
+# 显式配了 add_cart_count 时以映射为准；宽松解析同 062 回填 SQL（lenient_parse）。
+# 「直接购物车数」「间接购物车数」是它的拆分，不读。
+_ADD_CART_HEADER = "总购物车数"
 
 
 def _to_int(raw: Any) -> int | str | None:
@@ -87,6 +94,10 @@ class WanxiangtaiImportAdapter:
                 parsed[tgt] = _to_date(raw)
             else:
                 parsed[tgt] = str(raw).strip() if raw not in (None, "") else None
+        # 映射配了就用映射的结果（同样过一遍宽松解析，"-" 不能变成写库失败），没配按标准表头取
+        parsed["add_cart_count"] = to_optional_int(
+            parsed["add_cart_count"] if "add_cart_count" in parsed else row.get(_ADD_CART_HEADER)
+        )
         # 保留整行原始列到 extra（对齐 final.xlsx 站内推广 72 列）
         parsed["extra"] = {
             str(k): (str(v).strip() if v is not None else None)
@@ -125,12 +136,14 @@ class WanxiangtaiImportAdapter:
         await session.execute(
             text(
                 "INSERT INTO ad_daily (id, tenant_id, platform_product_id, "
-                "platform_id_snapshot, date, cost, impressions, clicks, gmv, extra, "
-                "created_at, updated_at) "
-                "VALUES (:id, :t, :ppid, :pid, :d, :cost, :imp, :clk, :gmv, CAST(:extra AS JSONB), NOW(), NOW()) "
+                "platform_id_snapshot, date, cost, impressions, clicks, gmv, add_cart_count, "
+                "extra, created_at, updated_at) "
+                "VALUES (:id, :t, :ppid, :pid, :d, :cost, :imp, :clk, :gmv, :cart, "
+                "CAST(:extra AS JSONB), NOW(), NOW()) "
                 "ON CONFLICT (tenant_id, platform_id_snapshot, date) DO UPDATE SET "
                 "cost=EXCLUDED.cost, impressions=EXCLUDED.impressions, "
-                "clicks=EXCLUDED.clicks, gmv=EXCLUDED.gmv, extra=EXCLUDED.extra, "
+                "clicks=EXCLUDED.clicks, gmv=EXCLUDED.gmv, "
+                "add_cart_count=EXCLUDED.add_cart_count, extra=EXCLUDED.extra, "
                 "platform_product_id=EXCLUDED.platform_product_id, updated_at=NOW()"
             ),
             {
@@ -143,6 +156,7 @@ class WanxiangtaiImportAdapter:
                 "imp": parsed.get("impressions"),
                 "clk": parsed.get("clicks"),
                 "gmv": parsed.get("gmv"),
+                "cart": parsed.get("add_cart_count"),
                 "extra": json.dumps(parsed.get("extra") or {}, ensure_ascii=False),
             },
         )

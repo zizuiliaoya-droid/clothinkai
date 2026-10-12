@@ -63,6 +63,8 @@ class StoreDaily(TenantScopedModel):
     ad_spend_total: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     zhitongche_spend: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     yinli_spend: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    # 062：仅退款金额（手填，不进汇总表；未录为 NULL）
+    refund_only_amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     remark: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     __table_args__ = (Index("uq_store_daily_date", "tenant_id", "date", unique=True),)

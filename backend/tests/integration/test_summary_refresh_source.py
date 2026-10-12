@@ -30,6 +30,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.tenancy import tenant_id_ctx
@@ -38,6 +39,8 @@ from app.modules.finance.order_adjustment_models import OrderAdjustment
 from app.modules.product.goods_models import GoodsMain, GoodsStyleItem
 from app.modules.product.platform_product_models import PlatformProduct
 from app.modules.report.advanced_repository import ProductionRepository
+from app.modules.report.summary_models import ProductRoiSummary
+from app.modules.report.summary_refresh_service import SummaryRefreshService
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
@@ -52,6 +55,9 @@ LO, HI = date(2026, 1, 1), date(2026, 12, 31)
 # 比对的指标。add_cart_count 由 054 加进汇总表（投产报表「总加购数」靠它），
 # net_roi 是比率不落盘，不参与等值比对。
 _METRICS = ("pay_amount", "refund_amount", "add_cart_count", "promo_cost", "ad_spend")
+# 062 加的两列。投产主表（aggregate_by_goods）要到按渠道改造时才出，所以只在
+# 趋势自身的比对（全商品 ⇄ 单商品、粗桶 ⇄ 日桶）里用
+_TREND_METRICS = (*_METRICS, "pay_orders", "ad_add_cart_count")
 
 
 async def _goods(
@@ -85,6 +91,7 @@ async def _platform_product(
     goods: GoodsMain,
     *,
     platform: str = "千牛",
+    channel: str = "普通",
 ) -> PlatformProduct:
     pp = PlatformProduct(
         tenant_id=tenant.id,
@@ -92,6 +99,7 @@ async def _platform_product(
         platform_id=f"P{uuid4().hex[:8]}",
         style_id=style.id,
         goods_main_id=goods.id,
+        channel=channel,
     )
     session.add(pp)
     await session.flush()
@@ -106,6 +114,7 @@ async def _qianniu(
     *,
     pay: str,
     refund: str = "0",
+    pay_orders: int = 1,
 ) -> None:
     session.add(
         QianniuDaily(
@@ -115,7 +124,7 @@ async def _qianniu(
             date=day,
             visitors=10,
             pay_amount=Decimal(pay),
-            pay_orders=1,
+            pay_orders=pay_orders,
             refund_amount=Decimal(refund),
             add_cart_count=2,
         )
@@ -123,7 +132,13 @@ async def _qianniu(
 
 
 async def _ad(
-    session: AsyncSession, tenant: Any, pp: PlatformProduct, day: date, *, cost: str
+    session: AsyncSession,
+    tenant: Any,
+    pp: PlatformProduct,
+    day: date,
+    *,
+    cost: str,
+    add_cart: int | None = None,
 ) -> None:
     session.add(
         AdDaily(
@@ -132,6 +147,7 @@ async def _ad(
             platform_id_snapshot=pp.platform_id,
             date=day,
             cost=Decimal(cost),
+            add_cart_count=add_cart,
             extra={},
         )
     )
@@ -153,24 +169,42 @@ async def _brushing(
     )
 
 
-def _fold_by_goods(rows: list[Any]) -> dict[UUID, dict[str, Decimal]]:
-    """把 (商品, 日期) 的逐日行按商品合并 —— 刷新任务写汇总表后读取时做的事。"""
-    out: dict[UUID, dict[str, Decimal]] = defaultdict(lambda: dict.fromkeys(_METRICS, Decimal("0")))
+def _fold_by_goods(
+    rows: list[Any], metrics: tuple[str, ...] = _METRICS
+) -> dict[UUID, dict[str, Decimal]]:
+    """把 (商品, 渠道, 日期) 的逐日行按商品合并 —— 刷新任务写汇总表后读取时做的事。"""
+    out: dict[UUID, dict[str, Decimal]] = defaultdict(lambda: dict.fromkeys(metrics, Decimal("0")))
     for r in rows:
         bucket = out[r["goods_id"]]
-        for m in _METRICS:
+        for m in metrics:
             bucket[m] += Decimal(r[m])
     return dict(out)
 
 
-def _assert_scenario_exercises_all_metrics(rows: list[Any]) -> None:
-    """四个指标都必须在场景里出现非零值。
+def _fold_by_goods_date(
+    rows: list[Any], metrics: tuple[str, ...]
+) -> dict[tuple[UUID, date], dict[str, Decimal]]:
+    """把全商品版的 (商品, 渠道, 日期) 行合计掉渠道 —— 单商品趋势的形态。"""
+    out: dict[tuple[UUID, date], dict[str, Decimal]] = defaultdict(
+        lambda: dict.fromkeys(metrics, Decimal("0"))
+    )
+    for r in rows:
+        bucket = out[(r["goods_id"], r["date"])]
+        for m in metrics:
+            bucket[m] += Decimal(r[m])
+    return dict(out)
+
+
+def _assert_scenario_exercises_all_metrics(
+    rows: list[Any], metrics: tuple[str, ...] = _METRICS
+) -> None:
+    """各指标都必须在场景里出现非零值。
 
     没有这一步，上面的等值断言可能全是 ``0 == 0``：少建一类数据、或者推广因为
     ``publish_status`` 不是「已发布」被过滤掉，测试照样绿。
     """
-    folded = _fold_by_goods(rows)
-    for metric in _METRICS:
+    folded = _fold_by_goods(rows, metrics)
+    for metric in metrics:
         assert any(
             sums[metric] != Decimal("0") for sums in folded.values()
         ), f"场景没有产生非零的 {metric}，等值断言是空跑"
@@ -192,7 +226,7 @@ async def _seed(
     await _qianniu(session, tenant, qn_a, D_MAR_02, pay="1000.00", refund="50.00")
     await _qianniu(session, tenant, qn_a, D_MAR_09, pay="800.00", refund="30.00")
     await _qianniu(session, tenant, qn_a, D_APR_01, pay="600.00")
-    await _ad(session, tenant, ad_a, D_MAR_02, cost="120.00")
+    await _ad(session, tenant, ad_a, D_MAR_02, cost="120.00", add_cart=5)
     await _ad(session, tenant, ad_a, D_APR_01, cost="90.00")
     await _brushing(session, tenant, style_a, D_MAR_05, amount="200.00")
 
@@ -328,7 +362,14 @@ class TestAllGoodsDailyIsFaithfulRefreshSource:
                 date_to=HI,
                 exclude_brushing=True,
             )
-            _assert_scenario_exercises_all_metrics(all_goods)
+            _assert_scenario_exercises_all_metrics(all_goods, _TREND_METRICS)
+
+            # 全商品版按 (商品, 渠道, 日) 出行，单商品版把渠道合计成一行：先合计再比
+            compared = (*_TREND_METRICS, "confirmed_amount", "total_spend")
+            folded = _fold_by_goods_date(all_goods, compared)
+            rows_per_key: dict[tuple[UUID, date], list[Any]] = defaultdict(list)
+            for r in all_goods:
+                rows_per_key[(r["goods_id"], r["date"])].append(r)
 
             # A 覆盖销售/广告/刷单，B 覆盖销售/推广/套装 —— 四个子查询都要对一遍，
             # 只测一个商品会漏掉某个子查询的分组列写错
@@ -341,16 +382,20 @@ class TestAllGoodsDailyIsFaithfulRefreshSource:
                     date_to=HI,
                     exclude_brushing=True,
                 )
-                sliced = [r for r in all_goods if r["goods_id"] == goods.id]
-                assert len(sliced) == len(single) > 0, f"{key} 两条路径行数不一致"
-                for got, want in zip(sliced, single, strict=True):
-                    assert got["date"] == want["date"]
-                    for metric in (*_METRICS, "confirmed_amount", "total_spend"):
-                        assert Decimal(got[metric]) == Decimal(want[metric]), (
+                sliced_dates = sorted(d for gid, d in folded if gid == goods.id)
+                assert single, f"{key} 没有数据，测试场景失效"
+                assert [r["date"] for r in single] == sliced_dates, f"{key} 两条路径日期不一致"
+                for want in single:
+                    got = folded[(goods.id, want["date"])]
+                    for metric in compared:
+                        assert got[metric] == Decimal(want[metric]), (
                             f"{key} {want['date']}.{metric}: 全商品版 {got[metric]} "
                             f"!= 单商品版 {want[metric]}"
                         )
-                    assert got["net_roi"] == want["net_roi"]
+                    # 比率不能相加；只有一个渠道的日子才能直接比
+                    same_day = rows_per_key[(goods.id, want["date"])]
+                    if len(same_day) == 1:
+                        assert same_day[0]["net_roi"] == want["net_roi"]
         finally:
             tenant_id_ctx.reset(tok)
 
@@ -392,12 +437,12 @@ class TestAllGoodsDailyIsFaithfulRefreshSource:
                 exclude_brushing=True,
             )
 
-            _assert_scenario_exercises_all_metrics(day_rows)
-            by_day = _fold_by_goods(day_rows)
-            by_coarse = _fold_by_goods(coarse_rows)
+            _assert_scenario_exercises_all_metrics(day_rows, _TREND_METRICS)
+            by_day = _fold_by_goods(day_rows, _TREND_METRICS)
+            by_coarse = _fold_by_goods(coarse_rows, _TREND_METRICS)
             assert by_day and by_day.keys() == by_coarse.keys()
             for gid, sums in by_day.items():
-                for metric in _METRICS:
+                for metric in _TREND_METRICS:
                     assert by_coarse[gid][metric] == sums[metric], (
                         f"{granularity} 桶的 {metric} 合计 {by_coarse[gid][metric]} "
                         f"!= day 桶 {sums[metric]}"
@@ -449,14 +494,14 @@ class TestOneRowServesBothBrushingModes:
 
             # 行集必须一致：汇总表存的是「同一批 (商品, 日期)」，
             # 两个口径只差一次减法，不该差出几行来
-            keys_in = {(r["goods_id"], r["date"]) for r in included}
-            keys_ex = {(r["goods_id"], r["date"]) for r in excluded}
+            keys_in = {(r["goods_id"], r["channel"], r["date"]) for r in included}
+            keys_ex = {(r["goods_id"], r["channel"], r["date"]) for r in excluded}
             assert keys_in == keys_ex
 
-            by_key_ex = {(r["goods_id"], r["date"]): r for r in excluded}
+            by_key_ex = {(r["goods_id"], r["channel"], r["date"]): r for r in excluded}
             brushed = 0
             for row in included:
-                want = by_key_ex[(row["goods_id"], row["date"])]
+                want = by_key_ex[(row["goods_id"], row["channel"], row["date"])]
                 # 从「含刷单」的行还原「剔刷单」—— 这就是读取汇总表时要做的运算
                 reconstructed = Decimal(row["pay_amount"]) - Decimal(row["brushing_amount"])
                 assert reconstructed == Decimal(want["pay_amount"]), (
@@ -514,5 +559,199 @@ class TestOneRowServesBothBrushingModes:
                 exclude_brushing=True,
             )
             assert Decimal(excluded[0]["pay_amount"]) == Decimal("700.00")
+        finally:
+            tenant_id_ctx.reset(tok)
+
+
+async def _seed_channels(
+    session: AsyncSession,
+    tenant: Any,
+    product_factory: Any,
+    blogger_factory: Any,
+    promotion_factory: Any,
+) -> GoodsMain:
+    """同一商品：普通 + 直播两条千牛链接、一条直播万相台链接，另有推广与刷单。
+
+    D_MAR_02 两个渠道都有销售，D_MAR_09 只有直播 —— 单商品趋势在 D_MAR_02 要把
+    两行合成一行，在 D_MAR_09 照旧一行。
+    """
+    style = await product_factory.style(style_code=f"CH{uuid4().hex[:6]}")
+    goods = await _goods(session, tenant, style, code=f"G_CH_{uuid4().hex[:6]}")
+    qn_normal = await _platform_product(session, tenant, style, goods)
+    qn_live = await _platform_product(session, tenant, style, goods, channel="直播")
+    ad_live = await _platform_product(
+        session, tenant, style, goods, platform="万相台", channel="直播"
+    )
+    await _qianniu(
+        session, tenant, qn_normal, D_MAR_02, pay="1000.00", refund="40.00", pay_orders=3
+    )
+    await _qianniu(session, tenant, qn_live, D_MAR_02, pay="500.00", refund="10.00", pay_orders=2)
+    await _qianniu(session, tenant, qn_live, D_MAR_09, pay="300.00", pay_orders=4)
+    await _ad(session, tenant, ad_live, D_MAR_02, cost="80.00", add_cart=7)
+    await _brushing(session, tenant, style, D_MAR_02, amount="100.00")
+    blogger = await blogger_factory.blogger()
+    await promotion_factory.promotion(
+        style=style,
+        blogger=blogger,
+        goods_main_id=goods.id,
+        cooperation_date=D_MAR_02,
+        quote_amount=Decimal("200.00"),
+        publish_status="已发布",
+    )
+    await session.flush()
+    return goods
+
+
+class TestChannelDimension:
+    """062 起 ``product_roi_summary`` 按 (商品, 渠道, 日) 存（7e R2）。
+
+    渠道来自链接：销售按千牛链接、站内花费按万相台链接；推广与刷单没有链接，记普通。
+    单商品趋势在 R2 不拆渠道（投产接口结构不变），要把渠道合计回一行。
+    """
+
+    async def test_all_goods_rows_split_by_link_channel(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            goods = await _seed_channels(
+                session, tenant_a, product_factory, blogger_factory, promotion_factory
+            )
+            await session.commit()
+
+            rows = await ProductionRepository(session).daily_trend_by_goods(
+                tenant_id=tenant_a.id,
+                goods_id=None,
+                date_from=LO,
+                date_to=HI,
+                exclude_brushing=False,
+            )
+            mine = {(r["channel"], r["date"]): r for r in rows if r["goods_id"] == goods.id}
+            assert set(mine) == {("普通", D_MAR_02), ("直播", D_MAR_02), ("直播", D_MAR_09)}
+
+            normal = mine[("普通", D_MAR_02)]
+            assert Decimal(normal["pay_amount"]) == Decimal("1000.00")
+            assert Decimal(normal["refund_amount"]) == Decimal("40.00")
+            assert int(normal["pay_orders"]) == 3
+            # 推广、刷单记普通
+            assert Decimal(normal["brushing_amount"]) == Decimal("100.00")
+            assert Decimal(normal["promo_cost"]) > 0
+            assert Decimal(normal["ad_spend"]) == 0
+            assert int(normal["ad_add_cart_count"]) == 0
+
+            live = mine[("直播", D_MAR_02)]
+            assert Decimal(live["pay_amount"]) == Decimal("500.00")
+            assert Decimal(live["refund_amount"]) == Decimal("10.00")
+            assert int(live["pay_orders"]) == 2
+            # 站内花费与站内加购按万相台链接的渠道
+            assert Decimal(live["ad_spend"]) == Decimal("80.00")
+            assert int(live["ad_add_cart_count"]) == 7
+            assert Decimal(live["brushing_amount"]) == 0
+            assert Decimal(live["promo_cost"]) == 0
+
+            assert int(mine[("直播", D_MAR_09)]["pay_orders"]) == 4
+        finally:
+            tenant_id_ctx.reset(tok)
+
+    @pytest.mark.parametrize("granularity", ["day", "week"])
+    async def test_single_goods_sums_channels_into_one_row(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        granularity: str,
+    ) -> None:
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            goods = await _seed_channels(
+                session, tenant_a, product_factory, blogger_factory, promotion_factory
+            )
+            await session.commit()
+
+            repo = ProductionRepository(session)
+            all_goods = await repo.daily_trend_by_goods(
+                tenant_id=tenant_a.id,
+                goods_id=None,
+                date_from=LO,
+                date_to=HI,
+                granularity=granularity,
+                exclude_brushing=True,
+            )
+            single = await repo.daily_trend_by_goods(
+                tenant_id=tenant_a.id,
+                goods_id=goods.id,
+                date_from=LO,
+                date_to=HI,
+                granularity=granularity,
+                exclude_brushing=True,
+            )
+            compared = (*_TREND_METRICS, "confirmed_amount", "total_spend")
+            folded = _fold_by_goods_date(
+                [r for r in all_goods if r["goods_id"] == goods.id], compared
+            )
+            # 每个桶一行（D_MAR_02 / D_MAR_09 分属两个 ISO 周），且 = 两个渠道之和
+            assert [r["date"] for r in single] == sorted(d for _, d in folded)
+            assert len(single) == 2
+            for want in single:
+                got = folded[(goods.id, want["date"])]
+                for metric in compared:
+                    assert got[metric] == Decimal(
+                        want[metric]
+                    ), f"{want['date']}.{metric}: 渠道合计 {got[metric]} != 单商品 {want[metric]}"
+            first = single[0]
+            assert Decimal(first["pay_amount"]) == Decimal("1400.00")  # 1000 + 500 - 刷单 100
+            assert int(first["pay_orders"]) == 5
+            assert int(first["ad_add_cart_count"]) == 7
+        finally:
+            tenant_id_ctx.reset(tok)
+
+    async def test_refresh_writes_channel_and_new_columns(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            goods = await _seed_channels(
+                session, tenant_a, product_factory, blogger_factory, promotion_factory
+            )
+            await session.commit()
+
+            await SummaryRefreshService(session).refresh(
+                tenant_id=tenant_a.id, date_from=D_MAR_02, date_to=D_MAR_09
+            )
+            await session.commit()
+
+            stored = (
+                (
+                    await session.execute(
+                        select(ProductRoiSummary).where(
+                            ProductRoiSummary.tenant_id == tenant_a.id,
+                            ProductRoiSummary.goods_main_id == goods.id,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            by_key = {(s.channel, s.stat_date): s for s in stored}
+            assert set(by_key) == {("普通", D_MAR_02), ("直播", D_MAR_02), ("直播", D_MAR_09)}
+            normal, live = by_key[("普通", D_MAR_02)], by_key[("直播", D_MAR_02)]
+            assert (normal.pay_orders, normal.ad_add_cart_count) == (3, 0)
+            assert normal.brushing_amount == Decimal("100.00")
+            assert (live.pay_orders, live.ad_add_cart_count) == (2, 7)
+            assert live.ad_spend == Decimal("80.00")
+            assert live.pay_amount == Decimal("500.00")
+            assert by_key[("直播", D_MAR_09)].pay_orders == 4
         finally:
             tenant_id_ctx.reset(tok)

@@ -177,6 +177,8 @@ class AdDaily(TenantScopedModel):
     impressions: Mapped[int | None] = mapped_column(Integer, nullable=True)
     clicks: Mapped[int | None] = mapped_column(Integer, nullable=True)
     gmv: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    # 062：「总购物车数」的 typed 列（宽松解析，认不出记 NULL，规则同千牛 055）
+    add_cart_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     extra: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     __table_args__ = (

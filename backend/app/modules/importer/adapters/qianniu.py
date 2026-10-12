@@ -18,6 +18,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.collect.data_quality_service import DataQualityService
+from app.modules.importer.adapters.lenient_parse import to_optional_decimal, to_optional_int
 from app.modules.importer.registry import ImportAdapterRegistry
 from app.modules.product.platform_product_service import PlatformProductService
 
@@ -42,28 +43,9 @@ _REFUND_HEADER = "成功退款金额"
 _ADD_CART_HEADER = "商品加购件数"
 
 
-def _to_optional_decimal(raw: Any) -> Decimal | None:
-    """宽松解析：去空白与千分位；空串、"-"、认不出的值一律 None。
-
-    与 055 回填 SQL 同一规则。不编造 0 —— 「没有这列」和「退款为 0」要分得开。
-    """
-    if raw is None:
-        return None
-    s = str(raw).replace(",", "").strip()
-    if s in ("", "-"):
-        return None
-    try:
-        value = Decimal(s)
-    except InvalidOperation:
-        return None
-    return value if value.is_finite() else None
-
-
-def _to_optional_int(raw: Any) -> int | None:
-    value = _to_optional_decimal(raw)
-    if value is None or value != value.to_integral_value():
-        return None
-    return int(value)
+# 宽松解析与 055 回填 SQL 同一规则，抽到 lenient_parse 与万相台共用（062）
+_to_optional_decimal = to_optional_decimal
+_to_optional_int = to_optional_int
 
 
 def _to_int(raw: Any) -> int | str | None:
