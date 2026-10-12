@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
-from httpx import ASGITransport, AsyncClient
+from httpx import ASGITransport, AsyncClient, Response
 
 
 @pytest.mark.api
@@ -51,7 +51,7 @@ class TestPlatformLinkRefreshBusy:
     ``rollback``（测试 session 里只回滚到上一个保存点），所以发请求前先 ``commit`` 落种子。
     """
 
-    async def test_update_while_refreshing_returns_409_and_changes_nothing(
+    async def _request_while_refreshing(
         self,
         session: Any,
         engine: Any,
@@ -59,12 +59,13 @@ class TestPlatformLinkRefreshBusy:
         factory: Any,
         product_factory: Any,
         monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
+        send: Callable[[AsyncClient, UUID], Awaitable[Response]],
+    ) -> tuple[Response, UUID, UUID]:
+        """落一条启用的普通千牛链接 + 3 天覆盖，另一条连接占住刷新锁时用运营身份发请求。"""
         from sqlalchemy import select, text
         from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
         from app.core.db import get_session
-        from app.core.tenancy import tenant_id_ctx
         from app.main import app
         from app.modules.auth.deps import get_current_perms, get_current_user_active
         from app.modules.auth.models import Role
@@ -73,42 +74,39 @@ class TestPlatformLinkRefreshBusy:
         from app.modules.report import summary_invalidation
 
         monkeypatch.setattr(summary_invalidation, "LOCK_TIMEOUT", "300ms")
-        token = tenant_id_ctx.set(tenant_a.id)
+        style = await product_factory.style()
+        link = PlatformProduct(
+            tenant_id=tenant_a.id,
+            platform="千牛",
+            platform_id=str(10**12 + uuid4().int % 10**12),
+            style_id=style.id,
+            channel="普通",
+        )
+        session.add(link)
+        await session.flush()
+        await session.execute(
+            text(
+                "INSERT INTO report_summary_coverage "
+                "(id, tenant_id, stat_date, refreshed_at, created_at, updated_at) "
+                "SELECT gen_random_uuid(), :t, d::date, NOW(), NOW(), NOW() "
+                "FROM generate_series(DATE '2026-03-01', DATE '2026-03-03', "
+                "interval '1 day') AS d"
+            ),
+            {"t": tenant_a.id},
+        )
+        role = (await session.execute(select(Role).where(Role.code == "operations"))).scalar_one()
+        user = await factory.user(tenant_a, roles=[role])
+        perms = await AuthService(session).load_effective_permissions(user.id)
+        link_id, tid = link.id, tenant_a.id
+        await session.commit()
+
+        async def _session_override() -> AsyncIterator[Any]:
+            yield session
+
+        app.dependency_overrides[get_session] = _session_override
+        app.dependency_overrides[get_current_user_active] = lambda: user
+        app.dependency_overrides[get_current_perms] = lambda: perms
         try:
-            style = await product_factory.style()
-            link = PlatformProduct(
-                tenant_id=tenant_a.id,
-                platform="千牛",
-                platform_id=str(10**12 + uuid4().int % 10**12),
-                style_id=style.id,
-                channel="普通",
-            )
-            session.add(link)
-            await session.flush()
-            await session.execute(
-                text(
-                    "INSERT INTO report_summary_coverage "
-                    "(id, tenant_id, stat_date, refreshed_at, created_at, updated_at) "
-                    "SELECT gen_random_uuid(), :t, d::date, NOW(), NOW(), NOW() "
-                    "FROM generate_series(DATE '2026-03-01', DATE '2026-03-03', "
-                    "interval '1 day') AS d"
-                ),
-                {"t": tenant_a.id},
-            )
-            role = (
-                await session.execute(select(Role).where(Role.code == "operations"))
-            ).scalar_one()
-            user = await factory.user(tenant_a, roles=[role])
-            perms = await AuthService(session).load_effective_permissions(user.id)
-            link_id, tid = link.id, tenant_a.id
-            await session.commit()
-
-            async def _session_override() -> AsyncIterator[Any]:
-                yield session
-
-            app.dependency_overrides[get_session] = _session_override
-            app.dependency_overrides[get_current_user_active] = lambda: user
-            app.dependency_overrides[get_current_perms] = lambda: perms
             maker = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
             async with maker() as holder:
                 got = (
@@ -124,15 +122,61 @@ class TestPlatformLinkRefreshBusy:
                 async with AsyncClient(
                     transport=ASGITransport(app=app), base_url="http://test"
                 ) as ac:
-                    resp = await ac.put(
-                        f"/api/platform-products/{link_id}",
-                        json={"is_active": False, "channel": "直播"},
-                    )
+                    resp = await send(ac, link_id)
                 await holder.rollback()
-            assert resp.status_code == 409, resp.text
-            body = resp.json()
-            assert body["code"] == "REPORT_SUMMARY_REFRESH_BUSY"
-            assert body["message"] == "报表正在刷新，请稍后再保存"
+        finally:
+            for dep in (get_session, get_current_user_active, get_current_perms):
+                app.dependency_overrides.pop(dep, None)
+        return resp, link_id, tid
+
+    @staticmethod
+    def _assert_busy(resp: Response) -> None:
+        assert resp.status_code == 409, resp.text
+        body = resp.json()
+        assert body["code"] == "REPORT_SUMMARY_REFRESH_BUSY"
+        assert body["message"] == "报表正在刷新，请稍后再保存"
+
+    @staticmethod
+    async def _coverage_count(session: Any, tid: UUID) -> int:
+        from sqlalchemy import text
+
+        return int(
+            (
+                await session.execute(
+                    text("SELECT count(*) FROM report_summary_coverage WHERE tenant_id = :t"),
+                    {"t": tid},
+                )
+            ).scalar_one()
+        )
+
+    async def test_update_while_refreshing_returns_409_and_changes_nothing(
+        self,
+        session: Any,
+        engine: Any,
+        tenant_a: Any,
+        factory: Any,
+        product_factory: Any,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from sqlalchemy import text
+
+        from app.core.tenancy import tenant_id_ctx
+
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            resp, link_id, tid = await self._request_while_refreshing(
+                session,
+                engine,
+                tenant_a,
+                factory,
+                product_factory,
+                monkeypatch,
+                lambda ac, pp_id: ac.put(
+                    f"/api/platform-products/{pp_id}",
+                    json={"is_active": False, "channel": "直播"},
+                ),
+            )
+            self._assert_busy(resp)
             row = (
                 await session.execute(
                     text("SELECT is_active, channel FROM platform_product WHERE id = :id"),
@@ -140,14 +184,44 @@ class TestPlatformLinkRefreshBusy:
                 )
             ).one()
             assert (row.is_active, row.channel) == (True, "普通")
-            covered = (
-                await session.execute(
-                    text("SELECT count(*) FROM report_summary_coverage WHERE tenant_id = :t"),
-                    {"t": tid},
-                )
-            ).scalar_one()
-            assert covered == 3
+            assert await self._coverage_count(session, tid) == 3
         finally:
             tenant_id_ctx.reset(token)
-            for dep in (get_session, get_current_user_active, get_current_perms):
-                app.dependency_overrides.pop(dep, None)
+
+    async def test_delete_while_refreshing_returns_409_and_keeps_link(
+        self,
+        session: Any,
+        engine: Any,
+        tenant_a: Any,
+        factory: Any,
+        product_factory: Any,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """R2 遗留 L4：DELETE 撞上刷新锁 → 409，链接仍在、覆盖仍在。"""
+        from sqlalchemy import text
+
+        from app.core.tenancy import tenant_id_ctx
+
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            resp, link_id, tid = await self._request_while_refreshing(
+                session,
+                engine,
+                tenant_a,
+                factory,
+                product_factory,
+                monkeypatch,
+                lambda ac, pp_id: ac.delete(f"/api/platform-products/{pp_id}"),
+            )
+            self._assert_busy(resp)
+            row = (
+                await session.execute(
+                    text("SELECT is_active, channel FROM platform_product WHERE id = :id"),
+                    {"id": link_id},
+                )
+            ).one_or_none()
+            assert row is not None, "撞锁后链接被删了"
+            assert (row.is_active, row.channel) == (True, "普通")
+            assert await self._coverage_count(session, tid) == 3
+        finally:
+            tenant_id_ctx.reset(token)

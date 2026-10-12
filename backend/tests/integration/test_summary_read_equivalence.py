@@ -824,6 +824,72 @@ class TestProductionChannels:
         finally:
             tenant_id_ctx.reset(tok)
 
+    async def test_streaming_ad_spend_with_normal_sales_split(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+        recorder: _SourceRecorder,
+    ) -> None:
+        """R2 评审 Not tested：直播万相台花费 + 普通千牛销售 → 两行各自的数，两路逐字相等。
+
+        商品只有普通千牛（D1 支付 500 / 退款 20 / 加购 4）和直播万相台（D1 花费 60、站内加购 6）。
+        """
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            style = await product_factory.style(style_code=f"XS{uuid4().hex[:6]}")
+            goods = await _goods(
+                session, tenant_a, style, code=f"G_XS_{uuid4().hex[:5]}", season="春夏"
+            )
+            qn = await _pp(session, tenant_a, style, goods)
+            ad = await _pp(session, tenant_a, style, goods, platform="万相台", channel="直播")
+            session.add_all(
+                [
+                    _qn(tenant_a, qn, D1, "500.00", refund="20.00", add_cart=4, pay_orders=3),
+                    AdDaily(
+                        tenant_id=tenant_a.id,
+                        platform_product_id=ad.id,
+                        platform_id_snapshot=ad.platform_id,
+                        date=D1,
+                        cost=Decimal("60.00"),
+                        add_cart_count=6,
+                        extra={},
+                    ),
+                ]
+            )
+            await session.commit()
+            await _refresh(session, tenant_a, M_LO, M_HI)
+
+            svc = ProductionService(session)
+            via_summary = await svc.get_report(tenant_a.id, (M_LO, M_HI))
+            assert recorder.calls[0] == ("production", "summary")
+            via_live = await svc.get_report(tenant_a.id, (M_LO, M_HI), use_summary=False)
+            assert ("production", "live") in recorder.calls
+            assert _dump(via_summary) == _dump(via_live)
+
+            gid, zero = str(goods.id), Decimal("0.00")
+            # 普通行只有销售，直播行只有站内花费（直播没有千牛链接 → 链接数 0）
+            assert [_channel_tuple(r) for r in via_summary.items] == [
+                (gid, "普通", 1, Decimal("500.00"), Decimal("20.00"), 4, zero, zero),
+                (gid, "直播", 0, zero, zero, 0, zero, Decimal("60.00")),
+            ]
+            assert [(r.pay_orders, r.ad_add_cart_count) for r in via_summary.items] == [
+                (3, 0),
+                (0, 6),
+            ]
+            # 两个渠道各自没有配对日 → 站外加购都是 null
+            assert [r.offsite_add_cart for r in via_summary.items] == [None, None]
+
+            # 内部调用方按商品合计：一行，销售与花费合在一起
+            goods_rows = await svc.get_goods_rows(
+                tenant_a.id, (M_LO, M_HI), exclude_brushing=True, use_summary=False
+            )
+            assert [_money_tuple(r) for r in goods_rows] == [
+                (gid, Decimal("500.00"), Decimal("20.00"), 4, zero, Decimal("60.00"))
+            ]
+        finally:
+            tenant_id_ctx.reset(tok)
+
 
 async def _seed_add_cart(
     session: AsyncSession, tenant: Any, product_factory: Any
@@ -1131,6 +1197,54 @@ class TestProductionTrend:
                 assert _dump(via_summary) == _dump(via_live), f"{key} {granularity}"
                 assert via_summary.points, f"{key} 没有趋势点"
             assert ("production_trend", "summary") in recorder.calls
+        finally:
+            tenant_id_ctx.reset(tok)
+
+    @pytest.mark.parametrize("granularity", ["day", "week"])
+    @pytest.mark.parametrize("exclude_brushing", [True, False])
+    async def test_repository_trend_rows_equal_with_062_columns(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+        granularity: str,
+        exclude_brushing: bool,
+    ) -> None:
+        """R2 遗留 L2：汇总趋势带上实时已有的 5 列，仓储层两路逐行相等（实时多一列 net_roi）。"""
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            seeded = await _seed_add_cart(session, tenant_a, product_factory)
+            await session.commit()
+            await _refresh(session, tenant_a, M_LO, M_HI)
+            kwargs = {
+                "tenant_id": tenant_a.id,
+                "goods_id": seeded["goods_a"].id,
+                "date_from": M_LO,
+                "date_to": M_HI,
+                "granularity": granularity,
+                "exclude_brushing": exclude_brushing,
+            }
+            live = await ProductionRepository(session).daily_trend_by_goods(**kwargs)
+            summary = await SummaryReadRepository(session).production_trend(**kwargs)
+            assert live, "没有趋势点，场景失效"
+            live_rows = [
+                _norm_repo_row({k: v for k, v in r.items() if k != "net_roi"}) for r in live
+            ]
+            summary_rows = [_norm_repo_row(r) for r in summary]
+            # 列集合与顺序都一致（漏一列这里就红）
+            assert [list(r) for r in summary_rows] == [list(r) for r in live_rows]
+            assert summary_rows == live_rows
+            # 场景有效性：5 列都出现非零值；普通 D2 配对 1 天 + 直播 D1、D2 配对 2 天
+            for col in (
+                "pay_orders",
+                "ad_add_cart_count",
+                "paired_all_cart",
+                "paired_ad_cart",
+                "paired_days",
+            ):
+                assert any(r[col] for r in summary_rows), col
+            assert sum(r["paired_days"] for r in summary_rows) == 3
+            assert sum(r["pay_orders"] for r in summary_rows) == 10
         finally:
             tenant_id_ctx.reset(tok)
 
