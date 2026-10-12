@@ -8,12 +8,16 @@
 - 第 3 层：运营删服务费 / 应付 / 收件（含 snapshot、diff 内层），收款码附件不签名（注入 T_ATT：先签后滤 → 签过收款码）；
   没登记的键连管理员也删
 - 上限 500：501 条 → ``truncated``、只回最新 500 条（注入 T_TRUNC）；SQL 条数与事件条数无关，事件只查 1 次
+- ``legacy``：只有字段的旧单读出各时间点（日期按 00:00 Asia/Shanghai）；只出第一条事件之前的点（截断时另查第一条，
+  注入 L_CUT、L_TRUNC）；过分组（财务只见结款两点，注入 L_GROUP）与谈款行级（PR 乙看不到谈款的点，注入 L_ROW）
+- ``next_step``：有推广单按推广阶段，否则按谈款状态（注入 NS_NEG）
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import dataclass
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
@@ -29,6 +33,7 @@ from app.modules.auth.models import Permission, UserPermissionOverride
 from app.modules.flow.exceptions import LineNotFoundError
 from app.modules.flow.line_events import LineEventRepository, LineEventType
 from app.modules.flow.timeline import HIDDEN_NEGOTIATION_REASON, TIMELINE_LIMIT, LineEventService
+from app.modules.promotion.urge_calculator import DEFAULT_TENANT_TZ
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
@@ -649,3 +654,280 @@ class TestLimitAndQueries:
         assert (two[2], fifty[2]) == (2, 50)
         assert two[0] == fifty[0], (two, fifty)
         assert two[1] == fifty[1] == 1
+
+
+async def _db_now(session: AsyncSession) -> datetime:
+    """事务时间（同一事务里 append 的事件 ``created_at`` 都是它）。"""
+    return (await session.execute(sa_text("SELECT NOW()"))).scalar_one()
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+class TestLegacy:
+    async def test_fields_only_line_reads_legacy_points(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        settlement_factory: Any,
+        signed: list[str],
+    ) -> None:
+        """上线前的已发布 · 已发货单：没有事件，各时间点全从字段推出来，最新在上。"""
+        style = await product_factory.style()
+        blogger = await blogger_factory.blogger()
+        base = datetime(2026, 9, 1, 2, 0, tzinfo=UTC)
+        promo = await promotion_factory.promotion(
+            style=style,
+            blogger=blogger,
+            pr=flow_users.pr,
+            publish_status="已发布",
+            settlement_status="待付款",
+            ship_status="已发货",
+            receiver_name="张三",
+            ship_pushed_at=base + timedelta(days=1),
+            shipped_at=base + timedelta(days=2),
+            actual_publish_date=date(2026, 9, 5),
+            review_action="approve",
+            # 上一轮驳回原因重提通过后不清：通过的点不带它
+            review_reason="上一轮驳回原因",
+        )
+        promo.created_at = base
+        promo.reviewed_at = base + timedelta(days=6)
+        promo.metrics_recorded_at = base + timedelta(days=14)
+        promo.retro_confirmed_at = base + timedelta(days=15)
+        await session.flush()
+        await settlement_factory.settlement(
+            style=style,
+            blogger=blogger,
+            promotion=promo,
+            pr=flow_users.pr,
+            payment_date=date(2026, 9, 10),
+        )
+        svc = LineEventService(session)
+        admin = await svc.read(promo.line_id, flow_users.admin)
+        assert admin.events == []
+        assert [(p.source, p.text) for p in admin.legacy] == [
+            ("promotion.retro_confirmed_at", "主管确认复盘"),
+            ("promotion.metrics_recorded_at", "PR 录入 7 天数据"),
+            ("settlement.payment_date", "财务付款"),
+            ("promotion.reviewed_at", "主管审核通过推广"),
+            ("promotion.actual_publish_date", "博主发布"),
+            ("promotion.shipped_at", "仓库已发货"),
+            ("promotion.ship_pushed_at", "推送仓库发货"),
+            ("promotion.created_at", "新建推广单"),
+        ]
+        at = {p.source: p.at for p in admin.legacy}
+        assert at["promotion.actual_publish_date"] == datetime(2026, 9, 5, tzinfo=DEFAULT_TENANT_TZ)
+        assert at["settlement.payment_date"] == datetime(2026, 9, 10, tzinfo=DEFAULT_TENANT_TZ)
+        assert at["promotion.reviewed_at"] == base + timedelta(days=6)
+        # 运营四组都看得到：同样这 8 点（文案里没有金额、收件）
+        ops = await svc.read(promo.line_id, flow_users.operations)
+        assert [p.source for p in ops.legacy] == [p.source for p in admin.legacy]
+        assert not any("500" in p.text or "张三" in p.text for p in ops.legacy)
+        # 财务（靠结款单进来）只有结款组的两点
+        fin = await svc.read(promo.line_id, flow_users.finance)
+        assert [p.source for p in fin.legacy] == [
+            "settlement.payment_date",
+            "promotion.reviewed_at",
+        ]
+
+    async def test_only_points_before_first_event(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        signed: list[str],
+    ) -> None:
+        """上线后有了事件：只出第一条事件之前的点；驳回带分类与原因。"""
+        style = await product_factory.style()
+        blogger = await blogger_factory.blogger()
+        now = await _db_now(session)
+        promo = await promotion_factory.promotion(
+            style=style,
+            blogger=blogger,
+            pr=flow_users.pr,
+            publish_status="已发布",
+            settlement_status="已驳回",
+            actual_publish_date=(now - timedelta(days=10)).astimezone(DEFAULT_TENANT_TZ).date(),
+            review_action="reject",
+            review_reason="流量太差",
+            review_reason_category="流量差补发",
+        )
+        promo.created_at = now - timedelta(days=30)
+        promo.reviewed_at = now - timedelta(days=5)
+        promo.metrics_recorded_at = now + timedelta(days=1)  # 第一条事件之后：有事件记着，不出
+        await session.flush()
+        await LineEventRepository(session).append(
+            tenant_id=promo.tenant_id,
+            line_id=promo.line_id,
+            event_type=_T.REVIEW_RESUBMITTED,
+            actor_id=flow_users.pr.id,
+            promotion_id=promo.id,
+        )
+        resp = await LineEventService(session).read(promo.line_id, flow_users.admin)
+        assert [e.event_type for e in resp.events] == ["review.resubmitted"]
+        assert [(p.source, p.text) for p in resp.legacy] == [
+            ("promotion.reviewed_at", "主管驳回推广（流量差补发）：流量太差"),
+            ("promotion.actual_publish_date", "博主发布"),
+            ("promotion.created_at", "新建推广单"),
+        ]
+
+    async def test_cut_uses_first_event_when_truncated(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        signed: list[str],
+    ) -> None:
+        """超 500 条：截断后剩下的最老一条不是第一条事件，截止点要另查。"""
+        style = await product_factory.style()
+        blogger = await blogger_factory.blogger()
+        now = await _db_now(session)
+        promo = await promotion_factory.promotion(
+            style=style, blogger=blogger, pr=flow_users.pr, review_action="approve"
+        )
+        promo.created_at = now - timedelta(days=3)
+        promo.reviewed_at = now - timedelta(days=1)  # 第一条事件（2 天前）之后
+        await session.flush()
+        params = {"t": promo.tenant_id, "l": promo.line_id, "p": promo.id}
+        await session.execute(
+            sa_text(
+                "INSERT INTO line_event (id, tenant_id, line_id, promotion_id, event_type, "
+                "payload, created_at, updated_at) VALUES (gen_random_uuid(), :t, :l, :p, "
+                "'promotion.updated', '{}'::jsonb, NOW() - INTERVAL '2 days', NOW())"
+            ),
+            params,
+        )
+        await session.execute(
+            sa_text(
+                "INSERT INTO line_event (id, tenant_id, line_id, promotion_id, event_type, "
+                "payload, created_at, updated_at) "
+                "SELECT gen_random_uuid(), :t, :l, :p, 'promotion.updated', '{}'::jsonb, "
+                "NOW(), NOW() FROM generate_series(1, CAST(:n AS int))"
+            ),
+            {**params, "n": TIMELINE_LIMIT},
+        )
+        resp = await LineEventService(session).read(promo.line_id, flow_users.pr)
+        assert resp.truncated is True
+        assert [p.source for p in resp.legacy] == ["promotion.created_at"]
+
+    async def test_negotiation_points_follow_row_rule(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        negotiation_factory: Any,
+        signed: list[str],
+    ) -> None:
+        """谈款的点只给看得到这张谈款的人：PR 乙看 PR 甲谈款生成的旧单，只有推广的点。"""
+        style = await product_factory.style()
+        blogger = await blogger_factory.blogger()
+        base = datetime(2026, 8, 1, 2, 0, tzinfo=UTC)
+        promo = await promotion_factory.promotion(style=style, blogger=blogger, pr=flow_users.pr)
+        promo.created_at = base + timedelta(hours=3)
+        await session.flush()
+        await negotiation_factory.negotiation(
+            style=style,
+            blogger=blogger,
+            pr=flow_users.pr,
+            status="已定稿",
+            promotion_id=promo.id,
+            line_id=promo.line_id,
+            created_at=base,
+            submitted_at=base + timedelta(hours=1),
+            reviewed_at=base + timedelta(hours=2),
+            review_opinion="可以",
+        )
+        svc = LineEventService(session)
+        own = await svc.read(promo.line_id, flow_users.pr)
+        assert [(p.source, p.text) for p in own.legacy] == [
+            ("promotion.created_at", "新建推广单"),
+            ("negotiation.reviewed_at", "主管审核通过谈款：可以"),
+            ("negotiation.submitted_at", "PR 提交谈款审核"),
+            ("negotiation.created_at", "PR 新建谈款"),
+        ]
+        other = await svc.read(promo.line_id, flow_users.pr2)
+        assert [p.source for p in other.legacy] == ["promotion.created_at"]
+
+    async def test_rejected_negotiation_text(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        negotiation_factory: Any,
+        signed: list[str],
+    ) -> None:
+        style = await product_factory.style()
+        blogger = await blogger_factory.blogger()
+        base = datetime(2026, 8, 1, 2, 0, tzinfo=UTC)
+        neg = await negotiation_factory.negotiation(
+            style=style,
+            blogger=blogger,
+            pr=flow_users.pr,
+            status="审核驳回",
+            created_at=base,
+            submitted_at=base + timedelta(hours=1),
+            reviewed_at=base + timedelta(hours=2),
+            review_opinion="价格太高",
+        )
+        resp = await LineEventService(session).read(neg.line_id, flow_users.pr)
+        assert resp.legacy[0].text == "主管驳回谈款：价格太高"
+        assert resp.next_step is None  # 终态
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+class TestNextStep:
+    async def test_promotion_stage_wins(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        negotiation_factory: Any,
+        signed: list[str],
+    ) -> None:
+        """线上有推广单按推广阶段（谈款「已定稿」那格是 None，不能拿它）。"""
+        style = await product_factory.style()
+        blogger = await blogger_factory.blogger()
+        promo = await promotion_factory.promotion(
+            style=style, blogger=blogger, pr=flow_users.pr, ship_status="待发货"
+        )
+        await negotiation_factory.negotiation(
+            style=style,
+            blogger=blogger,
+            pr=flow_users.pr,
+            status="已定稿",
+            promotion_id=promo.id,
+            line_id=promo.line_id,
+        )
+        resp = await LineEventService(session).read(promo.line_id, flow_users.pr)
+        assert resp.promotion is not None and resp.promotion.stage == "待推送仓库"
+        assert resp.next_step is not None
+        assert resp.next_step.model_dump() == {"text": "等 PR 把发货单推送给仓库", "who": "PR"}
+
+    async def test_negotiation_status_when_no_promotion(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        negotiation_factory: Any,
+        signed: list[str],
+    ) -> None:
+        style = await product_factory.style()
+        blogger = await blogger_factory.blogger()
+        neg = await negotiation_factory.negotiation(
+            style=style, blogger=blogger, pr=flow_users.pr, status="主管待审"
+        )
+        resp = await LineEventService(session).read(neg.line_id, flow_users.pr)
+        assert resp.next_step is not None
+        assert (resp.next_step.text, resp.next_step.who) == ("等主管审核", "主管")

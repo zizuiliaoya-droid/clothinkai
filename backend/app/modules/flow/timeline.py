@@ -8,20 +8,23 @@
    分组级就看不到的直接丢、不进 ``hidden_segments``（计划 D5 偏差）
 3. 能不能看到这个字段：payload 过 ``filter_payload``（白名单）；附件过 ``attachment_readable`` 之后才签名
 
+``legacy``（上线前记录）：这条线第一条事件之前、按单据字段推出来的时间点（无事件 = 全部），同样过第 2 层
+（分组 + 谈款行级）；只出动作与原因，不带金额、收件。``next_step``：有推广单按推广阶段，否则按看得到的谈款状态。
 查询：动作人权限 2 条（``load_flow_actor``）+ 线头 1 条 + 事件 1 条 + 附件 / 动作人名各 1 条（没有就不查）
-+ 催发阈值 1 条（线上有推广单时算阶段），与事件条数无关；列表接口不 join 事件表。
-``legacy``、``next_step`` 随 S5 接入。
++ 催发阈值 1 条（线上有推广单时算阶段）+ 第一条事件时间 1 条（只在超 500 条截断时），与事件条数无关；
+列表接口不 join 事件表。
 """
 
 from __future__ import annotations
 
 import logging
+from datetime import date, datetime, time
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.attachment import attachment_service
-from app.core.security.field_permissions import can_read_field
+from app.core.security.field_permissions import FieldPermissionContext, can_read_field
 from app.modules.auth.models import User
 from app.modules.auth.repository import PermissionRepository, RoleRepository
 from app.modules.flow.actor import load_flow_actor
@@ -35,21 +38,26 @@ from app.modules.flow.line_events import (
 )
 from app.modules.flow.matrix import FlowActor, FlowDocBase, ui_for
 from app.modules.flow.models import LineEvent
+from app.modules.flow.next_step import next_step
 from app.modules.flow.schemas import (
     HiddenSegment,
+    LegacyPoint,
     LineTimelineResponse,
     TimelineActor,
     TimelineAttachment,
     TimelineEvent,
     TimelineNegotiation,
+    TimelineNextStep,
     TimelinePromotion,
 )
 from app.modules.flow.timeline_repository import LineHeader, LineReadRepository
+from app.modules.negotiation.enums import NegotiationStatus
 from app.modules.negotiation.flow_doc import build_negotiation_doc
 from app.modules.negotiation.service import can_see_negotiation
+from app.modules.promotion.enums import ReviewAction
 from app.modules.promotion.flow_doc import build_promotion_doc
 from app.modules.promotion.stage_calculator import compute_stage
-from app.modules.promotion.urge_calculator import get_today
+from app.modules.promotion.urge_calculator import DEFAULT_TENANT_TZ, get_today
 from app.modules.urge.service import UrgeService
 
 log = logging.getLogger(__name__)
@@ -68,6 +76,96 @@ GROUP_LABELS: dict[str, str] = {
 HIDDEN_NEGOTIATION_REASON = "谈款过程只给谈款人和能看全部谈款的人看"
 # 附件签名时长与推广响应一致
 ATTACHMENT_URL_TTL = 900
+
+
+def _day_start(value: date) -> datetime:
+    """日期字段（发布日期、付款日期）按当天 00:00（Asia/Shanghai）当时间点。"""
+    return datetime.combine(value, time.min, tzinfo=DEFAULT_TENANT_TZ)
+
+
+def _with_reason(text: str, reason: str | None) -> str:
+    return f"{text}：{reason}" if reason else text
+
+
+def legacy_points(
+    header: LineHeader,
+    *,
+    first_event_at: datetime | None,
+    ctx: FieldPermissionContext,
+    sees_negotiation: bool,
+) -> list[LegacyPoint]:
+    """上线前记录（6.5）：第一条事件之前的字段时间点（没有事件 = 全部），最新在上。
+
+    同样过第 2 层：按点所属的事件分组 ``can_read_field("line_event", 组)``，谈款的点还要看得到这张谈款（行级）；
+    看不到的直接不出（不计入 ``hidden_segments``：那里数的是事件）。只出动作与原因，金额、收件不进文案。
+    发货两点（推送、发货）是计划 D7 加的：PR-2 ~ PR-4 之间的推送 / 回填没有事件；
+    两条迁移标记（``settled_at`` / ``completed_at``）的列随 PR-6 / M5 才有，那时再加。
+    """
+    # (分组, 时间, 文案, 来源字段)，按业务先后排列：同一时刻的几点，后发生的排在上面
+    points: list[tuple[str, datetime | date | None, str, str]] = []
+    neg = header.negotiation
+    if neg is not None and sees_negotiation:
+        rejected = neg.status == NegotiationStatus.REJECTED.value
+        points += [
+            ("negotiation", neg.created_at, "PR 新建谈款", "negotiation.created_at"),
+            ("negotiation", neg.submitted_at, "PR 提交谈款审核", "negotiation.submitted_at"),
+            (
+                "negotiation",
+                neg.reviewed_at,
+                _with_reason(
+                    "主管驳回谈款" if rejected else "主管审核通过谈款", neg.review_opinion
+                ),
+                "negotiation.reviewed_at",
+            ),
+        ]
+    promo = header.promotion
+    if promo is not None:
+        rejected_review = promo.review_action == ReviewAction.REJECT.value
+        category = promo.review_reason_category
+        review_text = (
+            _with_reason(
+                f"主管驳回推广（{category}）" if category else "主管驳回推广", promo.review_reason
+            )
+            if rejected_review
+            else "主管审核通过推广"
+        )
+        points += [
+            ("promotion", promo.created_at, "新建推广单", "promotion.created_at"),
+            ("shipping", promo.ship_pushed_at, "推送仓库发货", "promotion.ship_pushed_at"),
+            ("shipping", promo.shipped_at, "仓库已发货", "promotion.shipped_at"),
+            (
+                "promotion",
+                promo.actual_publish_date,
+                "博主发布",
+                "promotion.actual_publish_date",
+            ),
+            ("settlement", promo.reviewed_at, review_text, "promotion.reviewed_at"),
+            (
+                "settlement",
+                header.settlement_payment_date,
+                "财务付款",
+                "settlement.payment_date",
+            ),
+            (
+                "promotion",
+                promo.metrics_recorded_at,
+                "PR 录入 7 天数据",
+                "promotion.metrics_recorded_at",
+            ),
+            ("retro", promo.retro_confirmed_at, "主管确认复盘", "promotion.retro_confirmed_at"),
+        ]
+    out: list[tuple[datetime, int, LegacyPoint]] = []
+    for order, (group, raw, text, source) in enumerate(points):
+        if raw is None:
+            continue
+        at = raw if isinstance(raw, datetime) else _day_start(raw)
+        if first_event_at is not None and at >= first_event_at:
+            continue
+        if not can_read_field("line_event", group, ctx):
+            continue
+        out.append((at, order, LegacyPoint(at=at, text=text, source=source)))
+    out.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return [point for _, _, point in out]
 
 
 def _group_of(event_type: str) -> str | None:
@@ -107,6 +205,11 @@ class LineEventService:
         )
         truncated = len(rows) > TIMELINE_LIMIT
         rows = rows[:TIMELINE_LIMIT]
+        # legacy 的截止点：倒序取的，最后一条就是第一条事件；截断了才另查
+        if truncated:
+            first_event_at = await self._lines.first_event_at(tenant_id=tenant_id, line_id=line_id)
+        else:
+            first_event_at = rows[-1].created_at if rows else None
 
         # 第 2 层：分组 → 行级
         ctx = actor.field_ctx
@@ -167,6 +270,12 @@ class LineEventService:
 
         stage, doc = await self._doc(actor, header)
         comment = ui_for(actor, doc).actions.get("comment")
+        step = next_step(
+            promotion_stage=stage,
+            negotiation_status=(
+                negotiation.status if negotiation is not None and sees_negotiation else None
+            ),
+        )
         return LineTimelineResponse(
             line_id=line_id,
             negotiation=(
@@ -181,8 +290,17 @@ class LineEventService:
                 if promotion is not None and stage is not None
                 else None
             ),
+            next_step=(
+                TimelineNextStep(text=step.text, who=step.who) if step is not None else None
+            ),
             events=events,
             hidden_segments=hidden_segments,
+            legacy=legacy_points(
+                header,
+                first_event_at=first_event_at,
+                ctx=ctx,
+                sees_negotiation=sees_negotiation,
+            ),
             truncated=truncated,
             ui={"actions": {"comment": comment.to_dict()} if comment is not None else {}},
         )
@@ -234,4 +352,10 @@ class LineEventService:
         return out
 
 
-__all__ = ["GROUP_LABELS", "HIDDEN_NEGOTIATION_REASON", "TIMELINE_LIMIT", "LineEventService"]
+__all__ = [
+    "GROUP_LABELS",
+    "HIDDEN_NEGOTIATION_REASON",
+    "TIMELINE_LIMIT",
+    "LineEventService",
+    "legacy_points",
+]
