@@ -907,3 +907,111 @@ class TestStoreReport:
             partial = await _call(session, mgr, "GET", _store(page, _M_LO, _M_LO + timedelta(20)))
             assert partial.status_code == 200, partial.text
             assert store_recorder == [(_STORE_LABELS[page], "live")], page
+
+
+_PUT_STORE = "/api/reports/store-daily"
+_MANUAL_NONE = {
+    "ad_spend_total": None,
+    "zhitongche_spend": None,
+    "yinli_spend": None,
+    "refund_only_amount": None,
+    "remark": None,
+}
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+class TestStoreDailyPut:
+    """``PUT /store-daily/{day}``：仅退款、校验、``null`` 清空（设计 2.4、5.1）。"""
+
+    async def test_future_date_rejected_boundaries_ok(
+        self, session: AsyncSession, flow_users: Any
+    ) -> None:
+        """明天 → 422 且不落库；今天、2020-01-01、上限金额、200 字备注都能存。"""
+        ops = flow_users.operations
+        tomorrow = _TODAY + timedelta(days=1)
+        resp = await _call(
+            session, ops, "PUT", f"{_PUT_STORE}/{tomorrow}", {"refund_only_amount": "1.00"}
+        )
+        assert (resp.status_code, resp.json()["code"]) == (422, "STORE_DAILY_FUTURE_DATE")
+        written = await session.execute(
+            text(
+                "SELECT count(*) FROM store_daily "
+                "WHERE tenant_id = CAST(:t AS uuid) AND date = CAST(:d AS date)"
+            ),
+            {"t": str(flow_users.tenant.id), "d": tomorrow},
+        )
+        assert written.scalar_one() == 0
+
+        body = {"refund_only_amount": "99999999.99", "remark": "备" * 200}
+        for day in (_TODAY, "2020-01-01"):
+            ok = await _call(session, ops, "PUT", f"{_PUT_STORE}/{day}", body)
+            assert ok.status_code == 200, ok.text
+            assert ok.json() == {"ok": True, "date": str(day), **_MANUAL_NONE, **body}
+
+    @pytest.mark.parametrize(
+        ("day", "body", "code"),
+        [
+            ("2019-12-31", {"refund_only_amount": "1.00"}, "STORE_DAILY_DATE_TOO_EARLY"),
+            (None, {"zhitongche_spend": "-0.01"}, "VALIDATION_ERROR"),
+            (None, {"yinli_spend": "100000000.00"}, "VALIDATION_ERROR"),
+            (None, {"ad_spend_total": "1.234"}, "VALIDATION_ERROR"),
+            (None, {"refund_only_amount": "abc"}, "VALIDATION_ERROR"),
+            (None, {"remark": "备" * 201}, "VALIDATION_ERROR"),
+            (None, {}, "VALIDATION_ERROR"),
+        ],
+        ids=[
+            "before_2020",
+            "negative",
+            "over_max",
+            "three_decimals",
+            "not_number",
+            "remark_201",
+            "empty",
+        ],
+    )
+    async def test_invalid_422(
+        self, session: AsyncSession, flow_users: Any, day: str | None, body: Any, code: str
+    ) -> None:
+        resp = await _call(
+            session, flow_users.operations, "PUT", f"{_PUT_STORE}/{day or _M_LO}", body
+        )
+        assert (resp.status_code, resp.json()["code"]) == (422, code), resp.text
+
+    async def test_pr_manager_forbidden(self, session: AsyncSession, flow_users: Any) -> None:
+        """主管只读：PUT 403。"""
+        resp = await _call(
+            session,
+            flow_users.pr_manager,
+            "PUT",
+            f"{_PUT_STORE}/{_M_LO}",
+            {"refund_only_amount": "1.00"},
+        )
+        assert (resp.status_code, resp.json()["code"]) == (403, "PERMISSION_DENIED")
+        assert resp.json()["details"]["required_scope"] == "report.store_daily"
+
+    async def test_null_clears_via_api(self, session: AsyncSession, flow_users: Any) -> None:
+        """传 ``null`` 清空、没传的不动；日表立即读到。"""
+        ops = flow_users.operations
+        first = await _call(
+            session,
+            ops,
+            "PUT",
+            f"{_PUT_STORE}/{_WED}",
+            {"zhitongche_spend": "40.00", "refund_only_amount": "5.00"},
+        )
+        assert first.status_code == 200, first.text
+        cleared = await _call(
+            session, ops, "PUT", f"{_PUT_STORE}/{_WED}", {"zhitongche_spend": None}
+        )
+        assert cleared.status_code == 200, cleared.text
+        assert cleared.json() == {
+            "ok": True,
+            "date": str(_WED),
+            **_MANUAL_NONE,
+            "refund_only_amount": "5.00",
+        }
+        daily = await _call(session, ops, "GET", _store("daily", _WED, _WED))
+        assert daily.status_code == 200, daily.text
+        (row,) = daily.json()["items"]
+        assert (row["zhitongche_spend"], row["refund_only_amount"]) == (None, "5.00")
+        assert (row["refund_only_days"], row["day_count"]) == (1, 1)

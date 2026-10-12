@@ -201,13 +201,14 @@ async def update_store_daily(
     user: CurrentActiveUser,
     service: StoreDailyServiceDep,
 ) -> dict:
+    """手填三项、仅退款与备注：只写传了的字段，传 ``null`` 清空；``day`` 晚于今天 → 422。"""
     row = await service.upsert_manual(user.tenant_id, day, payload, user)
+    amounts = ("ad_spend_total", "zhitongche_spend", "yinli_spend", "refund_only_amount")
     return {
         "ok": True,
         "date": str(row.date),
-        "ad_spend_total": str(row.ad_spend_total) if row.ad_spend_total is not None else None,
-        "zhitongche_spend": str(row.zhitongche_spend) if row.zhitongche_spend is not None else None,
-        "yinli_spend": str(row.yinli_spend) if row.yinli_spend is not None else None,
+        **{k: None if getattr(row, k) is None else str(getattr(row, k)) for k in amounts},
+        "remark": row.remark,
     }
 
 

@@ -7,7 +7,8 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic_core import PydanticCustomError
 
 # ----------------------------- 工作进度 ----------------------------- #
 
@@ -117,11 +118,39 @@ class StoreDailyRow(BaseModel):
     extra: dict = Field(default_factory=dict)
 
 
+_MANUAL_AMOUNT_MAX = Decimal("99999999.99")
+_CENT = Decimal("0.01")
+
+
 class StoreDailyManualUpdate(BaseModel):
+    """店铺日手填层（设计 2.4）。只写传了的字段：传 ``null`` 清空、不传不动（按 ``model_fields_set``）。"""
+
     ad_spend_total: Decimal | None = None
     zhitongche_spend: Decimal | None = None
     yinli_spend: Decimal | None = None
-    remark: str | None = None
+    refund_only_amount: Decimal | None = None
+    remark: str | None = Field(default=None, max_length=200)
+
+    # 校验一律抛 PydanticCustomError：Field(ge=...) 把 Decimal、ValueError 把异常对象放进错误的 ctx，
+    # 422 响应序列化时变 500
+    @field_validator("ad_spend_total", "zhitongche_spend", "yinli_spend", "refund_only_amount")
+    @classmethod
+    def _check_amount(cls, v: Decimal | None) -> Decimal | None:
+        """金额 ≥ 0、≤ 99,999,999.99、最多两位小数，违者 422。"""
+        if v is None:
+            return v
+        if not v.is_finite() or v < 0 or v > _MANUAL_AMOUNT_MAX or v != v.quantize(_CENT):
+            raise PydanticCustomError(
+                "store_manual_amount", "金额需在 0 ~ 99,999,999.99 之间，最多两位小数"
+            )
+        return v
+
+    @model_validator(mode="after")
+    def _not_empty(self) -> StoreDailyManualUpdate:
+        # 空 body 原来会插一条空行、让这天进日期并集（计划偏差 5）
+        if not self.model_fields_set:
+            raise PydanticCustomError("store_manual_empty", "至少要传一个字段")
+        return self
 
 
 class StoreReportRow(BaseModel):

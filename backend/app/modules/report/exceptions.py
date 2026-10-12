@@ -37,6 +37,22 @@ class ReportExportTypeInvalidError(AppException):
     message = "不支持的报表导出类型"
 
 
+class StoreDailyFutureDateError(AppException):
+    """店铺日手填：``day`` 晚于今天（设计 2.4）。"""
+
+    code = "STORE_DAILY_FUTURE_DATE"
+    status_code = 422
+    message = "不能录入今天之后的日期"
+
+
+class StoreDailyDateTooEarlyError(AppException):
+    """店铺日手填：``day`` 早于 2020-01-01（设计 5.1）。"""
+
+    code = "STORE_DAILY_DATE_TOO_EARLY"
+    status_code = 422
+    message = "不能录入 2020-01-01 之前的日期"
+
+
 class SummaryRefreshBusyError(AppException):
     """同一租户已有一次汇总刷新在进行中。
 
@@ -57,5 +73,7 @@ __all__ = [
     "ReportInvalidTimeRangeError",
     "ReportRangeTooLongError",
     "ReportStyleNotFoundError",
+    "StoreDailyDateTooEarlyError",
+    "StoreDailyFutureDateError",
     "SummaryRefreshBusyError",
 ]
