@@ -289,6 +289,96 @@ class PromotionServiceBase:
                 payload={"urge_task_id": str(task_id), "close_reason": reason.value},
             )
 
+    async def _items_display(self, promotion_id: UUID) -> builtins.list[builtins.list[str]]:
+        """明细的时间线值 ``[[款式简称, 颜色, 尺码]]``（按 ``sort_order``；不放编码，流程线 6.3、D13）。"""
+        views = (await self._items_repo.list_by_promotions([promotion_id])).get(promotion_id, [])
+        return [
+            [normalize_goods_short_name(v.style_short_name) or v.style_name, v.color, v.size]
+            for v in views
+        ]
+
+    async def _append_items_changed(
+        self,
+        promotion: Promotion,
+        user: User,
+        *,
+        before: builtins.list[builtins.list[str]],
+        reason: str,
+    ) -> None:
+        """明细前后值不同才写 ``ship.items_changed``（PATCH 改主款 SKU / 推送前换商品、PUT items）。"""
+        after = await self._items_display(promotion.id)
+        if after == before:
+            return
+        await LineEventRepository(self._session).append(
+            tenant_id=promotion.tenant_id,
+            line_id=promotion.line_id,
+            event_type=LineEventType.SHIP_ITEMS_CHANGED,
+            actor_id=user.id,
+            promotion_id=promotion.id,
+            payload={"items_before": before, "items_after": after, "reason": reason},
+        )
+
+    async def _append_patch_events(
+        self,
+        promotion: Promotion,
+        user: User,
+        *,
+        changes: Mapping[str, dict[str, Any]],
+        mode_before: str | None,
+        amount_before: dict[str, Decimal | None],
+    ) -> None:
+        """PATCH 的时间线（流程线 6.3、D13），各自没变化就不写：
+
+        - ``promotion.updated``：非金额、非收件字段的 ``diff``（``source_extra`` 只列改了的键）；
+          金额只进 ``amount_fields`` 名单（净变更，明细看金额改动页签，不重复记 promotion_amount_log）
+        - ``ship.receiver_changed``：收件三项的 ``diff``，读时逐项过收件字段规则
+        明细变化由调用方另写 ``ship.items_changed``（要在改明细之前取前值）。
+        """
+        events = LineEventRepository(self._session)
+        diff: dict[str, Any] = {
+            k: v
+            for k, v in changes.items()
+            if k not in AMOUNT_LOG_FIELDS and k not in RECEIVER_FIELDS
+        }
+        # 合作模式在算 changes 之前就补上了（空值补一次），changes 里看不到，按前值比
+        if mode_before != promotion.cooperation_mode:
+            diff["cooperation_mode"] = {"before": mode_before, "after": promotion.cooperation_mode}
+        if "source_extra" in diff:
+            old, new = diff["source_extra"]["before"] or {}, diff["source_extra"]["after"] or {}
+            keys = sorted(k for k in old.keys() | new.keys() if old.get(k) != new.get(k))
+            diff["source_extra"] = {
+                "before": {k: old.get(k) for k in keys},
+                "after": {k: new.get(k) for k in keys},
+            }
+        amount_after = self._amount_snapshot(promotion)
+        amount_fields = [
+            f for f in AMOUNT_LOG_FIELDS if amount_before.get(f) != amount_after.get(f)
+        ]
+        updated_payload: dict[str, Any] = {}
+        if diff:
+            updated_payload["diff"] = diff
+        if amount_fields:
+            updated_payload["amount_fields"] = amount_fields
+        if updated_payload:
+            await events.append(
+                tenant_id=promotion.tenant_id,
+                line_id=promotion.line_id,
+                event_type=LineEventType.PROMOTION_UPDATED,
+                actor_id=user.id,
+                promotion_id=promotion.id,
+                payload=updated_payload,
+            )
+        receiver_diff = {k: changes[k] for k in RECEIVER_FIELDS if k in changes}
+        if receiver_diff:
+            await events.append(
+                tenant_id=promotion.tenant_id,
+                line_id=promotion.line_id,
+                event_type=LineEventType.SHIP_RECEIVER_CHANGED,
+                actor_id=user.id,
+                promotion_id=promotion.id,
+                payload={"diff": receiver_diff},
+            )
+
     @staticmethod
     def _enforce_mode_costs(promotion: Promotion) -> None:
         """只强制两条不可协商的成本规则，其余保留当前值。

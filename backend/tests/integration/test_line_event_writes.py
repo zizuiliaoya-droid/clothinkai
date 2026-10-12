@@ -8,10 +8,13 @@
 
 S7：发布、取消（待打单多一条 ``ship.withdrawn``）、催发（手动催 / 批量催 / 手动关闭 / 扫描建任务与收口）。
 S8：旧召回（发起 / 成功 / 失败）、旧推广审核（通过 / 驳回）与重提、录 7 天数据、旧复盘（写 / 确认 / 打回）。
+S9：收款码上传 / 绑定、品牌词截图、寄回单号；PATCH 拆成 ``promotion.updated`` / ``ship.receiver_changed`` /
+``ship.items_changed``（金额只列字段名、收件单独一条、明细值不放编码），PUT items；无变化不写。
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from datetime import timedelta
 from decimal import Decimal
@@ -27,12 +30,16 @@ from app.modules.flow.line_events import LineEventRepository, LineEventType
 from app.modules.flow.timeline import LineEventService
 from app.modules.promotion.enums import RejectReasonCategory, ReviewAction
 from app.modules.promotion.schemas import (
+    GoodsItemIn,
     PromotionCancelRequest,
     PromotionMetricsRequest,
+    PromotionPaymentQrBindRequest,
     PromotionPublishRequest,
     PromotionRecallStartRequest,
     PromotionResubmitRequest,
+    PromotionReturnWaybillRequest,
     PromotionReviewRequest,
+    PromotionUpdate,
     RetrospectiveConfirmRequest,
     RetrospectiveSubmitRequest,
 )
@@ -40,6 +47,7 @@ from app.modules.promotion.service import PromotionService
 from app.modules.promotion.urge_calculator import get_today
 from app.modules.urge.service import UrgeService
 from tests.flow_event_helpers import assert_payload_registered, events_of
+from tests.integration.test_promotion_shipping import _goods
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
@@ -738,3 +746,390 @@ class TestRetro:
         assert confirmed.payload == {"retrospective_id": retro_ids["第二版复盘"]}
         assert {e.promotion_id for e in events} == {pid}
         _check_registered(events)
+
+
+# ---------------------------------------------------------------------------
+# 上传 / 寄回单号（S9）
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+class TestUploads:
+    async def test_payment_qr_each_upload_and_bind_writes_one(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """重传两次 → 两条、各挂当次的图（旧图不失联，6.3）；bind 换回旧图 → 第三条；bind 同一张不重复（注入 E_QR）。"""
+        from app.core import attachment as att_mod
+
+        monkeypatch.setattr(att_mod.attachment_service, "_client", _FakeS3(), raising=False)
+        promo = await _promo(flow_users, product_factory, blogger_factory, promotion_factory)
+        line_id, pid = promo.line_id, promo.id
+        svc = PromotionService(session)
+        first = await svc.upload_payment_qr(
+            pid, filename="a.png", mime_type="image/png", data=_PNG, user=flow_users.pr
+        )
+        second = await svc.upload_payment_qr(
+            pid, filename="b.png", mime_type="image/png", data=_PNG, user=flow_users.pr
+        )
+        first_att, second_att = first.payment_qr_attachment_id, second.payment_qr_attachment_id
+        assert first_att is not None and second_att is not None and first_att != second_att
+        bind = PromotionPaymentQrBindRequest(payment_qr_attachment_id=first_att)
+        await svc.bind_payment_qr(pid, bind, flow_users.pr)
+        await svc.bind_payment_qr(pid, bind, flow_users.pr)
+
+        events = await events_of(session, line_id=line_id)
+        assert _types(events) == [_T.PROMOTION_PAYMENT_QR_UPLOADED.value] * 3
+        assert [e.attachment_id for e in events] == [first_att, second_att, first_att]
+        for e in events:
+            assert e.promotion_id == pid and e.actor_id == flow_users.pr.id
+            assert (e.from_state, e.to_state, e.note) == (None, None, None)
+            assert e.payload == {}
+
+    async def test_brand_comment_upload(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from app.core import attachment as att_mod
+
+        monkeypatch.setattr(att_mod.attachment_service, "_client", _FakeS3(), raising=False)
+        promo = await _promo(flow_users, product_factory, blogger_factory, promotion_factory)
+        line_id, pid, old_att = promo.line_id, promo.id, promo.brand_comment_attachment_id
+        resp = await PromotionService(session).upload_brand_comment(
+            pid, filename="c.png", mime_type="image/png", data=_PNG, user=flow_users.pr
+        )
+        (event,) = await events_of(session, line_id=line_id)
+        assert event.event_type == _T.PROMOTION_BRAND_COMMENT_UPLOADED.value
+        new_att = (
+            await session.execute(
+                sa_text("SELECT brand_comment_attachment_id FROM promotion WHERE id = :p"),
+                {"p": pid},
+            )
+        ).scalar_one()
+        assert new_att is not None and new_att != old_att
+        assert event.attachment_id == new_att and resp.id == pid
+        assert event.promotion_id == pid and event.actor_id == flow_users.pr.id
+        assert event.payload == {}
+
+    async def test_return_waybill_only_when_changed(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        promo = await _promo(flow_users, product_factory, blogger_factory, promotion_factory)
+        line_id, pid = promo.line_id, promo.id
+        svc = PromotionService(session)
+        for waybill in ("SF100", "SF100", "YT200"):
+            await svc.set_return_waybill(
+                pid, PromotionReturnWaybillRequest(return_waybill=waybill), flow_users.pr
+            )
+        events = await events_of(session, line_id=line_id)
+        assert _types(events) == [_T.PROMOTION_RETURN_WAYBILL_SET.value] * 2
+        assert [e.payload for e in events] == [
+            {"return_waybill": "SF100"},
+            {"return_waybill": "YT200"},
+        ]
+        assert {(e.promotion_id, e.actor_id) for e in events} == {(pid, flow_users.pr.id)}
+        _check_registered(events)
+
+
+# ---------------------------------------------------------------------------
+# PATCH / PUT items（S9；D13）
+# ---------------------------------------------------------------------------
+
+_RECEIVER = {
+    "receiver_name": "张三",
+    "receiver_phone": "13800000000",
+    "receiver_address": "杭州市某路 1 号",
+}
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+class TestPatch:
+    async def test_remark_and_receiver_split_into_two_events(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        """备注进 ``promotion.updated``，收件单独 ``ship.receiver_changed``（updated 里不能有收件，注入 E_PATCH_RECV）。"""
+        promo = await _promo(
+            flow_users, product_factory, blogger_factory, promotion_factory, **_RECEIVER
+        )
+        line_id, pid = promo.line_id, promo.id
+        await PromotionService(session).update_promotion(
+            pid,
+            PromotionUpdate(
+                remark="博主要求周五前到", receiver_name="李四", receiver_phone="13800000000"
+            ),
+            flow_users.pr,
+        )
+        events = await events_of(session, line_id=line_id)
+        assert _types(events) == [_T.PROMOTION_UPDATED.value, _T.SHIP_RECEIVER_CHANGED.value]
+        updated, receiver = events
+        assert updated.payload == {
+            "diff": {"remark": {"before": None, "after": "博主要求周五前到"}}
+        }
+        # 电话同值不算改
+        assert receiver.payload == {"diff": {"receiver_name": {"before": "张三", "after": "李四"}}}
+        for e in events:
+            assert e.promotion_id == pid and e.negotiation_id is None
+            assert e.actor_id == flow_users.pr.id
+            assert (e.from_state, e.to_state) == (None, None)
+        _check_registered(events)
+
+        # 读接口：运营看得到发货组，但收件 diff 被裁掉（6.5 第 3 层）；PR 看得到全文
+        svc = LineEventService(session)
+        ops = {e.event_type: e for e in (await svc.read(line_id, flow_users.operations)).events}
+        assert ops["ship.receiver_changed"].payload == {"diff": {}}
+        pr = {e.event_type: e for e in (await svc.read(line_id, flow_users.pr)).events}
+        assert pr["ship.receiver_changed"].payload == receiver.payload
+
+    async def test_amount_change_lists_field_names_only(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        promo = await _promo(
+            flow_users,
+            product_factory,
+            blogger_factory,
+            promotion_factory,
+            cooperation_mode="送拍",
+            quote_amount=Decimal("500.00"),
+        )
+        line_id = promo.line_id
+        await PromotionService(session).update_promotion(
+            promo.id, PromotionUpdate(quote_amount=Decimal("666.00")), flow_users.pr
+        )
+        (event,) = await events_of(session, line_id=line_id)
+        assert event.event_type == _T.PROMOTION_UPDATED.value
+        assert event.payload == {"amount_fields": ["quote_amount"]}
+        assert "666" not in json.dumps(event.payload) and "500" not in json.dumps(event.payload)
+        _check_registered([event])
+
+    async def test_no_change_writes_nothing(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        promo = await _promo(
+            flow_users, product_factory, blogger_factory, promotion_factory, **_RECEIVER
+        )
+        line_id = promo.line_id
+        await PromotionService(session).update_promotion(
+            promo.id,
+            PromotionUpdate(receiver_name="张三", receiver_address=" 杭州市某路 1 号 "),
+            flow_users.pr,
+        )
+        assert await events_of(session, line_id=line_id) == []
+
+    async def test_source_extra_diff_lists_changed_keys_only(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        promo = await _promo(flow_users, product_factory, blogger_factory, promotion_factory)
+        line_id, pid = promo.line_id, promo.id
+        svc = PromotionService(session)
+        await svc.update_promotion(
+            pid, PromotionUpdate(source_extra={"博主风格": "甜美"}), flow_users.pr
+        )
+        await svc.update_promotion(
+            pid,
+            PromotionUpdate(source_extra={"博主风格": "甜美", "寄样备注": "加急"}),
+            flow_users.pr,
+        )
+        first, second = await events_of(session, line_id=line_id)
+        assert first.payload == {
+            "diff": {"source_extra": {"before": {"博主风格": None}, "after": {"博主风格": "甜美"}}}
+        }
+        assert second.payload == {
+            "diff": {"source_extra": {"before": {"寄样备注": None}, "after": {"寄样备注": "加急"}}}
+        }
+        _check_registered([first, second])
+
+
+class _Suit:
+    def __init__(self) -> None:
+        self.top: Any = None
+        self.pants: Any = None
+        self.top_sku: Any = None
+        self.top_sku2: Any = None
+        self.pants_sku: Any = None
+        self.goods: Any = None
+        self.single: Any = None
+
+
+@pytest.fixture
+async def suit(session: AsyncSession, tenant_a: Any, product_factory: Any) -> _Suit:
+    """上衣（简称「上衣」）+ 裤子（无简称 → 用全称）的套装，另有只含上衣的单品商品。"""
+    s = _Suit()
+    s.top = await product_factory.style(short_name="上衣", style_name="条纹上衣全称")
+    s.pants = await product_factory.style(short_name=None, style_name="阔腿裤")
+    s.top_sku = await product_factory.sku(s.top, color="黑色", size="M")
+    s.top_sku2 = await product_factory.sku(s.top, color="灰色", size="S")
+    s.pants_sku = await product_factory.sku(s.pants, color="白色", size="L")
+    s.goods = await _goods(session, tenant_a, s.top, s.pants, is_suit=True)
+    s.single = await _goods(session, tenant_a, s.top, is_suit=False)
+    return s
+
+
+def _no_codes(payload: Any, *codes: str) -> None:
+    dumped = json.dumps(payload, ensure_ascii=False)
+    for code in codes:
+        assert code not in dumped
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+class TestItems:
+    async def _single(
+        self, flow_users: Any, blogger_factory: Any, promotion_factory: Any, suit: _Suit, **kw: Any
+    ) -> Any:
+        blogger = await blogger_factory.blogger()
+        return await promotion_factory.promotion(
+            style=suit.top,
+            blogger=blogger,
+            pr=flow_users.pr,
+            goods_main_id=suit.single.id,
+            sku_id=suit.top_sku.id,
+            items=[(suit.top, suit.top_sku)],
+            **kw,
+        )
+
+    async def test_change_goods_before_push_writes_items_changed(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        suit: _Suit,
+    ) -> None:
+        """推送前换商品删明细也记一条（6.3；注入 E_ITEMS_GOODS）。"""
+        promo = await self._single(
+            flow_users, blogger_factory, promotion_factory, suit, ship_status="待发货"
+        )
+        line_id = promo.line_id
+        await PromotionService(session).update_promotion(
+            promo.id, PromotionUpdate(goods_main_id=suit.goods.id), flow_users.pr_manager
+        )
+        events = await events_of(session, line_id=line_id)
+        assert _types(events) == [_T.PROMOTION_UPDATED.value, _T.SHIP_ITEMS_CHANGED.value]
+        updated, items = events
+        assert updated.payload == {
+            "diff": {"goods_main_id": {"before": str(suit.single.id), "after": str(suit.goods.id)}}
+        }
+        assert items.payload == {
+            "items_before": [["上衣", "黑色", "M"]],
+            "items_after": [],
+            "reason": "换归属商品，推送前的明细已清空",
+        }
+        assert items.actor_id == flow_users.pr_manager.id and items.promotion_id == promo.id
+        _no_codes(items.payload, suit.top.style_code, suit.top_sku.sku_code)
+        _check_registered(events)
+
+    async def test_change_goods_after_push_keeps_items(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        suit: _Suit,
+    ) -> None:
+        promo = await self._single(
+            flow_users, blogger_factory, promotion_factory, suit, ship_status="待打单"
+        )
+        line_id = promo.line_id
+        await PromotionService(session).update_promotion(
+            promo.id, PromotionUpdate(goods_main_id=suit.goods.id), flow_users.pr_manager
+        )
+        assert _types(await events_of(session, line_id=line_id)) == [_T.PROMOTION_UPDATED.value]
+
+    async def test_patch_sku_writes_items_changed(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        suit: _Suit,
+    ) -> None:
+        promo = await self._single(
+            flow_users, blogger_factory, promotion_factory, suit, ship_status="待发货"
+        )
+        line_id = promo.line_id
+        await PromotionService(session).update_promotion(
+            promo.id, PromotionUpdate(sku_id=suit.top_sku2.id), flow_users.pr_manager
+        )
+        updated, items = await events_of(session, line_id=line_id)
+        assert updated.event_type == _T.PROMOTION_UPDATED.value
+        assert updated.payload == {
+            "diff": {"sku_id": {"before": str(suit.top_sku.id), "after": str(suit.top_sku2.id)}}
+        }
+        assert items.event_type == _T.SHIP_ITEMS_CHANGED.value
+        assert items.payload == {
+            "items_before": [["上衣", "黑色", "M"]],
+            "items_after": [["上衣", "灰色", "S"]],
+            "reason": "改主款颜色尺码",
+        }
+        _check_registered([updated, items])
+
+    async def test_put_items_writes_once_and_same_items_write_nothing(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        suit: _Suit,
+    ) -> None:
+        blogger = await blogger_factory.blogger()
+        promo = await promotion_factory.promotion(
+            style=suit.top,
+            blogger=blogger,
+            pr=flow_users.pr,
+            goods_main_id=suit.goods.id,
+            ship_status="待发货",
+        )
+        line_id, pid = promo.line_id, promo.id
+        items = [
+            GoodsItemIn(style_id=suit.pants.id, sku_id=suit.pants_sku.id),
+            GoodsItemIn(style_id=suit.top.id, sku_id=suit.top_sku.id),
+        ]
+        svc = PromotionService(session)
+        await svc.replace_items(pid, items, flow_users.pr_manager)
+        await svc.replace_items(pid, items, flow_users.pr_manager)
+
+        (event,) = await events_of(session, line_id=line_id)
+        assert event.event_type == _T.SHIP_ITEMS_CHANGED.value
+        assert event.payload == {
+            "items_before": [],
+            "items_after": [["阔腿裤", "白色", "L"], ["上衣", "黑色", "M"]],
+            "reason": "改颜色尺码明细",
+        }
+        assert event.actor_id == flow_users.pr_manager.id and event.promotion_id == pid
+        assert (event.from_state, event.to_state) == (None, None)
+        _no_codes(event.payload, suit.pants.style_code, suit.pants_sku.sku_code)
+        _check_registered([event])

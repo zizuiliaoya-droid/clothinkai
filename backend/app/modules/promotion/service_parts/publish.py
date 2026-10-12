@@ -329,6 +329,15 @@ class PromotionPublishMixin(PromotionServiceBase):
             )
             old_id = promotion.brand_comment_attachment_id
             promotion.brand_comment_attachment_id = attachment_id
+            # 时间线（流程线 6.3）：每次上传一条带附件的事件，重传后旧图仍挂在时间线上
+            await LineEventRepository(self._session).append(
+                tenant_id=promotion.tenant_id,
+                line_id=promotion.line_id,
+                event_type=LineEventType.PROMOTION_BRAND_COMMENT_UPLOADED,
+                actor_id=user.id,
+                promotion_id=promotion.id,
+                attachment_id=attachment_id,
+            )
             await self._audit.log(
                 action="promotion.brand_comment.bind",
                 resource="promotion",

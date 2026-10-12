@@ -342,6 +342,16 @@ class PromotionReviewMixin(PromotionServiceBase):
         before = promotion.return_waybill
         promotion.return_waybill = payload.return_waybill
         await self._session.flush()
+        if payload.return_waybill != before:
+            # 时间线（流程线 6.3）：同一单号重复提交不再记
+            await LineEventRepository(self._session).append(
+                tenant_id=promotion.tenant_id,
+                line_id=promotion.line_id,
+                event_type=LineEventType.PROMOTION_RETURN_WAYBILL_SET,
+                actor_id=user.id,
+                promotion_id=promotion_id,
+                payload={"return_waybill": payload.return_waybill},
+            )
         await self._audit.log(
             action="promotion.return_waybill.update",
             resource="promotion",

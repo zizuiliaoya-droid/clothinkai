@@ -386,6 +386,7 @@ class PromotionService(
         # 金额时间线的「更新前」快照必须在这里取 —— 下面补合作模式那一步就会改成本，
         # 等到算 changes 时拿到的已经是中间值了。
         amount_before = self._amount_snapshot(promotion)
+        mode_before = promotion.cooperation_mode
 
         # 字段写权限；收件三项过写权限并规范化电话（之后的比对与落库都用规范化值）
         await self._check_amount_write_permission(payload, user)
@@ -469,10 +470,15 @@ class PromotionService(
         # 改归属商品（11-53）：推送前（待发货 / 历史单）换了商品，旧明细按旧成员选的，
         # 同事务删掉、推送时按新商品补选；推送后明细是实际发出的货，只改归属不动明细。
         # 先删再同步 sku_id：同一请求带了 sku_id 时主款式那一行按新值写回。
-        if "goods_main_id" in changes and promotion.ship_status in (
+        clear_items = "goods_main_id" in changes and promotion.ship_status in (
             None,
             ShipStatus.PENDING.value,
-        ):
+        )
+        # 时间线 ship.items_changed 的前值：要在改明细之前取（流程线 6.3、D13）
+        items_before = (
+            await self._items_display(promotion.id) if clear_items or "sku_id" in changes else None
+        )
+        if clear_items:
             await self._items_repo.replace(
                 tenant_id=promotion.tenant_id, promotion_id=promotion.id, rows=[]
             )
@@ -496,6 +502,22 @@ class PromotionService(
             after=self._amount_snapshot(promotion),
             payload=payload,
         )
+
+        # 时间线（流程线 6.3）：promotion.updated / ship.receiver_changed / ship.items_changed，同事务
+        await self._append_patch_events(
+            promotion,
+            user,
+            changes=changes,
+            mode_before=mode_before,
+            amount_before=amount_before,
+        )
+        if items_before is not None:
+            await self._append_items_changed(
+                promotion,
+                user,
+                before=items_before,
+                reason="换归属商品，推送前的明细已清空" if clear_items else "改主款颜色尺码",
+            )
 
         # 审计：仅敏感字段 + 敏感值脱敏
         audit_changes = build_promotion_audit_changes(changes)
@@ -544,6 +566,7 @@ class PromotionService(
                 promotion.id, []
             )
         ]
+        items_before = await self._items_display(promotion.id)
         await self._items_repo.replace(
             tenant_id=promotion.tenant_id, promotion_id=promotion.id, rows=rows
         )
@@ -551,6 +574,10 @@ class PromotionService(
         if main_sku_id is not None:
             promotion.sku_id = main_sku_id
         await self._session.flush()
+        # 时间线（流程线 6.3）：整组替换写 ship.items_changed，前后一样不写
+        await self._append_items_changed(
+            promotion, user, before=items_before, reason="改颜色尺码明细"
+        )
         await self._audit.log(
             action="promotion.items.replace",
             resource="promotion",
