@@ -2,12 +2,13 @@
 //
 // 后端按「ISO 周（自然月）∩ 请求区间」分桶，行上带实际起止；日表升序，周 / 月倒序（最新在上）。
 // 日表标题旁显示整段「仅退款已录 x / y 天」，周 / 月在每行的仅退款率下面显示。
-import { useMemo } from "react";
-import { Button, Card, Space, Table, Typography, message } from "antd";
+// 日表行内编辑（S8）：只在 capabilities.store_write 时出；一次一行，只发改了的字段，成功后作废店铺查询。
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { Alert, Button, Card, Space, Table, Typography, message } from "antd";
 import { DownloadOutlined } from "@ant-design/icons";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { FilterPageCode } from "@/features/preference/api";
-import { exportReport, getStoreReport } from "@/features/report/api";
+import { exportReport, getStoreReport, updateStoreDaily } from "@/features/report/api";
 import { TIME_PRESETS, type ReportFilterSchema } from "@/features/report/reportFilters";
 import {
   fromDateRange,
@@ -32,6 +33,15 @@ import {
 } from "@/components/ReportTimeRangeFilter/ReportTimeRangeFilter";
 import { recordedDaysLabel } from "./storeFormat";
 import { buildStoreColumns, storeColumnsWidth } from "./storeColumns";
+import type { StoreManualEditing } from "./StoreManualCells";
+import {
+  MANUAL_AMOUNT_ERROR,
+  manualDraftFromRow,
+  manualErrors,
+  manualPatch,
+  type StoreManualDraft,
+  type StoreManualPatch,
+} from "./storeManual";
 
 /** 筛选状态：preset 记忆；日期区间只从 URL 带入（下钻、书签）、不记。 */
 interface StoreFilters {
@@ -55,6 +65,12 @@ const PAGES: Record<StoreGranularity, { title: string; pageCode: FilterPageCode 
 };
 
 const LABEL_STYLE = { color: "#475569", fontSize: 14, fontWeight: 400 } as const;
+
+interface EditingRow {
+  day: string;
+  original: StoreManualDraft;
+  draft: StoreManualDraft;
+}
 
 export function StoreReportView({ granularity }: { granularity: StoreGranularity }) {
   const page = PAGES[granularity];
@@ -89,7 +105,70 @@ export function StoreReportView({ granularity }: { granularity: StoreGranularity
     const items = report?.items ?? [];
     return granularity === "day" ? items : [...items].reverse();
   }, [report, granularity]);
-  const columns = useMemo(() => buildStoreColumns(granularity, rows), [granularity, rows]);
+
+  // 行内编辑：只在日表、且 capabilities 说能写时出（能力没回来前不出）
+  const canWrite = granularity === "day" && reportCaps?.store_write === true;
+  const queryClient = useQueryClient();
+  const hintId = useId();
+  const [editing, setEditing] = useState<EditingRow | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [focusDay, setFocusDay] = useState<string | null>(null);
+  const editButtons = useRef(new Map<string, HTMLButtonElement>());
+  useEffect(() => {
+    if (focusDay === null || editing !== null) return;
+    editButtons.current.get(focusDay)?.focus();
+    setFocusDay(null);
+  }, [focusDay, editing]);
+  const saveMutation = useMutation({
+    mutationFn: ({ day, patch }: { day: string; patch: StoreManualPatch }) =>
+      updateStoreDaily(day, patch),
+    onSuccess: (_data, { day }) => {
+      message.success(`已保存 ${day}`);
+      setEditing(null);
+      setFocusDay(day);
+      void queryClient.invalidateQueries({ queryKey: ["store-daily"] });
+    },
+    // 422（未来日期、金额不合法）显示后端的提示，留在编辑态
+    onError: (err) => setSaveError(extractErrorMessage(err, "保存失败")),
+  });
+  const errors = editing ? manualErrors(editing.draft) : {};
+  const patch = editing ? manualPatch(editing.original, editing.draft) : {};
+  const hasErrors = Object.keys(errors).length > 0;
+  const canSave =
+    editing !== null && !hasErrors && Object.keys(patch).length > 0 && !saveMutation.isPending;
+  const edit: StoreManualEditing | undefined = canWrite
+    ? {
+        day: editing?.day ?? null,
+        draft: editing?.draft ?? null,
+        errors,
+        canSave,
+        saving: saveMutation.isPending,
+        hintId,
+        onStart: (r) => {
+          const original = manualDraftFromRow(r);
+          setSaveError(null);
+          setEditing({ day: r.date_from, original, draft: original });
+        },
+        onChange: (field, value) =>
+          setEditing((cur) => (cur ? { ...cur, draft: { ...cur.draft, [field]: value } } : cur)),
+        onSave: () => {
+          if (!editing || !canSave) return;
+          setSaveError(null);
+          saveMutation.mutate({ day: editing.day, patch });
+        },
+        onCancel: () => {
+          if (!editing || saveMutation.isPending) return;
+          setSaveError(null);
+          setEditing(null);
+          setFocusDay(editing.day);
+        },
+        editButtonRef: (day) => (el) => {
+          if (el) editButtons.current.set(day, el);
+          else editButtons.current.delete(day);
+        },
+      }
+    : undefined;
+  const columns = buildStoreColumns(granularity, rows, edit);
 
   // 菜单按 capabilities 已隐藏；直接输入 URL 进来、接口 403 时给明确提示，不显示空表
   if (isForbiddenError(error)) {
@@ -137,6 +216,19 @@ export function StoreReportView({ granularity }: { granularity: StoreGranularity
           </Button>
         )}
       </Space>
+      {edit && hasErrors && (
+        <div id={hintId}>
+          <Alert type="error" showIcon style={{ marginBottom: 12 }} message={MANUAL_AMOUNT_ERROR} />
+        </div>
+      )}
+      {edit && editing && saveError && (
+        <Alert
+          type="error"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message={`${editing.day} 保存失败：${saveError}`}
+        />
+      )}
       <Table
         rowKey="date_from"
         size="small"

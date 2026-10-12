@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // 店铺日明细 / 周汇总 / 月度汇总（7e R4 S6）：三粒度调对接口；日表标题旁「仅退款已录 x / y 天」、
-// 周行「已录 x / y 天」；改名后没有「访客数」「支付订单数」；页面文字里没有商品编码。
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+// 周行「已录 x / y 天」；改名后没有「访客数」「支付订单数」；页面文字里没有商品编码；日表行内编辑（S8）。
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -13,8 +13,11 @@ import type {
 } from "@/features/report/types";
 
 const storeMock = vi.fn();
+const updateMock = vi.fn();
+const caps = vi.hoisted(() => ({ storeWrite: false }));
 vi.mock("@/features/report/api", () => ({
   getStoreReport: (...args: unknown[]) => storeMock(...args),
+  updateStoreDaily: (...args: unknown[]) => updateMock(...args),
   getReportCapabilities: () =>
     Promise.resolve({
       work_progress: null,
@@ -23,7 +26,7 @@ vi.mock("@/features/report/api", () => ({
       production: false,
       production_margin: false,
       store_read: true,
-      store_write: false,
+      store_write: caps.storeWrite,
       export: [],
       refresh: false,
     } satisfies ReportCapabilities),
@@ -43,6 +46,7 @@ vi.mock("@/features/preference/api", () => ({
   saveFilterPreference: () => Promise.resolve(undefined),
 }));
 
+import { useAuthStore } from "@/stores/authStore";
 import { StoreReportView } from "./StoreReportView";
 
 beforeAll(() => {
@@ -69,8 +73,18 @@ beforeAll(() => {
 // vitest 视为清理函数在用例后再调一次 mock（mock 设成拒绝时用例会因此失败）
 beforeEach(() => {
   storeMock.mockReset();
+  updateMock.mockReset();
+  caps.storeWrite = false;
+  // 能力查询要登录才发
+  useAuthStore.setState({
+    user: { id: "u1", username: "u1", display_name: null, email: null, status: "active", roles: [] },
+    isAuthenticated: true,
+  });
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  useAuthStore.setState({ user: null, isAuthenticated: false });
+});
 
 function row(over: Partial<StoreReportRow>): StoreReportRow {
   return {
@@ -241,5 +255,132 @@ describe("StoreReportView 列名与页面文字", () => {
     // 其中直播两列只展示
     expect(screen.getAllByText("其中直播支付").length).toBeGreaterThan(0);
     expect(screen.getAllByText("其中直播站内花费").length).toBeGreaterThan(0);
+  });
+});
+
+describe("StoreReportView 行内编辑（7e R4 S8）", () => {
+  const DAY = "2026-09-02";
+  const dayRows = () => [
+    row({}),
+    row({
+      date_from: "2026-09-03",
+      date_to: "2026-09-03",
+      zhitongche_spend: null,
+      refund_only_amount: null,
+      refund_only_days: 0,
+    }),
+  ];
+  const input = (field: string, day = DAY) =>
+    screen.getByRole("spinbutton", { name: `${day} ${field}` }) as HTMLInputElement;
+  const saveButton = () => screen.getByRole("button", { name: `保存 ${DAY}` });
+
+  async function startEdit() {
+    caps.storeWrite = true;
+    storeMock.mockResolvedValue(report("day", dayRows()));
+    const utils = renderView("day");
+    fireEvent.click(await screen.findByRole("button", { name: `编辑 ${DAY}` }));
+    await screen.findByRole("spinbutton", { name: `${DAY} 直通车消耗` });
+    return utils;
+  }
+
+  it("没有 store_write：日表不出编辑按钮与操作列", async () => {
+    storeMock.mockResolvedValue(report("day", dayRows()));
+    const { container } = renderView("day");
+    await within(tableBody(container)).findByText("2026-09-03");
+    // 等 capabilities 回来再断言「不出」
+    await new Promise((r) => setTimeout(r, 30));
+    expect(screen.queryAllByRole("button", { name: /^编辑/ })).toHaveLength(0);
+    expect(container.querySelector("thead")?.textContent).not.toContain("操作");
+  });
+
+  it("能写也只在日表出：周表没有编辑", async () => {
+    caps.storeWrite = true;
+    storeMock.mockResolvedValue(report("week", [row({ date_to: "2026-09-06", day_count: 3 })]));
+    const { container } = renderView("week");
+    await within(tableBody(container)).findByText("09-02 ~ 09-06");
+    await new Promise((r) => setTimeout(r, 30));
+    expect(screen.queryAllByRole("button", { name: /^编辑/ })).toHaveLength(0);
+  });
+
+  it("能写：每个日行一个编辑按钮；进入编辑后四个金额框带原值，一次只编辑一行", async () => {
+    await startEdit();
+    expect(input("全站推消耗").value).toBe("");
+    // InputNumber 显示时去掉末尾的 0（40.00 → 40），数值不变、不算改动
+    expect(input("直通车消耗").value).toBe("40");
+    expect(input("引力魔方消耗").value).toBe("");
+    expect(input("仅退款").value).toBe("10");
+    // 另一行的编辑按钮在编辑时禁用
+    expect(
+      (screen.getByRole("button", { name: "编辑 2026-09-03" }) as HTMLButtonElement).disabled
+    ).toBe(true);
+  });
+
+  it("保存只发改了的字段；成功后重新查询并退出编辑", async () => {
+    updateMock.mockResolvedValue({ ok: true, date: DAY });
+    await startEdit();
+    const before = storeMock.mock.calls.length;
+    fireEvent.change(input("直通车消耗"), { target: { value: "45" } });
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
+    expect(updateMock).toHaveBeenCalledWith(DAY, { zhitongche_spend: "45" });
+    await waitFor(() => expect(storeMock.mock.calls.length).toBeGreaterThan(before));
+    expect(await screen.findByRole("button", { name: `编辑 ${DAY}` })).toBeTruthy();
+    expect(screen.queryByRole("spinbutton", { name: `${DAY} 直通车消耗` })).toBeNull();
+  });
+
+  it("清空发 null", async () => {
+    updateMock.mockResolvedValue({ ok: true, date: DAY });
+    await startEdit();
+    fireEvent.change(input("仅退款"), { target: { value: "" } });
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
+    expect(updateMock).toHaveBeenCalledWith(DAY, { refund_only_amount: null });
+  });
+
+  it("没改动、金额不合法时保存禁用，并提示校验文案", async () => {
+    await startEdit();
+    expect((saveButton() as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(input("引力魔方消耗"), { target: { value: "-1" } });
+    expect(await screen.findByText("金额需在 0 ~ 99,999,999.99 之间，最多两位小数")).toBeTruthy();
+    expect(input("引力魔方消耗").getAttribute("aria-invalid")).toBe("true");
+    expect((saveButton() as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.keyDown(input("引力魔方消耗"), { key: "Enter" });
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it("422：页面上显示后端提示，留在编辑态", async () => {
+    updateMock.mockRejectedValue({
+      response: {
+        status: 422,
+        data: { code: "STORE_DAILY_FUTURE_DATE", message: "不能录入今天之后的日期" },
+      },
+    });
+    await startEdit();
+    fireEvent.change(input("直通车消耗"), { target: { value: "45" } });
+    fireEvent.click(saveButton());
+    expect(await screen.findByText(/不能录入今天之后的日期/)).toBeTruthy();
+    expect(input("直通车消耗").value).toBe("45");
+  });
+
+  it("Enter 保存", async () => {
+    updateMock.mockResolvedValue({ ok: true, date: DAY });
+    await startEdit();
+    fireEvent.change(input("全站推消耗"), { target: { value: "12.5" } });
+    fireEvent.keyDown(input("全站推消耗"), { key: "Enter" });
+    await waitFor(() => expect(updateMock).toHaveBeenCalledWith(DAY, { ad_spend_total: "12.5" }));
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: `编辑 ${DAY}` }))
+    );
+  });
+
+  it("Esc 取消：不发请求，恢复原值，焦点回编辑按钮", async () => {
+    await startEdit();
+    fireEvent.change(input("直通车消耗"), { target: { value: "45" } });
+    fireEvent.keyDown(input("直通车消耗"), { key: "Escape" });
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: `编辑 ${DAY}` }))
+    );
+    expect(updateMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole("spinbutton", { name: `${DAY} 直通车消耗` })).toBeNull();
   });
 });

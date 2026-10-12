@@ -138,6 +138,17 @@ export interface StoreReport {
   total_days: number;
 }
 
+/** PUT /api/reports/store-daily/{day} 的响应：写后的手填值（null = 没填）。 */
+export interface StoreDailyManualResult {
+  ok: boolean;
+  date: string;
+  ad_spend_total: string | null;
+  zhitongche_spend: string | null;
+  yinli_spend: string | null;
+  refund_only_amount: string | null;
+  remark: string | null;
+}
+
 /** 单品投产渠道（7e R3）：一行 = 商品 × 渠道；null 只出现在内部按商品合计的行上。 */
 export type ProductionChannel = "普通" | "直播";
 
