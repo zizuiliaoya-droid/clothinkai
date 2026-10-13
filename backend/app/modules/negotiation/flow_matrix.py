@@ -1,4 +1,4 @@
-"""谈款单的能力矩阵（流程线 5.2；PR-3 入矩阵除「时间线」「留言 / 贴图」两行外的全部行，那两行随 PR-4）。
+"""谈款单的能力矩阵（流程线 5.2；PR-3 入矩阵除「时间线」「留言 / 贴图」两行外的全部行，那两行随 PR-4 入）。
 
 import 本模块即把 ``MATRICES["negotiation"]`` 登记进 ``flow.matrix``；``negotiation/flow_doc.py`` import 它，
 所以用到快照的地方都已注册。
@@ -65,6 +65,7 @@ OWNER_REASON = "只有谈款 PR 本人可以操作"
 STAR_FIRST_LEVEL_REASON = "第一级由 PR 主管审核，管理员不能代做"
 MANAGER_REVIEW_REASON = "需 PR 主管审核"
 FINAL_REVIEW_REASON = "需老板定稿"
+COMMENT_READ_REASON = "只读角色不能留言"
 
 _OWNER = Owner(reason=OWNER_REASON)
 _SEE = AnyOf(_OWNER, _ALL)
@@ -224,6 +225,34 @@ _receiver_confirm: dict[str, Cell | tuple[Cell, ...]] = {
 # 复制为新谈款：审核驳回 改/隐/隐/隐/隐（11-4：只放在审批未通过上）
 _copy: dict[str, Cell | tuple[Cell, ...]] = {_REJECTED: Cell(edit=(_WRITE, _OWNER))}
 
+# 留言 / 贴图（N11，PR-4）：草稿 改/—；其余 改/改/改/读/读（财务、运营没有 negotiation:write）
+_comment: dict[str, Cell | tuple[Cell, ...]] = {
+    _DRAFT: Cell(edit=(_WRITE, _OWNER)),
+    **_each(
+        Cell(edit=(_SEE, _WRITE), read=(_SEE,), reason=COMMENT_READ_REASON),
+        _PENDING,
+        _REJECTED,
+        _FINAL_PENDING,
+        _RETURNED,
+        _RECEIVER_PENDING,
+        _APPROVED,
+    ),
+}
+
+# 时间线（PR-4，字段行）：草稿 读/—；其余看得到这张谈款的人都读。事件按分组的过滤在读接口（6.5）
+_timeline: dict[str, Cell | tuple[Cell, ...]] = {
+    _DRAFT: Cell(read=(_OWNER,)),
+    **_each(
+        Cell(read=(_SEE,)),
+        _PENDING,
+        _REJECTED,
+        _FINAL_PENDING,
+        _RETURNED,
+        _RECEIVER_PENDING,
+        _APPROVED,
+    ),
+}
+
 NEGOTIATION_MATRIX = Matrix(
     kind="negotiation",
     stages=NEGOTIATION_STAGES,
@@ -235,11 +264,13 @@ NEGOTIATION_MATRIX = Matrix(
         Row("receiver_save", "action", _receiver_save),
         Row("receiver_confirm", "action", _receiver_confirm),
         Row("copy", "action", _copy),
+        Row("comment", "action", _comment),
         Row("basic", "field", _basic),
         Row("quote_amount", "field", _quote_amount),
         Row("manager_opinion", "field", _manager_opinion),
         Row("final_opinion", "field", _final_opinion),
         Row("receiver", "field", _receiver),
+        Row("timeline", "field", _timeline),
         Row("overdue_badge", "field", _overdue_badge),
         Row("others_in_progress", "field", _others_in_progress),
     ),
@@ -248,6 +279,7 @@ NEGOTIATION_MATRIX = Matrix(
 MATRICES.update({"negotiation": NEGOTIATION_MATRIX})
 
 __all__ = [
+    "COMMENT_READ_REASON",
     "FINAL_OPINION_HINT",
     "FINAL_REVIEW_REASON",
     "MANAGER_OPINION_HINT",

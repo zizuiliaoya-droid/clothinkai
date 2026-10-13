@@ -78,6 +78,22 @@ FIELD_PERMISSION_REGISTRY: dict[str, dict[str, FieldRule]] = {
             frozenset({"admin", "pr", "pr_manager", "warehouse"}),
             frozenset({"admin", "pr", "pr_manager"}),
         ),
+        # 流程线 4.6 / 7d-3：收款码（含财务）。PR-4 先给时间线的收款码附件用；
+        # 推广响应里收款码签名的硬编码角色集合随 PR-6 换成这条
+        "payment_qr": FieldRule(
+            frozenset({"admin", "pr", "pr_manager", "finance"}),
+            frozenset({"admin", "pr", "pr_manager"}),
+        ),
+    },
+    # 流程线 6.5 第 2 层：时间线按事件分组过滤（键 = ``flow.line_events.EVENT_GROUP_KEYS``），只读；
+    # 个人授予 / 撤销的 scope ``field.line_event.<键>:read`` 随迁移 063 入册
+    "line_event": {
+        "negotiation": FieldRule(frozenset({"admin", "pr", "pr_manager", "finance", "operations"})),
+        "comment": FieldRule(frozenset({"admin", "pr", "pr_manager", "finance", "operations"})),
+        "promotion": FieldRule(frozenset({"admin", "pr", "pr_manager", "operations"})),
+        "shipping": FieldRule(frozenset({"admin", "pr", "pr_manager", "operations", "warehouse"})),
+        "settlement": FieldRule(frozenset({"admin", "pr", "pr_manager", "finance", "operations"})),
+        "retro": FieldRule(frozenset({"admin", "pr", "pr_manager", "operations"})),
     },
     "settlement": {
         "amount": FieldRule(frozenset({"admin", "pr_manager", "finance"})),

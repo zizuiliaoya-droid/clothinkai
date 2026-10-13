@@ -88,6 +88,11 @@ export async function urgePromotionWithScreenshot(
   return resp.data;
 }
 
+/** react-query 键：推广列表抽屉的「催发记录」页签；催发成功后 invalidate。 */
+export function promotionUrgeRecordsKey(promotionId: string) {
+  return ["promotion-urge-records", promotionId] as const;
+}
+
 /** 按推广单取催发时间线。没有任务返回空数组。 */
 export async function listPromotionUrgeRecords(
   promotionId: string

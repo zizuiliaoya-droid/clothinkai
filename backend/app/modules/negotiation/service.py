@@ -25,6 +25,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -114,6 +115,8 @@ STAR_CREATE_REASON = "管理员建的谈款没人能定稿"
 """持 ``*`` 不能建谈款（N1、11-1）：页级新建按钮的禁用原因，也是 ``star_create`` 的文案。"""
 FINALIZED_CONFLICT_MESSAGE = "已定稿，推广单已生成"
 """重复确认收货信息（N9）：已定稿，或并发里输给 ``uq_promotion_line`` 的那个请求 → 409 的文案。"""
+REASSIGNED_CONFLICT_MESSAGE = "谈款已转交给其他 PR，推广单未生成"
+"""确认收货信息时单被管理员转走（N12 并发）：条件 UPDATE 带 ``pr_id`` 落空 → 409 的文案（PR-3 评审 L1）。"""
 _PROMOTION_LINE_UQ = "uq_promotion_line"
 # 管理员能转交的状态（N12）：要 PR 动手或还在推进的 4 个；草稿只有本人看得到（取不到 → 404），终态不转
 _REASSIGNABLE = (
@@ -993,7 +996,7 @@ class NegotiationService:
         推广单带谈款的 8 项、``line_id``、收件三项、明细（齐了才复制，偏差 5）、``ship_status = 待发货``；
         建单人仍是谈款 PR，``receiver_confirmed_by`` 与事件动作人记实际确认的人。
         两人同时确认：后到的在插推广单时卡在 ``uq_promotion_line`` 上，先到的提交后报唯一冲突 → 回滚、409；
-        条件 UPDATE 0 行同样 409，推广单跟着回滚。
+        条件 UPDATE 0 行同样 409，推广单跟着回滚；文案按回滚后重读到的状态给（已定稿 / 已转交 / 其他）。
         """
         actor, negotiation, views, members = await self._load_for_action(negotiation_id, user)
         if negotiation.status == NegotiationStatus.APPROVED.value:
@@ -1079,7 +1082,8 @@ class NegotiationService:
         if updated is None:
             await self._session.rollback()
             raise NegotiationStateConflictError(
-                FINALIZED_CONFLICT_MESSAGE, details={"negotiation_id": str(negotiation_id)}
+                await self._confirm_conflict_message(negotiation_id, pr_id),
+                details={"negotiation_id": str(negotiation_id)},
             )
         await self._events.append(
             tenant_id=tenant_id,
@@ -1106,6 +1110,23 @@ class NegotiationService:
             )
         await self._session.commit()
         return await self.get(negotiation_id, user)
+
+    async def _confirm_conflict_message(self, negotiation_id: UUID, read_pr_id: UUID) -> str | None:
+        """定稿的条件 UPDATE 0 行、已回滚之后：按重读到的实际状态给 409 文案（PR-3 评审 L1），错误码不变。
+        已定稿 → 「已定稿，推广单已生成」；还没定稿但 ``pr_id`` 变了 → 已转交；其余 → 默认「刚被别人处理过」。
+        """
+        row = (
+            await self._session.execute(
+                select(Negotiation.status, Negotiation.pr_id).where(
+                    Negotiation.id == negotiation_id
+                )
+            )
+        ).one_or_none()
+        if row is not None and row.status == NegotiationStatus.APPROVED.value:
+            return FINALIZED_CONFLICT_MESSAGE
+        if row is not None and row.pr_id != read_pr_id:
+            return REASSIGNED_CONFLICT_MESSAGE
+        return None
 
     # ------------------------------------------------------------------ #
     # N10 复制为新谈款 / N12 管理员转交

@@ -1,3 +1,4 @@
+import { LINE_EVENTS_ALL } from "@/features/flow/api";
 import { useEffect, useState } from "react";
 import { Button, Form, InputNumber, Modal, Space, Typography, Upload, message } from "antd";
 import { UploadOutlined } from "@ant-design/icons";
@@ -47,6 +48,7 @@ export function MetricsModal({ target, onClose }: Props) {
       setMetricsFile(null);
       form.resetFields();
       void qc.invalidateQueries({ queryKey: ["promotions"] });
+      void qc.invalidateQueries({ queryKey: LINE_EVENTS_ALL });
     },
     onError: (err) => message.error(extractErrorMessage(err)),
   });

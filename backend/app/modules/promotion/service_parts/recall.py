@@ -8,6 +8,7 @@ from app.core.metrics import (
     promotion_state_transitions_total,
 )
 from app.modules.auth.models import User
+from app.modules.flow.line_events import LineEventRepository, LineEventType
 from app.modules.promotion.enums import (
     PublishStatus,
     RecallStatus,
@@ -94,6 +95,18 @@ class PromotionRecallMixin(PromotionServiceBase):
             status_field="recall",
         ).inc()
 
+        # 时间线（流程线 6.3）：recall.started，note = 召回原因（运费、承担方随 PR-8）
+        await LineEventRepository(self._session).append(
+            tenant_id=promotion.tenant_id,
+            line_id=promotion.line_id,
+            event_type=LineEventType.RECALL_STARTED,
+            actor_id=user.id,
+            promotion_id=promotion_id,
+            from_state=from_value,
+            to_state=RecallStatus.RECALLING.value,
+            note=payload.recall_reason or None,
+        )
+
         await self._audit.log(
             action="promotion.start_recall",
             resource="promotion",
@@ -163,6 +176,21 @@ class PromotionRecallMixin(PromotionServiceBase):
             to_state=to_state,
             status_field="recall",
         ).inc()
+
+        # 时间线（流程线 6.3）：recall.succeeded / failed（现有接口没有失败备注）
+        await LineEventRepository(self._session).append(
+            tenant_id=promotion.tenant_id,
+            line_id=promotion.line_id,
+            event_type=(
+                LineEventType.RECALL_SUCCEEDED
+                if to_state == RecallStatus.RECALLED_SUCCESS.value
+                else LineEventType.RECALL_FAILED
+            ),
+            actor_id=user.id,
+            promotion_id=promotion_id,
+            from_state=RecallStatus.RECALLING.value,
+            to_state=to_state,
+        )
 
         await self._audit.log(
             action=action_log,

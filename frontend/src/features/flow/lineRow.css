@@ -1,0 +1,11 @@
+/* 点一行开主线抽屉（流程线设计 8.3、8.4、8.9）：行可点的光标与键盘焦点框。 */
+.ant-table-wrapper .ant-table-tbody > tr.line-row {
+  cursor: pointer;
+}
+.ant-table-wrapper .ant-table-tbody > tr.line-row:focus-visible {
+  outline: 2px solid #1677ff;
+  outline-offset: -2px;
+}
+.ant-table-wrapper .ant-table-tbody > tr.line-row > td.line-row-ignore {
+  cursor: default;
+}

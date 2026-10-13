@@ -28,6 +28,12 @@ from app.modules.auth.models import Tenant, User
 from app.modules.auth.repository import PermissionRepository, RoleRepository
 from app.modules.blogger.repository import BloggerRepository
 from app.modules.flow.actor import load_flow_actor
+from app.modules.flow.line_events import (
+    PAYLOAD_MAX_BYTES,
+    LineEventRepository,
+    LineEventType,
+    payload_size,
+)
 from app.modules.flow.matrix import FlowActor, View, ui_for
 from app.modules.product.models import Sku
 from app.modules.product.repository import SkuRepository, StyleRepository
@@ -102,6 +108,40 @@ _PayloadT = TypeVar("_PayloadT", PromotionCreate, PromotionUpdate, PromotionShip
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+# promotion.updated 的 diff 里字符串值（前值、后值各自）最多留几个字（L1：备注、source_extra 无长度上限）
+DIFF_TEXT_MAX_CHARS = 200
+
+
+def _clip_text(value: Any) -> tuple[Any, bool]:
+    """超长字符串截到前 ``DIFF_TEXT_MAX_CHARS`` 字；dict（``source_extra``）逐值截。返回 (值, 是否截过)。"""
+    if isinstance(value, str) and len(value) > DIFF_TEXT_MAX_CHARS:
+        return value[:DIFF_TEXT_MAX_CHARS], True
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        cut = False
+        for k, v in value.items():
+            out[k], c = _clip_text(v)
+            cut = cut or c
+        return out, cut
+    return value, False
+
+
+def _clip_diff(diff: Mapping[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """diff 条目的前后值各自截断；截过的一侧记进条目的 ``truncated``（``["before", "after"]`` 的子集）。"""
+    out: dict[str, dict[str, Any]] = {}
+    for field, change in diff.items():
+        entry: dict[str, Any] = {}
+        truncated: builtins.list[str] = []
+        for side in ("before", "after"):
+            entry[side], cut = _clip_text(change.get(side))
+            if cut:
+                truncated.append(side)
+        if truncated:
+            entry["truncated"] = truncated
+        out[field] = entry
+    return out
 
 
 def _assert_not_future_publish_date(actual: date | None) -> None:
@@ -230,6 +270,11 @@ class PromotionServiceBase:
                 )
             )
 
+    async def amount_log_readable(self, user: User) -> bool:
+        """金额改动接口的读判定：推广列表页级 ``ui.actions.amount_log`` 用同一个（收尾 L3）。"""
+        ctx = await build_field_perm_context(user.id, self._roles, self._perms)
+        return can_read_field("promotion", "quote_amount", ctx)
+
     async def amount_log(
         self, promotion_id: UUID, user: User, *, limit: int = 100
     ) -> builtins.list[PromotionAmountLogResponse]:
@@ -240,8 +285,7 @@ class PromotionServiceBase:
         任何 ``promotion.xxx:read`` 都会被命中，于是能读到看不见的金额。
         这里用的是推广响应过滤金额时的同一个闸门。
         """
-        ctx = await build_field_perm_context(user.id, self._roles, self._perms)
-        if not can_read_field("promotion", "quote_amount", ctx):
+        if not await self.amount_log_readable(user):
             raise FieldPermissionDenied(field="quote_amount", entity="promotion")
 
         rows = await self._repo.amount_log(
@@ -250,21 +294,25 @@ class PromotionServiceBase:
         return [PromotionAmountLogResponse(**r) for r in rows]
 
     async def _close_urge_task(
-        self, promotion_id: UUID, user: User, reason: UrgeCloseReason
+        self, promotion: Promotion, user: User, reason: UrgeCloseReason
     ) -> None:
-        """发布 / 取消时顺手关掉催发任务（PRD 改动 2）。
+        """发布 / 取消时顺手关掉催发任务（PRD 改动 2），关掉了就写 ``urge.closed``。
 
         在 service 内部局部 import：``urge.service`` 用到 ``promotion.urge_calculator``，
         模块级互引会绕回来。
 
-        **故意吞掉异常**：没有催发任务、任务已关闭、甚至催发模块出问题，都不该让
+        **关任务故意吞掉异常**：没有催发任务、任务已关闭、甚至催发模块出问题，都不该让
         「发布推广单」这个主流程失败 —— 催发任务只是辅助视图。失败记一条 warning
         由自动扫描的 ``find_stale_open_tasks`` 兜底收口。
+
+        **事件不吞**（流程线 6.4）：``urge.closed`` 写在 try 之外，写不进去整个动作失败。
         """
         from app.modules.urge.service import UrgeService
 
+        promotion_id = promotion.id
+        task_id: UUID | None = None
         try:
-            await UrgeService(self._session).close_for_promotion(
+            task_id = await UrgeService(self._session).close_for_promotion(
                 promotion_id=promotion_id,
                 tenant_id=user.tenant_id,
                 reason=reason,
@@ -273,6 +321,110 @@ class PromotionServiceBase:
             log.warning(
                 "urge_task_auto_close_failed",
                 extra={"promotion_id": str(promotion_id), "reason": reason.value},
+            )
+        if task_id is not None:
+            await LineEventRepository(self._session).append(
+                tenant_id=promotion.tenant_id,
+                line_id=promotion.line_id,
+                event_type=LineEventType.URGE_CLOSED,
+                actor_id=user.id,
+                promotion_id=promotion_id,
+                payload={"urge_task_id": str(task_id), "close_reason": reason.value},
+            )
+
+    async def _items_display(self, promotion_id: UUID) -> builtins.list[builtins.list[str]]:
+        """明细的时间线值 ``[[款式简称, 颜色, 尺码]]``（按 ``sort_order``；不放编码，流程线 6.3、D13）。"""
+        views = (await self._items_repo.list_by_promotions([promotion_id])).get(promotion_id, [])
+        return [
+            [normalize_goods_short_name(v.style_short_name) or v.style_name, v.color, v.size]
+            for v in views
+        ]
+
+    async def _append_items_changed(
+        self,
+        promotion: Promotion,
+        user: User,
+        *,
+        before: builtins.list[builtins.list[str]],
+        reason: str,
+    ) -> None:
+        """明细前后值不同才写 ``ship.items_changed``（PATCH 改主款 SKU / 推送前换商品、PUT items）。"""
+        after = await self._items_display(promotion.id)
+        if after == before:
+            return
+        await LineEventRepository(self._session).append(
+            tenant_id=promotion.tenant_id,
+            line_id=promotion.line_id,
+            event_type=LineEventType.SHIP_ITEMS_CHANGED,
+            actor_id=user.id,
+            promotion_id=promotion.id,
+            payload={"items_before": before, "items_after": after, "reason": reason},
+        )
+
+    async def _append_patch_events(
+        self,
+        promotion: Promotion,
+        user: User,
+        *,
+        changes: Mapping[str, dict[str, Any]],
+        mode_before: str | None,
+        amount_before: dict[str, Decimal | None],
+    ) -> None:
+        """PATCH 的时间线（流程线 6.3、D13），各自没变化就不写：
+
+        - ``promotion.updated``：非金额、非收件字段的 ``diff``（``source_extra`` 只列改了的键）；
+          金额只进 ``amount_fields`` 名单（净变更，明细看金额改动页签，不重复记 promotion_amount_log）。
+          diff 的字符串值各截到 200 字（条目带 ``truncated``），截完仍超 8 KB 就只记 ``changed_fields``
+        - ``ship.receiver_changed``：收件三项的 ``diff``，读时逐项过收件字段规则
+        明细变化由调用方另写 ``ship.items_changed``（要在改明细之前取前值）。
+        """
+        events = LineEventRepository(self._session)
+        diff: dict[str, Any] = {
+            k: v
+            for k, v in changes.items()
+            if k not in AMOUNT_LOG_FIELDS and k not in RECEIVER_FIELDS
+        }
+        # 合作模式在算 changes 之前就补上了（空值补一次）；update_promotion 已按前值补进 changes，这里同口径兜底
+        if mode_before != promotion.cooperation_mode:
+            diff["cooperation_mode"] = {"before": mode_before, "after": promotion.cooperation_mode}
+        if "source_extra" in diff:
+            old, new = diff["source_extra"]["before"] or {}, diff["source_extra"]["after"] or {}
+            keys = sorted(k for k in old.keys() | new.keys() if old.get(k) != new.get(k))
+            diff["source_extra"] = {
+                "before": {k: old.get(k) for k in keys},
+                "after": {k: new.get(k) for k in keys},
+            }
+        amount_after = self._amount_snapshot(promotion)
+        amount_fields = [
+            f for f in AMOUNT_LOG_FIELDS if amount_before.get(f) != amount_after.get(f)
+        ]
+        updated_payload: dict[str, Any] = {}
+        if diff:
+            # 长文本截断（L1）：PATCH 不能因为事件 payload 超 8 KB 失败
+            updated_payload["diff"] = _clip_diff(diff)
+        if amount_fields:
+            updated_payload["amount_fields"] = amount_fields
+        if "diff" in updated_payload and payload_size(updated_payload) > PAYLOAD_MAX_BYTES:
+            # 截完仍超限（如 source_extra 键很多）：只记改了哪些字段名，不带值（同金额的写法）
+            updated_payload["changed_fields"] = sorted(updated_payload.pop("diff"))
+        if updated_payload:
+            await events.append(
+                tenant_id=promotion.tenant_id,
+                line_id=promotion.line_id,
+                event_type=LineEventType.PROMOTION_UPDATED,
+                actor_id=user.id,
+                promotion_id=promotion.id,
+                payload=updated_payload,
+            )
+        receiver_diff = {k: changes[k] for k in RECEIVER_FIELDS if k in changes}
+        if receiver_diff:
+            await events.append(
+                tenant_id=promotion.tenant_id,
+                line_id=promotion.line_id,
+                event_type=LineEventType.SHIP_RECEIVER_CHANGED,
+                actor_id=user.id,
+                promotion_id=promotion.id,
+                payload={"diff": receiver_diff},
             )
 
     @staticmethod

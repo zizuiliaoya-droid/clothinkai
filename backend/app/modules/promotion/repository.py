@@ -109,6 +109,8 @@ class WarehouseShipmentRecord:
     """仓库页一行（``warehouse_shipments``）：只取发货要用的列，不把整张推广单读出来。"""
 
     id: UUID
+    line_id: UUID
+    """主线号：「地址已更新 / 明细已更新」按线查事件（流程线 7.4 末尾）。"""
     pr_id: UUID | None
     internal_code: str
     style_code: str
@@ -924,7 +926,7 @@ class PromotionRepository:
             FROM promotion p
             WHERE {" AND ".join(base_where)}
         )
-        SELECT b.id, b.pr_id, b.internal_code, b.style_code_snapshot AS style_code,
+        SELECT b.id, b.line_id, b.pr_id, b.internal_code, b.style_code_snapshot AS style_code,
                {display} AS display_short_name,
                g.goods_code, g.goods_title, ps.sku_code,
                b.source_extra ->> CAST(:legacy_key AS text) AS legacy_color_spec,

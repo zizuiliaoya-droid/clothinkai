@@ -47,8 +47,8 @@ class PromotionDoc(FlowDocBase):
         )
 
     def allowed_actions(self) -> frozenset[str]:
-        """细化 §6 的状态机列。PR-2 只有发货三个动作，其余动作随各自的 PR 入矩阵。"""
-        allowed: set[str] = set()
+        """细化 §6 的状态机列。PR-2 有发货三个动作、PR-4 有留言（任何阶段都允许），其余动作随各自的 PR 入矩阵。"""
+        allowed: set[str] = {"comment"}
         if self.ship_status == ShipStatus.PENDING.value and self._open_unpublished():
             allowed.add("ship_push")
         if self.ship_status == ShipStatus.PRINTING.value:

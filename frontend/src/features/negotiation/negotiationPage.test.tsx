@@ -19,6 +19,14 @@ vi.mock("@/features/negotiation/api", () => ({
   bloggerCooperationHistory: vi.fn(),
 }));
 
+const lineEventsMock = vi.fn();
+vi.mock("@/features/flow/api", () => ({
+  LINE_EVENTS_ALL: ["line-events"],
+  lineEventsKey: (id: string | null) => ["line-events", id],
+  getLineEvents: (...args: unknown[]) => lineEventsMock(...args),
+  postLineComment: vi.fn(),
+}));
+
 import { NegotiationPage } from "@/pages/NegotiationPage";
 
 beforeAll(() => {
@@ -46,7 +54,19 @@ beforeEach(() => {
   listMock.mockReset();
   countsMock.mockReset();
   submitMock.mockReset();
+  lineEventsMock.mockReset();
   countsMock.mockResolvedValue({});
+  lineEventsMock.mockResolvedValue({
+    line_id: "l-1",
+    negotiation: { id: "n-1", status: "主管待审" },
+    promotion: null,
+    next_step: { text: "等主管审核谈款", who: "PR 主管" },
+    events: [],
+    hidden_segments: [],
+    legacy: [],
+    truncated: false,
+    ui: { actions: {} },
+  });
 });
 afterEach(cleanup);
 
@@ -220,6 +240,8 @@ describe("NegotiationPage", () => {
     const overdueTag = screen.getByText("超 36 小时");
     const tr = overdueTag.closest("tr");
     expect(tr?.className).toContain("negotiation-row-overdue");
+    // 超时行同样可点开抽屉（行 className 与高亮叠加，不互相覆盖）
+    expect(tr?.className).toContain("line-row");
     const single = screen.getByText("黑色 / M").closest("tr");
     expect(single?.className).not.toContain("negotiation-row-overdue");
 
@@ -265,6 +287,30 @@ describe("NegotiationPage", () => {
     expect(await screen.findAllByText("小美")).toHaveLength(2);
     expect(screen.queryByText("操作")).toBeNull();
     expect(screen.queryByRole("button", { name: /操作/ })).toBeNull();
+  });
+
+  it("点一行开主线抽屉（按 line_id 拉时间线）；点操作列、博主不开；Enter 也能开", async () => {
+    listMock.mockResolvedValue(pageOf([row({ status: "主管待审" })]));
+    renderPage();
+    const name = (await screen.findAllByText("飞狐短裙"))[0];
+    const tr = name.closest("tr") as HTMLElement;
+    expect(tr.className).toContain("line-row");
+    expect(tr.tabIndex).toBe(0);
+
+    fireEvent.click(screen.getByRole("button", { name: /操作/ }));
+    fireEvent.click(screen.getByText("小美"));
+    expect(lineEventsMock).not.toHaveBeenCalled();
+
+    fireEvent.click(name);
+    await waitFor(() => expect(lineEventsMock).toHaveBeenCalledWith("l-1"));
+    expect(await screen.findByText(/等主管审核谈款/)).toBeTruthy();
+    expect(document.querySelector(".ant-drawer-open")).toBeTruthy();
+    expect(document.body.textContent).not.toContain(GOODS_CODE);
+
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    lineEventsMock.mockClear();
+    fireEvent.keyDown(tr, { key: "Enter" });
+    await waitFor(() => expect(lineEventsMock).toHaveBeenCalledWith("l-1"));
   });
 
   it("新建谈款按页级 ui：可点 / 禁用 + 原因可见 / 不出现", async () => {

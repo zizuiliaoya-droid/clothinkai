@@ -3,7 +3,8 @@
 顺序（7.1 / 细化 §3）：404 → 状态机 422 → 规则 403（``flow.matrix.require``，端点 scope 已在路由层判过）
 → 条件 UPDATE 0 行 409。推送（S3）的 ★ 在条件 UPDATE 与写入弹窗补的内容之后再判，缺项整笔回滚：
 先抢到这一行，并发的输家停在条件 UPDATE、走不到写明细，不会撞 ``uq_promotion_item_style``。
-过渡期没有事件表（PR-4），发货动作只写 audit_log。
+每个发货动作同事务写一条 ``ship.*`` 事件（流程线 6.3，PR-4），写在 audit_log 之前；
+仓库页「地址已更新 / 明细已更新」由事件推出（7.4 末尾）。
 """
 
 from __future__ import annotations
@@ -16,7 +17,9 @@ from uuid import UUID
 
 from app.core.security.field_permissions import can_read_field
 from app.modules.auth.models import User
+from app.modules.flow.line_events import LineEventRepository, LineEventType
 from app.modules.flow.matrix import FlowActor, ensure_gates, require, ui_for
+from app.modules.flow.timeline_repository import LineReadRepository, ShipUpdateFlags
 from app.modules.promotion.display_name import normalize_goods_short_name
 from app.modules.promotion.enums import PublishStatus, RecallStatus, ShipCourier, ShipStatus
 from app.modules.promotion.exceptions import (
@@ -104,6 +107,30 @@ class PromotionShippingMixin(PromotionServiceBase):
             )
         return updated
 
+    async def _append_ship_event(
+        self,
+        promotion: Promotion,
+        user: User,
+        event_type: LineEventType,
+        from_state: str | None,
+        to_state: str | None,
+        *,
+        note: str | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        """发货组事件（流程线 6.3）：只挂 ``promotion_id``，同事务、不吞异常（6.4）。"""
+        await LineEventRepository(self._session).append(
+            tenant_id=promotion.tenant_id,
+            line_id=promotion.line_id,
+            event_type=event_type,
+            actor_id=user.id,
+            promotion_id=promotion.id,
+            from_state=from_state,
+            to_state=to_state,
+            note=note,
+            payload=payload,
+        )
+
     async def ship_include(self, promotion_id: UUID, user: User) -> PromotionResponse:
         """S2 纳入发货：历史单（发货为空）→ 待发货。"""
         promotion = await self._get_or_404(promotion_id)
@@ -112,6 +139,9 @@ class PromotionShippingMixin(PromotionServiceBase):
 
         updated = await self._ship_transition(
             promotion, user, from_state=None, to_state=ShipStatus.PENDING.value, require_open=True
+        )
+        await self._append_ship_event(
+            updated, user, LineEventType.SHIP_INCLUDED, None, ShipStatus.PENDING.value
         )
         await self._audit.log(
             action="promotion.ship.include",
@@ -149,6 +179,7 @@ class PromotionShippingMixin(PromotionServiceBase):
             else None
         )
         receiver_set = [f for f in RECEIVER_FIELDS if f in payload.model_fields_set]
+        receiver_before = {f: getattr(promotion, f) for f in receiver_set}
 
         try:
             updated = await self._ship_transition(
@@ -170,6 +201,24 @@ class PromotionShippingMixin(PromotionServiceBase):
                 setattr(updated, field, getattr(payload, field))
             await self._session.flush()
             ensure_gates(actor, await self._promotion_doc(updated, stage=doc.stage), "ship_push")
+            # 推送时的明细与弹窗里改了的收件只进这一条（不另写 receiver_changed / items_changed：
+            # 那两类的 seq 大于 pushed 就是「推送后又改了」，7.4 末尾）
+            push_payload: dict[str, Any] = {"items": await self._items_display(updated.id)}
+            receiver_diff = {
+                f: {"before": receiver_before[f], "after": getattr(updated, f)}
+                for f in receiver_set
+                if receiver_before[f] != getattr(updated, f)
+            }
+            if receiver_diff:
+                push_payload["diff"] = receiver_diff
+            await self._append_ship_event(
+                updated,
+                user,
+                LineEventType.SHIP_PUSHED,
+                ShipStatus.PENDING.value,
+                ShipStatus.PRINTING.value,
+                payload=push_payload,
+            )
             await self._audit.log(
                 action="promotion.ship.push",
                 resource="promotion",
@@ -201,6 +250,14 @@ class PromotionShippingMixin(PromotionServiceBase):
             user,
             from_state=ShipStatus.PRINTING.value,
             to_state=ShipStatus.PENDING.value,
+        )
+        await self._append_ship_event(
+            updated,
+            user,
+            LineEventType.SHIP_WITHDRAWN,
+            ShipStatus.PRINTING.value,
+            ShipStatus.PENDING.value,
+            note=payload.reason,
         )
         await self._audit.log(
             action="promotion.ship.withdraw",
@@ -255,6 +312,7 @@ class PromotionShippingMixin(PromotionServiceBase):
         record: WarehouseShipmentRecord,
         items: builtins.list[PromotionItemView],
         actor: FlowActor,
+        flags: ShipUpdateFlags | None,
     ) -> WarehouseShipmentRow:
         doc = build_warehouse_doc(
             stage=record.stage, pr_id=record.pr_id, ship_status=record.ship_status
@@ -274,9 +332,8 @@ class PromotionShippingMixin(PromotionServiceBase):
             ],
             legacy_color_spec=None if items else record.legacy_color_spec,
             **self._receiver_view(record, actor),
-            # 事件表随 M2（PR-4），这之前恒为 false
-            receiver_updated_after_push=False,
-            items_updated_after_push=False,
+            receiver_updated_after_push=flags is not None and flags.receiver,
+            items_updated_after_push=flags is not None and flags.items,
             ship_status=record.ship_status,
             ship_pushed_at=record.ship_pushed_at,
             ship_pushed_by_name=record.ship_pushed_by_name,
@@ -291,6 +348,15 @@ class PromotionShippingMixin(PromotionServiceBase):
     ) -> Mapping[UUID, builtins.list[PromotionItemView]]:
         return await self._items_repo.list_by_promotions([r.id for r in records])
 
+    async def _ship_update_flags(
+        self, records: builtins.list[WarehouseShipmentRecord], user: User
+    ) -> Mapping[UUID, ShipUpdateFlags]:
+        """「地址已更新 / 明细已更新」只对还在待打单的单算（7.4 末尾），一页一查；键是 ``line_id``。"""
+        return await LineReadRepository(self._session).ship_update_flags(
+            tenant_id=user.tenant_id,
+            line_ids=[r.line_id for r in records if r.ship_status == ShipStatus.PRINTING.value],
+        )
+
     async def list_warehouse_shipments(
         self, *, bucket: str, keyword: str | None, page: int, page_size: int, user: User
     ) -> WarehouseShipmentPage:
@@ -299,11 +365,15 @@ class PromotionShippingMixin(PromotionServiceBase):
             user, actor, bucket=bucket, keyword=keyword, page=page, page_size=page_size
         )
         items = await self._items_of(records)
+        flags = await self._ship_update_flags(records, user)
         page_actions: dict[str, Any] = {}
         if actor.perms.has("promotion_ship", "export"):
             page_actions["export"] = {"state": "enabled"}
         return WarehouseShipmentPage(
-            items=[self._warehouse_row(r, items.get(r.id, []), actor) for r in records],
+            items=[
+                self._warehouse_row(r, items.get(r.id, []), actor, flags.get(r.line_id))
+                for r in records
+            ],
             total=total,
             page=page,
             page_size=page_size,
@@ -391,10 +461,17 @@ class PromotionShippingMixin(PromotionServiceBase):
             "ship_waybill": promotion.ship_waybill,
             "shipped_at": _iso(promotion.shipped_at),
         }
-        await self._ship_transition(
+        shipped_at_before = promotion.shipped_at
+        after = {
+            "ship_status": ShipStatus.SHIPPED.value,
+            "ship_courier": payload.courier.value,
+            "ship_waybill": payload.waybill,
+            "shipped_at": shipped_at.isoformat(),
+        }
+        updated = await self._ship_transition(
             promotion,
             user,
-            from_state=promotion.ship_status,
+            from_state=before["ship_status"],
             to_state=ShipStatus.SHIPPED.value,
             extra_fields={
                 "ship_courier": payload.courier.value,
@@ -402,17 +479,43 @@ class PromotionShippingMixin(PromotionServiceBase):
                 "shipped_at": shipped_at,
             },
         )
+        if before["ship_status"] == ShipStatus.PRINTING.value:
+            await self._append_ship_event(
+                updated,
+                user,
+                LineEventType.SHIP_FILLED,
+                ShipStatus.PRINTING.value,
+                ShipStatus.SHIPPED.value,
+                payload={
+                    "courier": after["ship_courier"],
+                    "waybill": after["ship_waybill"],
+                    "shipped_at": after["shipped_at"],
+                },
+            )
+        else:
+            # 已发货改快递信息：只列改了的（发货时间按时刻比，不按字符串）；都没改不写
+            diff = {
+                k: {"before": before[k], "after": after[k]}
+                for k in ("ship_courier", "ship_waybill")
+                if before[k] != after[k]
+            }
+            if shipped_at_before != shipped_at:
+                diff["shipped_at"] = {"before": before["shipped_at"], "after": after["shipped_at"]}
+            if diff:
+                await self._append_ship_event(
+                    updated,
+                    user,
+                    LineEventType.SHIP_WAYBILL_CHANGED,
+                    None,
+                    None,
+                    payload={"diff": diff},
+                )
         await self._audit.log(
             action="promotion.warehouse_waybill.update",
             resource="promotion",
             resource_id=promotion_id,
             before=before,
-            after={
-                "ship_status": ShipStatus.SHIPPED.value,
-                "ship_courier": payload.courier.value,
-                "ship_waybill": payload.waybill,
-                "shipped_at": shipped_at.isoformat(),
-            },
+            after=after,
             user_id=user.id,
         )
         await self._session.commit()
@@ -426,4 +529,7 @@ class PromotionShippingMixin(PromotionServiceBase):
             promotion_id=promotion_id,
         )
         items = await self._items_of(records)
-        return self._warehouse_row(records[0], items.get(promotion_id, []), actor)
+        flags = await self._ship_update_flags(records, user)
+        return self._warehouse_row(
+            records[0], items.get(promotion_id, []), actor, flags.get(records[0].line_id)
+        )

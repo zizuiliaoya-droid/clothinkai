@@ -24,6 +24,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.auth.models import Tenant
 from app.modules.blogger.repository import BloggerRepository
+from app.modules.flow.line_events import (
+    PROMOTION_SOURCE_IMPORT,
+    LineEventRepository,
+    LineEventType,
+)
 from app.modules.importer.exceptions import RowValidationError
 from app.modules.importer.registry import ImportAdapterRegistry
 from app.modules.product.repository import SkuRepository, StyleRepository
@@ -35,6 +40,9 @@ if TYPE_CHECKING:
     from app.modules.importer.models import FieldMapping
 
 log = logging.getLogger(__name__)
+
+# 系统写的事件（actor NULL）payload 带的标记（流程线 6.4、K4-2）
+_SYSTEM_IMPORT = "import"
 
 # 内置默认映射（mapping=None 回退；中文表头 → 目标字段）
 _DEFAULT_COLUMNS: list[dict[str, Any]] = [
@@ -231,6 +239,42 @@ class PromotionImportAdapter:
         promotions.add(promotion)
         await session.flush()
         return promotion.id, True  # INSERT-only → is_inserted 恒 True
+
+    # ----------------------- after_insert（runner 钩子，流程线 6.2）----------------------- #
+
+    async def after_insert(
+        self,
+        session: AsyncSession,
+        rid: UUID,
+        *,
+        tenant_id: UUID,
+        actor_id: UUID | None,
+        batch_id: UUID,
+        row_number: int,
+    ) -> None:
+        """写 ``promotion.imported``（带批次 id、行号）。runner 在 upsert 之后、写 import_job 之前调。
+
+        同 per-row 事务、不提交；抛错由 runner 记成该行失败。line_id 是库发的号（upsert 刚插入），
+        按 rid 读回。批次没有发起人时 actor NULL、payload 带 system（6.4）。
+        """
+        line_id = (
+            await session.execute(select(Promotion.line_id).where(Promotion.id == rid))
+        ).scalar_one()
+        payload: dict[str, Any] = {
+            "source": PROMOTION_SOURCE_IMPORT,
+            "batch_id": str(batch_id),
+            "row_number": row_number,
+        }
+        if actor_id is None:
+            payload["system"] = _SYSTEM_IMPORT
+        await LineEventRepository(session).append(
+            tenant_id=tenant_id,
+            line_id=line_id,
+            event_type=LineEventType.PROMOTION_IMPORTED,
+            actor_id=actor_id,
+            promotion_id=rid,
+            payload=payload,
+        )
 
     async def _get_tenant_code(self, session: AsyncSession, tenant_id: UUID) -> str:
         """tenant.code（实例级缓存；tenant.code 不可变，缓存安全）。"""

@@ -161,6 +161,7 @@ ALLOWED_PURPOSES: frozenset[str] = frozenset(
         "urge_screenshot",  # 催发留痕的聊天截图（私有，PRD V1.4 改动 2）
         "promotion_metrics",  # 发布满 7 天的数据截图（私有，PRD V1.4 改动 4）
         "brand_comment_screenshot",  # 品牌词评论截图（私有，PRD V1.4 改动 5，发布必传）
+        "line_comment_image",  # 时间线留言贴图（私有，流程线设计 7.6）
     }
 )
 

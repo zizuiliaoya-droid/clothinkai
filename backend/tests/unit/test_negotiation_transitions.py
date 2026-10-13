@@ -56,15 +56,15 @@ STATES = (
     "已定稿",
 )
 
-# 3.2 转移表（N2 ~ N10）按「从」抄；留言 N11 随 PR-4，转交 N12 不进矩阵
+# 3.2 转移表（N2 ~ N11）按「从」抄；留言 N11 任意状态（PR-4），转交 N12 不进矩阵
 ALLOWED: dict[str, set[str]] = {
-    "草稿": {"edit", "submit"},
-    "主管待审": {"manager_review"},
-    "审核驳回": {"copy"},
-    "待老板审核": {"final_review"},
-    "老板退回": {"edit", "submit"},
-    "待补收货地址": {"receiver_save", "receiver_confirm"},
-    "已定稿": set(),
+    "草稿": {"edit", "submit", "comment"},
+    "主管待审": {"manager_review", "comment"},
+    "审核驳回": {"copy", "comment"},
+    "待老板审核": {"final_review", "comment"},
+    "老板退回": {"edit", "submit", "comment"},
+    "待补收货地址": {"receiver_save", "receiver_confirm", "comment"},
+    "已定稿": {"comment"},
 }
 
 # 每个动作的执行人（默认角色下）
@@ -76,6 +76,7 @@ EXECUTOR: dict[str, FlowActor] = {
     "final_review": ADMIN,
     "receiver_save": PR,
     "receiver_confirm": PR,
+    "comment": PR,
 }
 
 ACTIONS = ACTION_KEYS["negotiation"]
@@ -108,11 +109,12 @@ def test_states_are_the_seven_stored_values() -> None:
     assert set(ALLOWED) == set(STATES)
 
 
-def test_every_action_reachable_and_comment_not_yet() -> None:
-    """每个已入矩阵的动作至少在一个状态允许；留言（comment）随 PR-4，本 PR 哪个状态都不允许。"""
+def test_every_action_reachable() -> None:
+    """每个动作至少在一个状态允许；留言（comment，N11）每个状态都允许（PR-4）。"""
     reachable = set().union(*ALLOWED.values())
-    assert reachable == set(EXECUTOR)
-    assert reachable | {"comment"} == set(ACTIONS)
+    assert reachable == set(EXECUTOR) == set(ACTIONS)
+    for state in STATES:
+        assert "comment" in TRANSITIONS[state], state
 
 
 @pytest.mark.parametrize("state", STATES)
@@ -147,7 +149,7 @@ def test_state_machine_before_rules_and_gates() -> None:
 def test_rejected_is_terminal_except_copy() -> None:
     """审核驳回（Q1）：不能再编辑、提交（旧行为是改完回草稿，B1），只能复制为新谈款。"""
     doc = _doc("审核驳回")
-    assert doc.allowed_actions() == frozenset({"copy"})
+    assert doc.allowed_actions() == frozenset({"copy", "comment"})
     for action in ("edit", "submit"):
         with pytest.raises(AppException) as exc:
             require(PR, doc, action)
@@ -177,7 +179,7 @@ def test_build_negotiation_doc_from_orm_and_row() -> None:
     assert doc.reviewed_by == reviewer
     assert doc.items_complete is False
     assert doc.quote_amount == Decimal("0")
-    assert doc.allowed_actions() == frozenset({"final_review"})
+    assert doc.allowed_actions() == frozenset({"final_review", "comment"})
 
     row = {
         c: getattr(neg, c)

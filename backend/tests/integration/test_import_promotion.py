@@ -14,10 +14,12 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import app.tasks.import_tasks as tasks
+from app.modules.flow.line_events import PROMOTION_SOURCE_IMPORT
 from app.modules.importer.adapters.promotion import PromotionImportAdapter
 from app.modules.importer.registry import ImportAdapterRegistry
 from app.tasks.import_tasks import _run_import_batch
 from tests.conftest import purge_promotions
+from tests.flow_event_helpers import assert_payload_registered
 
 
 async def _seed(Maker, suffix: str, batch_id):
@@ -209,6 +211,212 @@ class TestPromotionImportEndToEnd:
                     )
                 ).scalar_one()
                 assert "博主" in err and "不存在" in err
+        finally:
+            ImportAdapterRegistry.clear()
+            await _cleanup(Maker, suffix, batch_id)
+
+
+def _use_test_engine(engine: Any, monkeypatch, csv_bytes: bytes):
+    """runner 的两个 session 换成测试 engine、文件换成样本、只注册推广适配器。"""
+    Maker = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    monkeypatch.setattr(tasks, "AsyncSessionApp", Maker)
+    monkeypatch.setattr(tasks, "AsyncSessionBypass", Maker)
+    ImportAdapterRegistry.clear()
+    ImportAdapterRegistry.register(PromotionImportAdapter())
+
+    import app.core.attachment as att_mod
+
+    monkeypatch.setattr(
+        att_mod.attachment_service, "get_object_bytes", lambda bucket, key: csv_bytes
+    )
+    return Maker
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+class TestPromotionImportedEvent:
+    """流程线 6.2 / G 块：runner 在 upsert 之后调 after_insert，每行一条 promotion.imported。"""
+
+    async def test_each_inserted_row_writes_imported_event(self, engine: Any, monkeypatch) -> None:
+        """3 行 1 行款式编码不存在 → 2 条 imported，batch_id / row_number / line_id 对得上（G8）。"""
+        suffix = uuid4().hex[:8]
+        csv_bytes = (
+            "款式编码,小红书ID,报价金额,平台,合作日期\n"
+            f"ST{suffix}A,xhs{suffix}A,500.00,小红书,2026-06-01\n"
+            f"ST{suffix}X,xhs{suffix}A,100,小红书,2026-06-01\n"
+            f"ST{suffix}A,xhs{suffix}A,600,小红书,2026-06-01\n"
+        ).encode()
+        Maker = _use_test_engine(engine, monkeypatch, csv_bytes)
+        batch_id = uuid4()
+        tenant_id = await _seed(Maker, suffix, batch_id)
+        try:
+            result = await _run_import_batch(batch_id, only_failed=False)
+            assert result["imported"] == 2
+            assert result["failed"] == 1
+
+            async with Maker() as check:
+                jobs = (
+                    await check.execute(
+                        text(
+                            "SELECT j.row_number, p.id, p.line_id FROM import_job j "
+                            "JOIN promotion p ON p.id = j.target_resource_id "
+                            "WHERE j.batch_id = :b AND j.status = 'success' ORDER BY j.row_number"
+                        ),
+                        {"b": batch_id},
+                    )
+                ).fetchall()
+                assert len(jobs) == 2
+                events = (
+                    await check.execute(
+                        text(
+                            "SELECT e.promotion_id, e.line_id, e.negotiation_id, e.actor_id, "
+                            "e.tenant_id, e.payload FROM line_event e "
+                            "JOIN promotion p ON p.id = e.promotion_id "
+                            "WHERE p.style_code_snapshot = :code "
+                            "AND e.event_type = 'promotion.imported' "
+                            "ORDER BY (e.payload->>'row_number')::int"
+                        ),
+                        {"code": f"ST{suffix}A"},
+                    )
+                ).fetchall()
+            assert len(events) == 2
+            for (row_number, promotion_id, line_id), event in zip(jobs, events, strict=True):
+                assert event.promotion_id == promotion_id
+                assert event.line_id == line_id
+                assert event.negotiation_id is None
+                assert str(event.tenant_id) == str(tenant_id)
+                # 批次没有发起人 → actor NULL，payload 带 system（K4-2）
+                assert event.actor_id is None
+                assert event.payload == {
+                    "source": PROMOTION_SOURCE_IMPORT,
+                    "batch_id": str(batch_id),
+                    "row_number": row_number,
+                    "system": "import",
+                }
+                assert_payload_registered(event.payload)
+        finally:
+            ImportAdapterRegistry.clear()
+            await _cleanup(Maker, suffix, batch_id)
+
+    async def test_batch_with_initiator_writes_actor(self, engine: Any, monkeypatch) -> None:
+        """批次有发起人（生产路径：页面上传）→ imported 的 actor_id = 发起人，payload 不带 system。"""
+        suffix = uuid4().hex[:8]
+        csv_bytes = (
+            "款式编码,小红书ID,报价金额,平台,合作日期\n"
+            f"ST{suffix}A,xhs{suffix}A,500.00,小红书,2026-06-01\n"
+        ).encode()
+        Maker = _use_test_engine(engine, monkeypatch, csv_bytes)
+        batch_id = uuid4()
+        tenant_id = await _seed(Maker, suffix, batch_id)
+        user_id = uuid4()
+        async with Maker() as s:
+            await s.execute(
+                text(
+                    'INSERT INTO "user" (id, tenant_id, username, password_hash, display_name, '
+                    "status, password_must_change, failed_login_count, created_at, updated_at) "
+                    "VALUES (:id, :tid, :u, 'x', '导入人', 'active', false, 0, NOW(), NOW())"
+                ),
+                {"id": user_id, "tid": tenant_id, "u": f"imppr_{suffix}"},
+            )
+            await s.execute(
+                text("UPDATE import_batch SET created_by = :u WHERE id = :id"),
+                {"u": user_id, "id": batch_id},
+            )
+            await s.commit()
+        try:
+            result = await _run_import_batch(batch_id, only_failed=False)
+            assert result["imported"] == 1
+            assert result["failed"] == 0
+
+            async with Maker() as check:
+                events = (
+                    await check.execute(
+                        text(
+                            "SELECT e.actor_id, e.payload FROM line_event e "
+                            "JOIN promotion p ON p.id = e.promotion_id "
+                            "WHERE p.style_code_snapshot = :code "
+                            "AND e.event_type = 'promotion.imported'"
+                        ),
+                        {"code": f"ST{suffix}A"},
+                    )
+                ).fetchall()
+            assert len(events) == 1
+            assert events[0].actor_id == user_id
+            assert events[0].payload == {
+                "source": PROMOTION_SOURCE_IMPORT,
+                "batch_id": str(batch_id),
+                "row_number": 1,
+            }
+            assert "system" not in events[0].payload
+            assert_payload_registered(events[0].payload)
+        finally:
+            ImportAdapterRegistry.clear()
+            await _cleanup(Maker, suffix, batch_id)
+            async with Maker() as c:
+                await c.execute(text('DELETE FROM "user" WHERE id = :u'), {"u": user_id})
+                await c.commit()
+
+    async def test_hook_error_fails_the_row(self, engine: Any, monkeypatch) -> None:
+        """钩子抛错 → 该行失败：推广单与 import_job(success) 都不落、失败明细有原因（I_ERR）。"""
+        suffix = uuid4().hex[:8]
+        csv_bytes = (
+            "款式编码,小红书ID,报价金额,平台,合作日期\n"
+            f"ST{suffix}A,xhs{suffix}A,500.00,小红书,2026-06-01\n"
+            f"ST{suffix}A,xhs{suffix}A,600,小红书,2026-06-01\n"
+        ).encode()
+        Maker = _use_test_engine(engine, monkeypatch, csv_bytes)
+        original = PromotionImportAdapter.after_insert
+        calls: list[int] = []
+
+        async def flaky_after_insert(self, session, rid, **kwargs):
+            calls.append(kwargs["row_number"])
+            if len(calls) == 2:
+                raise RuntimeError("时间线写入失败")
+            await original(self, session, rid, **kwargs)
+
+        monkeypatch.setattr(PromotionImportAdapter, "after_insert", flaky_after_insert)
+        batch_id = uuid4()
+        await _seed(Maker, suffix, batch_id)
+        try:
+            result = await _run_import_batch(batch_id, only_failed=False)
+            assert result["imported"] == 1
+            assert result["failed"] == 1
+
+            async with Maker() as check:
+                jobs = (
+                    await check.execute(
+                        text(
+                            "SELECT row_number, status, error_detail, target_resource_id "
+                            "FROM import_job WHERE batch_id = :b ORDER BY row_number"
+                        ),
+                        {"b": batch_id},
+                    )
+                ).fetchall()
+                assert [j.row_number for j in jobs] == calls
+                assert [j.status for j in jobs] == ["success", "failed"]
+                assert "时间线写入失败" in (jobs[1].error_detail or "")
+                assert jobs[1].target_resource_id is None
+                promos = (
+                    (
+                        await check.execute(
+                            text("SELECT id FROM promotion WHERE style_code_snapshot = :code"),
+                            {"code": f"ST{suffix}A"},
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                assert promos == [jobs[0].target_resource_id]
+                imported = (
+                    await check.execute(
+                        text(
+                            "SELECT COUNT(*) FROM line_event WHERE promotion_id = :p "
+                            "AND event_type = 'promotion.imported'"
+                        ),
+                        {"p": promos[0]},
+                    )
+                ).scalar_one()
+                assert imported == 1
         finally:
             ImportAdapterRegistry.clear()
             await _cleanup(Maker, suffix, batch_id)
