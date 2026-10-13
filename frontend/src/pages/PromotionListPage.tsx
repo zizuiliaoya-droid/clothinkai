@@ -213,7 +213,7 @@ export function PromotionListPage() {
   function confirmApprove(record: Promotion) {
     Modal.confirm({
       title: `审核通过 · ${record.internal_code}`,
-      content: approveConfirmText(record.quote_amount),
+      content: approveConfirmText(record.quote_amount, record.existing_settlement_status),
       okText: "审核通过",
       cancelText: "取消",
       onOk: () => approveMutation.mutateAsync(record.id).catch(() => undefined),

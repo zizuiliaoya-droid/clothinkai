@@ -683,6 +683,9 @@ class PromotionResponse(BaseModel):
     settlement: PromotionSettlementBlock | None = None
     """结款块（流程线 7.3）：只在详情与各动作的返回里有，列表为 None；还没有结款单、或矩阵「结款单」一行
     对当前用户是隐（运营）时为 None。"""
+    existing_settlement_status: str | None = None
+    """这张推广单已有结款单的状态（审核确认框按它写去向，R2 ⑥）：列表与详情都给，取自已批量查的结款引用；
+    没有结款单、或矩阵「结款单」一行对当前用户是隐（运营）时为 None。"""
 
     # 重复警告（仅 create / detail 视图填入）
     duplicate_warnings: list[PromotionDuplicateWarning] = Field(default_factory=list)

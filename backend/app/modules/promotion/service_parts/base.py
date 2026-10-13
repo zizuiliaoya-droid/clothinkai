@@ -35,7 +35,7 @@ from app.modules.flow.line_events import (
     LineEventType,
     payload_size,
 )
-from app.modules.flow.matrix import FlowActor, View, ui_for
+from app.modules.flow.matrix import FlowActor, Level, View, cell_level, ui_for
 from app.modules.product.models import Sku
 from app.modules.product.repository import SkuRepository, StyleRepository
 from app.modules.promotion.display_name import (
@@ -928,6 +928,14 @@ class PromotionServiceBase:
         settlement_block = (
             await self._settlement_block(promotion, ctx, ui) if view != "list" else None
         )
+        # 已有结款单的状态（审核确认框写去向，R2 ⑥）：列表、详情同取上面的结款引用，不另查；
+        # 矩阵「结款单」一行对当前用户是隐（运营）就给 None，与结款块同一条规则
+        existing_settlement_status = (
+            attachment_refs.settlement_status
+            if attachment_refs is not None
+            and cell_level(actor, doc, "field", "settlement") is not Level.HIDDEN
+            else None
+        )
         badges = compute_badges(
             stage=stage,
             publish_status=promotion.publish_status,
@@ -1031,6 +1039,7 @@ class PromotionServiceBase:
             settlement_payment_proof_signed_url=settlement_proof_url,
             settlement_chat_signed_url=settlement_chat_url,
             settlement=settlement_block,
+            existing_settlement_status=existing_settlement_status,
             duplicate_warnings=[],
             ui=ui,
         )

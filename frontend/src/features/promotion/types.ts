@@ -201,6 +201,11 @@ export interface Promotion {
   settlement_chat_signed_url?: string | null;
   /** 结款块：只在详情与动作返回里有；没有结款单或看不到为 null。 */
   settlement?: PromotionSettlementBlock | null;
+  /**
+   * 已有结款单的状态（审核确认框按它写去向，R2 ⑥）：列表与详情都有；没有结款单、或结款分组对当前用户是隐为 null。
+   * 缺这个键（undefined）= 拿不到，确认框不写去向。
+   */
+  existing_settlement_status?: string | null;
   // 通用
   is_active: boolean;
   created_at: string;

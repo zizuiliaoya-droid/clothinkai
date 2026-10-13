@@ -5,14 +5,32 @@ import type { FlowMenuItem } from "@/features/flow/flowMenu";
 import type { UiAction } from "@/features/flow/keys";
 import type { Promotion, ReviewOutcome } from "./types";
 
-/** 审核通过确认框：写清应付与去向（R2 / R3：应付 = 审核时的服务费，> 0 生成结款单，= 0 直接已结款）。 */
-export function approveConfirmText(quoteAmount: string | null | undefined): string {
-  if (quoteAmount == null || quoteAmount === "") {
-    return "通过后：应付大于 0 生成结款单给财务，应付为 0 直接记为已结款";
+/**
+ * 审核通过确认框：写清应付与去向（R2 / R3 / R2 ⑥，与后端 review 的判断顺序一致）。
+ * - 服务费 = 0 → 直接已结款（后端先判服务费，与有没有结款单无关）
+ * - 服务费 > 0：按行上的 existing_settlement_status 写——null 没有结款单 → 生成结款单给财务；
+ *   已付款（导入的）→ 转待传结款截图；其他状态 → 只写「已有结款单（状态：X）」（后端会 409）；
+ *   undefined 拿不到 → 不写去向，只写「确认审核通过？」加服务费
+ */
+export function approveConfirmText(
+  quoteAmount: string | null | undefined,
+  existingSettlementStatus: string | null | undefined,
+): string {
+  const hasFee = quoteAmount != null && quoteAmount !== "";
+  if (hasFee && !(Number(quoteAmount) > 0)) return `应付 ¥${quoteAmount}，通过后直接记为已结款`;
+  const fee = hasFee ? `应付 ¥${quoteAmount}` : null;
+  if (existingSettlementStatus === undefined) {
+    return fee ? `确认审核通过？${fee}` : "确认审核通过？";
   }
-  return Number(quoteAmount) > 0
-    ? `应付 ¥${quoteAmount}，通过后生成结款单给财务`
-    : `应付 ¥${quoteAmount}，通过后直接记为已结款`;
+  if (existingSettlementStatus === "已付款") {
+    return `${fee ? `${fee}，` : ""}已有导入的已付款结款单，通过后转待传结款截图，不再生成结款单`;
+  }
+  if (existingSettlementStatus !== null) {
+    return `${fee ? `${fee}，` : ""}已有结款单（状态：${existingSettlementStatus}）`;
+  }
+  return fee
+    ? `${fee}，通过后生成结款单给财务`
+    : "通过后：应付大于 0 生成结款单给财务，应付为 0 直接记为已结款";
 }
 
 const OUTCOME_TEXT: Record<ReviewOutcome, string> = {

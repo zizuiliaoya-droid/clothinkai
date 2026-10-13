@@ -126,6 +126,7 @@ function promotion(over: Partial<Promotion> = {}): Promotion {
     payment_qr_attachment_id: null,
     payment_qr_signed_url: null,
     settlement_payment_proof_signed_url: null,
+    existing_settlement_status: null,
     duplicate_warnings: [],
     receiver_name: null,
     receiver_phone: null,
@@ -288,16 +289,28 @@ describe("推广列表 · 审核按 ui.actions.review", () => {
     expect(await screen.findByText("审核通过。应付为 0，已直接记为已结款")).toBeTruthy();
   });
 
-  it("已有导入的已付款结款单：提示转待传结款截图（settlement_status = 已付款 不再误报「置换已结清」）", async () => {
-    const row = promotion({ ui: { actions: { review: ENABLED }, edits: [] } });
+  it("已有导入的已付款结款单：确认框与提示都写转待传结款截图（settlement_status = 已付款 不再误报「置换已结清」）", async () => {
+    const row = promotion({ existing_settlement_status: "已付款", ui: { actions: { review: ENABLED }, edits: [] } });
     const { dialog, ok } = await approve(row, {
       ...row,
       settlement_status: "已付款",
       review_outcome: "imported_settlement_paid",
     });
-    expect(within(dialog).getByText("应付 ¥400.00，通过后生成结款单给财务")).toBeTruthy();
+    expect(
+      within(dialog).getByText("应付 ¥400.00，已有导入的已付款结款单，通过后转待传结款截图，不再生成结款单"),
+    ).toBeTruthy();
+    expect(within(dialog).queryByText(/生成结款单给财务/)).toBeNull();
     ok();
     expect(await screen.findByText("审核通过。已有导入的已付款结款单，转待传结款截图")).toBeTruthy();
+  });
+
+  it("没有结款单、服务费 > 0：确认框照旧写生成结款单给财务", async () => {
+    const row = promotion({ ui: { actions: { review: ENABLED }, edits: [] } });
+    const { dialog, ok } = await approve(row, { ...row, settlement_status: "待付款", review_outcome: "settlement_created" });
+    expect(within(dialog).getByText("应付 ¥400.00，通过后生成结款单给财务")).toBeTruthy();
+    // 关掉确认框（Modal.confirm 挂在 body 上，不关会留给后面的用例）
+    ok();
+    expect(await screen.findByText("审核通过，已生成结款单，转待财务付款")).toBeTruthy();
   });
 });
 

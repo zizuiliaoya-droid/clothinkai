@@ -15,12 +15,29 @@ import {
 import type { Promotion, PromotionSettlementBlock } from "./types";
 
 describe("approveConfirmText（审核确认框写应付与去向）", () => {
-  it("应付 > 0 → 生成结款单给财务；= 0 → 直接记为已结款", () => {
-    expect(approveConfirmText("400.00")).toBe("应付 ¥400.00，通过后生成结款单给财务");
-    expect(approveConfirmText("0.00")).toBe("应付 ¥0.00，通过后直接记为已结款");
+  it("服务费 0 → 直接记为已结款（有没有结款单、拿不拿得到都一样）", () => {
+    expect(approveConfirmText("0.00", null)).toBe("应付 ¥0.00，通过后直接记为已结款");
+    expect(approveConfirmText("0.00", "已付款")).toBe("应付 ¥0.00，通过后直接记为已结款");
+    expect(approveConfirmText("0.00", undefined)).toBe("应付 ¥0.00，通过后直接记为已结款");
   });
-  it("读不到报价时不写金额，两种去向都说清", () => {
-    expect(approveConfirmText(null)).toBe("通过后：应付大于 0 生成结款单给财务，应付为 0 直接记为已结款");
+  it("没有结款单、服务费 > 0 → 照旧生成结款单给财务", () => {
+    expect(approveConfirmText("400.00", null)).toBe("应付 ¥400.00，通过后生成结款单给财务");
+  });
+  it("R2 ⑥ 已有导入的已付款结款单 → 转待传结款截图，不写「生成结款单」", () => {
+    const text = approveConfirmText("400.00", "已付款");
+    expect(text).toBe("应付 ¥400.00，已有导入的已付款结款单，通过后转待传结款截图，不再生成结款单");
+    expect(text).not.toContain("给财务");
+  });
+  it("已有其他状态的结款单 → 不写去向，只写状态", () => {
+    expect(approveConfirmText("400.00", "待财务付款")).toBe("应付 ¥400.00，已有结款单（状态：待财务付款）");
+  });
+  it("拿不到结款信息 → 「确认审核通过？」加服务费，不出现「生成结款单」", () => {
+    const text = approveConfirmText("400.00", undefined);
+    expect(text).toBe("确认审核通过？应付 ¥400.00");
+    expect(text).not.toContain("生成结款单");
+  });
+  it("读不到报价、没有结款单时不写金额，两种去向都说清", () => {
+    expect(approveConfirmText(null, null)).toBe("通过后：应付大于 0 生成结款单给财务，应付为 0 直接记为已结款");
   });
 });
 

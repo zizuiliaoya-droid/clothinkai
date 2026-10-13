@@ -445,6 +445,130 @@ class TestExistingSettlement:
         assert len(await _settlement_rows(session, promo.id)) == 1
 
 
+async def _existing_status_in_list_and_detail(
+    session: AsyncSession, user: Any, promotion_id: UUID
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """同一个人看列表行与详情，各返回这张推广单的响应体。"""
+    listed = await _call(session, user, "GET", "/api/promotions/?page_size=100")
+    assert listed.status_code == 200, listed.text
+    rows = [r for r in listed.json()["items"] if r["id"] == str(promotion_id)]
+    assert len(rows) == 1, "列表里要有这张单"
+    detail = await _call(session, user, "GET", f"/api/promotions/{promotion_id}")
+    assert detail.status_code == 200, detail.text
+    return rows[0], detail.json()
+
+
+@pytest.mark.usefixtures("tenant_ctx", "cross_unit_event_bus")
+class TestExistingSettlementStatusField:
+    """L4：推广响应的 ``existing_settlement_status``（审核确认框写去向）。列表与详情都给，
+    取自已批量查的结款引用；结款分组对当前用户是隐（运营）时给 null。"""
+
+    async def _imported_paid(
+        self,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        settlement_factory: Any,
+    ) -> Any:
+        """R2 ⑥：待主管审核、服务费 300，已有导入的已付款结款单。"""
+        style = await product_factory.style()
+        blogger = await blogger_factory.blogger()
+        promo = await promotion_factory.promotion(
+            style=style,
+            blogger=blogger,
+            pr=flow_users.pr,
+            publish_status="已发布",
+            settlement_status="待核查",
+            quote_amount=Decimal("300.00"),
+            payment_qr=True,
+        )
+        await settlement_factory.settlement(
+            style=style,
+            blogger=blogger,
+            promotion=promo,
+            pr=flow_users.pr,
+            settlement_status="已付款",
+            amount=Decimal("280.00"),
+            total_amount=Decimal("280.00"),
+        )
+        return promo
+
+    async def test_imported_paid_settlement_in_list_and_detail(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        settlement_factory: Any,
+    ) -> None:
+        promo = await self._imported_paid(
+            flow_users, product_factory, blogger_factory, promotion_factory, settlement_factory
+        )
+        row, detail = await _existing_status_in_list_and_detail(
+            session, flow_users.pr_manager, promo.id
+        )
+        assert row["existing_settlement_status"] == "已付款"
+        assert detail["existing_settlement_status"] == "已付款"
+        # 场景有效：仍在待主管审核、审核可点；结款分组照旧灰（D 列不因新字段改显示）
+        assert row["settlement_status"] == "待核查"
+        assert row["ui"]["actions"]["review"]["state"] == "enabled"
+        assert detail["ui"]["fields"]["settlement"]["state"] == "grey"
+        assert detail["settlement"] is None
+
+    async def test_no_settlement_is_null(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        promo = await _pending_review(
+            flow_users,
+            product_factory,
+            blogger_factory,
+            promotion_factory,
+            cooperation_mode="送拍",
+            quote_amount=Decimal("300.00"),
+            payment_qr=True,
+        )
+        row, detail = await _existing_status_in_list_and_detail(
+            session, flow_users.pr_manager, promo.id
+        )
+        # 键一直在，没有结款单为 null（读不到的角色同样给 null，沿用其他隐藏字段的写法）
+        assert "existing_settlement_status" in row and row["existing_settlement_status"] is None
+        assert (
+            "existing_settlement_status" in detail and detail["existing_settlement_status"] is None
+        )
+        assert await _settlement_rows(session, promo.id) == []
+
+    async def test_operations_cannot_see(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        settlement_factory: Any,
+    ) -> None:
+        promo = await self._imported_paid(
+            flow_users, product_factory, blogger_factory, promotion_factory, settlement_factory
+        )
+        row, detail = await _existing_status_in_list_and_detail(
+            session, flow_users.operations, promo.id
+        )
+        assert row["existing_settlement_status"] is None
+        assert detail["existing_settlement_status"] is None
+        # 场景有效：运营的结款分组是隐；同一张单主管看得到已付款
+        assert "settlement" not in detail["ui"]["fields"]
+        manager_row, _ = await _existing_status_in_list_and_detail(
+            session, flow_users.pr_manager, promo.id
+        )
+        assert manager_row["existing_settlement_status"] == "已付款"
+
+
 _PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
 
 
