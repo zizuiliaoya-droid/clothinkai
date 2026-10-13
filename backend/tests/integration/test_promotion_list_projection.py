@@ -107,6 +107,8 @@ class TestListProjection:
                       ship_courier = '顺丰',
                       ship_waybill = 'SF000111',
                       shipped_at = NOW(),
+                      settled_at = NOW(),
+                      return_shipping_payer = '到付',
                       source_extra = '{"订单号": "xx"}'::jsonb
                     WHERE id = :pid
                     """

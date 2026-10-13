@@ -280,6 +280,24 @@ class Promotion(TenantScopedModel):
     ship_waybill: Mapped[str | None] = mapped_column(String(128), nullable=True)
     shipped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    # --- 结款 / 召回闭环（流程线 M4，065）---
+    settlement_chat_attachment_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("attachment.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    """结款聊天截图（已付款 → 已结款）。存量已付款单迁移时直接记已结款，不补截图。"""
+    settled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    """记为已结款的时间（PR 上传结款聊天截图时，或应付 = 0 审核通过时）；存量不回填。"""
+    recall_waybill_attachment_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("attachment.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    """召回寄回单号截图（PR-8 召回闭环才用）。"""
+    return_shipping_payer: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    """运费承担方：博主垫付 / 到付。召回成功时录，博主垫付且运费 > 0 才走寄回运费付款单（PR-8）。"""
+
     # --- 主线号（流程线 M2） ---
     line_id: Mapped[UUID] = mapped_column(
         PGUUID(as_uuid=True),
@@ -416,6 +434,10 @@ class Promotion(TenantScopedModel):
         CheckConstraint(
             "ship_status IS NULL OR ship_status IN ('待发货', '待打单', '已发货')",
             name="ck_promotion_ship_status",
+        ),
+        CheckConstraint(
+            "return_shipping_payer IS NULL OR return_shipping_payer IN ('博主垫付', '到付')",
+            name="ck_promotion_return_shipping_payer",
         ),
         # 推广列表「发货」筛选与仓库页；历史单（NULL）不进索引
         Index(

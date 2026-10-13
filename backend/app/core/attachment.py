@@ -163,6 +163,8 @@ ALLOWED_PURPOSES: frozenset[str] = frozenset(
         "promotion_metrics",  # 发布满 7 天的数据截图（私有，PRD V1.4 改动 4）
         "brand_comment_screenshot",  # 品牌词评论截图（私有，PRD V1.4 改动 5，发布必传）
         "line_comment_image",  # 时间线留言贴图（私有，流程线设计 7.6）
+        "settlement_chat_screenshot",  # 结款聊天截图：已付款 → 已结款（私有，流程线设计 2.5 M4）
+        "recall_waybill_screenshot",  # 召回寄回单号截图（私有，流程线设计 2.5 M4，PR-8 才用）
     }
 )
 
