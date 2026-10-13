@@ -42,14 +42,6 @@ class PrScope:
         if (self.kind is PrScopeKind.PR) != (self.pr_id is not None):
             raise ValueError("只有 kind=PR 时带 pr_id")
 
-    def keeps(self, pr_id: UUID | None) -> bool:
-        """service 层 SQL 之后按行过滤用：这一行的 PR 是否在范围内。"""
-        if self.kind is PrScopeKind.ALL:
-            return True
-        if self.kind is PrScopeKind.UNASSIGNED:
-            return pr_id is None
-        return pr_id == self.pr_id
-
     def sql(self, column: str) -> tuple[str, dict[str, Any]]:
         """下推到 SQL 用：返回 ``(" AND <column> …", 参数)``，ALL 时为 ``("", {})``。
 

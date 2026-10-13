@@ -80,16 +80,6 @@ class TestResolvePrScope:
 
 @pytest.mark.unit
 class TestPrScopeFilters:
-    def test_keeps(self) -> None:
-        assert all(PR_SCOPE_ALL.keeps(x) for x in (None, _ME, _OTHER))
-        mine = PrScope(PrScopeKind.PR, _ME)
-        assert mine.keeps(_ME)
-        assert not mine.keeps(_OTHER)
-        assert not mine.keeps(None)
-        unassigned = PrScope(PrScopeKind.UNASSIGNED)
-        assert unassigned.keeps(None)
-        assert not unassigned.keeps(_ME)
-
     def test_sql(self) -> None:
         assert PR_SCOPE_ALL.sql("p.pr_id") == ("", {})
         assert PrScope(PrScopeKind.UNASSIGNED).sql("p.pr_id") == (" AND p.pr_id IS NULL", {})
