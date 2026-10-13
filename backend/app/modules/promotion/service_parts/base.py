@@ -36,6 +36,8 @@ from app.modules.flow.line_events import (
     payload_size,
 )
 from app.modules.flow.matrix import FlowActor, Level, View, cell_level, ui_for
+from app.modules.metric_config.service import PlatformMetricSettingService
+from app.modules.metric_config.settings import PlatformMetricSettings
 from app.modules.product.models import Sku
 from app.modules.product.repository import SkuRepository, StyleRepository
 from app.modules.promotion.display_name import (
@@ -735,6 +737,7 @@ class PromotionServiceBase:
         members_by_goods: Mapping[UUID, builtins.list[UUID]] | None = None,
         user_names: Mapping[UUID, str] | None = None,
         style_names: Mapping[UUID, tuple[str, str | None, str | None]] | None = None,
+        metric_settings: PlatformMetricSettings | None = None,
     ) -> PromotionResponse:
         """组装响应：字段权限过滤 + 衍生字段计算 + 矩阵 ``ui``.
 
@@ -754,6 +757,7 @@ class PromotionServiceBase:
             negotiators / members_by_goods: 列表整页一次查好的谈款人与套装成员；None 时单条现查。
             user_names: 列表整页一次查好的推送人名字；None 时单条现查。
             style_names: 列表整页一次查好的成员款式名（``goods_members`` 用）；None 时单条现查。
+            metric_settings: 列表整页读一次的平台指标配置（7e R7）；None 时按租户现查。
         """
         if actor is None:
             actor = await self._flow_actor(user)
@@ -877,8 +881,14 @@ class PromotionServiceBase:
         else:
             dual_platform = dual_platform_override
 
+        if metric_settings is None:
+            metric_settings = await PlatformMetricSettingService(self._session).get_settings(
+                promotion.tenant_id
+            )
         effective_like = calculate_effective_like_count(
-            platform=promotion.platform, like_count=promotion.like_count
+            platform=promotion.platform,
+            like_count=promotion.like_count,
+            settings=metric_settings,
         )
         is_hit = calculate_is_hit(
             like_count=promotion.like_count, threshold=HIT_THRESHOLD_LIKE_COUNT

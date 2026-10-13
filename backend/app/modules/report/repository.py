@@ -4,7 +4,8 @@
 （依赖 Session 注入 tenant_id，不显式写 tenant_id WHERE）。
 
 复用 U04 ``URGE_STATUS_SQL_EXPR``（:today/:urge_days/:important_days 参数）+
-``services.metric.publish_progress.like_sum_expr``（折算系数来自 U04 常量）。
+``metric_config.settings.effective_like_sum``（折算系数走 ``:like_coef`` 参数）。三个带点赞的
+聚合都收必填 ``metric_settings``：每次查询按租户配置算，不在导入时拼系数。
 
 4 个聚合都收必填 ``pr_scope``（7e R1 只看本人）：子句下推到 WHERE —— 摘要 / 卡片是跨 PR
 的聚合，SQL 之后无法再按行过滤。
@@ -21,11 +22,10 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import as_mapping, as_mappings
+from app.modules.metric_config.settings import PlatformMetricSettings, effective_like_sum
 from app.modules.promotion.urge_calculator import URGE_STATUS_SQL_EXPR
 from app.modules.report.pr_scope import PrScope
-from app.services.metric.publish_progress import like_sum_expr
 
-_LIKE = like_sum_expr("like_count")
 _OVERDUE = f"COUNT(*) FILTER (WHERE ({URGE_STATUS_SQL_EXPR}) = '超时')"
 
 
@@ -41,6 +41,7 @@ class PublishProgressRepository:
         today: date,
         urge_days: int,
         important_days: int,
+        metric_settings: PlatformMetricSettings,
         **extra: Any,
     ) -> dict[str, Any]:
         return {
@@ -50,6 +51,7 @@ class PublishProgressRepository:
             "today": today,
             "urge_days": urge_days,
             "important_days": important_days,
+            **metric_settings.sql_params(),
             **extra,
         }
 
@@ -62,6 +64,7 @@ class PublishProgressRepository:
         today: date,
         urge_days: int,
         important_days: int,
+        metric_settings: PlatformMetricSettings,
         pr_scope: PrScope,
     ) -> Mapping[str, Any]:
         scope_sql, scope_params = pr_scope.sql("pr_id")
@@ -76,7 +79,7 @@ class PublishProgressRepository:
               COUNT(*) FILTER (WHERE publish_status='已发布') AS publish_count,
               COUNT(*) FILTER (WHERE publish_status='已取消') AS cancel_count,
               {_OVERDUE} AS overdue_count,
-              {_LIKE} AS like_count
+              {effective_like_sum("like_count", "platform")} AS like_count
             FROM promotion
             WHERE tenant_id = :tenant_id
               AND is_active = true
@@ -94,6 +97,7 @@ class PublishProgressRepository:
                         today,
                         urge_days,
                         important_days,
+                        metric_settings,
                         **scope_params,
                     ),
                 )
@@ -113,6 +117,7 @@ class PublishProgressRepository:
         important_days: int,
         page: int,
         page_size: int,
+        metric_settings: PlatformMetricSettings,
         pr_scope: PrScope,
     ) -> tuple[list[Mapping[str, Any]], int]:
         scope_sql, scope_params = pr_scope.sql("p.pr_id")
@@ -124,7 +129,14 @@ class PublishProgressRepository:
         # total = 不同 style 数（与数据行同一个 WHERE，只看本人时也只数本人的款）
         total_sql = text(f"SELECT COUNT(DISTINCT p.style_id) FROM promotion p {where}")
         params = self._params(
-            tenant_id, date_from, date_to, today, urge_days, important_days, **scope_params
+            tenant_id,
+            date_from,
+            date_to,
+            today,
+            urge_days,
+            important_days,
+            metric_settings,
+            **scope_params,
         )
         total = int((await self._s.execute(total_sql, params)).scalar_one())
 
@@ -143,7 +155,7 @@ class PublishProgressRepository:
                 AS cooperation_amount,
               COUNT(*) FILTER (WHERE p.publish_status='已取消') AS cancel_count,
               COUNT(*) FILTER (WHERE ({URGE_STATUS_SQL_EXPR}) = '超时') AS overdue_count,
-              {like_sum_expr("p.like_count")} AS like_count
+              {effective_like_sum("p.like_count", "p.platform")} AS like_count
             FROM promotion p
             JOIN style s ON s.id = p.style_id
             {where}
@@ -169,6 +181,7 @@ class PublishProgressRepository:
         today: date,
         urge_days: int,
         important_days: int,
+        metric_settings: PlatformMetricSettings,
         pr_scope: PrScope,
     ) -> list[Mapping[str, Any]]:
         scope_sql, scope_params = pr_scope.sql("p.pr_id")
@@ -180,7 +193,7 @@ class PublishProgressRepository:
               COUNT(*) AS quote_count,
               COUNT(*) FILTER (WHERE p.publish_status='已发布') AS publish_count,
               COUNT(*) FILTER (WHERE ({URGE_STATUS_SQL_EXPR}) = '超时') AS overdue_count,
-              {like_sum_expr("p.like_count")} AS like_count
+              {effective_like_sum("p.like_count", "p.platform")} AS like_count
             FROM promotion p
             LEFT JOIN "user" u ON u.id = p.pr_id
             WHERE p.tenant_id = :tenant_id
@@ -198,6 +211,7 @@ class PublishProgressRepository:
             today,
             urge_days,
             important_days,
+            metric_settings,
             style_id=style_id,
             **scope_params,
         )

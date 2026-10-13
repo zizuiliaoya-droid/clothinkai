@@ -31,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.tenancy import tenant_id_ctx
 from app.modules.collect.models import AdDaily, QianniuDaily
 from app.modules.finance.order_adjustment_models import OrderAdjustment
+from app.modules.metric_config.service import PlatformMetricSettingService
 from app.modules.product.goods_models import GoodsMain, GoodsStyleItem
 from app.modules.product.platform_product_models import PlatformProduct
 from app.modules.report.advanced_repository import (
@@ -252,6 +253,9 @@ class TestRefreshMatchesLiveAggregation:
                 date_to=FULL_HI,
                 today=FULL_HI,
                 thresholds=await UrgeService(session).get_urge_thresholds(tenant_a.id),
+                metric_settings=await PlatformMetricSettingService(session).get_settings(
+                    tenant_a.id
+                ),
                 by_goods=False,
             )
             assert live, "场景没有推广单，PR 进度对比是空跑"

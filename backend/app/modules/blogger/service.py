@@ -404,13 +404,15 @@ class BloggerService:
 
     async def recompute_quality_tags(self, blogger_id: UUID) -> Blogger:
         """U11: 聚合 promotion 历史自动重算质量标签 + 假号嫌疑."""
+        from app.modules.metric_config.service import PlatformMetricSettingService
         from app.services.metric.blogger_quality import compute_quality_tags
 
         blogger = await self._repo.get_by_id(blogger_id)
         if blogger is None:
             raise BloggerNotFoundError(f"博主 {blogger_id} 不存在")
+        settings = await PlatformMetricSettingService(self._session).get_settings(blogger.tenant_id)
         blogger.quality_tags = await compute_quality_tags(
-            blogger.id, self._session, blogger.tenant_id
+            blogger.id, self._session, blogger.tenant_id, settings=settings
         )
         ratio = self._tags.compute_read_like_ratio(blogger.audience_profile)
         blogger.is_suspected_fake = self._tags.is_fake_account(ratio)

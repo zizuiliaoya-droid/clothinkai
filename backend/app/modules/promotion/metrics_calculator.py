@@ -14,31 +14,31 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal
 
-from app.modules.promotion.legacy_settings import (
-    HIT_THRESHOLD_LIKE_COUNT,
-    PLATFORM_LIKE_COEFFICIENT,
-)
+from app.modules.metric_config.settings import PlatformMetricSettings
+from app.modules.promotion.legacy_settings import HIT_THRESHOLD_LIKE_COUNT
 
 
 def calculate_effective_like_count(
     *,
     platform: str,
     like_count: int | None,
+    settings: PlatformMetricSettings,
 ) -> int | None:
     """BR-U04-31: 折算后点赞数。
 
-    抖音 / 快手 系数 0.1（÷ 10）；小红书 / B 站 系数 1.0；未知平台默认 1.0。
+    系数读租户的平台指标配置（默认抖音 / 快手 0.1、其余 1.0；5 个平台之外按 1）。
 
     Args:
-        platform: 平台名（必须命中 ``PLATFORM_LIKE_COEFFICIENT``，否则按 1.0 处理）。
+        platform: 平台名。
         like_count: 原始点赞数；None 表示未采集，返回 None。
+        settings: 租户的平台指标（``PlatformMetricSettingService.get_settings``），不给默认值。
 
     Returns:
         折算后整数；ROUND_HALF_UP 取整。
     """
     if like_count is None:
         return None
-    coefficient = PLATFORM_LIKE_COEFFICIENT.get(platform, Decimal("1.0"))
+    coefficient = settings.like_coefficient(platform)
     return int((Decimal(like_count) * coefficient).to_integral_value(rounding=ROUND_HALF_UP))
 
 

@@ -63,6 +63,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import Date, cast, delete, func, insert, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.metric_config.service import PlatformMetricSettingService
 from app.modules.promotion.urge_calculator import get_today
 from app.modules.report.advanced_repository import (
     ProductionRepository,
@@ -181,6 +182,7 @@ class SummaryRefreshService:
         self._work = WorkProgressRepository(session)
         self._store = StoreDailyRepository(session)
         self._urge = UrgeService(session)
+        self._metric = PlatformMetricSettingService(session)
 
     async def refresh(self, *, tenant_id: UUID, date_from: date, date_to: date) -> dict[str, int]:
         """刷新 ``[date_from, date_to]`` 区间。返回每张表写入的行数。
@@ -283,6 +285,8 @@ class SummaryRefreshService:
         # 分界天数读租户配置，与实时路径同一来源，整次刷新只查一次。
         today = get_today()
         thresholds = await self._urge.get_urge_thresholds(tenant_id)
+        # 点赞折算系数同理（7e R7）：拿锁之后读，整次刷新一次
+        metric_settings = await self._metric.get_settings(tenant_id)
         day = date_from
         while day <= date_to:
             # aggregate_by_pr 按区间聚合，没有「按日分组」的形态。与其给它加一个
@@ -297,6 +301,7 @@ class SummaryRefreshService:
                 date_to=day,
                 today=today,
                 thresholds=thresholds,
+                metric_settings=metric_settings,
                 by_goods=True,
             )
             payload.extend(

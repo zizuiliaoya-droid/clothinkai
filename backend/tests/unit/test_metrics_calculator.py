@@ -13,6 +13,7 @@ from decimal import Decimal
 
 import pytest
 
+from app.modules.metric_config.settings import PlatformMetricSettings
 from app.modules.promotion.metrics_calculator import (
     calculate_cpl,
     calculate_effective_like_count,
@@ -37,7 +38,12 @@ class TestEffectiveLikeCount:
         ],
     )
     def test_calculation(self, platform: str, raw: int | None, expected: int | None) -> None:
-        assert calculate_effective_like_count(platform=platform, like_count=raw) == expected
+        assert (
+            calculate_effective_like_count(
+                platform=platform, like_count=raw, settings=PlatformMetricSettings.defaults()
+            )
+            == expected
+        )
 
 
 class TestIsHit:

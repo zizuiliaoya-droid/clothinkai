@@ -33,6 +33,7 @@ from app.core.security.field_permissions import FieldPermissionContext
 from app.core.tenancy import tenant_id_ctx
 from app.modules.collect.models import AdDaily, QianniuDaily
 from app.modules.finance.order_adjustment_models import OrderAdjustment
+from app.modules.metric_config.service import PlatformMetricSettingService
 from app.modules.product.goods_models import GoodsMain, GoodsStyleItem
 from app.modules.product.platform_product_models import PlatformProduct
 from app.modules.promotion.urge_calculator import get_today
@@ -1687,6 +1688,7 @@ class TestWorkProgress:
             live_repo = WorkProgressRepository(session)
             summary = SummaryReadRepository(session)
             thresholds = await UrgeService(session).get_urge_thresholds(tenant_a.id)
+            metric_settings = await PlatformMetricSettingService(session).get_settings(tenant_a.id)
             for seasons in (None, ["春夏"], ["秋冬"], ["春夏", "秋冬"]):
                 for pr_id in (None, pr3.id, UNASSIGNED):
                     live = await live_repo.aggregate_by_pr(
@@ -1695,6 +1697,7 @@ class TestWorkProgress:
                         date_to=M_HI,
                         today=TODAY,
                         thresholds=thresholds,
+                        metric_settings=metric_settings,
                         by_goods=False,
                         seasons=seasons,
                         pr_id=pr_id,
@@ -1748,6 +1751,7 @@ class TestWorkProgress:
 
             repo = WorkProgressRepository(session)
             thresholds = await UrgeService(session).get_urge_thresholds(tenant_a.id)
+            metric_settings = await PlatformMetricSettingService(session).get_settings(tenant_a.id)
 
             async def pr3_row(seasons: list[str] | None) -> dict[str, Any]:
                 rows = await repo.aggregate_by_pr(
@@ -1756,6 +1760,7 @@ class TestWorkProgress:
                     date_to=M_HI,
                     today=TODAY,
                     thresholds=thresholds,
+                    metric_settings=metric_settings,
                     by_goods=False,
                     seasons=seasons,
                     pr_id=pr3.id,
@@ -1805,6 +1810,7 @@ class TestWorkProgress:
                 date_to=M_HI,
                 today=TODAY,
                 thresholds=thresholds,
+                metric_settings=metric_settings,
                 by_goods=True,
                 pr_id=pr3.id,
             )
@@ -2366,6 +2372,9 @@ class TestWorkProgressWeeks:
                 date_to=WEEK_HI,
                 today=TODAY,
                 thresholds=await UrgeService(session).get_urge_thresholds(tenant_a.id),
+                metric_settings=await PlatformMetricSettingService(session).get_settings(
+                    tenant_a.id
+                ),
                 by_goods=False,
                 seasons=seasons,
                 pr_id=None,

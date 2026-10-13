@@ -51,6 +51,7 @@ from app.modules.flow.matrix import (
     require,
     ui_for,
 )
+from app.modules.metric_config.service import PlatformMetricSettingService
 from app.modules.negotiation.enums import (
     NegotiationFinalReviewAction,
     NegotiationReviewAction,
@@ -1400,6 +1401,10 @@ class NegotiationService:
         can_see_quote = can_read_field("promotion", "quote_amount", ctx)
         # 单赞成本的分子含样品成本与寄回运费，乘回点赞数就能反推 —— 两个读权限都要有
         can_see_cpl = can_see_quote and can_read_field("promotion", "cost_snapshot", ctx)
+        # 单赞成本的分母用折算点赞：系数读租户的平台指标配置，整张卡读一次（7e R7）
+        metric_settings = await PlatformMetricSettingService(self._session).get_settings(
+            user.tenant_id
+        )
         items: builtins.list[BloggerCooperationItem] = []
         for r in rows:
             image_url: str | None = None
@@ -1412,7 +1417,9 @@ class NegotiationService:
                 except Exception:
                     image_url = None
             effective_like = calculate_effective_like_count(
-                platform=str(r["platform"]), like_count=r.get("like_count")
+                platform=str(r["platform"]),
+                like_count=r.get("like_count"),
+                settings=metric_settings,
             )
             raw_cost = r.get("total_promo_cost")
             cpl = calculate_cpl(

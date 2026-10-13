@@ -25,6 +25,7 @@ from app.modules.blogger.tag_config import (
     FOLLOWER_KOL_MIN,
     TYPE_GRADED_PLATFORMS,
 )
+from app.modules.metric_config.service import PlatformMetricSettingService
 from app.services.metric.blogger_quality import compute_quality_tags
 
 log = logging.getLogger(__name__)
@@ -88,6 +89,8 @@ class BloggerTagService:
         调用方负责 commit。
         """
         bloggers = await self._repo.list_active_bloggers(tenant_id)
+        # 平台指标（折算系数 / 爆文阈值）整批读一次（7e R7）
+        settings = await PlatformMetricSettingService(self._session).get_settings(tenant_id)
         updated = 0
         failed = 0
         for b in bloggers:
@@ -96,7 +99,9 @@ class BloggerTagService:
                     b.blogger_type = self.compute_blogger_type(b.follower_count)
                 ratio = self.compute_read_like_ratio(b.audience_profile)
                 b.is_suspected_fake = self.is_fake_account(ratio)
-                b.quality_tags = await compute_quality_tags(b.id, self._session, tenant_id)
+                b.quality_tags = await compute_quality_tags(
+                    b.id, self._session, tenant_id, settings=settings
+                )
                 updated += 1
             except Exception:
                 log.warning("recompute_blogger_failed blogger_id=%s", str(b.id))

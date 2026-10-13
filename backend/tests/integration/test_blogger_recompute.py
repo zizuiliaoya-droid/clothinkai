@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.tenancy import tenant_id_ctx
 from app.modules.blogger.service import BloggerService
 from app.modules.blogger.tag_config import TAG_BESTSELLER, TAG_HIGH_VALUE
+from app.modules.metric_config.settings import PlatformMetricSettings
 from app.services.metric.blogger_quality import (
     avg_cpl_for_blogger,
     compute_quality_tags,
@@ -23,6 +24,8 @@ from app.services.metric.blogger_quality import (
 )
 
 pytestmark = pytest.mark.asyncio
+
+_DEFAULTS = PlatformMetricSettings.defaults()
 
 
 class TestBloggerQualityAggregation:
@@ -60,7 +63,7 @@ class TestBloggerQualityAggregation:
                 platform="小红书",
             )
             await session.flush()
-            cpl = await avg_cpl_for_blogger(blogger.id, session, tenant_a.id)
+            cpl = await avg_cpl_for_blogger(blogger.id, session, tenant_a.id, settings=_DEFAULTS)
             assert cpl == Decimal("0.5000")
         finally:
             tenant_id_ctx.reset(token)
@@ -78,7 +81,10 @@ class TestBloggerQualityAggregation:
             style = await product_factory.style()
             blogger = await blogger_factory.blogger(follower_count=50_000)
             await promotion_factory.promotion(style=style, blogger=blogger, like_count=None)
-            assert await avg_cpl_for_blogger(blogger.id, session, tenant_a.id) is None
+            assert (
+                await avg_cpl_for_blogger(blogger.id, session, tenant_a.id, settings=_DEFAULTS)
+                is None
+            )
         finally:
             tenant_id_ctx.reset(token)
 
@@ -137,7 +143,7 @@ class TestBloggerQualityAggregation:
             )
             p.metrics_recorded_at = datetime.now(UTC)
             await session.flush()
-            tags = await compute_quality_tags(blogger.id, session, tenant_a.id)
+            tags = await compute_quality_tags(blogger.id, session, tenant_a.id, settings=_DEFAULTS)
             assert TAG_HIGH_VALUE in tags
             assert TAG_BESTSELLER in tags
         finally:

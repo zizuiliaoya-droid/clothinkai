@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.metrics import report_query_duration_seconds
 from app.core.security.field_permissions import FieldPermissionContext
+from app.modules.metric_config.service import PlatformMetricSettingService
 from app.modules.promotion.display_name import normalize_goods_short_name
 from app.modules.promotion.urge_calculator import get_today
 from app.modules.report.advanced_repository import WorkProgressRepository
@@ -55,6 +56,7 @@ class WorkProgressService:
         self._repo = WorkProgressRepository(session)
         self._summary = SummaryReadRepository(session)
         self._urge = UrgeService(session)
+        self._metric = PlatformMetricSettingService(session)
 
     async def get_for_range(
         self,
@@ -102,6 +104,7 @@ class WorkProgressService:
                     date_to=date_to,
                     today=get_today(),
                     thresholds=await self._urge.get_urge_thresholds(tenant_id),
+                    metric_settings=await self._metric.get_settings(tenant_id),
                     by_goods=False,
                     seasons=seasons,
                     pr_id=pr_id,
@@ -153,6 +156,7 @@ class WorkProgressService:
                     date_to=date_to,
                     today=get_today(),
                     thresholds=await self._urge.get_urge_thresholds(tenant_id),
+                    metric_settings=await self._metric.get_settings(tenant_id),
                     by_goods=True,
                     seasons=seasons,
                     pr_id=pr_id,
@@ -225,6 +229,7 @@ class WorkProgressService:
                 record_source("work_progress_weeks", "live")
                 today = get_today()
                 thresholds = await self._urge.get_urge_thresholds(tenant_id)
+                metric_settings = await self._metric.get_settings(tenant_id)
                 merged = {}
                 for week_start, lo, hi in weeks:
                     week_rows = await self._repo.aggregate_by_pr(
@@ -233,6 +238,7 @@ class WorkProgressService:
                         date_to=hi,
                         today=today,
                         thresholds=thresholds,
+                        metric_settings=metric_settings,
                         by_goods=False,
                         seasons=seasons,
                         pr_id=pr_id,

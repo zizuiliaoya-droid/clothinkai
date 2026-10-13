@@ -3,8 +3,10 @@
 REMOVE AFTER V1 system_setting 单元 is implemented.
 
 包含 U04 实时计算字段所需的系统设置常量：
-- PLATFORM_LIKE_COEFFICIENT：平台点赞折算系数（EP05-S10）
 - HIT_THRESHOLD_LIKE_COUNT：爆文阈值（EP05-S11）
+
+平台点赞折算系数已收进租户的 ``promotion_platform_setting`` 表，
+从 ``PlatformMetricSettingService.get_settings`` 取（7e R7）。
 
 催发天数阈值（原 URGE_THRESHOLD_DAYS / IMPORTANT_THRESHOLD_DAYS）已收进租户的
 ``urge_config`` 表，从 ``UrgeService.get_urge_thresholds`` 取 —— 别在这里再加回来：
@@ -18,23 +20,10 @@ V1+ system_setting 单元落地后：
 
 from __future__ import annotations
 
-from decimal import Decimal
-
-PLATFORM_LIKE_COEFFICIENT: dict[str, Decimal] = {
-    "小红书": Decimal("1.0"),
-    "抖音": Decimal("0.1"),  # 抖音点赞 ÷ 10
-    "快手": Decimal("0.1"),
-    "B站": Decimal("1.0"),
-    "得物": Decimal("1.0"),
-}
-"""平台点赞折算系数（EP05-S10）。"""
-
-
 HIT_THRESHOLD_LIKE_COUNT: int = 1000
 """爆文阈值（EP05-S11）。like_count >= 此值标记 is_hit=true。"""
 
 
 __all__ = [
     "HIT_THRESHOLD_LIKE_COUNT",
-    "PLATFORM_LIKE_COEFFICIENT",
 ]

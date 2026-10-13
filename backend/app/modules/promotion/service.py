@@ -37,6 +37,7 @@ from app.modules.flow.line_events import (
 from app.modules.flow.matrix import Level, cell_level, ensure_patch_allowed, require
 from app.modules.importer.access import SCOPE_PROMOTION_CREATE
 from app.modules.importer.access import can_write as can_import_write
+from app.modules.metric_config.service import PlatformMetricSettingService
 from app.modules.product.models import Sku
 from app.modules.promotion.domain import (
     build_promotion_audit_changes,
@@ -683,6 +684,10 @@ class PromotionService(
         )
 
         promotion_search_results_count.observe(total)
+        # 平台指标（折算系数）整页读一次（7e R7）
+        metric_settings = await PlatformMetricSettingService(self._session).get_settings(
+            user.tenant_id
+        )
 
         attachment_refs = await self._repo.get_payment_attachment_refs(
             tenant_id=user.tenant_id,
@@ -731,6 +736,7 @@ class PromotionService(
                 members_by_goods=members_by_goods,
                 user_names=user_names,
                 style_names=style_names,
+                metric_settings=metric_settings,
             )
             for row in rows
         ]
