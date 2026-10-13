@@ -30,6 +30,7 @@ from app.modules.product.platform_product_models import PlatformProduct
 from app.modules.report.advanced_schemas import StoreDailyManualUpdate
 from app.modules.report.domain import bucket_start
 from app.modules.report.export_service import ReportExportService
+from app.modules.report.production_columns import PRODUCTION_COLUMNS
 from app.modules.report.production_service import ProductionService
 from app.modules.report.store_daily_service import StoreDailyService
 from tests.unit.test_extra_metrics import qianniu_row, wanxiangtai_row
@@ -38,7 +39,7 @@ pytestmark = pytest.mark.asyncio
 
 D1, D2 = date(2026, 6, 15), date(2026, 6, 16)  # 周一、周二
 _STORE_FIXED = 7  # 店铺导出的固定列：日期 + 6 个指标
-_PRODUCTION_FIXED = 15  # 投产导出的固定列：编码、简称、名称、含款号 + 11 个指标
+_PRODUCTION_FIXED = len(PRODUCTION_COLUMNS)  # 投产导出的固定列 = 共用列定义
 _SUPER_CTX = FieldPermissionContext(frozenset(), frozenset(), frozenset(), is_superuser=True)
 
 

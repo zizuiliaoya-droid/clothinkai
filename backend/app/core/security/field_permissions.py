@@ -103,6 +103,11 @@ FIELD_PERMISSION_REGISTRY: dict[str, dict[str, FieldRule]] = {
             frozenset({"admin", "pr_manager", "finance"}),
         ),
     },
+    # 7e R3（报表视图设计 4-F1，10-10 业务答复）：单品投产毛利三列只给管理员；
+    # 持 '*' 的 admin / platform_admin 走超管判定。无 permission 行，个人授予暂不可用
+    "report": {
+        "production_margin": FieldRule(frozenset({"admin"})),
+    },
 }
 
 

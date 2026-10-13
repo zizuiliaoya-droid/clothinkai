@@ -20,6 +20,7 @@ const NO_CAPS: ReportCapabilities = {
   publish_progress: null,
   bi: null,
   production: false,
+  production_margin: false,
   store_read: false,
   store_write: false,
   export: [],

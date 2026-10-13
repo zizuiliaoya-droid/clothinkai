@@ -112,7 +112,9 @@ def _production_row(**kw: Any) -> ProductionRow:
         "promo_cost": _ZERO,
         "ad_spend": Decimal("10"),
         "total_spend": Decimal("10"),
+        "pay_orders": 0,
         "add_cart_count": 0,
+        "ad_add_cart_count": 0,
     }
     base.update(kw)
     return ProductionRow(**base)

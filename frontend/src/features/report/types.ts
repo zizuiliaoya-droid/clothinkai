@@ -90,6 +90,10 @@ export interface StoreDailyRow {
   extra?: Record<string, unknown>;
 }
 
+/** 单品投产渠道（7e R3）：一行 = 商品 × 渠道；null 只出现在内部按商品合计的行上。 */
+export type ProductionChannel = "普通" | "直播";
+
+/** 单品投产一行（7e R3，设计 2.3）：同商品同渠道的多条链接合成一行，行键 = 商品 id + 渠道。 */
 export interface ProductionRow {
   goods_id: string;
   goods_code: string;
@@ -98,23 +102,52 @@ export interface ProductionRow {
   is_suit: boolean;
   style_codes: string[];
   main_image_url: string | null;
+  channel: ProductionChannel | null;
+  /** 该商品该渠道启用的千牛链接数（当前状态，不看区间）。 */
+  link_count: number;
   pay_amount: string;
   refund_amount: string;
   return_rate: string | null;
+  /** 实际销售金额（原「待确认收货金额」，字段名不变）。 */
   confirmed_amount: string;
   promo_cost: string;
   ad_spend: string;
   total_spend: string;
+  /** 支付件数：剔除刷单开关不扣件数。 */
+  pay_orders: number;
   add_cart_count: number;
   add_cart_cost: string | null;
+  ad_add_cart_count: number;
+  ad_add_cart_cost: string | null;
+  /** 站外加购：所选区间千牛与万相台没有同一天的数据时为 null。 */
+  offsite_add_cart: number | null;
+  pre_return_roi: string | null;
   net_roi: string | null;
+  /** 推广单件成交成本（推广总花费 / 支付件数）。 */
   unit_deal_cost: string | null;
+  /** 近 7 天（T-7 ~ T-1，不随筛选变）；上期行为 null。 */
+  recent7_pay_amount: string | null;
+  recent7_total_spend: string | null;
+  recent7_net_roi: string | null;
+  /** 毛利三列只给管理员，其他角色恒 null；缺成本也为 null。 */
+  goods_cost_total: string | null;
+  gross_profit: string | null;
+  gross_margin_rate: string | null;
   extra?: Record<string, unknown>;
+}
+
+/** 近 7 天区间（租户时区 T-7 ~ T-1）。 */
+export interface Recent7Range {
+  date_from: string;
+  date_to: string;
 }
 
 export interface ProductionReport {
   items: ProductionRow[];
   previous: ProductionRow[] | null;
+  recent7_range: Recent7Range | null;
+  /** 区间内有日报或花费、但已停用的链接数（未计入单品）。 */
+  inactive_link_count: number;
 }
 
 export type TimePreset =
@@ -246,6 +279,8 @@ export interface ReportCapabilities {
   publish_progress: "all" | "own" | null;
   bi: "full" | "personal" | null;
   production: boolean;
+  /** 能否看单品投产毛利三列（7e R3：只给管理员）；false 时页面不渲染这三列。 */
+  production_margin: boolean;
   store_read: boolean;
   store_write: boolean;
   /** 能导出的报表类型（`/api/reports/{type}/export` 的 type）。 */

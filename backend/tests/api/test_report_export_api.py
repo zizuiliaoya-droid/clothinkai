@@ -14,7 +14,9 @@ from openpyxl import load_workbook
 
 from app.core.security.field_permissions import FieldPermissionContext
 from app.core.security.permissions import EffectivePermissions
+from app.modules.report.advanced_schemas import ProductionReport, ProductionRow, Recent7Range
 from app.modules.report.pr_scope import PR_SCOPE_ALL
+from app.modules.report.production_columns import PRODUCTION_COLUMNS
 
 _SUPER_CTX = FieldPermissionContext(frozenset(), frozenset(), frozenset(), is_superuser=True)
 _ALL_PERMS = EffectivePermissions(user_id="test", scopes=frozenset({"*"}))
@@ -56,11 +58,15 @@ class TestReportExportApiContract:
         dangerous_header = '=HYPERLINK("https://invalid.example","x")'
         dangerous_text = "  +SUM(1,1)"
         dangerous_short = "=1+1"
-        production_row = SimpleNamespace(
+        goods_id = uuid4()
+        production_row = ProductionRow(
+            goods_id=goods_id,
             goods_code="S001",
             goods_short_name=dangerous_short,
             goods_title=dangerous_text,
-            style_codes=["S001"],
+            style_codes=["S001", "S002"],
+            channel="普通",
+            link_count=2,
             pay_amount=Decimal("100"),
             refund_amount=Decimal("10"),
             return_rate=Decimal("0.1"),
@@ -68,12 +74,32 @@ class TestReportExportApiContract:
             promo_cost=Decimal("20"),
             ad_spend=Decimal("30"),
             total_spend=Decimal("50"),
+            pay_orders=4,
             add_cart_count=5,
             add_cart_cost=Decimal("10"),
+            ad_add_cart_count=3,
+            ad_add_cart_cost=Decimal("10"),
+            offsite_add_cart=2,
+            pre_return_roi=Decimal("2"),
             net_roi=Decimal("1.8"),
-            unit_deal_cost=Decimal("12"),
+            unit_deal_cost=Decimal("12.5"),
+            recent7_pay_amount=Decimal("70"),
+            recent7_total_spend=Decimal("7"),
+            recent7_net_roi=Decimal("10"),
+            goods_cost_total=Decimal("40"),
+            gross_profit=Decimal("50"),
+            gross_margin_rate=Decimal("0.5556"),
             extra={dangerous_header: "3"},
         )
+        # 同一商品的直播行：extra 只挂在普通行（S1 偏差），直播行这一列留空
+        live_row = production_row.model_copy(
+            update={"channel": "直播", "link_count": 1, "offsite_add_cart": None, "extra": {}}
+        )
+        production_report = ProductionReport(
+            items=[production_row, live_row],
+            recent7_range=Recent7Range(date_from=date(2026, 7, 27), date_to=date(2026, 8, 2)),
+        )
+        production_calls: list[dict[str, object]] = []
         # service 给什么行导出就写什么行：分桶与 extra 聚合都在 StoreDailyService 里。
         # 两行故意落在同一周 —— 导出要是自己再按周合并一次，这里会变成一行。
         store_rows = [
@@ -128,8 +154,9 @@ class TestReportExportApiContract:
             def __init__(self, _session: object) -> None:
                 pass
 
-            async def get_report(self, *_args: object, **_kwargs: object) -> object:
-                return SimpleNamespace(items=[production_row])
+            async def get_report(self, *_args: object, **kwargs: object) -> object:
+                production_calls.append(kwargs)
+                return production_report
 
         class FakeStoreDailyService:
             def __init__(self, _session: object) -> None:
@@ -162,13 +189,91 @@ class TestReportExportApiContract:
             granularity="day",
             field_ctx=_SUPER_CTX,
         )
-        assert production_headers[:4] == ["商品编码", "商品简称", "商品名称", "含款号"]
-        assert production_rows[0][1:3] == [dangerous_short, dangerous_text]
-        assert production_headers[-1] == dangerous_header
-        # 15 个固定列（编码、简称、名称、含款号 + 11 个指标）+ 1 个动态 extra
-        assert len(production_headers) == len(production_rows[0]) == 16
-        assert isinstance(module._cell(production_rows[0][4]), float)
+        # 表头逐列来自共用列定义（列顺序 = 页面），近 7 天三列带区间；extra 在最后
+        assert production_headers == [
+            "商品编码",
+            "商品简称",
+            "商品名称",
+            "渠道",
+            "链接数",
+            "含款号",
+            "支付金额",
+            "支付件数（不扣刷单）",
+            "退款金额",
+            "退货退款率",
+            "实际销售金额",
+            "站外推广费",
+            "站内投放",
+            "推广总花费",
+            "退货前投产比",
+            "净投产比",
+            "推广单件成交成本",
+            "总加购数",
+            "总加购成本",
+            "站内加购",
+            "站内加购成本",
+            "站外加购",
+            "近 7 天（07-27 ~ 08-02）支付金额",
+            "近 7 天（07-27 ~ 08-02）推广总花费",
+            "近 7 天（07-27 ~ 08-02）净投产比",
+            "销售货品总成本",
+            "单品毛利",
+            "单品利润率",
+            dangerous_header,
+        ]
+        assert production_headers[:-1] == [
+            module.export_header(c, production_report.recent7_range) for c in PRODUCTION_COLUMNS
+        ]
+        assert production_rows[0][:-1] == [
+            "S001",
+            dangerous_short,
+            dangerous_text,
+            "普通",
+            2,
+            "S001,S002",
+            Decimal("100"),
+            4,
+            Decimal("10"),
+            Decimal("0.1"),
+            Decimal("90"),
+            Decimal("20"),
+            Decimal("30"),
+            Decimal("50"),
+            Decimal("2"),
+            Decimal("1.8"),
+            Decimal("12.5"),
+            5,
+            Decimal("10"),
+            3,
+            Decimal("10"),
+            2,
+            Decimal("70"),
+            Decimal("7"),
+            Decimal("10"),
+            Decimal("40"),
+            Decimal("50"),
+            Decimal("0.5556"),
+        ]
+        # 同商品两渠道 → 两行；直播行站外加购 None、extra 空
+        assert [r[3] for r in production_rows] == ["普通", "直播"]
+        live = dict(zip(production_headers, production_rows[1], strict=True))
+        assert live["站外加购"] is None and live[dangerous_header] is None
+        assert len(production_headers) == len(production_rows[0]) == len(PRODUCTION_COLUMNS) + 1
+        assert isinstance(module._cell(production_rows[0][6]), float)
         assert isinstance(module._cell(production_rows[0][-1]), float)
+        # 超管 ctx → 毛利可见，原样交给 service；运营 ctx（能看成本价）→ 不给毛利
+        assert production_calls[-1]["show_margin"] is True
+        ops_ctx = FieldPermissionContext(frozenset({"operations"}), frozenset(), frozenset())
+        await service._fetch_rows(
+            uuid4(),
+            "production",
+            period,
+            exclude_brushing=True,
+            seasons=None,
+            granularity="day",
+            field_ctx=ops_ctx,
+        )
+        assert production_calls[-1]["show_margin"] is False
         assert module._cell(dangerous_header) == f"'{dangerous_header}"
         assert module._cell(dangerous_text) == f"'{dangerous_text}"
         assert module._cell(dangerous_short) == f"'{dangerous_short}"

@@ -12,7 +12,9 @@ report 模块原来没有字段裁剪；下钻（R1）、散点（R6）、毛利
   返回 ``can_read_field("promotion", "quote_amount", ctx)``，``production`` / ``store_daily`` 照常 True（ROI 要用）
 - **ROI 例外**：BI 的站外推广花费、总花费、ROI 是投产口径（算 ROI 要用），即便按上面收紧 ``bi``
   也**不**过 F3，照常给；收紧只作用于 BI 的推广汇总金额（服务费、已发布 / 未发布花费、取消金额）
-- F1 毛利随 R3
+- **F1 毛利**（R3，10-10 业务答复）：单品投产的销售货品总成本、单品毛利、单品利润率三列只给管理员，
+  页面与导出同规则，其他角色给 ``null``。判定见 :func:`production_margin_visible`（注册表
+  ``report.production_margin``，只登记 admin；持 ``*`` 的超管可见）。``sku.cost_price`` 的规则不变
 """
 
 from __future__ import annotations
@@ -42,6 +44,11 @@ def promotion_amounts_visible(ctx: FieldPermissionContext) -> tuple[bool, bool]:
     return quote, quote and can_read_field("promotion", "cost_snapshot", ctx)
 
 
+def production_margin_visible(ctx: FieldPermissionContext) -> bool:
+    """F1：单品投产毛利三列是否给（只管理员；页面、导出、capabilities 共用）。"""
+    return can_read_field("report", "production_margin", ctx)
+
+
 def aggregate_promo_amounts_visible(report: AggregateReport, ctx: FieldPermissionContext) -> bool:
     """F3：该报表的推广金额聚合列是否给（R1 恒 True，决定 12 的唯一落点）。"""
     del report, ctx  # 现行口径不看逐单字段权限；收紧时按模块 docstring 改这里
@@ -54,5 +61,6 @@ __all__ = [
     "aggregate_promo_amounts_visible",
     "build_field_perm_context",
     "can_read_field",
+    "production_margin_visible",
     "promotion_amounts_visible",
 ]

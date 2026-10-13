@@ -17,8 +17,15 @@ from app.core.exceptions import PermissionDeniedError
 from app.core.metrics import report_export_total
 from app.core.security.field_permissions import FieldPermissionContext
 from app.core.security.permissions import EffectivePermissions
+from app.modules.report.advanced_schemas import ProductionRow
 from app.modules.report.exceptions import ReportExportTypeInvalidError
+from app.modules.report.field_mask import production_margin_visible
 from app.modules.report.pr_scope import PR_SCOPE_ALL
+from app.modules.report.production_columns import (
+    PRODUCTION_COLUMNS,
+    ProductionColumn,
+    export_header,
+)
 from app.modules.report.production_service import ProductionService
 from app.modules.report.store_daily_service import StoreDailyService
 from app.modules.report.work_progress_service import WorkProgressService
@@ -68,23 +75,6 @@ _WORK_HEADERS = [
     "成本",
     "CPL",
 ]
-_PRODUCTION_HEADERS = [
-    "商品编码",
-    "商品简称",
-    "商品名称",
-    "含款号",
-    "支付额",
-    "退款额",
-    "退货率",
-    "确认金额",
-    "站外花费",
-    "站内花费",
-    "总花费",
-    "加购数",
-    "加购成本",
-    "净投产比",
-    "单件成交成本",
-]
 _STORE_HEADERS = [
     "日期",
     "访客数",
@@ -105,6 +95,11 @@ def _cell(v: Any) -> Any:
         return f"'{v}"
     # Excel 数值单元格必须保持可计算/排序；openpyxl 最终仍以 IEEE 754 存储。
     return float(v) if isinstance(v, Decimal) else v
+
+
+def _production_cell(row: ProductionRow, col: ProductionColumn) -> Any:
+    value = getattr(row, col.key)
+    return ",".join(value) if col.kind == "codes" else value
 
 
 def _numeric_extra(v: Any) -> Any:
@@ -192,31 +187,21 @@ class ReportExportService:
                 time_range,
                 exclude_brushing=exclude_brushing,
                 seasons=seasons,
+                # F1：毛利三列只给管理员；其他角色 service 给 None → 表头照留、单元格为空
+                show_margin=production_margin_visible(field_ctx),
             )
             extra_keys = sorted({key for row in report.items for key in row.extra})
+            # 表头与单元格都从共用列定义取（列顺序 = 页面）。导出是数据而不是界面：
+            # 没填简称就留空，不拿全称冒充
+            headers = [export_header(col, report.recent7_range) for col in PRODUCTION_COLUMNS]
             rows = [
                 [
-                    row.goods_code,
-                    # 导出是数据而不是界面：没填简称就留空，不拿全称冒充
-                    row.goods_short_name,
-                    row.goods_title,
-                    ",".join(row.style_codes),
-                    row.pay_amount,
-                    row.refund_amount,
-                    row.return_rate,
-                    row.confirmed_amount,
-                    row.promo_cost,
-                    row.ad_spend,
-                    row.total_spend,
-                    row.add_cart_count,
-                    row.add_cart_cost,
-                    row.net_roi,
-                    row.unit_deal_cost,
+                    *[_production_cell(row, col) for col in PRODUCTION_COLUMNS],
                     *[_numeric_extra(row.extra.get(key)) for key in extra_keys],
                 ]
                 for row in report.items
             ]
-            return [*_PRODUCTION_HEADERS, *extra_keys], rows
+            return [*headers, *extra_keys], rows
 
         if report_type == "store-daily":
             # 周 / 月 / 年的分桶与 extra 聚合都在 service 里：导出与页面是同一份结果，

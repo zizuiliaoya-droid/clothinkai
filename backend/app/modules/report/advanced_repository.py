@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
+from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
@@ -86,7 +87,7 @@ GOODS_META_COLUMNS = """
   ) AS style_codes"""
 
 # 投产主表按（商品, 渠道）出行（7e R2）的可加列。外层 SELECT（实时与汇总读取共用）
-# 与 ProductionService 把渠道求和回一行都引这两个元组，不各写一份列名。
+# 与 ProductionService.get_goods_rows 按商品求和都引这两个元组，不各写一份列名。
 PRODUCTION_MONEY_COLUMNS: tuple[str, ...] = (
     "pay_amount",
     "refund_amount",
@@ -115,8 +116,8 @@ def goods_channel_select(filter_sql: str) -> str:
 
     过滤与排序看**商品级合计**（窗口按商品求和），不看单个渠道行：行集合 = 改动前按商品
     聚合的 HAVING（含刷单的销售原值、站外、站内三项任一 > 0），排序 = 商品级支付额降序、
-    货号、渠道。逐行 HAVING 会丢掉「直播整段只有退款」这种行，渠道求和回一行后就和旧数
-    对不上了。同一商品的渠道行排在一起，service 按首次出现的顺序合并即可。
+    货号、商品 id、渠道（普通在前）。逐行 HAVING 会丢掉「直播整段只有退款」这种行，按商品
+    求和（``ProductionService.get_goods_rows``）后就和旧数对不上了。同一商品的渠道行相邻。
     """
     money = ",\n".join(f"r.{c} AS {c}" for c in PRODUCTION_MONEY_COLUMNS)
     counts = ",\n".join(f"CAST(r.{c} AS bigint) AS {c}" for c in PRODUCTION_COUNT_COLUMNS)
@@ -141,8 +142,10 @@ def goods_channel_select(filter_sql: str) -> str:
     FROM goods_rows r
     JOIN goods_main g ON g.id = r.goods_id
     WHERE r.goods_pay_raw > 0 OR r.goods_promo_cost > 0 OR r.goods_ad_spend > 0
-    -- 支付额相同的商品原来顺序不确定；货号兜底后汇总表读取能逐行比对
-    ORDER BY r.goods_pay_amount DESC, g.goods_code, r.channel
+    -- 支付额相同的商品原来顺序不确定；货号兜底后汇总表读取能逐行比对。
+    -- 再按商品 id、渠道（普通在前，不靠中文排序规则）兜底：同一商品的两行相邻
+    ORDER BY r.goods_pay_amount DESC, g.goods_code, g.id,
+             CASE WHEN r.channel = '普通' THEN 0 ELSE 1 END
     """
 
 
@@ -591,7 +594,8 @@ class ProductionRepository:
         支付单数按千牛链接的 ``channel``（兜底记普通），站内花费与站内加购按万相台链接的
         ``channel``，推广与刷单记普通；配对加购走同一份 ``_PAIRED_CART_CTE``（逐日配对后
         再按（商品, 渠道）求和）。过滤与排序看商品级合计（``goods_channel_select``）。
-        R2 期间投产接口不拆渠道：``ProductionService`` 把同一商品的渠道行求和回一行。
+        投产接口按（商品, 渠道）出行（7e R3）；BI / 企微 / AI 走 ``ProductionService.get_goods_rows``
+        按商品求和回一行。
 
         ``seasons`` 为多选（PRD 第 4 章），空列表与 None 同义：不筛（类目筛选已下线，8a-3）。
         """
@@ -732,6 +736,118 @@ class ProductionRepository:
             **filter_params,
         }
         return as_mappings((await self._s.execute(sql, params)).mappings().all())
+
+    async def link_counts(
+        self, *, tenant_id: UUID, goods_ids: Sequence[UUID]
+    ) -> dict[tuple[UUID, str], int]:
+        """（商品, 渠道）→ 启用的千牛链接数（7e R3，页面「N 条链接」）。
+
+        看当前状态、不看区间：链接今天停用了就不算。汇总 / 实时两路共用这一条。
+        """
+        if not goods_ids:
+            return {}
+        sql = text(
+            """
+            SELECT pp.goods_main_id AS goods_id, pp.channel AS channel, COUNT(*) AS n
+            FROM platform_product pp
+            WHERE pp.tenant_id = :tenant_id
+              AND pp.platform = '千牛'
+              AND pp.is_active = true
+              AND pp.goods_main_id = ANY(CAST(:goods_ids AS uuid[]))
+            GROUP BY pp.goods_main_id, pp.channel
+            """
+        )
+        rows = (
+            await self._s.execute(sql, {"tenant_id": tenant_id, "goods_ids": list(goods_ids)})
+        ).mappings()
+        return {(r["goods_id"], r["channel"]): int(r["n"]) for r in rows}
+
+    async def inactive_link_count(
+        self,
+        *,
+        tenant_id: UUID,
+        date_from: date,
+        date_to: date,
+        seasons: Sequence[str] | None,
+    ) -> int:
+        """区间内有数据、但因停用没计入单品的链接数（7e R3，设计 2.9 的展示部分）。
+
+        口径：``is_active = false``、有归属商品（商品未删、过季节筛选）的千牛 / 万相台链接，
+        区间内有千牛日报**行**或万相台花费**行**（金额 0 的行也算：数据进来了、被排除了）。
+        日报对链接同 ``qn_link`` / ``ads``：有 FK 按 FK，没回填按 ``platform_id`` 快照，
+        平台各配各的。汇总 / 实时两路都调这一条（汇总表不存停用链接的数），不随刷单开关。
+        """
+        filter_sql, filter_params = goods_filter_clauses(seasons)
+        sql = text(
+            f"""
+            SELECT COUNT(DISTINCT pp.id) AS n
+            FROM platform_product pp
+            JOIN goods_main g ON g.id = pp.goods_main_id
+            WHERE pp.tenant_id = :tenant_id
+              AND pp.is_active = false
+              AND g.tenant_id = :tenant_id AND g.is_deleted = false
+              {filter_sql}
+              AND (
+                (pp.platform = '千牛' AND EXISTS (
+                  SELECT 1 FROM qianniu_daily q
+                  WHERE q.tenant_id = pp.tenant_id
+                    AND q.date BETWEEN :date_from AND :date_to
+                    AND (
+                      (q.platform_product_id IS NOT NULL AND q.platform_product_id = pp.id)
+                      OR (q.platform_product_id IS NULL
+                          AND q.platform_id_snapshot = pp.platform_id)
+                    )
+                ))
+                OR (pp.platform = '万相台' AND EXISTS (
+                  SELECT 1 FROM ad_daily a
+                  WHERE a.tenant_id = pp.tenant_id
+                    AND a.date BETWEEN :date_from AND :date_to
+                    AND (
+                      (a.platform_product_id IS NOT NULL AND a.platform_product_id = pp.id)
+                      OR (a.platform_product_id IS NULL
+                          AND a.platform_id_snapshot = pp.platform_id)
+                    )
+                ))
+              )
+            """
+        )
+        params: dict[str, Any] = {
+            "tenant_id": tenant_id,
+            "date_from": date_from,
+            "date_to": date_to,
+            **filter_params,
+        }
+        return int((await self._s.execute(sql, params)).scalar_one())
+
+    async def goods_unit_costs(
+        self, *, tenant_id: UUID, goods_ids: Sequence[UUID]
+    ) -> dict[UUID, Decimal | None]:
+        """商品 → 当前单品货品成本（7e R3 毛利，默 12；读取时现算，改价立即生效）。
+
+        = 启用成员 ``goods_style_item.single_goods_cost`` 之和，同商品列表的 ``total_cost``。
+        任一启用成员没有成本、或没有启用成员 → None（不当 0）；不在返回里的商品按 None 处理。
+        """
+        if not goods_ids:
+            return {}
+        sql = text(
+            """
+            SELECT gi.goods_main_id AS goods_id,
+                   SUM(gi.single_goods_cost) AS unit_cost,
+                   COUNT(*) FILTER (WHERE gi.single_goods_cost IS NULL) AS missing
+            FROM goods_style_item gi
+            WHERE gi.tenant_id = :tenant_id
+              AND gi.is_active = true
+              AND gi.goods_main_id = ANY(CAST(:goods_ids AS uuid[]))
+            GROUP BY gi.goods_main_id
+            """
+        )
+        rows = (
+            await self._s.execute(sql, {"tenant_id": tenant_id, "goods_ids": list(goods_ids)})
+        ).mappings()
+        return {
+            r["goods_id"]: (None if int(r["missing"]) > 0 else Decimal(str(r["unit_cost"])))
+            for r in rows
+        }
 
     async def daily_trend_by_goods(
         self,

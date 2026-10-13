@@ -12,6 +12,7 @@ from app.modules.report.field_mask import (
     AGGREGATE_REPORTS,
     AggregateReport,
     aggregate_promo_amounts_visible,
+    production_margin_visible,
     promotion_amounts_visible,
 )
 
@@ -61,6 +62,29 @@ class TestPromotionAmountsVisible:
     def test_operations_with_quote_grant_only(self) -> None:
         ctx = _ctx("operations", grants=frozenset({_QUOTE}))
         assert promotion_amounts_visible(ctx) == (True, False)
+
+
+@pytest.mark.unit
+class TestProductionMarginVisible:
+    """F1 毛利（10-10 业务答复）：只给管理员；能看成本价的运营 / 财务也看不到。"""
+
+    @pytest.mark.parametrize(
+        "ctx",
+        [_ctx("admin"), _ctx(superuser=True), _ctx("operations", "admin")],
+    )
+    def test_admin_and_superuser_see(self, ctx: FieldPermissionContext) -> None:
+        assert production_margin_visible(ctx) is True
+
+    @pytest.mark.parametrize(
+        "role", ["pr_manager", "operations", "finance", "merchandiser", "pr", "warehouse"]
+    )
+    def test_other_roles_do_not_see(self, role: str) -> None:
+        assert production_margin_visible(_ctx(role)) is False
+
+    def test_cost_price_grant_does_not_open_margin(self) -> None:
+        # 判定不是 sku.cost_price：个人授予成本价读也看不到毛利
+        ctx = _ctx("pr_manager", grants=frozenset({"field.sku.cost_price:read"}))
+        assert production_margin_visible(ctx) is False
 
 
 @pytest.mark.unit
