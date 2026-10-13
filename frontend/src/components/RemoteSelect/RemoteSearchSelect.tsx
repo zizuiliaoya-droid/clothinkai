@@ -15,7 +15,8 @@ export interface RemoteSearchSelectProps extends AriaAttributes {
   /** Form.Item 会注入 id，转给 Select 才能让 label 指到输入框。 */
   id?: string;
   value?: string | null;
-  onChange?: (value: string | undefined) => void;
+  /** 第二个参数是选中的选项（含名字），要记住名字回显的页面用；清空时为 undefined。 */
+  onChange?: (value: string | undefined, option?: PickerOption) => void;
   /** 按关键词取选项；关键词为空表示「不带条件的前几条」。 */
   fetchOptions: (keyword?: string) => Promise<PickerOption[]>;
   /** React Query 的 key 前缀，后面接关键词。缓存的是选项数组，别和存分页原始数据的 key 共用。 */
@@ -86,8 +87,9 @@ export function RemoteSearchSelect({
         if (!next) setSearch("");
       }}
       onChange={(next) => {
-        setPinned(options.find((o) => o.value === next) ?? null);
-        onChange?.(next);
+        const picked = options.find((o) => o.value === next);
+        setPinned(picked ?? null);
+        onChange?.(next, picked);
       }}
     />
   );

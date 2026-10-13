@@ -20,6 +20,7 @@ from app.modules.report.user_preference_models import UserPreference
 
 FILTER_PAGE_CODES: frozenset[str] = frozenset(
     {
+        "urge_tasks",  # 催发任务（流程线 PR-5）
         "product_roi",  # 投产报表
         "pr_work_progress",  # 工作进度表
         "store_daily",  # 店铺日明细（7e R4 前是店铺数据）

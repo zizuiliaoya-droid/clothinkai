@@ -301,8 +301,8 @@ class TestCreateFieldWrite:
             "quote_amount": "100.00",
             "receiver_name": "张三",
         }
-        # 场景有效：同一份 body，没被撤销的 PR 建得出来
-        ok = await _call(session, flow_users.pr, "POST", "/api/promotions/", body)
+        # 场景有效：同一份 body，没被撤销的人建得出来（PR-5 起 PR 不能直接建单，改用管理员）
+        ok = await _call(session, flow_users.admin, "POST", "/api/promotions/", body)
         assert ok.status_code == 201, ok.text
 
         perm = (

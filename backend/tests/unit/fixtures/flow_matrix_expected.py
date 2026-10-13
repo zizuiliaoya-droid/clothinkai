@@ -4,7 +4,8 @@
 
 - ``EXPECTED[kind][(阶段标签, persona, 行类型, 行键)] = "改" | "读" | "灰" | "隐"``，与 ``MATRICES`` 逐格比对
   （``tests/unit/test_flow_matrix.py::test_real_matrices_match_expected``）
-- ``DOCS[kind][阶段标签]`` 是比对用的单据快照：阶段标签 = 精确阶段名；有子状态谓词的格按谓词取值展开，写成「阶段·子状态」
+- ``DOCS[kind][阶段标签]`` 是比对用的单据快照：阶段标签 = 精确阶段名；有子状态谓词的格按谓词取值展开，写成「阶段·子状态」。
+  推广单默认合作模式「寄拍」，每个阶段另展开一份「阶段·模式空」（PR-5 合作模式 ²³）；``_labels`` 默认两份都带
 - persona：pr（本人，即快照的 owner_id / negotiator_id）、pr2（另一个 PR）、pr_manager、admin、finance、operations、warehouse，
   按 ``DEFAULT_ROLES`` 构造
 - 行类型：``action`` / ``field``（同名键如 promotion 的 ``metrics`` 两种都有）
@@ -43,6 +44,7 @@ COLUMNS: dict[str, tuple[str, ...]] = {
     "H": ("已完结", "已完结 · 召回", "已完结 · 不合作", "已停用", "已删除", "状态异常"),
 }
 HISTORY = "历史单"  # C ~ F 各阶段再展开一份发货为空的（「阶段·历史单」）
+MODE_EMPTY = "模式空"  # 每个阶段再展开一份合作模式为空的（「阶段·模式空」，历史导入的单）
 
 # 各列快照的状态取值（矩阵只看 stage 与谓词；这里给与阶段一致的值，方便读）
 _COLUMN_STATE: dict[str, dict[str, Any]] = {
@@ -69,6 +71,7 @@ def _promotion_doc(stage: str, column: str, **override: Any) -> PromotionDoc:
         "receiver_phone": "13812345678",
         "receiver_address": "杭州市某路 1 号",
         "items_complete": True,
+        "cooperation_mode": "寄拍",
         **_COLUMN_STATE[column],
     }
     kw.update(override)
@@ -86,11 +89,19 @@ def _warehouse_doc(stage: str, column: str) -> WarehouseDoc:
     )
 
 
-def _labels(columns: str, *, history: bool = False) -> list[str]:
+def _labels(columns: str, *, history: bool = False, mode_empty: bool | None = None) -> list[str]:
+    """``history``：只取「阶段·历史单」。否则 ``mode_empty`` 为 None 取有模式与「阶段·模式空」两份，
+    True 只取模式空，False 只取有模式（合作模式那一行要分开写）。"""
     out: list[str] = []
     for col in columns:
         for stage in COLUMNS[col]:
-            out.append(f"{stage}·{HISTORY}" if history else stage)
+            if history:
+                out.append(f"{stage}·{HISTORY}")
+                continue
+            if mode_empty is not True:
+                out.append(stage)
+            if mode_empty is not False:
+                out.append(f"{stage}·{MODE_EMPTY}")
     return out
 
 
@@ -98,6 +109,9 @@ _PROMOTION_DOCS: dict[str, Any] = {}
 for _col, _stages in COLUMNS.items():
     for _stage in _stages:
         _PROMOTION_DOCS[_stage] = _promotion_doc(_stage, _col)
+        _PROMOTION_DOCS[f"{_stage}·{MODE_EMPTY}"] = _promotion_doc(
+            _stage, _col, cooperation_mode=None
+        )
         if _col in "CDEF":
             _PROMOTION_DOCS[f"{_stage}·{HISTORY}"] = _promotion_doc(_stage, _col, ship_status=None)
 
@@ -191,12 +205,48 @@ _PROMOTION_ROWS: dict[tuple[str, str], list[tuple[list[str], str]]] = {
     ("action", "comment"): [
         (_labels("ABCDEFGH") + _labels("CDEF", history=True), "改改改隐隐隐"),
     ],
+    # —— PR-5 ——
+    # 商品归属（¹⁹）：PR 读（合作信息由谈款带过来，11-53）；历史单按 A 列；H 只有管理员改
+    ("field", "goods"): [
+        (_labels("A") + _labels("CDEF", history=True), "读改改隐读隐"),
+        (_labels("BCD"), "读改改隐读读"),
+        (_labels("EFG"), "读改改读读读"),
+        (_labels("H"), "读读改读读读"),
+    ],
+    # 合作信息（平台、约定发布时间、备注）：PR 读（11-16）；E 列起只有管理员改、财务读
+    ("field", "cooperation"): [
+        (_labels("ABCD") + _labels("CD", history=True), "读改改隐读隐"),
+        (_labels("EFGH") + _labels("EF", history=True), "读读改读读隐"),
+    ],
+    # 合作模式（²³）：有值所有人读；空值主管 / 管理员可补一次，H 只有管理员
+    ("field", "cooperation_mode"): [
+        (_labels("ABCD", mode_empty=False) + _labels("CD", history=True), "读读读隐读隐"),
+        (_labels("EFGH", mode_empty=False) + _labels("EF", history=True), "读读读读读隐"),
+        (_labels("ABCD", mode_empty=True), "读改改隐读隐"),
+        (_labels("EFG", mode_empty=True), "读改改读读隐"),
+        (_labels("H", mode_empty=True), "读读改读读隐"),
+    ],
+    # 服务费：运营过不了字段规则；结款单生成后（E 列起）所有人只读；G 列财务「隐」
+    ("field", "quote_amount"): [
+        (_labels("ABCD") + _labels("CD", history=True), "读改改隐隐隐"),
+        (_labels("EFH") + _labels("EF", history=True), "读读读读隐隐"),
+        (_labels("G"), "读读读隐隐隐"),
+    ],
+    # 催发：手动催、标记完成
+    ("action", "urge"): [(_labels("ABC") + _labels("C", history=True), "改改改隐隐隐")],
+    ("action", "urge_complete"): [(_labels("ABC") + _labels("C", history=True), "改改改隐隐隐")],
+    # 停用推广单（11-15）：结款单生成后（E、F）与 H 只有管理员
+    ("action", "deactivate"): [
+        (_labels("ABCDG") + _labels("CD", history=True), "隐改改隐隐隐"),
+        (_labels("EFH") + _labels("EF", history=True), "隐隐改隐隐隐"),
+    ],
 }
 
 _WAREHOUSE_ROWS: dict[tuple[str, str], list[tuple[list[str], str]]] = {
+    # 仓库行快照没有合作模式，不展开「模式空」
     ("action", "ship_fill"): [
-        (_labels("BCDEFG"), "隐隐改隐隐改"),
-        (_labels("H"), "隐隐改隐隐隐"),
+        (_labels("BCDEFG", mode_empty=False), "隐隐改隐隐改"),
+        (_labels("H", mode_empty=False), "隐隐改隐隐隐"),
     ],
 }
 

@@ -102,6 +102,10 @@ BLOGGER_TAG_WRITE = "blogger_tag:write"
 PROMOTION_SHIP_PUSH = "promotion_ship:push"  # 纳入发货 / 确认推送仓库 / 撤回推送：主管
 PROMOTION_SHIP_FILL = "promotion_ship:fill"  # 回填快递信息、改单号：仓库
 PROMOTION_SHIP_EXPORT = "promotion_ship:export"  # 导出待打单（业务方要求单独授权）：仓库
+# 流程线 PR-5 建单收权（迁移 064）。新建推广、导入站外推广（上传 / 重试）、停用推广单只给主管，
+# 管理员靠 *。独立一级域 promotion_create，刻意不叫 promotion.create:write —— PR 的 promotion.*:*
+# 会命中它，PR 就照旧能直接建单（Q6、7c-9、11-15）。
+PROMOTION_CREATE_WRITE = "promotion_create:write"
 # 旧回填 scope。060 起回填接口改挂 promotion_ship:fill，已停用，仅为回滚保留
 PROMOTION_WAREHOUSE_WRITE_LEGACY = "promotion.warehouse:write"
 # 7e R1 报表视图（迁移 061，报表视图设计第 4 节）。read_own 是「只看本人」：
@@ -203,6 +207,7 @@ DEFAULT_ROLES: tuple[RoleSpec, ...] = (
             PROMOTION_REVIEW,
             BLOGGER_TAG_WRITE,
             PROMOTION_SHIP_PUSH,
+            PROMOTION_CREATE_WRITE,
             # 谈款：主管是唯一能审的角色
             NEGOTIATION_READ,
             NEGOTIATION_WRITE,

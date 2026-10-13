@@ -3,8 +3,8 @@ import { Button, Form, Input, Modal, Typography, Upload, message } from "antd";
 import { UploadOutlined } from "@ant-design/icons";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  URGE_SCREENSHOT_MAX_BYTES,
   URGE_SCREENSHOT_MIME_TYPES,
+  screenshotProblem,
   urgePromotion,
   urgePromotionWithScreenshot,
 } from "@/features/urge/api";
@@ -19,16 +19,6 @@ type Props = {
   onClose: () => void;
   onUrged?: (detail: UrgeTaskDetail) => void;
 };
-
-const ALLOWED_TYPES: readonly string[] = URGE_SCREENSHOT_MIME_TYPES;
-
-/** 和后端 check_image_payload 同样的顺序与措辞（后端还会核对文件头，这里只挡格式与大小）。 */
-function screenshotProblem(file: File): string | null {
-  if (!ALLOWED_TYPES.includes(file.type)) return "催发截图仅支持 JPG、PNG、WebP 格式";
-  if (file.size === 0) return "催发截图文件不能为空";
-  if (file.size > URGE_SCREENSHOT_MAX_BYTES) return "催发截图文件不能超过 10MB";
-  return null;
-}
 
 /**
  * 手动催发弹窗（7a-3）：催发任务页与推广页共用。

@@ -340,7 +340,10 @@ export interface PromotionPage {
   total: number;
   page: number;
   page_size: number;
-  /** 页级 ui.actions.amount_log：能读金额改动接口才有，「金额改动」页签与菜单只看它。 */
+  /**
+   * 页级 ui.actions：amount_log 能读金额改动接口才有，「金额改动」页签与菜单只看它；
+   * create（持 promotion_create:write）/ import（能上传站外推广）有才出「新建推广」「导入站外推广」（流程线 PR-5）。
+   */
   ui: Pick<UiState, "actions">;
 }
 

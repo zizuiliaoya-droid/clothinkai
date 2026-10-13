@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID
 
 from pydantic import (
@@ -186,6 +186,9 @@ class SettlementPage(BaseModel):
     total: int
     page: int
     page_size: int
+    ui: dict[str, Any] = Field(default_factory=lambda: {"actions": {}})
+    """页级 ``ui.actions.import``：能上传结款单（``manual_settlement``，即 ``finance.settlement:pay``）才有
+    （流程线 PR-5，7.5）；结款单行级 ``ui`` 随 PR-6。"""
 
 
 # ---------------------------------------------------------------------------

@@ -647,7 +647,8 @@ class PromotionPage(BaseModel):
     page: int
     page_size: int
     ui: dict[str, Any] = Field(default_factory=lambda: {"actions": {}})
-    """页级 ``ui.actions.amount_log``：能读金额改动接口才有（同一判定，收尾 L3），前端「金额改动」页签与菜单只看它。"""
+    """页级 ``ui.actions``：``amount_log`` 能读金额改动接口才有（同一判定，收尾 L3），前端「金额改动」页签与菜单只看它；
+    ``create`` 持 ``promotion_create:write``、``import`` 能上传站外推广（``manual_promotion``）才有（流程线 PR-5）。"""
 
 
 # ---------------------------------------------------------------------------

@@ -424,6 +424,12 @@ class ShipIn(_AttrIn):
     attr = "ship_status"
 
 
+class ModeIn(_AttrIn):
+    """推广单合作模式；``ModeIn(None)`` = 还没有模式（历史导入，5.3 ²³ 空值可补一次）。"""
+
+    attr = "cooperation_mode"
+
+
 Predicate = _AttrIn
 
 
@@ -488,7 +494,11 @@ class Row:
 
 @dataclass(frozen=True)
 class Matrix:
-    """一种单据的矩阵。``patch_groups``：PATCH 字段名 → 字段分组键（只登记已入矩阵的，5.4 过渡规则）。"""
+    """一种单据的矩阵。``patch_groups``：PATCH 字段名 → 字段分组键（只登记已入矩阵的，5.4 过渡规则）。
+
+    分组键先找字段行、没有再找动作行：``is_active`` 归动作「停用推广单」（``deactivate``，5.4 表最后一行），
+    按动作那一格判能不能写（不过状态机，与字段一致）。
+    """
 
     kind: str
     stages: tuple[str, ...]
@@ -518,7 +528,7 @@ class Matrix:
                     if row.kind == "field" and cell.gates:
                         raise ValueError(f"字段行 {row.key} 不能挂 ★ 卡点")
         for patch_field, group in self.patch_groups.items():
-            if ("field", group) not in seen:
+            if ("field", group) not in seen and ("action", group) not in seen:
                 raise ValueError(f"PATCH 字段 {patch_field} 指向未入矩阵的分组 {group!r}")
 
     def row(self, kind: RowKind, key: str) -> Row | None:
@@ -526,6 +536,10 @@ class Matrix:
             if row.kind == kind and row.key == key:
                 return row
         return None
+
+    def patch_kind(self, group: str) -> RowKind:
+        """PATCH 分组键对应的行类型：有字段行用字段行，否则是动作行（构造时已校验两者至少有一个）。"""
+        return "field" if self.row("field", group) is not None else "action"
 
     def check_stage(self, stage: str) -> None:
         if stage not in self.stages:
@@ -798,7 +812,7 @@ def writable_fields(actor: FlowActor, doc: FlowDocBase) -> WritableFields:
     allowed = frozenset(
         f
         for f, group in m.patch_groups.items()
-        if cell_level(actor, doc, "field", group) is Level.EDIT
+        if cell_level(actor, doc, m.patch_kind(group), group) is Level.EDIT
     )
     return WritableFields(managed=managed, allowed=allowed)
 

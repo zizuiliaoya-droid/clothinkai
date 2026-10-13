@@ -83,6 +83,8 @@ from app.modules.finance.schemas import (
     SettlementListFilters as ApiSettlementListFilters,
 )
 from app.modules.finance.state_machines import SettlementStatusMachine
+from app.modules.flow.actor import load_flow_actor
+from app.modules.importer.access import can_write as can_import_write
 from app.modules.promotion.enums import ReviewAction
 from app.modules.promotion.urge_calculator import get_today
 
@@ -633,11 +635,18 @@ class SettlementService:
         # 反范式富化：批量取款式编码/名称 + 博主昵称（对齐 final.xlsx 结款表）
         await self._enrich_display_fields(items, responses)
 
+        # 页级「导入结款」（流程线 PR-5，7.5）：与 manual_settlement 上传同一判定（finance.settlement:pay）
+        actor = await load_flow_actor(user.id, self._roles, self._perms)
+        page_actions: dict[str, Any] = {}
+        if can_import_write(actor.perms, "manual_settlement"):
+            page_actions["import"] = {"state": "enabled"}
+
         return SettlementPage(
             items=responses,
             total=total,
             page=page,
             page_size=page_size,
+            ui={"actions": page_actions},
         )
 
     async def _enrich_display_fields(self, items: Any, responses: list[SettlementResponse]) -> None:

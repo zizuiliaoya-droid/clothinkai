@@ -34,7 +34,9 @@ from app.modules.flow.line_events import (
     LineEventRepository,
     LineEventType,
 )
-from app.modules.flow.matrix import Level, cell_level, ensure_patch_allowed
+from app.modules.flow.matrix import Level, cell_level, ensure_patch_allowed, require
+from app.modules.importer.access import SCOPE_PROMOTION_CREATE
+from app.modules.importer.access import can_write as can_import_write
 from app.modules.product.models import Sku
 from app.modules.promotion.domain import (
     build_promotion_audit_changes,
@@ -375,9 +377,21 @@ class PromotionService(
         promotion = await self._repo.get_by_id(promotion_id)
         if promotion is None:
             raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
-        # 顺序（流程线 7.1）：404 → 退役键 422 → 已入矩阵的字段（越权全列 403）→ 字段写权限 → 其余校验
+        # 顺序（流程线 7.1）：404 → 退役键 422 → 合作模式改成另一个值 409 → 已入矩阵的字段（越权全列 403）
+        # → 字段写权限 → 其余校验
         self._reject_retired_source_extra_keys(payload)
         managed = PROMOTION_MATRIX.patch_groups.keys() & payload.model_fields_set
+        if "cooperation_mode" in managed:
+            attempted = payload.cooperation_mode.value if payload.cooperation_mode else None
+            if attempted is not None and promotion.cooperation_mode not in (None, attempted):
+                # 有值之后任何人都不能改成另一个值（²³），先于矩阵：主管、管理员也是 409 而不是 403
+                raise CooperationModeImmutableError(
+                    "合作模式在单据生成后不可修改",
+                    details={"current": promotion.cooperation_mode, "attempted": attempted},
+                )
+            if attempted is None or attempted == promotion.cooperation_mode:
+                # 传 null 或同值是空操作（下面也不落库），不按「改合作模式」判权
+                managed = managed - {"cooperation_mode"}
         if managed:
             ensure_patch_allowed(
                 await self._flow_actor(user), await self._promotion_doc(promotion), managed
@@ -710,6 +724,11 @@ class PromotionService(
         page_actions: dict[str, Any] = {}
         if await self.amount_log_readable(user):
             page_actions["amount_log"] = {"state": "enabled"}
+        # 「新建推广」「导入站外推广」（流程线 PR-5，8.4）：与建单接口、manual_promotion 上传同一判定
+        if actor.perms.has(SCOPE_PROMOTION_CREATE, "write"):
+            page_actions["create"] = {"state": "enabled"}
+        if can_import_write(actor.perms, "manual_promotion"):
+            page_actions["import"] = {"state": "enabled"}
         return PromotionPage(
             items=items,
             total=total,
@@ -723,10 +742,17 @@ class PromotionService(
     # ============================================================
 
     async def soft_delete_promotion(self, promotion_id: UUID, user: User) -> None:
-        """通用软停用：is_active=false（与状态机正交）."""
+        """通用软停用：is_active=false（与状态机正交）.
+
+        顺序：404 → 矩阵 ``deactivate``（已停用 / 已删除 422；A ~ D、G 列主管能停，结款单生成后只有
+        管理员，11-15；不够 403）→ 条件 UPDATE（并发下 0 行 409）→ 时间线 ``promotion.updated``
+        （diff ``is_active``，同 PATCH 的写法）→ 审计 → 提交。
+        """
         promotion = await self._repo.get_by_id(promotion_id)
         if promotion is None:
             raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
+        require(await self._flow_actor(user), await self._promotion_doc(promotion), "deactivate")
+        tenant_id, line_id = promotion.tenant_id, promotion.line_id
 
         deactivated = await self._repo.soft_deactivate(
             promotion_id=promotion_id,
@@ -736,6 +762,15 @@ class PromotionService(
             raise StateTransitionConflictError(
                 "推广已被停用或软删，请刷新后重试",
             )
+
+        await LineEventRepository(self._session).append(
+            tenant_id=tenant_id,
+            line_id=line_id,
+            event_type=LineEventType.PROMOTION_UPDATED,
+            actor_id=user.id,
+            promotion_id=promotion_id,
+            payload={"diff": {"is_active": {"before": True, "after": False}}},
+        )
 
         await self._audit.log(
             action="promotion.delete",

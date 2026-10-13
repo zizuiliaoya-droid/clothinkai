@@ -132,6 +132,15 @@ class UrgeTask(TenantScopedModel):
 
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     close_reason: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    close_attachment_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("attachment.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    """「标记完成」的截图（迁移 064）。关闭原因是「已完成」时必须有值。
+    任务被手动催发重开时与 ``closed_at``、``close_reason`` 一起清空；截图本身永久留在
+    附件表和 ``line_event`` 里，所以这里断开引用不丢证据。
+    """
 
     __table_args__ = (
         # 一单一任务。自动扫描靠这个唯一约束幂等（ON CONFLICT DO NOTHING）
@@ -141,9 +150,21 @@ class UrgeTask(TenantScopedModel):
         Index("idx_urge_task_blogger", "tenant_id", "blogger_id"),
         CheckConstraint("status IN ('进行中', '已关闭')", name="ck_urge_task_status"),
         CheckConstraint("urge_count >= 0", name="ck_urge_task_urge_count_nonneg"),
+        # 截图 FK 的反查（删附件前的 RESTRICT 校验）；只有已完成的任务有值
+        Index(
+            "idx_urge_task_close_attachment",
+            "close_attachment_id",
+            postgresql_where=text("close_attachment_id IS NOT NULL"),
+        ),
         CheckConstraint(
-            "close_reason IS NULL OR close_reason IN ('博主已发布', '已取消', '手动关闭')",
+            "close_reason IS NULL"
+            " OR close_reason IN ('博主已发布', '已取消', '手动关闭', '已完成')",
             name="ck_urge_task_close_reason",
+        ),
+        # 截图必传（Q8）：service 先报友好的 422，这里是库级兜底
+        CheckConstraint(
+            "close_reason IS DISTINCT FROM '已完成' OR close_attachment_id IS NOT NULL",
+            name="ck_urge_task_complete_screenshot",
         ),
         # 关闭必须留时间与原因，没关闭就不该有 —— 否则看板的「进行中」会算错
         CheckConstraint(

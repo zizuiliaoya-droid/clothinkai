@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Alert,
   Button,
@@ -42,10 +42,13 @@ import type {
   UrgeTaskFilters,
   UrgeTaskStatus,
 } from "@/features/urge/types";
+import { UrgeCompleteModal } from "@/features/urge/UrgeCompleteModal";
+import { useFilterMemory } from "@/features/preference/useFilterMemory";
 import { extractErrorMessage } from "@/services/apiClient";
 import { useAuthStore } from "@/stores/authStore";
 import { BloggerHoverCard } from "@/components/BloggerHoverCard/BloggerHoverCard";
 import { DisplayNameCell } from "@/components/DisplayNameCell/DisplayNameCell";
+import type { PickerOption } from "@/components/RemoteSelect/mergeSelectedOption";
 import { StyleSelect } from "@/components/RemoteSelect/StyleSelect";
 import { UrgeModal } from "@/components/UrgeModal/UrgeModal";
 
@@ -58,7 +61,20 @@ const closeReasonColor: Record<string, string> = {
   博主已发布: "green",
   已取消: "orange",
   手动关闭: "default",
+  已完成: "cyan",
 };
+
+/** 催发页记住的筛选（流程线 8.7）：款式（连名字，回显用）与「只看我的」。 */
+interface UrgeFilterMemory {
+  style_id?: string | null;
+  style_label?: string | null;
+  mine?: boolean;
+}
+
+/** 已完成的任务还能手动催（会重开，3.9 U2）；其他原因关闭的不能。 */
+function canUrge(t: UrgeTask): boolean {
+  return t.status === "进行中" || t.close_reason === "已完成";
+}
 
 /**
  * 催发任务（PRD V1.4 改动 2）。
@@ -81,9 +97,36 @@ export function UrgePage() {
     page: 1,
     page_size: 20,
   });
+  // 款式与「只看我的」记在筛选偏好里（换设备也在）；读回来之前不发列表请求
+  const memory = useFilterMemory<UrgeFilterMemory>("urge_tasks");
+  const [memoryApplied, setMemoryApplied] = useState(false);
+  const [style, setStyle] = useState<PickerOption | null>(null);
+  const [mine, setMine] = useState(false);
+  useEffect(() => {
+    if (memoryApplied || !memory.restored) return;
+    const r = memory.restored;
+    if (r.style_id) setStyle({ value: r.style_id, label: r.style_label || r.style_id });
+    setMine(Boolean(r.mine));
+    setMemoryApplied(true);
+  }, [memory.restored, memoryApplied]);
+
+  function remember(next: { style: PickerOption | null; mine: boolean }) {
+    memory.persist({
+      style_id: next.style?.value ?? null,
+      style_label: next.style?.label ?? null,
+      mine: next.mine,
+    });
+  }
+
+  const listFilters: UrgeTaskFilters = {
+    ...filters,
+    style_id: style?.value,
+    pr_id: mine ? user?.id : undefined,
+  };
   const [detailId, setDetailId] = useState<string | null>(null);
   // 催发弹窗（与推广页共用 UrgeModal，可附截图）
   const [urgeTarget, setUrgeTarget] = useState<UrgeTask | null>(null);
+  const [completeTarget, setCompleteTarget] = useState<UrgeTask | null>(null);
   const [configOpen, setConfigOpen] = useState(false);
   const [batchOpen, setBatchOpen] = useState(false);
   const [configForm] = Form.useForm<UrgeConfig>();
@@ -100,8 +143,9 @@ export function UrgePage() {
   });
 
   const { data, isLoading } = useQuery({
-    queryKey: ["urge-tasks", filters],
-    queryFn: () => listUrgeTasks(filters),
+    queryKey: ["urge-tasks", listFilters],
+    queryFn: () => listUrgeTasks(listFilters),
+    enabled: memoryApplied,
   });
 
   const { data: detail, isLoading: detailLoading } = useQuery({
@@ -179,6 +223,20 @@ export function UrgePage() {
       okText: "确认关闭",
       cancelText: "取消",
       onOk: () => closeMutation.mutateAsync({ id: task.id, reason }),
+    });
+  }
+
+  function startUrge(task: UrgeTask) {
+    if (task.status === "进行中") {
+      setUrgeTarget(task);
+      return;
+    }
+    Modal.confirm({
+      title: "重新打开任务",
+      content: "这单已标记完成，催发后会重新打开任务",
+      okText: "继续催发",
+      cancelText: "取消",
+      onOk: () => setUrgeTarget(task),
     });
   }
 
@@ -273,20 +331,28 @@ export function UrgePage() {
     },
     {
       title: "操作",
-      width: 170,
+      width: 240,
       fixed: "right",
       render: (_, r) => (
-        <Space>
+        <Space size={0} wrap>
           <Button type="link" size="small" onClick={() => setDetailId(r.id)}>
             时间线
           </Button>
           <Button
             type="link"
             size="small"
-            disabled={r.status !== "进行中"}
-            onClick={() => setUrgeTarget(r)}
+            disabled={!canUrge(r)}
+            onClick={() => startUrge(r)}
           >
             催发
+          </Button>
+          <Button
+            type="link"
+            size="small"
+            disabled={r.status !== "进行中"}
+            onClick={() => setCompleteTarget(r)}
+          >
+            标记完成
           </Button>
           <Button
             type="link"
@@ -421,6 +487,35 @@ export function UrgePage() {
               }))
             }
           />
+          <StyleSelect
+            aria-label="款式"
+            placeholder="全部款式"
+            allowClear
+            style={{ width: 220 }}
+            value={style?.value}
+            selected={style}
+            onChange={(v, option) => {
+              const next = v ? (option ?? { value: v, label: v }) : null;
+              setStyle(next);
+              setFilters((f) => ({ ...f, page: 1 }));
+              remember({ style: next, mine });
+            }}
+          />
+          <Space size={6}>
+            <Switch
+              id="urge-mine-only"
+              size="small"
+              checked={mine}
+              onChange={(checked) => {
+                setMine(checked);
+                setFilters((f) => ({ ...f, page: 1 }));
+                remember({ style, mine: checked });
+              }}
+            />
+            <label htmlFor="urge-mine-only" style={{ cursor: "pointer" }}>
+              只看我的
+            </label>
+          </Space>
         </Space>
 
         <Table
@@ -484,6 +579,22 @@ export function UrgePage() {
               </Space>
             </Space>
 
+            {detail.close_reason === "已完成" && (
+              <Space direction="vertical" size={4}>
+                <Typography.Text type="secondary">完成截图</Typography.Text>
+                {detail.close_screenshot_url ? (
+                  <Image
+                    src={detail.close_screenshot_url}
+                    alt="完成截图"
+                    width={160}
+                    style={{ borderRadius: 4, border: "1px solid #f0f0f0" }}
+                  />
+                ) : (
+                  <Typography.Text type="secondary">截图暂时打不开，稍后再试</Typography.Text>
+                )}
+              </Space>
+            )}
+
             {detail.records.length === 0 ? (
               <Empty description="还没有催发记录" />
             ) : (
@@ -533,6 +644,8 @@ export function UrgePage() {
         }
         onClose={() => setUrgeTarget(null)}
       />
+
+      <UrgeCompleteModal task={completeTarget} onClose={() => setCompleteTarget(null)} />
 
       <Modal
         title="催发设置"

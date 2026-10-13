@@ -254,3 +254,59 @@ describe("PromotionListPage 主线抽屉", () => {
     expect(d.queryByText(/报价/)).toBeNull();
   });
 });
+
+// 流程线 PR-5（8.4、D15）：「新建推广」「导入站外推广」只看页级 ui.actions.create / import；
+// 「改归属商品」只看行 ui.edits 的 goods，「催发」只看行 ui.actions.urge。
+describe("PromotionListPage 按 ui 出按钮与菜单项", () => {
+  const ENABLED = { state: "enabled" as const };
+
+  it("页级 ui 没有 create / import（PR、运营）：两个按钮都不出", async () => {
+    renderPage([promotion()], promotion({ ui: DETAIL_UI }));
+    await screen.findAllByText("XHS-20261009-001");
+    expect(screen.queryByRole("button", { name: /新建推广/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /导入站外推广/ })).toBeNull();
+  });
+
+  it("页级 ui 有 create / import（主管、管理员）：两个按钮都在", async () => {
+    renderPage([promotion()], promotion({ ui: DETAIL_UI }), {
+      actions: { ...PAGE_UI_AMOUNT.actions, create: ENABLED, import: ENABLED },
+    });
+    // 先等列表响应落到页面，按钮在响应之后才判
+    await screen.findAllByText("XHS-20261009-001");
+    expect(screen.getByRole("button", { name: /新建推广/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /导入站外推广/ })).toBeTruthy();
+  });
+
+  it("只有 import：出导入、不出新建", async () => {
+    renderPage([promotion()], promotion({ ui: DETAIL_UI }), { actions: { import: ENABLED } });
+    await screen.findAllByText("XHS-20261009-001");
+    expect(screen.getByRole("button", { name: /导入站外推广/ })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /新建推广/ })).toBeNull();
+  });
+
+  it("行 ui.edits 没有 goods（PR）：菜单没有「改归属商品」", async () => {
+    renderPage([promotion({ ui: { actions: {}, edits: ["receiver"] } })], promotion({ ui: DETAIL_UI }));
+    const labels = await openMenu();
+    expect(labels).toContain("改收件信息");
+    expect(labels).not.toContain("改归属商品");
+  });
+
+  it("行 ui.edits 有 goods（主管）：菜单有「改归属商品」", async () => {
+    renderPage([promotion({ ui: { actions: {}, edits: ["goods"] } })], promotion({ ui: DETAIL_UI }));
+    expect(await openMenu()).toContain("改归属商品");
+  });
+
+  it("催发按行 ui.actions.urge：没有就不出，可点就出，禁用带原因", async () => {
+    renderPage([promotion({ ui: { actions: {}, edits: [] } })], promotion({ ui: DETAIL_UI }));
+    expect((await openMenu()).filter((l) => l.startsWith("催发"))).toEqual([]);
+    cleanup();
+    renderPage([promotion({ ui: { actions: { urge: ENABLED }, edits: [] } })], promotion({ ui: DETAIL_UI }));
+    expect(await openMenu()).toContain("催发");
+    cleanup();
+    renderPage(
+      [promotion({ ui: { actions: { urge: { state: "disabled", reason: "已发布不用催" } }, edits: [] } })],
+      promotion({ ui: DETAIL_UI })
+    );
+    expect(await openMenu()).toContain("催发（已发布不用催）");
+  });
+});
