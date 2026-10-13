@@ -34,7 +34,7 @@ from app.modules.flow.line_events import (
     LineEventRepository,
     LineEventType,
 )
-from app.modules.flow.matrix import Level, cell_level, ensure_patch_allowed
+from app.modules.flow.matrix import Level, cell_level, ensure_patch_allowed, require
 from app.modules.product.models import Sku
 from app.modules.promotion.domain import (
     build_promotion_audit_changes,
@@ -735,10 +735,17 @@ class PromotionService(
     # ============================================================
 
     async def soft_delete_promotion(self, promotion_id: UUID, user: User) -> None:
-        """通用软停用：is_active=false（与状态机正交）."""
+        """通用软停用：is_active=false（与状态机正交）.
+
+        顺序：404 → 矩阵 ``deactivate``（已停用 / 已删除 422；A ~ D、G 列主管能停，结款单生成后只有
+        管理员，11-15；不够 403）→ 条件 UPDATE（并发下 0 行 409）→ 时间线 ``promotion.updated``
+        （diff ``is_active``，同 PATCH 的写法）→ 审计 → 提交。
+        """
         promotion = await self._repo.get_by_id(promotion_id)
         if promotion is None:
             raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
+        require(await self._flow_actor(user), await self._promotion_doc(promotion), "deactivate")
+        tenant_id, line_id = promotion.tenant_id, promotion.line_id
 
         deactivated = await self._repo.soft_deactivate(
             promotion_id=promotion_id,
@@ -748,6 +755,15 @@ class PromotionService(
             raise StateTransitionConflictError(
                 "推广已被停用或软删，请刷新后重试",
             )
+
+        await LineEventRepository(self._session).append(
+            tenant_id=tenant_id,
+            line_id=line_id,
+            event_type=LineEventType.PROMOTION_UPDATED,
+            actor_id=user.id,
+            promotion_id=promotion_id,
+            payload={"diff": {"is_active": {"before": True, "after": False}}},
+        )
 
         await self._audit.log(
             action="promotion.delete",

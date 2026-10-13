@@ -168,11 +168,50 @@ class TestBloggerMatrix:
 
 
 @pytest.mark.unit
+class TestPromotionSource:
+    """流程线 PR-5（4.4、7.6）：站外推广导入 = 建单，上传 / 重试 / 裁决只认 promotion_create:write。"""
+
+    SOURCE = "manual_promotion"
+
+    def test_upload_and_resolve_only_manager(self) -> None:
+        assert _who(_can_upload(self.SOURCE)) == {"admin", "platform_admin", "pr_manager"}
+        assert _who(_can_resolve(self.SOURCE)) == {"admin", "platform_admin", "pr_manager"}
+        assert _who(lambda p: access.can_write(p, self.SOURCE)) == {
+            "admin",
+            "platform_admin",
+            "pr_manager",
+        }
+
+    def test_mapping_and_view_unchanged(self) -> None:
+        assert _who(_can_map(self.SOURCE)) == {"admin", "platform_admin", "pr_manager"}
+        assert _who(lambda p: access.can_view(p, self.SOURCE)) == {
+            "admin",
+            "platform_admin",
+            "operations",
+            "pr",
+            "pr_manager",
+        }
+
+    def test_pr_denied_details(self) -> None:
+        perms = _role_perms("pr")
+        assert perms.has("importer.batch", "write")
+        with pytest.raises(PermissionDeniedError) as exc:
+            access.require_write(perms, self.SOURCE)
+        assert exc.value.details == {
+            "required_scope": "promotion_create",
+            "required_action": "write",
+            "source": self.SOURCE,
+        }
+
+    def test_personal_grant_gives_pr_import(self) -> None:
+        assert access.can_write(_role_perms("pr", "promotion_create:write"), self.SOURCE)
+
+
+@pytest.mark.unit
 class TestOtherSources:
     @pytest.mark.parametrize(
         "source",
         [
-            "manual_promotion",
             "manual_settlement",
             "qianniu",
             "wanxiangtai",
@@ -286,7 +325,9 @@ class TestDescribeAccess:
             False,
         )
         assert by_source[BLOGGER]["can_resolve"] is True
-        assert by_source["manual_promotion"]["can_upload"] is True
+        # 流程线 PR-5：站外推广导入收回给主管
+        assert by_source["manual_promotion"]["can_upload"] is False
+        assert by_source["manual_promotion"]["can_view"] is True
 
     def test_huitun_douyin_flags(self, registered: None) -> None:
         """8b §6.7：灰豚抖音与手工博主同一套权限（裁决看 blogger:write）。"""
