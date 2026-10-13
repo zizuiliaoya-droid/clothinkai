@@ -212,9 +212,9 @@ describe("productionColumns 显示（S9）", () => {
     expect(await findByText("剔除刷单开关不扣件数")).toBeTruthy();
   });
 
-  it("列头里没有可聚焦元素（横向滚动的测量行也没有），Tab 不多停（L4）", () => {
+  it("支付件数列头说明 Tab 只停一次：列头里一个，测量行里的克隆不可聚焦；聚焦出 Tooltip（L4）", async () => {
     const cols = buildProductionColumns({ recent7Range: RANGE, showMargin: true, onTrend: () => {} });
-    const { container } = render(
+    const { container, findByText } = render(
       <Table
         rowKey={productionRowKey}
         columns={cols}
@@ -223,9 +223,18 @@ describe("productionColumns 显示（S9）", () => {
         pagination={false}
       />
     );
-    expect(container.querySelectorAll("thead").length).toBeGreaterThan(0);
-    expect(container.querySelectorAll("thead [tabindex]")).toHaveLength(0);
-    expect(container.querySelectorAll('[aria-hidden="true"] [tabindex]')).toHaveLength(0);
+    // 场景有效性：横向滚动时测量行确实克隆了支付件数列头
+    const measure = container.querySelector('tr[aria-hidden="true"]') as HTMLElement;
+    expect(measure?.textContent).toContain("支付件数");
+    const stops = Array.from(container.querySelectorAll<HTMLElement>("[tabindex]")).filter(
+      (el) => el.tabIndex >= 0
+    );
+    expect(stops).toHaveLength(1);
+    expect(stops[0].closest("thead")).not.toBeNull();
+    expect(stops[0].textContent).toContain("支付件数");
+    expect(measure.querySelectorAll('[tabindex="0"]')).toHaveLength(0);
+    fireEvent.focus(stops[0]);
+    expect(await findByText("剔除刷单开关不扣件数")).toBeTruthy();
   });
 });
 

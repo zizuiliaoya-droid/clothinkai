@@ -51,7 +51,7 @@ export function ProductionGoodsCell({ row }: { row: ProductionRow }) {
 
 /**
  * 支付件数列头：注明剔除刷单开关不扣件数（件数始终含刷单）。
- * 说明挂在列头文字上（HeaderHint），不放可聚焦图标：rc-table 测量行会克隆列头，Tab 会多停一次（R3 评审 L4）。
+ * 说明挂在列头文字上（HeaderHint，Tab 停一次），不放问号图标：rc-table 测量行会克隆列头，图标会让 Tab 多停一次（R3 评审 L4）。
  */
 export function ProductionPayOrdersTitle() {
   return <HeaderHint label="支付件数" hint="剔除刷单开关不扣件数" />;
