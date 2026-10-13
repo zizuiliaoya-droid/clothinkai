@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import io
 from collections.abc import AsyncIterator
 from datetime import timedelta
 from decimal import Decimal
@@ -22,6 +23,7 @@ from uuid import uuid4
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from openpyxl import load_workbook
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -612,6 +614,60 @@ class TestExport:
             assert resp.headers["content-type"].startswith(
                 "application/vnd.openxmlformats-officedocument.spreadsheetml"
             )
+
+    async def test_work_progress_three_sheets_and_season(
+        self,
+        session: AsyncSession,
+        seeded: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        """工作进度导出（7e R5）：三个 sheet；带季节只剩命中的单；单品末行未归属、不导商品编码。"""
+        from app.modules.product.goods_models import GoodsMain
+
+        goods = GoodsMain(
+            tenant_id=seeded.tenant.id,
+            goods_code=f"XS{uuid4().hex[:8]}",
+            goods_title="季节导出商品",
+            season="2026秋",
+        )
+        session.add(goods)
+        await session.flush()
+        await promotion_factory.promotion(
+            style=await product_factory.style(style_code=f"XS{uuid4().hex[:8]}"),
+            blogger=await blogger_factory.blogger(),
+            pr=seeded.pr,
+            goods_main_id=goods.id,
+            internal_code=f"XS{uuid4().hex[:10].upper()}",
+            cooperation_date=_M_LO + timedelta(days=3),
+            quote_amount=Decimal("66.00"),
+        )
+        await session.flush()
+
+        async def sheets(query: str) -> dict[str, list[tuple[Any, ...]]]:
+            resp = await _call(session, seeded.finance, "GET", _export("work-progress") + query)
+            assert resp.status_code == 200, resp.text
+            wb = load_workbook(io.BytesIO(resp.content), data_only=False)
+            assert wb.sheetnames == ["PR 进度", "单品汇总", "周明细"]
+            return {n: list(wb[n].iter_rows(values_only=True)) for n in wb.sheetnames}
+
+        bare = await sheets("")
+        autumn = await sheets("&season=2026秋")
+        header = bare["PR 进度"][0]
+        assert "推广成本" in header and "成本" not in header
+        quote_col = header.index("约篇量")
+        # 场景有效性：不带季节时 pr / pr2 / 未分配三行共 5 单；单品 = 季节商品 + 末行未归属
+        assert sum(r[quote_col] for r in bare["PR 进度"][1:]) == 5
+        assert [r[0] for r in bare["单品汇总"][1:]] == ["季节导出商品", "未归属商品"]
+        assert sum(r[quote_col + 2] for r in bare["周明细"][1:]) == 5
+        # 带季节：三个 sheet 都只剩命中的那一单，没有未归属行
+        amount_col = header.index("约稿服务费")
+        assert [(r[quote_col], r[amount_col]) for r in autumn["PR 进度"][1:]] == [(1, 66.0)]
+        assert [(r[0], r[quote_col]) for r in autumn["单品汇总"][1:]] == [("季节导出商品", 1)]
+        assert sum(r[quote_col + 2] for r in autumn["周明细"][1:]) == 1
+        cells = {c for s in bare.values() for r in s for c in r}
+        assert goods.goods_code not in cells
 
     @pytest.mark.parametrize("kind", ["work-progress", "production", "store-daily"])
     async def test_operations_all_types(

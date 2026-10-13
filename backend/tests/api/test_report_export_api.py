@@ -14,9 +14,20 @@ from openpyxl import load_workbook
 
 from app.core.security.field_permissions import FieldPermissionContext
 from app.core.security.permissions import EffectivePermissions
-from app.modules.report.advanced_schemas import ProductionReport, ProductionRow, Recent7Range
+from app.modules.report.advanced_schemas import (
+    ProductionReport,
+    ProductionRow,
+    Recent7Range,
+    WorkProgressMetrics,
+)
 from app.modules.report.pr_scope import PR_SCOPE_ALL
 from app.modules.report.production_columns import PRODUCTION_COLUMNS
+from app.modules.report.work_progress_columns import (
+    GOODS_HEADERS,
+    PR_HEADERS,
+    WEEK_HEADERS,
+    WORK_PROGRESS_METRIC_COLUMNS,
+)
 
 _SUPER_CTX = FieldPermissionContext(frozenset(), frozenset(), frozenset(), is_superuser=True)
 _ALL_PERMS = EffectivePermissions(user_id="test", scopes=frozenset({"*"}))
@@ -126,29 +137,6 @@ class TestReportExportApiContract:
             ),
         ]
         store_calls: list[dict[str, object]] = []
-        work_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
-        work_row = SimpleNamespace(
-            pr_name="PR甲",
-            quote_count=10,
-            in_schedule_count=1,
-            urge_count=2,
-            important_urge_count=3,
-            overdue_count=4,
-            publish_count=5,
-            info_complete_count=4,
-            info_complete_rate=Decimal("0.8"),
-            cancel_count=1,
-            recall_due_count=2,
-            recall_success_count=1,
-            recall_complete_rate=Decimal("0.5"),
-            overdue_rate=Decimal("0.4"),
-            month_complete_rate=Decimal("0.5"),
-            hit_count=2,
-            hit_rate=Decimal("0.4"),
-            like_count=100,
-            cost=Decimal("200"),
-            cpl=Decimal("2"),
-        )
 
         class FakeProductionService:
             def __init__(self, _session: object) -> None:
@@ -166,17 +154,8 @@ class TestReportExportApiContract:
                 store_calls.append(kwargs)
                 return store_rows
 
-        class FakeWorkProgressService:
-            def __init__(self, _session: object) -> None:
-                pass
-
-            async def get_for_range(self, *args: object, **kwargs: object) -> list[object]:
-                work_calls.append((args[1:], kwargs))
-                return [work_row]
-
         monkeypatch.setattr(module, "ProductionService", FakeProductionService)
         monkeypatch.setattr(module, "StoreDailyService", FakeStoreDailyService)
-        monkeypatch.setattr(module, "WorkProgressService", FakeWorkProgressService)
         service = module.ReportExportService(None)  # type: ignore[arg-type]
         period = (date(2026, 8, 3), date(2026, 8, 4))
 
@@ -324,32 +303,6 @@ class TestReportExportApiContract:
             ],
         ]
 
-        work_headers, work_rows = await service._fetch_rows(
-            uuid4(),
-            "work-progress",
-            period,
-            exclude_brushing=True,
-            seasons=None,
-            granularity="day",
-            field_ctx=_SUPER_CTX,
-        )
-        assert len(work_headers) == len(work_rows[0]) == 20
-        assert work_headers[1:9] == [
-            "约篇量",
-            "档期内",
-            "催发",
-            "重要催发",
-            "超时",
-            "发布量",
-            "信息完整数",
-            "信息完整率",
-        ]
-        assert work_rows[0][7:9] == [4, Decimal("0.8")]
-        # 工作进度按请求区间导（不再取起日所在整月），看全部 PR
-        assert work_calls == [
-            (period, {"seasons": None, "scope": PR_SCOPE_ALL, "field_ctx": _SUPER_CTX})
-        ]
-
         response = await service.export(
             uuid4(),
             "production",
@@ -386,3 +339,156 @@ class TestReportExportApiContract:
         assert store_sheet.cell(1, 8).value == "下单转化率"
         assert store_sheet.cell(2, 8).value in (None, "")
         assert store_sheet.cell(3, 8).value == 0.63
+
+    async def test_work_progress_three_sheets(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """工作进度导出三个 sheet（7e R5）：PR 进度 / 单品汇总（末行未归属）/ 周明细（实际起止）。
+
+        三个 service 方法都拿到同一份区间、季节、``PR_SCOPE_ALL``；单品一次取全部（不只第一页）。
+        """
+        from app.modules.report import export_service as module
+
+        # 每个指标给不同的值，逐列能对上；cost（旧样品成本）给一个不会出现的值
+        metrics: dict[str, object] = {
+            c.key: i + 1 for i, c in enumerate(WORK_PROGRESS_METRIC_COLUMNS)
+        }
+        metrics["promo_cost"] = Decimal("400.00")
+        old_cost = Decimal("987.65")
+        pr_row = SimpleNamespace(pr_name="PR甲", cost=old_cost, **metrics)
+        goods_rows = [
+            SimpleNamespace(display_name=name, cost=old_cost, **metrics)
+            for name in ("短裙", "外套", "=1+1")
+        ]
+        unassigned = SimpleNamespace(display_name="未归属商品", cost=old_cost, **metrics)
+        week_rows = [
+            SimpleNamespace(
+                week_start=date(2026, 7, 27),
+                date_from=date(2026, 7, 29),
+                date_to=date(2026, 8, 2),
+                cost=old_cost,
+                **metrics,
+            ),
+            SimpleNamespace(
+                week_start=date(2026, 8, 3),
+                date_from=date(2026, 8, 3),
+                date_to=date(2026, 8, 7),
+                cost=old_cost,
+                **metrics,
+            ),
+        ]
+        calls: dict[str, list[tuple[tuple[object, ...], dict[str, object]]]] = {}
+
+        class FakeWorkProgressService:
+            def __init__(self, _session: object) -> None:
+                pass
+
+            async def get_for_range(self, *args: object, **kwargs: object) -> list[object]:
+                calls.setdefault("pr", []).append((args[1:], kwargs))
+                return [pr_row]
+
+            async def get_goods(self, *args: object, **kwargs: object) -> object:
+                calls.setdefault("goods", []).append((args[1:], kwargs))
+                lo = int(kwargs["offset"])  # type: ignore[call-overload]
+                hi = lo + int(kwargs["limit"])  # type: ignore[call-overload]
+                return SimpleNamespace(
+                    total=len(goods_rows), items=goods_rows[lo:hi], unassigned=unassigned
+                )
+
+            async def get_weeks(self, *args: object, **kwargs: object) -> object:
+                calls.setdefault("weeks", []).append((args[1:], kwargs))
+                return SimpleNamespace(items=week_rows)
+
+        monkeypatch.setattr(module, "WorkProgressService", FakeWorkProgressService)
+        period = (date(2026, 7, 29), date(2026, 8, 7))
+        response = await module.ReportExportService(None).export(  # type: ignore[arg-type]
+            uuid4(),
+            "work-progress",
+            period,
+            seasons=["2026秋"],
+            field_ctx=_SUPER_CTX,
+            perms=_ALL_PERMS,
+        )
+        assert response.headers["content-disposition"] == (
+            'attachment; filename="work-progress_2026-07-29_2026-08-07.xlsx"'
+        )
+        body = b"".join([chunk async for chunk in response.body_iterator])
+        wb = load_workbook(io.BytesIO(body), data_only=False)
+        assert wb.sheetnames == ["PR 进度", "单品汇总", "周明细"]
+        sheets = {name: list(wb[name].iter_rows(values_only=True)) for name in wb.sheetnames}
+
+        # 表头：有「推广成本」，没有旧的「成本」；指标段三表相同
+        assert sheets["PR 进度"][0] == PR_HEADERS
+        assert sheets["单品汇总"][0] == GOODS_HEADERS
+        assert sheets["周明细"][0] == WEEK_HEADERS
+        assert "推广成本" in PR_HEADERS and "成本" not in PR_HEADERS
+        assert PR_HEADERS[1:] == GOODS_HEADERS[1:] == WEEK_HEADERS[3:]
+        expected_metrics = tuple(
+            float(v) if isinstance(v, Decimal) else v for v in metrics.values()
+        )
+        assert sheets["PR 进度"][1:] == [("PR甲", *expected_metrics)]
+        assert 987.65 not in sheets["PR 进度"][1]
+
+        # 单品：全部商品（不止一页）+ 末行未归属；危险文本照样转义；不导商品编码
+        assert [r[0] for r in sheets["单品汇总"][1:]] == ["短裙", "外套", "'=1+1", "未归属商品"]
+        assert all(r[1:] == expected_metrics for r in sheets["单品汇总"][1:])
+
+        # 周：所在周的周一 + 实际起止（首周起 = 区间起，不是周一）
+        week_dates = [tuple(c.date() for c in r[:3]) for r in sheets["周明细"][1:]]
+        assert week_dates == [
+            (date(2026, 7, 27), date(2026, 7, 29), date(2026, 8, 2)),
+            (date(2026, 8, 3), date(2026, 8, 3), date(2026, 8, 7)),
+        ]
+
+        # 三个方法：同一区间、季节透传、看全部 PR
+        for kind in ("pr", "goods", "weeks"):
+            [(args, kwargs)] = calls[kind]
+            assert args == period, kind
+            assert kwargs["seasons"] == ["2026秋"], kind
+            assert kwargs["scope"] is PR_SCOPE_ALL, kind
+            assert kwargs["field_ctx"] is _SUPER_CTX, kind
+        assert calls["goods"][0][1]["offset"] == 0
+
+    async def test_work_progress_goods_without_unassigned(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """选了季节时没有未归属（service 给 None）：单品 sheet 只有商品行，不多一行空的。"""
+        from app.modules.report import export_service as module
+
+        metrics = {c.key: 1 for c in WORK_PROGRESS_METRIC_COLUMNS}
+        goods = SimpleNamespace(display_name="短裙", **metrics)
+
+        class FakeWorkProgressService:
+            def __init__(self, _session: object) -> None:
+                pass
+
+            async def get_for_range(self, *_a: object, **_k: object) -> list[object]:
+                return []
+
+            async def get_goods(self, *_a: object, **_k: object) -> object:
+                return SimpleNamespace(total=1, items=[goods], unassigned=None)
+
+            async def get_weeks(self, *_a: object, **_k: object) -> object:
+                return SimpleNamespace(items=[])
+
+        monkeypatch.setattr(module, "WorkProgressService", FakeWorkProgressService)
+        response = await module.ReportExportService(None).export(  # type: ignore[arg-type]
+            uuid4(),
+            "work-progress",
+            (date(2026, 8, 3), date(2026, 8, 4)),
+            seasons=["2026秋"],
+            field_ctx=_SUPER_CTX,
+            perms=_ALL_PERMS,
+        )
+        body = b"".join([chunk async for chunk in response.body_iterator])
+        wb = load_workbook(io.BytesIO(body), data_only=False)
+        assert [r[0] for r in wb["单品汇总"].iter_rows(values_only=True)] == ["商品", "短裙"]
+        # 没数据的 sheet 也照样有表头
+        assert wb["PR 进度"].max_row == wb["周明细"].max_row == 1
+
+
+def test_work_progress_metric_columns_cover_model() -> None:
+    """指标段 + 旧 ``cost`` = ``WorkProgressMetrics`` 全部字段：模型加列漏了导出就红。"""
+    keys = [c.key for c in WORK_PROGRESS_METRIC_COLUMNS]
+    assert len(keys) == len(set(keys))
+    assert {*keys, "cost"} == set(WorkProgressMetrics.model_fields)
+    headers = [c.header for c in WORK_PROGRESS_METRIC_COLUMNS]
+    assert len(headers) == len(set(headers))

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import sys
 from collections.abc import Sequence
 from datetime import date
 from decimal import Decimal
@@ -17,7 +18,7 @@ from app.core.exceptions import PermissionDeniedError
 from app.core.metrics import report_export_total
 from app.core.security.field_permissions import FieldPermissionContext
 from app.core.security.permissions import EffectivePermissions
-from app.modules.report.advanced_schemas import ProductionRow
+from app.modules.report.advanced_schemas import ProductionRow, WorkProgressMetrics
 from app.modules.report.exceptions import ReportExportTypeInvalidError
 from app.modules.report.field_mask import production_margin_visible
 from app.modules.report.pr_scope import PR_SCOPE_ALL
@@ -28,6 +29,15 @@ from app.modules.report.production_columns import (
 )
 from app.modules.report.production_service import ProductionService
 from app.modules.report.store_daily_service import StoreDailyService
+from app.modules.report.work_progress_columns import (
+    GOODS_HEADERS,
+    PR_HEADERS,
+    SHEET_GOODS,
+    SHEET_PR,
+    SHEET_WEEKS,
+    WEEK_HEADERS,
+    WORK_PROGRESS_METRIC_COLUMNS,
+)
 from app.modules.report.work_progress_service import WorkProgressService
 
 _XLSX_MEDIA = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -53,28 +63,8 @@ def exportable_report_types(perms: EffectivePermissions) -> list[str]:
     return [t for t, (scope, action) in _READ_PERMISSION.items() if perms.has(scope, action)]
 
 
-_WORK_HEADERS = [
-    "PR",
-    "约篇量",
-    "档期内",
-    "催发",
-    "重要催发",
-    "超时",
-    "发布量",
-    "信息完整数",
-    "信息完整率",
-    "取消量",
-    "待召回",
-    "召回成功",
-    "召回完成率",
-    "超时率",
-    "月度完成率",
-    "爆文数",
-    "爆文率",
-    "点赞数",
-    "成本",
-    "CPL",
-]
+# 单品 sheet 一次取全部商品：service 只按 limit / offset 切片
+_ALL_GOODS = sys.maxsize
 _STORE_HEADERS = [
     "日期",
     "访客数",
@@ -100,6 +90,11 @@ def _cell(v: Any) -> Any:
 def _production_cell(row: ProductionRow, col: ProductionColumn) -> Any:
     value = getattr(row, col.key)
     return ",".join(value) if col.kind == "codes" else value
+
+
+def _metric_cells(row: WorkProgressMetrics) -> list[Any]:
+    """工作进度指标段（三个 sheet 共用，列顺序见 ``WORK_PROGRESS_METRIC_COLUMNS``）。"""
+    return [getattr(row, col.key) for col in WORK_PROGRESS_METRIC_COLUMNS]
 
 
 def _numeric_extra(v: Any) -> Any:
@@ -145,20 +140,29 @@ class ReportExportService:
             )
         if granularity not in _GRANULARITIES:
             raise ReportExportTypeInvalidError(f"不支持的时间粒度: {granularity}")
-        headers, rows = await self._fetch_rows(
-            tenant_id,
-            report_type,
-            time_range,
-            exclude_brushing=exclude_brushing,
-            seasons=seasons,
-            granularity=granularity,
-            field_ctx=field_ctx,
-        )
+        # (sheet 名, 表头, 行)：工作进度三个 sheet（7e R5），其他类型一个、以类型命名
+        sheets: list[tuple[str, Sequence[str], list[list[Any]]]]
+        if report_type == "work-progress":
+            sheets = await self._work_progress_sheets(
+                tenant_id, time_range, seasons=seasons, field_ctx=field_ctx
+            )
+        else:
+            headers, rows = await self._fetch_rows(
+                tenant_id,
+                report_type,
+                time_range,
+                exclude_brushing=exclude_brushing,
+                seasons=seasons,
+                granularity=granularity,
+                field_ctx=field_ctx,
+            )
+            sheets = [(report_type, headers, rows)]
         wb = Workbook(write_only=True)
-        ws = wb.create_sheet(report_type)
-        ws.append([_cell(header) for header in headers])
-        for row in rows:
-            ws.append([_cell(cell) for cell in row])
+        for title, sheet_headers, sheet_rows in sheets:
+            ws = wb.create_sheet(title)
+            ws.append([_cell(header) for header in sheet_headers])
+            for row in sheet_rows:
+                ws.append([_cell(cell) for cell in row])
         buf = io.BytesIO()
         wb.save(buf)
         buf.seek(0)
@@ -225,36 +229,54 @@ class ReportExportService:
             ]
             return [*_STORE_HEADERS, *extra_keys], rows
 
-        # 按请求区间导（原来取起日所在整月）；能走到这里的都持 work_progress:read，看全部 PR
-        work_rows = await WorkProgressService(self._s).get_for_range(
+        raise ReportExportTypeInvalidError(f"不支持的报表类型: {report_type}")
+
+    async def _work_progress_sheets(
+        self,
+        tenant_id: UUID,
+        time_range: tuple[date, date],
+        *,
+        seasons: Sequence[str] | None,
+        field_ctx: FieldPermissionContext,
+    ) -> list[tuple[str, Sequence[str], list[list[Any]]]]:
+        """工作进度三个 sheet（7e R5，设计 2.5）：PR 进度、单品汇总、周明细。
+
+        按请求区间 + 季节导；能走到这里的都持 ``work_progress:read``，看全部 PR（``PR_SCOPE_ALL``）。
+        三份数据与页面同一组 service 方法；单品一次取全部（``limit`` 的 1 ~ 100 是路由的校验，
+        service 只切片），「未归属商品」放最后一行；周行写所在周的周一与实际起止。
+        """
+        service = WorkProgressService(self._s)
+        pr_rows = await service.get_for_range(
             tenant_id, *time_range, seasons=seasons, scope=PR_SCOPE_ALL, field_ctx=field_ctx
         )
-        rows = [
-            [
-                row.pr_name,
-                row.quote_count,
-                row.in_schedule_count,
-                row.urge_count,
-                row.important_urge_count,
-                row.overdue_count,
-                row.publish_count,
-                row.info_complete_count,
-                row.info_complete_rate,
-                row.cancel_count,
-                row.recall_due_count,
-                row.recall_success_count,
-                row.recall_complete_rate,
-                row.overdue_rate,
-                row.month_complete_rate,
-                row.hit_count,
-                row.hit_rate,
-                row.like_count,
-                row.cost,
-                row.cpl,
-            ]
-            for row in work_rows
+        goods_page = await service.get_goods(
+            tenant_id,
+            *time_range,
+            seasons=seasons,
+            scope=PR_SCOPE_ALL,
+            field_ctx=field_ctx,
+            limit=_ALL_GOODS,
+            offset=0,
+        )
+        weeks = await service.get_weeks(
+            tenant_id, *time_range, seasons=seasons, scope=PR_SCOPE_ALL, field_ctx=field_ctx
+        )
+        goods_rows = [*goods_page.items]
+        if goods_page.unassigned is not None:
+            goods_rows.append(goods_page.unassigned)
+        return [
+            (SHEET_PR, PR_HEADERS, [[r.pr_name, *_metric_cells(r)] for r in pr_rows]),
+            (
+                SHEET_GOODS,
+                GOODS_HEADERS,
+                [[r.display_name, *_metric_cells(r)] for r in goods_rows],
+            ),
+            (
+                SHEET_WEEKS,
+                WEEK_HEADERS,
+                [[r.week_start, r.date_from, r.date_to, *_metric_cells(r)] for r in weeks.items],
+            ),
         ]
-        return _WORK_HEADERS, rows
 
 
 __all__ = ["ReportExportService", "exportable_report_types"]
