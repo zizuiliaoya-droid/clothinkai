@@ -92,6 +92,41 @@ async def seeded(
     return flow_users
 
 
+@pytest.fixture
+async def goods_seeded(
+    session: AsyncSession,
+    seeded: Any,
+    product_factory: Any,
+    blogger_factory: Any,
+    promotion_factory: Any,
+) -> Any:
+    """在 ``seeded`` 之上：pr 一单归属商品甲、pr2 一单归属商品乙（单品卡片 / 周明细的只看本人）。"""
+    from app.modules.product.goods_models import GoodsMain
+
+    style = await product_factory.style(style_code=f"RG{uuid4().hex[:8]}")
+    blogger = await blogger_factory.blogger()
+    made: list[Any] = []
+    for user in (seeded.pr, seeded.pr2):
+        goods = GoodsMain(
+            tenant_id=seeded.tenant.id,
+            goods_code=f"RG{uuid4().hex[:8]}",
+            goods_title=f"商品{uuid4().hex[:4]}",
+        )
+        session.add(goods)
+        await session.flush()
+        await promotion_factory.promotion(
+            style=style,
+            blogger=blogger,
+            pr=user,
+            goods_main_id=goods.id,
+            internal_code=f"RG{uuid4().hex[:10].upper()}",
+            cooperation_date=_M_LO + timedelta(days=9),
+        )
+        made.append(goods)
+    await session.flush()
+    return seeded, made[0], made[1]
+
+
 @pytest.mark.usefixtures("tenant_ctx")
 class TestWorkProgress:
     async def test_pr_sees_only_self(self, session: AsyncSession, seeded: Any) -> None:
@@ -255,6 +290,44 @@ class TestWorkProgress:
         for r in body["items"]:
             assert str(_M_LO) <= r["date_from"] <= r["date_to"] <= str(_M_HI)
             assert r["week_start"] <= r["date_from"]
+
+    async def test_goods_pr_sees_only_self(self, session: AsyncSession, goods_seeded: Any) -> None:
+        """只持 ``read_own`` 的 PR：卡片只有本人的商品与本人的未归属单；财务看全部。"""
+        users, own_goods, other_goods = goods_seeded
+        query = f"{_WP}/goods?preset=custom&date_from={_M_LO}&date_to={_M_HI}"
+        own = await _call(session, users.pr, "GET", query)
+        everyone = await _call(session, users.finance, "GET", query)
+        assert own.status_code == everyone.status_code == 200, own.text
+        own_body, all_body = own.json(), everyone.json()
+        assert [(r["goods_id"], r["quote_count"]) for r in own_body["items"]] == [
+            (str(own_goods.id), 1)
+        ]
+        assert str(other_goods.id) not in {r["goods_id"] for r in own_body["items"]}
+        assert own_body["total"] == 1
+        assert own_body["unassigned"]["quote_count"] == 2  # seeded 里 pr 的两单
+        # 场景有效性：财务能看到别人的商品与全部未归属单
+        assert {r["goods_id"] for r in all_body["items"]} == {
+            str(own_goods.id),
+            str(other_goods.id),
+        }
+        assert all_body["unassigned"]["quote_count"] == 4
+
+    async def test_weeks_pr_sees_only_self(self, session: AsyncSession, goods_seeded: Any) -> None:
+        """只持 ``read_own`` 的 PR：各周之和 = 本人那一行 PR 表；财务各周之和 = 全部 PR 表合计。"""
+        users, _own_goods, _other_goods = goods_seeded
+        query = f"preset=custom&date_from={_M_LO}&date_to={_M_HI}"
+
+        async def totals(user: Any) -> tuple[int, int]:
+            weeks = await _call(session, user, "GET", f"{_WP}/weeks?{query}")
+            table = await _call(session, user, "GET", f"{_WP}?{query}")
+            assert weeks.status_code == table.status_code == 200, weeks.text
+            return (
+                sum(r["quote_count"] for r in weeks.json()["items"]),
+                sum(r["quote_count"] for r in table.json()),
+            )
+
+        assert await totals(users.pr) == (3, 3)  # seeded 2 + 本人商品 1
+        assert await totals(users.finance) == (6, 6)
 
     async def test_weeks_warehouse_forbidden(self, session: AsyncSession, flow_users: Any) -> None:
         resp = await _call(session, flow_users.warehouse, "GET", f"{_WP}/weeks")

@@ -47,6 +47,7 @@ from app.modules.report.advanced_schemas import (
     PrWorkProgress,
     StoreReportRow,
     WorkProgressGoodsPage,
+    WorkProgressMetrics,
     WorkProgressWeekRow,
     WorkProgressWeeks,
 )
@@ -1932,11 +1933,69 @@ class TestWorkProgressGoods:
                 assert via_summary.unassigned is not None
                 assert via_summary.unassigned.display_name == "未归属商品"
                 assert via_summary.unassigned.quote_count == 1
+                # 每个指标字段（含 R5 新列与公式列）都要在某张卡 / 未归属行出现非零值
+                rows = [*via_summary.items, via_summary.unassigned]
+                for c in WorkProgressMetrics.model_fields:
+                    assert any(getattr(r, c) for r in rows), f"场景没有产生非零的 {c}"
             else:
                 # 选了季节：没归属商品的单不算，信封里也没有「未归属商品」
                 assert ids == ([goods_a] if seasons == ["春夏"] else [goods_a, goods_b])
                 assert via_summary.unassigned is None
             assert via_summary.total == len(ids)
+        finally:
+            tenant_id_ctx.reset(tok)
+
+    @pytest.mark.parametrize("who", ["pr1", "unassigned"])
+    async def test_scoped_summary_equals_live(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        factory: Any,
+        recorder: _SourceRecorder,
+        monkeypatch: pytest.MonkeyPatch,
+        who: str,
+    ) -> None:
+        """只看本人（``PrScope(PR, pr1)``）与「未分配」：两路逐字相等，卡片之和 = 同范围的 PR 表那一行。"""
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            seeded = await _seed(
+                session, tenant_a, product_factory, blogger_factory, promotion_factory, factory
+            )
+            await _seed_wp_amounts(
+                session, tenant_a, product_factory, promotion_factory, factory, seeded
+            )
+            await session.commit()
+            await _refresh(session, tenant_a, M_LO, M_HI)
+            goods_a, goods_b = seeded["goods_a"].id, seeded["goods_b"].id
+            if who == "pr1":
+                scope = PrScope(PrScopeKind.PR, seeded["pr1"].id)
+                expected_pr = seeded["pr1"].id
+                # pr1：goods_a 8 单（含按款式推定的）、goods_b 1 单
+                expected_items = [(goods_a, 8), (goods_b, 1)]
+            else:
+                scope = PrScope(PrScopeKind.UNASSIGNED)
+                expected_pr = None
+                expected_items = [(goods_a, 1)]  # 未分配那一单按款式推定归属 goods_a
+
+            svc = WorkProgressService(session)
+            via_summary = await _wpg(svc, tenant_a, M_LO, M_HI, scope=scope)
+            assert recorder.calls == [("work_progress_goods", "summary")]
+
+            monkeypatch.setattr(settings, "REPORT_SUMMARY_READS_ENABLED", False)
+            via_live = await _wpg(svc, tenant_a, M_LO, M_HI, scope=scope)
+            assert recorder.calls[1:] == [("work_progress_goods", "live")]
+            assert _dump(via_summary) == _dump(via_live)
+
+            # 场景有效性：全量里 goods_a 有 12 单，范围内只剩本范围的单；没有未归属商品的单
+            assert [(r.goods_id, r.quote_count) for r in via_summary.items] == expected_items
+            assert via_summary.unassigned is None
+            pr_rows = await _wp(svc, tenant_a, M_LO, M_HI, scope=scope)
+            assert [r.pr_id for r in pr_rows] == [expected_pr]
+            for c in _WP_ADDITIVE:
+                assert sum(getattr(r, c) for r in via_summary.items) == getattr(pr_rows[0], c), c
         finally:
             tenant_id_ctx.reset(tok)
 
@@ -2317,6 +2376,54 @@ class TestWorkProgressWeeks:
             assert likes(by_week) == likes(by_pr) == likes(live)
             # 场景有效性：确有带小数的 PR 行（逐行取整再相加就会差）
             assert any(Decimal(str(r["like_count"])) % 1 for r in live)
+        finally:
+            tenant_id_ctx.reset(tok)
+
+    @pytest.mark.parametrize("who", ["pr1", "unassigned"])
+    async def test_scoped_summary_equals_live(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        factory: Any,
+        recorder: _SourceRecorder,
+        monkeypatch: pytest.MonkeyPatch,
+        who: str,
+    ) -> None:
+        """只看本人（``PrScope(PR, pr1)``）与「未分配」：两路逐字相等，各周之和 = 同范围的 PR 表那一行。"""
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            seeded = await self._seed_all(
+                session, tenant_a, product_factory, blogger_factory, promotion_factory, factory
+            )
+            await _refresh(session, tenant_a, WEEK_LO, WEEK_HI)
+            if who == "pr1":
+                scope = PrScope(PrScopeKind.PR, seeded["pr1"].id)
+                expected_pr = seeded["pr1"].id
+            else:
+                scope = PrScope(PrScopeKind.UNASSIGNED)
+                expected_pr = None
+
+            svc = WorkProgressService(session)
+            via_summary = await _wpw(svc, tenant_a, WEEK_LO, WEEK_HI, scope=scope)
+            assert recorder.calls == [("work_progress_weeks", "summary")]
+
+            monkeypatch.setattr(settings, "REPORT_SUMMARY_READS_ENABLED", False)
+            via_live = await _wpw(svc, tenant_a, WEEK_LO, WEEK_HI, scope=scope)
+            assert recorder.calls[1:] == [("work_progress_weeks", "live")]
+            assert _dump(via_summary) == _dump(via_live)
+
+            pr_rows = await _wp(svc, tenant_a, WEEK_LO, WEEK_HI, scope=scope)
+            everyone = await _wpw(svc, tenant_a, WEEK_LO, WEEK_HI)
+            # 场景有效性：范围内只剩那一个 PR，且确实比全量少（范围真的下推了）
+            assert [r.pr_id for r in pr_rows] == [expected_pr]
+            assert via_summary.items
+            scoped_total = sum(r.quote_count for r in via_summary.items)
+            assert 0 < scoped_total < sum(r.quote_count for r in everyone.items)
+            for c in _WP_ADDITIVE:
+                assert sum(getattr(r, c) for r in via_summary.items) == getattr(pr_rows[0], c), c
         finally:
             tenant_id_ctx.reset(tok)
 
