@@ -28,7 +28,7 @@ from app.modules.finance.enums import SettlementStatus
 from app.modules.finance.models import Settlement
 from app.modules.finance.repository import SettlementRepository
 from app.modules.flow.line_events import LineEventRepository, LineEventType
-from app.modules.promotion.events import SettlementRequested
+from app.modules.promotion.events import SettlementRequested, SettlementResubmitted
 
 log = logging.getLogger(__name__)
 
@@ -162,19 +162,38 @@ async def on_settlement_requested_auto_order(
         order_adjustment_auto_created_total.labels(result="failed").inc()
 
 
+async def on_settlement_resubmitted(event: SettlementResubmitted, session: AsyncSession) -> None:
+    """推广单 R7 → 结款单 F6：已驳回 → 待付款，清空实付与调整说明（流程线 3.4、7.5）。
+
+    与推广单的条件 UPDATE 同一事务：``autocommit=False``、不吞异常；结款单不在已驳回 → 409 冒泡，
+    推广单跟着回滚。租户与操作人取事件字段。
+    """
+    from app.modules.finance.service import SettlementService
+
+    await SettlementService(session).resubmit(
+        event.settlement_id,
+        tenant_id=event.tenant_id,
+        actor_id=event.actor_id,
+        autocommit=False,
+    )
+
+
 def register() -> None:
     """U05 finance listener 注册（强一致正向）+ U16 拍单自动生成（通知类）。
 
     被 main.py register_event_listeners 第 1 步调用。
     缺失时 main.py 视为 U05 未部署（warning），但因 SettlementRequested
     required_handler=True，U04 review approve 会抛 MissingRequiredHandlerError（FB1）。
+    ``SettlementResubmitted`` 同样必须有监听（流程线 R7 / F6）。
     """
     subscribe("SettlementRequested", on_settlement_requested)
     subscribe("SettlementRequested", on_settlement_requested_auto_order)
+    subscribe("SettlementResubmitted", on_settlement_resubmitted)
 
 
 __all__ = [
     "on_settlement_requested",
     "on_settlement_requested_auto_order",
+    "on_settlement_resubmitted",
     "register",
 ]

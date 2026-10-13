@@ -78,6 +78,7 @@ class TestReview:
         product_factory: Any,
         blogger_factory: Any,
         settlement_factory: Any,
+        cross_unit_event_bus: None,  # 驳回同事务发 SettlementRejected（必须有监听，R6）
     ) -> None:
         token = tenant_id_ctx.set(tenant_a.id)
         try:
@@ -323,10 +324,13 @@ class TestFillPaymentAndResubmit:
                 style=style,
                 blogger=blogger,
                 settlement_status="已驳回",
+                payment_amount=Decimal("480.00"),
             )
             svc = SettlementService(session)
-            resp = await svc.resubmit(s.id, user)
+            # 没有 HTTP 调用方：新签名取租户与操作人（F6，监听调用）
+            resp = await svc.resubmit(s.id, tenant_id=tenant_a.id, actor_id=user.id)
             assert resp.settlement_status == "待付款"
+            assert resp.payment_amount is None  # 清空实付，由财务重新填
         finally:
             tenant_id_ctx.reset(token)
 

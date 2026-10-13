@@ -49,7 +49,7 @@ from app.modules.finance.attachment_validator import (
 )
 from app.modules.finance.attachment_validator import ProofAttachmentValidator
 from app.modules.finance.enums import ExtraItemType, SettlementStatus
-from app.modules.finance.events import SettlementPaid
+from app.modules.finance.events import SettlementPaid, SettlementRejected
 from app.modules.finance.exceptions import (
     ExtraItemNotAllowedError,
     FieldPermissionDenied,
@@ -121,8 +121,14 @@ class SettlementService:
         settlement_id: UUID,
         payload: SettlementReviewRequest,
         user: User,
+        *,
+        autocommit: bool = True,
     ) -> SettlementResponse:
-        """核查（F0，只给上线前停在待核查的旧单；新单 → 422）/ 驳回（F5，待付款 / 待财务付款）."""
+        """核查（F0，只给上线前停在待核查的旧单；新单 → 422）/ 驳回（F5，待付款 / 待财务付款）.
+
+        驳回在结款单条件 UPDATE 之后、commit 之前同一 session 发 ``SettlementRejected``（R6，D12）：
+        推广单监听 0 行 / 抛错时异常冒泡，两张表一起回滚。``autocommit=False`` 时不提交，由调用方统一提交。
+        """
         settlement = await self._repo.get_by_id(settlement_id)
         if settlement is None:
             raise SettlementNotFoundError(f"结算单 {settlement_id} 不存在")
@@ -186,6 +192,21 @@ class SettlementService:
                 from_state=from_status,
                 to_state=to_status,
             )
+        else:
+            # F5 → R6：同事务、异常冒泡（必须有监听，不按通知类容忍）
+            await event_bus.dispatch(
+                SettlementRejected(
+                    event_id=uuid4(),
+                    timestamp=now,
+                    tenant_id=updated.tenant_id,
+                    settlement_id=updated.id,
+                    promotion_id=updated.promotion_id,
+                    reason=payload.review_reason or "",
+                    actor_id=user.id,
+                    from_state=from_status,
+                ),
+                session=self._session,
+            )
 
         await self._audit.log(
             action=audit_action,
@@ -197,7 +218,8 @@ class SettlementService:
             },
             user_id=user.id,
         )
-        await self._session.commit()
+        if autocommit:
+            await self._session.commit()
         return await self._to_response(updated, user)
 
     # ============================================================
@@ -500,47 +522,67 @@ class SettlementService:
         return updated
 
     # ============================================================
-    # 状态推进：resubmit（已驳回 → 待核查）
+    # 状态推进：resubmit（已驳回 → 待付款，F6）
     # ============================================================
 
-    async def resubmit(self, settlement_id: UUID, user: User) -> SettlementResponse:
-        """已驳回 → 待付款（F6；监听调用的新签名与清空实付随推广单 R7 一起做）。"""
+    async def resubmit(
+        self,
+        settlement_id: UUID,
+        *,
+        tenant_id: UUID,
+        actor_id: UUID,
+        autocommit: bool = True,
+    ) -> Settlement:
+        """已驳回 → 待付款（F6），清空实付与调整说明，由财务重新填。
+
+        没有 HTTP 调用方：推广单 R7 发 ``SettlementResubmitted``，finance 监听以 ``autocommit=False`` 调用，
+        租户与操作人取事件字段。条件 UPDATE ``WHERE settlement_status = '已驳回'``，0 行（不在已驳回 /
+        跨租户）→ 409，异常冒泡让推广单一起回滚。``settlement.resubmitted`` 由推广侧写。
+        """
         settlement = await self._repo.get_by_id(settlement_id)
         if settlement is None:
             raise SettlementNotFoundError(f"结算单 {settlement_id} 不存在")
 
         SettlementStatusMachine.assert_can_transition(
-            from_state=settlement.settlement_status,
+            from_state=SettlementStatus.REJECTED.value,
             to_state=SettlementStatus.PENDING_PAYMENT.value,
             action="resubmit",
         )
 
         updated = await self._repo.update_state(
             settlement_id=settlement_id,
-            tenant_id=user.tenant_id,
+            tenant_id=tenant_id,
             from_state_value=SettlementStatus.REJECTED.value,
             to_state_value=SettlementStatus.PENDING_PAYMENT.value,
+            extra_fields={"payment_amount": None, "payment_adjust_note": None},
         )
         if updated is None:
             raise StateTransitionConflictError(
-                "结款状态已变更，请刷新后重试",
-                details={"settlement_id": str(settlement_id)},
+                "结款单不在已驳回，不能重提，请刷新后重试",
+                details={
+                    "settlement_id": str(settlement_id),
+                    "settlement_status": settlement.settlement_status,
+                },
             )
 
         settlement_state_transitions_total.labels(
             from_state=SettlementStatus.REJECTED.value,
-            to_state=SettlementStatus.PENDING_REVIEW.value,
+            to_state=SettlementStatus.PENDING_PAYMENT.value,
         ).inc()
 
         await self._audit.log(
             action="settlement.resubmit",
             resource="settlement",
             resource_id=settlement_id,
-            after={"settlement_status": SettlementStatus.PENDING_REVIEW.value},
-            user_id=user.id,
+            after={
+                "settlement_status": SettlementStatus.PENDING_PAYMENT.value,
+                "payment_amount_cleared": True,
+            },
+            user_id=actor_id,
         )
-        await self._session.commit()
-        return await self._to_response(updated, user)
+        if autocommit:
+            await self._session.commit()
+        return updated
 
     # ============================================================
     # Extra Item

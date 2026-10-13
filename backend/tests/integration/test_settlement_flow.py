@@ -6,6 +6,7 @@
 - F3：实付 ≥ 0；实付 ≠ 应付（``total_amount``）时调整说明必填（422 ``FLOW_GATE_MISSING``）
 - F4：付款日期一律取北京时间的当天，客户端传的日期忽略（D5：容器是 UTC）
 - 每一步各写一条结款组事件（6.3），付款事件的附件 = 付款凭证
+- F5 → R6 / R7 → F6：``SettlementRejected`` / ``SettlementResubmitted`` 必须有监听，两张表同事务（D7、D12）
 """
 
 from __future__ import annotations
@@ -22,10 +23,14 @@ from sqlalchemy import select
 from sqlalchemy import text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import IllegalStateTransitionError
+from app.core.events import dispatch, subscribe
+from app.core.exceptions import IllegalStateTransitionError, MissingRequiredHandlerError
 from app.core.tenancy import tenant_id_ctx
 from app.modules.finance.enums import ExtraItemType
 from app.modules.finance.exceptions import ExtraItemNotAllowedError
+from app.modules.finance.exceptions import (
+    StateTransitionConflictError as SettlementStateConflictError,
+)
 from app.modules.finance.listeners import on_settlement_requested
 from app.modules.finance.models import Settlement, SettlementExtraItem
 from app.modules.finance.schemas import (
@@ -39,7 +44,10 @@ from app.modules.flow.exceptions import FlowGateMissingError
 from app.modules.flow.line_events import LineEventType
 from app.modules.flow.models import LineEvent
 from app.modules.promotion.enums import ReviewAction
-from app.modules.promotion.events import SettlementRequested
+from app.modules.promotion.events import SettlementRequested, SettlementResubmitted
+from app.modules.promotion.exceptions import (
+    StateTransitionConflictError as PromotionStateConflictError,
+)
 from app.modules.promotion.urge_calculator import get_today
 from tests.flow_event_helpers import assert_payload_registered
 from tests.integration.test_settlement_proof_upload import _PNG, _RecordingS3
@@ -562,3 +570,318 @@ class TestPaymentDate:
             "payment_date" in schema["properties"]
         ), "场景有效性：表单仍接受这个字段（兼容旧前端）"
         assert schema["required"] == ["file"]
+
+
+async def _promotion_status(session: AsyncSession, promotion_id: UUID) -> str:
+    row = await session.execute(
+        sa_text("SELECT settlement_status FROM promotion WHERE id = :id"), {"id": promotion_id}
+    )
+    return str(row.scalar_one())
+
+
+async def _settlement_row(session: AsyncSession, settlement_id: UUID) -> tuple[Any, ...]:
+    row = await session.execute(
+        sa_text(
+            "SELECT settlement_status, payment_amount, payment_adjust_note "
+            "FROM settlement WHERE id = :id"
+        ),
+        {"id": settlement_id},
+    )
+    return tuple(row.one())
+
+
+def _resubmitted(s: Settlement, *, actor_id: UUID) -> SettlementResubmitted:
+    return SettlementResubmitted(
+        event_id=uuid4(),
+        timestamp=datetime.now(UTC),
+        tenant_id=s.tenant_id,
+        promotion_id=s.promotion_id,
+        settlement_id=s.id,
+        note="收款码换好了",
+        actor_id=actor_id,
+    )
+
+
+_REJECT = SettlementReviewRequest(action=ReviewAction.REJECT, review_reason="收款码不对")
+
+
+class TestSettlementRejected:
+    """F5 → R6：财务驳回与推广单「结款驳回」同一事务（D7、D12）。"""
+
+    @pytest.mark.parametrize("from_status", ["待付款", "待财务付款"])
+    async def test_reject_moves_promotion_and_writes_event(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        finance_role: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        settlement_factory: Any,
+        cross_unit_event_bus: None,
+        from_status: str,
+    ) -> None:
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            finance = await factory.user(tenant_a, roles=[finance_role])
+            s = await _settlement(
+                settlement_factory,
+                product_factory,
+                blogger_factory,
+                status=from_status,
+                payment_amount=Decimal("480.00") if from_status == "待财务付款" else None,
+            )
+            assert await _promotion_status(session, s.promotion_id) == "待付款"
+            resp = await SettlementService(session).review(s.id, _REJECT, finance)
+            assert resp.settlement_status == "已驳回"
+            assert await _promotion_status(session, s.promotion_id) == "结款驳回"
+            events = await _events(session, s.promotion_id, LineEventType.SETTLEMENT_REJECTED)
+            assert len(events) == 1
+            ev = events[0]
+            assert ev.line_id == await _line_id(session, s.promotion_id)
+            assert (ev.from_state, ev.to_state) == (from_status, "已驳回")
+            assert ev.note == "收款码不对"
+            assert ev.actor_id == finance.id
+            assert ev.payload == {"settlement_id": str(s.id)}
+            assert_payload_registered(ev.payload)
+        finally:
+            tenant_id_ctx.reset(token)
+
+    async def test_listener_failure_rolls_back_both_tables(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        finance_role: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        settlement_factory: Any,
+        cross_unit_event_bus: None,
+    ) -> None:
+        """监听里中途抛错 → 结款单、推广单、事件都不变（review 不能先 commit 再 dispatch）。"""
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            finance = await factory.user(tenant_a, roles=[finance_role])
+            s = await _settlement(
+                settlement_factory, product_factory, blogger_factory, status="待付款"
+            )
+            sid, pid = s.id, s.promotion_id
+            await session.commit()
+            seen: list[str] = []
+
+            async def _boom(event: Any, sess: AsyncSession) -> None:
+                seen.append(await _promotion_status(sess, event.promotion_id))
+                raise RuntimeError("listener boom")
+
+            subscribe("SettlementRejected", _boom)  # 排在真实监听之后
+            with pytest.raises(RuntimeError, match="listener boom"):
+                await SettlementService(session).review(sid, _REJECT, finance)
+            assert seen == ["结款驳回"], "场景有效性：真实监听已在同一事务里改了推广单"
+            await session.rollback()
+            assert await _status(session, sid) == "待付款"
+            assert await _promotion_status(session, pid) == "待付款"
+            assert await _events(session, pid, LineEventType.SETTLEMENT_REJECTED) == []
+        finally:
+            tenant_id_ctx.reset(token)
+
+    async def test_promotion_not_pending_payment_conflicts_both_unchanged(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        pr_role: Any,
+        finance_role: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        settlement_factory: Any,
+        cross_unit_event_bus: None,
+    ) -> None:
+        """直接造一张结款单、推广单停在待核查 → 409 PROMOTION_STATE_CONFLICT，两边都不变。"""
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            pr = await factory.user(tenant_a, roles=[pr_role])
+            finance = await factory.user(tenant_a, roles=[finance_role])
+            style = await product_factory.style()
+            blogger = await blogger_factory.blogger()
+            promotion = await promotion_factory.promotion(
+                style=style,
+                blogger=blogger,
+                pr=pr,
+                publish_status="已发布",
+                settlement_status="待核查",
+            )
+            s = await settlement_factory.settlement(
+                style=style, blogger=blogger, promotion=promotion, settlement_status="待付款"
+            )
+            sid, pid = s.id, promotion.id
+            await session.commit()
+            with pytest.raises(PromotionStateConflictError) as exc_info:
+                await SettlementService(session).review(sid, _REJECT, finance)
+            assert exc_info.value.status_code == 409
+            assert exc_info.value.code == "PROMOTION_STATE_CONFLICT"
+            assert exc_info.value.details == {
+                "promotion_id": str(pid),
+                "settlement_id": str(sid),
+            }
+            await session.rollback()
+            assert await _status(session, sid) == "待付款"
+            assert await _promotion_status(session, pid) == "待核查"
+            assert await _events(session, pid, LineEventType.SETTLEMENT_REJECTED) == []
+        finally:
+            tenant_id_ctx.reset(token)
+
+    async def test_missing_listener_raises_and_settlement_unchanged(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        finance_role: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        settlement_factory: Any,
+    ) -> None:
+        """没注册 promotion 监听 → MissingRequiredHandlerError（不能按通知类静默丢掉）。"""
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            finance = await factory.user(tenant_a, roles=[finance_role])
+            s = await _settlement(
+                settlement_factory, product_factory, blogger_factory, status="待付款"
+            )
+            sid, pid = s.id, s.promotion_id
+            await session.commit()
+            with pytest.raises(MissingRequiredHandlerError):
+                await SettlementService(session).review(sid, _REJECT, finance)
+            await session.rollback()
+            assert await _status(session, sid) == "待付款"
+            assert await _promotion_status(session, pid) == "待付款"
+        finally:
+            tenant_id_ctx.reset(token)
+
+
+class TestSettlementResubmitted:
+    """R7 → F6：finance 监听把结款单 已驳回 → 待付款、清空实付与说明，同事务、不 commit。"""
+
+    async def test_listener_resets_settlement(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        pr_role: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        settlement_factory: Any,
+        cross_unit_event_bus: None,
+    ) -> None:
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            pr = await factory.user(tenant_a, roles=[pr_role])
+            s = await _settlement(
+                settlement_factory,
+                product_factory,
+                blogger_factory,
+                status="已驳回",
+                payment_amount=Decimal("480.00"),
+                payment_adjust_note="扣 20 元",
+            )
+            assert await _settlement_row(session, s.id) == (
+                "已驳回",
+                Decimal("480.00"),
+                "扣 20 元",
+            ), "场景有效性：重提前实付与说明都有值"
+            await dispatch(_resubmitted(s, actor_id=pr.id), session=session)
+            assert await _settlement_row(session, s.id) == ("待付款", None, None)
+        finally:
+            tenant_id_ctx.reset(token)
+
+    async def test_listener_does_not_commit(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        pr_role: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        settlement_factory: Any,
+        cross_unit_event_bus: None,
+    ) -> None:
+        """之后的处理抛错 → 结款单回到已驳回、实付仍在（监听用 autocommit=False）。"""
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            pr = await factory.user(tenant_a, roles=[pr_role])
+            s = await _settlement(
+                settlement_factory,
+                product_factory,
+                blogger_factory,
+                status="已驳回",
+                payment_amount=Decimal("480.00"),
+            )
+            event = _resubmitted(s, actor_id=pr.id)
+            await session.commit()
+            seen: list[tuple[Any, ...]] = []
+
+            async def _boom(ev: Any, sess: AsyncSession) -> None:
+                seen.append(await _settlement_row(sess, ev.settlement_id))
+                raise RuntimeError("listener boom")
+
+            subscribe("SettlementResubmitted", _boom)
+            with pytest.raises(RuntimeError, match="listener boom"):
+                await dispatch(event, session=session)
+            assert seen == [("待付款", None, None)], "场景有效性：真实监听已改了结款单"
+            await session.rollback()
+            assert await _settlement_row(session, event.settlement_id) == (
+                "已驳回",
+                Decimal("480.00"),
+                None,
+            )
+        finally:
+            tenant_id_ctx.reset(token)
+
+    @pytest.mark.parametrize("status", ["待付款", "待财务付款", "已付款"])
+    async def test_not_rejected_conflicts(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        pr_role: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        settlement_factory: Any,
+        cross_unit_event_bus: None,
+        status: str,
+    ) -> None:
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            pr = await factory.user(tenant_a, roles=[pr_role])
+            s = await _settlement(
+                settlement_factory, product_factory, blogger_factory, status=status
+            )
+            with pytest.raises(SettlementStateConflictError) as exc_info:
+                await dispatch(_resubmitted(s, actor_id=pr.id), session=session)
+            assert exc_info.value.status_code == 409
+            assert exc_info.value.details["settlement_status"] == status
+            assert (await _settlement_row(session, s.id))[0] == status
+        finally:
+            tenant_id_ctx.reset(token)
+
+    async def test_missing_listener_raises(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        pr_role: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        settlement_factory: Any,
+    ) -> None:
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            pr = await factory.user(tenant_a, roles=[pr_role])
+            s = await _settlement(
+                settlement_factory, product_factory, blogger_factory, status="已驳回"
+            )
+            with pytest.raises(MissingRequiredHandlerError):
+                await dispatch(_resubmitted(s, actor_id=pr.id), session=session)
+            assert (await _settlement_row(session, s.id))[0] == "已驳回"
+        finally:
+            tenant_id_ctx.reset(token)

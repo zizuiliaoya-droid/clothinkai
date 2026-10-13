@@ -919,6 +919,9 @@ async def event_capture() -> AsyncIterator[Any]:
     subscribe("SettlementRequested", _settlement_handler)
     subscribe("PromotionPublished", _published_handler)
     subscribe("SettlementPaid", _paid_handler)
+    # 流程线 R6 / R7：两个必须有监听的跨模块事件，只捕获不处理（要真实链路用 cross_unit_event_bus）
+    subscribe("SettlementRejected", _settlement_handler)
+    subscribe("SettlementResubmitted", _settlement_handler)
     yield captured
     clear_handlers()
 
@@ -1011,6 +1014,7 @@ async def settlement_factory(session: AsyncSession, tenant_a: Any) -> Any:
                     "amount",
                     "total_amount",
                     "payment_amount",
+                    "payment_adjust_note",
                     "payment_date",
                     "payment_proof_attachment_id",
                     "note_title",
@@ -1095,6 +1099,7 @@ async def settlement_factory(session: AsyncSession, tenant_a: Any) -> Any:
                     amount=kw.get("amount", Decimal("500.00")),
                     total_amount=kw.get("total_amount", Decimal("500.00")),
                     payment_amount=kw.get("payment_amount"),
+                    payment_adjust_note=kw.get("payment_adjust_note"),
                     payment_date=kw.get("payment_date"),
                     payment_proof_attachment_id=kw.get("payment_proof_attachment_id"),
                     note_title=kw.get("note_title"),
