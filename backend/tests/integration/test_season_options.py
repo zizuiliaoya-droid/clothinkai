@@ -2,7 +2,7 @@
 
 - ``list_season_options``：字典 season 启用值（``sort_order, value``）在前，再接商品上出现过、
   字典里没有的值（按值降序），去重；停用字典值、已删商品、空白值、别的租户都不进来
-- 报表侧 ``GET /api/reports/season-options`` 只要 ``report.production:read``：主管 200 且非空，
+- 报表侧 ``GET /api/reports/season-options`` 要投产或工作进度读权限（7e R5 放宽）：主管 200 且非空，
   跟单（没有报表读权限）403——不再依赖 ``/api/dict-items``（C-02）
 - 商品侧 ``GET /api/goods/season-options`` 要 ``product.goods:read``，声明在 ``/{goods_id}`` 之前
 - 商品能保存季节并读回（AC 20 后半）
@@ -29,7 +29,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
 
 def _route_permissions(path: str, method: str = "GET") -> set[tuple[str, str]]:
-    """从路由依赖里取出 require_permission 闭包的 (scope, action)。"""
+    """从路由依赖里取出 require_permission / require_any_permission 闭包的 (scope, action)。"""
     from fastapi.routing import APIRoute
 
     from app.main import app
@@ -44,6 +44,8 @@ def _route_permissions(path: str, method: str = "GET") -> set[tuple[str, str]]:
                 nonlocals = inspect.getclosurevars(fn).nonlocals
                 if "scope" in nonlocals and "action" in nonlocals:
                     perms.add((str(nonlocals["scope"]), str(nonlocals["action"])))
+                if "pairs" in nonlocals:
+                    perms.update((str(s), str(a)) for s, a in nonlocals["pairs"])
             return perms
     raise AssertionError(f"路由不存在：{method} {path}")
 
@@ -142,9 +144,13 @@ class TestListSeasonOptions:
 
 
 class TestSeasonOptionsRoutes:
-    def test_report_route_only_needs_production_read(self) -> None:
-        """AC 19：接口只要求投产报表读权限。"""
-        assert _route_permissions("/api/reports/season-options") == {("report.production", "read")}
+    def test_report_route_needs_production_or_work_progress_read(self) -> None:
+        """AC 19：只要求投产报表读权限；7e R5 起工作进度 read / read_own 也行（只回季节名）。"""
+        assert _route_permissions("/api/reports/season-options") == {
+            ("report.production", "read"),
+            ("report.work_progress", "read"),
+            ("report.work_progress", "read_own"),
+        }
 
     def test_goods_route_needs_goods_read(self) -> None:
         assert _route_permissions("/api/goods/season-options") == {("product.goods", "read")}

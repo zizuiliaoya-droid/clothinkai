@@ -346,7 +346,9 @@ class TestReportExportApiContract:
         ]
         assert work_rows[0][7:9] == [4, Decimal("0.8")]
         # 工作进度按请求区间导（不再取起日所在整月），看全部 PR
-        assert work_calls == [(period, {"scope": PR_SCOPE_ALL, "field_ctx": _SUPER_CTX})]
+        assert work_calls == [
+            (period, {"seasons": None, "scope": PR_SCOPE_ALL, "field_ctx": _SUPER_CTX})
+        ]
 
         response = await service.export(
             uuid4(),

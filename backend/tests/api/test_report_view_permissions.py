@@ -169,6 +169,76 @@ class TestWorkProgress:
         )
         assert resp.status_code == 200, resp.text
 
+    @pytest.mark.parametrize(
+        "season_q",
+        ["".join(f"&season=s{i}" for i in range(21)), f"&season={'x' * 65}"],
+        ids=["21_seasons", "65_chars"],
+    )
+    async def test_invalid_season_422(
+        self, session: AsyncSession, flow_users: Any, season_q: str
+    ) -> None:
+        resp = await _call(session, flow_users.pr_manager, "GET", f"{_WP}?month={_MONTH}{season_q}")
+        assert (resp.status_code, resp.json()["code"]) == (422, "VALIDATION_ERROR")
+
+    async def test_season_keeps_only_matching_goods(
+        self,
+        session: AsyncSession,
+        seeded: Any,
+        promotion_factory: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+    ) -> None:
+        """带季节只统计归属商品季节命中的单：seeded 的单都没归属商品，选了季节就不算。"""
+        from app.modules.product.goods_models import GoodsMain
+
+        tenant = seeded.tenant
+        goods = GoodsMain(
+            tenant_id=tenant.id,
+            goods_code=f"WS{uuid4().hex[:8]}",
+            goods_title="季节商品",
+            season="2026秋",
+        )
+        session.add(goods)
+        await session.flush()
+        style = await product_factory.style(style_code=f"WS{uuid4().hex[:8]}")
+        blogger = await blogger_factory.blogger()
+        await promotion_factory.promotion(
+            style=style,
+            blogger=blogger,
+            pr=seeded.pr,
+            goods_main_id=goods.id,
+            internal_code=f"WS{uuid4().hex[:10].upper()}",
+            cooperation_date=_M_LO + timedelta(days=3),
+            quote_amount=Decimal("88.00"),
+        )
+        await session.flush()
+
+        bare = await _call(session, seeded.finance, "GET", f"{_WP}?month={_MONTH}")
+        autumn = await _call(session, seeded.finance, "GET", f"{_WP}?month={_MONTH}&season=2026秋")
+        other = await _call(session, seeded.finance, "GET", f"{_WP}?month={_MONTH}&season=春夏")
+        assert bare.status_code == autumn.status_code == other.status_code == 200
+        # 场景有效性：不带季节时 pr 有 3 单（seeded 2 + 本单）、共 3 行
+        assert {r["pr_id"]: r["quote_count"] for r in bare.json()}[str(seeded.pr.id)] == 3
+        assert [(r["pr_id"], r["quote_count"], r["quote_amount"]) for r in autumn.json()] == [
+            (str(seeded.pr.id), 1, "88.00")
+        ]
+        assert other.json() == []
+
+    @pytest.mark.parametrize("role", ["pr", "finance", "pr_manager"])
+    async def test_season_options_open_to_work_progress_readers(
+        self, session: AsyncSession, flow_users: Any, role: str
+    ) -> None:
+        """季节下拉只回季节名：持工作进度 read / read_own 就能拿（7e R5，原来只认投产读权限）。"""
+        resp = await _call(session, getattr(flow_users, role), "GET", "/api/reports/season-options")
+        assert resp.status_code == 200, resp.text
+        assert isinstance(resp.json()["items"], list)
+
+    async def test_season_options_warehouse_forbidden(
+        self, session: AsyncSession, flow_users: Any
+    ) -> None:
+        resp = await _call(session, flow_users.warehouse, "GET", "/api/reports/season-options")
+        assert (resp.status_code, resp.json()["code"]) == (403, "PERMISSION_DENIED")
+
 
 _PP = "/api/reports/publish-progress"
 _PP_RANGE = f"preset=custom&date_from={_M_LO}&date_to={_M_HI}"

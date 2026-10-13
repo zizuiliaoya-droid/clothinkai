@@ -227,7 +227,7 @@ class ReportExportService:
 
         # 按请求区间导（原来取起日所在整月）；能走到这里的都持 work_progress:read，看全部 PR
         work_rows = await WorkProgressService(self._s).get_for_range(
-            tenant_id, *time_range, scope=PR_SCOPE_ALL, field_ctx=field_ctx
+            tenant_id, *time_range, seasons=seasons, scope=PR_SCOPE_ALL, field_ctx=field_ctx
         )
         rows = [
             [

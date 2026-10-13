@@ -72,10 +72,12 @@ async def get_work_progress(
     preset: _PresetQ = "this_month",
     date_from: _FromQ = None,
     date_to: _ToQ = None,
+    season: Annotated[list[str] | None, Query(description="季节多选，≤ 20 个")] = None,
 ) -> list[PrWorkProgress]:
     """工作进度（区间 × PR）。传了 ``month`` 就按整月，否则按 ``preset`` / 自定义区间。
 
     只持 ``read_own`` 的 PR 只看到本人那一行（service 层过滤，``resolve_pr_scope``）。
+    ``season``（7e R5）：只统计归属商品季节命中的单。
     """
     if month is not None:
         lo, hi = _month_range(month)
@@ -86,6 +88,7 @@ async def get_work_progress(
         user.tenant_id,
         lo,
         hi,
+        seasons=season,
         scope=scope,
         field_ctx=await build_field_perm_context(user.id, session),
     )
@@ -348,15 +351,20 @@ async def refresh_summaries(
 @router.get(
     "/season-options",
     response_model=SeasonOptionsResponse,
-    dependencies=[require_permission("report.production", "read")],
+    dependencies=[
+        require_any_permission(
+            ("report.production", "read"), _WP_READ, REPORT_WORK_PROGRESS_READ_OWN
+        )
+    ],
 )
 async def get_report_season_options(
     user: CurrentActiveUser,
     session: SessionDep,
 ) -> SeasonOptionsResponse:
-    """投产页季节下拉（8a-3，§8.3，C-02）：字典 season 启用值 + 商品上出现过的值。
+    """投产页 / 工作进度页季节下拉（8a-3，§8.3，C-02；7e R5）：字典 season 启用值 + 商品上出现过的值。
 
-    只要求投产报表读权限——主管没有 ``product:read``，原来调 ``/api/dict-items`` 拿到的是空下拉。
+    只要求投产或工作进度读权限——主管没有 ``product:read``，原来调 ``/api/dict-items`` 拿到的是
+    空下拉；只回季节名，PR（``read_own``）与财务也能拿到。
     """
     return SeasonOptionsResponse(items=await list_season_options(session, user.tenant_id))
 

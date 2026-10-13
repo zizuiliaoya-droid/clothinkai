@@ -143,6 +143,7 @@ class TestWorkProgressUrgeCounts:
             rows = await WorkProgressService(session).get_for_range(
                 tenant_a.id,
                 *_month_range(f"{COOP:%Y-%m}"),
+                seasons=None,
                 scope=PR_SCOPE_ALL,
                 field_ctx=FieldPermissionContext(
                     frozenset(), frozenset(), frozenset(), is_superuser=True

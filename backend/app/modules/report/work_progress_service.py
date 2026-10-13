@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import calendar
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import date
-from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 from uuid import UUID
 
@@ -16,15 +15,13 @@ from app.core.security.field_permissions import FieldPermissionContext
 from app.modules.promotion.urge_calculator import get_today
 from app.modules.report.advanced_repository import WorkProgressRepository
 from app.modules.report.advanced_schemas import PrWorkProgress
+from app.modules.report.drill_service import validate_seasons
 from app.modules.report.exceptions import ReportInvalidTimeRangeError
 from app.modules.report.field_mask import aggregate_promo_amounts_visible
 from app.modules.report.pr_scope import PrScope
 from app.modules.report.summary_read import SummaryReadRepository, record_source
+from app.modules.report.work_progress_rows import progress_metrics
 from app.modules.urge.service import UrgeService
-from app.services.metric.common import safe_div
-
-_Q4 = Decimal("0.0001")
-_CENT = Decimal("0.01")
 
 
 def _month_range(month: str) -> tuple[date, date]:
@@ -50,6 +47,7 @@ class WorkProgressService:
         date_from: date,
         date_to: date,
         *,
+        seasons: Sequence[str] | None,
         scope: PrScope,
         field_ctx: FieldPermissionContext,
     ) -> list[PrWorkProgress]:
@@ -58,16 +56,23 @@ class WorkProgressService:
         没有「当月永远实时」的特例：未来的日子刷新不到、不会有覆盖，含未来的区间照样走实时。
 
         ``scope``（只看本人）下推到 SQL（7e R2）：两条路径都按 ``scope.as_param()`` 过滤。
-        ``field_ctx`` 给 F3 聚合金额（``cost`` / ``cpl``）。
-        两个关键字都不给默认值：漏传直接报错，不悄悄放成「全部可见」。
+        ``seasons``（7e R5）：只统计归属商品季节命中的单（没归属商品的单不算），空 = 不筛；
+        ≤ 20 个、每个 ≤ 64 字，违者 422。
+        ``field_ctx`` 给 F3 聚合金额（金额列与金额派生的比率）。
+        三个关键字都不给默认值：漏传直接报错，不悄悄放成「全部可见」或「不筛季节」。
         """
+        validate_seasons(seasons)
         fresh = await self._summary.freshness(tenant_id, date_from, date_to)
         pr_id = scope.as_param()
         with report_query_duration_seconds.labels("work_progress").time():
             if fresh.source == "summary":
                 record_source("work_progress", "summary")
                 rows = await self._summary.work_progress_by_pr(
-                    tenant_id=tenant_id, date_from=date_from, date_to=date_to, pr_id=pr_id
+                    tenant_id=tenant_id,
+                    date_from=date_from,
+                    date_to=date_to,
+                    seasons=seasons,
+                    pr_id=pr_id,
                 )
             else:
                 record_source("work_progress", "live")
@@ -78,45 +83,16 @@ class WorkProgressService:
                     today=get_today(),
                     thresholds=await self._urge.get_urge_thresholds(tenant_id),
                     by_goods=False,
+                    seasons=seasons,
                     pr_id=pr_id,
                 )
         amounts = aggregate_promo_amounts_visible("work_progress", field_ctx)
         return [self._to_row(r, amounts=amounts) for r in rows]
 
-    def _to_row(self, r: Mapping[str, Any], *, amounts: bool) -> PrWorkProgress:
-        quote = int(r["quote_count"])
-        publish = int(r["publish_count"])
-        effective_quote = int(r["effective_quote_count"])
-        # 两条路径数值相等但写法可能不同（"0" vs "0.00"），归一成两位小数
-        cost = Decimal(str(r["cost"] or 0)).quantize(_CENT, rounding=ROUND_HALF_UP)
+    @staticmethod
+    def _to_row(r: Mapping[str, Any], *, amounts: bool) -> PrWorkProgress:
         return PrWorkProgress(
-            pr_id=r["pr_id"],
-            pr_name=r["pr_name"],
-            quote_count=quote,
-            in_schedule_count=int(r["in_schedule_count"]),
-            urge_count=int(r["urge_count"]),
-            important_urge_count=int(r["important_urge_count"]),
-            overdue_count=int(r["overdue_count"]),
-            publish_count=publish,
-            info_complete_count=int(r["info_complete_count"]),
-            info_complete_rate=safe_div(r["info_complete_count"], publish, quantize=_Q4),
-            cancel_count=int(r["cancel_count"]),
-            recall_due_count=int(r["recall_due_count"]),
-            recall_success_count=int(r["recall_success_count"]),
-            recall_complete_rate=safe_div(
-                r["recall_success_count"], r["recall_due_count"], quantize=_Q4
-            ),
-            effective_quote_count=effective_quote,
-            # PRD 第 9 章：超时率 / 完成率的分母要扣掉召回量与取消量。
-            # 用裸约稿量做分母会把已取消、已召回的单也算成「待发布」，完成率被系统性低估。
-            overdue_rate=safe_div(r["overdue_count"], effective_quote, quantize=_Q4),
-            month_complete_rate=safe_div(publish, effective_quote, quantize=_Q4),
-            hit_count=int(r["hit_count"]),
-            hit_rate=safe_div(r["hit_count"], publish, quantize=_Q4),
-            like_count=int(r["like_count"]),
-            # F3：聚合金额按报表读权限给（field_mask.aggregate_promo_amounts_visible）
-            cost=cost if amounts else None,
-            cpl=safe_div(cost, r["like_count"], quantize=_Q4) if amounts else None,
+            pr_id=r["pr_id"], pr_name=r["pr_name"], **progress_metrics(r, amounts=amounts)
         )
 
 

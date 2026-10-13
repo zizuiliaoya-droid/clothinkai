@@ -320,8 +320,11 @@ async def _wp(
     hi: date,
     *,
     scope: PrScope = PR_SCOPE_ALL,
+    seasons: list[str] | None = None,
 ) -> list[PrWorkProgress]:
-    return await svc.get_for_range(tenant.id, lo, hi, scope=scope, field_ctx=_SUPER_CTX)
+    return await svc.get_for_range(
+        tenant.id, lo, hi, seasons=seasons, scope=scope, field_ctx=_SUPER_CTX
+    )
 
 
 def _dump(models: Any) -> Any:
@@ -1469,6 +1472,9 @@ def _norm_wp(row: Any) -> dict[str, Any]:
 
 
 class TestWorkProgress:
+    @pytest.mark.parametrize(
+        "seasons", [None, ["春夏"], ["春夏", "秋冬"]], ids=["no_filter", "spring", "both"]
+    )
     async def test_summary_equals_live(
         self,
         session: AsyncSession,
@@ -1479,49 +1485,70 @@ class TestWorkProgress:
         factory: Any,
         recorder: _SourceRecorder,
         monkeypatch: pytest.MonkeyPatch,
+        seasons: list[str] | None,
     ) -> None:
+        """service 两路逐字相等（含 R5 新列与 PRD 公式列），季节在两路同一口径。"""
         tok = tenant_id_ctx.set(tenant_a.id)
         try:
             seeded = await _seed(
                 session, tenant_a, product_factory, blogger_factory, promotion_factory, factory
             )
+            pr3 = await _seed_wp_amounts(
+                session, tenant_a, product_factory, promotion_factory, factory, seeded
+            )
             await session.commit()
             await _refresh(session, tenant_a, M_LO, M_HI)
 
             svc = WorkProgressService(session)
-            via_summary = await _wp(svc, tenant_a, M_LO, M_HI)
-            assert ("work_progress", "summary") in recorder.calls
+            via_summary = await _wp(svc, tenant_a, M_LO, M_HI, seasons=seasons)
+            assert recorder.calls == [("work_progress", "summary")]
 
             monkeypatch.setattr(settings, "REPORT_SUMMARY_READS_ENABLED", False)
-            via_live = await _wp(svc, tenant_a, M_LO, M_HI)
-            assert ("work_progress", "live") in recorder.calls
+            via_live = await _wp(svc, tenant_a, M_LO, M_HI, seasons=seasons)
+            assert recorder.calls[1:] == [("work_progress", "live")]
             assert _dump(via_summary) == _dump(via_live)
 
-            # 场景有效性：14 个计数每一个都要在某一行出现非零值
-            counters = (
-                "quote_count",
-                "in_schedule_count",
-                "urge_count",
-                "important_urge_count",
-                "overdue_count",
-                "publish_count",
-                "info_complete_count",
-                "cancel_count",
-                "recall_due_count",
-                "recall_success_count",
-                "effective_quote_count",
-                "hit_count",
-                "like_count",
-                "cost",
-            )
-            for c in counters:
+            by_pr = {r.pr_id: r for r in via_summary}
+            if seasons == ["春夏"]:
+                # pr3 只剩 ② ③ ④（季节在 SQL 里过滤，不是取全部后在 service 筛）
+                assert (by_pr[pr3.id].quote_count, by_pr[pr3.id].promo_cost) == (
+                    3,
+                    Decimal("400.00"),
+                )
+                return
+            if seasons is not None:
+                assert by_pr[pr3.id].quote_count == 5  # ⑥ 没归属商品不算
+                return
+
+            # 场景有效性：每个指标字段（含 R5 新列与公式列）都要在某一行出现非零值
+            metric_fields = [
+                c for c in PrWorkProgress.model_fields if c not in ("pr_id", "pr_name")
+            ]
+            for c in metric_fields:
                 assert any(getattr(r, c) for r in via_summary), f"场景没有产生非零的 {c}"
 
-            by_pr = {r.pr_id: r for r in via_summary}
             # 抖音折算：两天各 1.5，合计 3（逐日取整会得到 4）
             assert by_pr[seeded["pr2"].id].like_count == 3
             # 未分配 PR 的那一行在
             assert None in by_pr
+            # pr3 手算（单据见 _seed_wp_amounts）：已发布服务费 300、发布 1 篇；
+            # 约稿服务费 820、有效 640；已发货 2、其中已发布 1；推广成本 870、没有点赞 → CPL null
+            row = by_pr[pr3.id]
+            assert (
+                row.avg_published_quote,
+                row.amount_publish_rate,
+                row.total_amount_publish_rate,
+                row.ship_publish_rate,
+                row.promo_cost,
+                row.cpl,
+            ) == (
+                Decimal("300.00"),
+                Decimal("0.3659"),
+                Decimal("0.4688"),
+                Decimal("0.5000"),
+                Decimal("870.00"),
+                None,
+            )
         finally:
             tenant_id_ctx.reset(tok)
 
