@@ -74,14 +74,14 @@ export const PAYMENT_PROOF_MAX_BYTES = 10 * 1024 * 1024;
  *
  * 不再由浏览器直传 R2 —— 直传要求 bucket 配 CORS，生产私有桶没配，浏览器只会报
  * 「Failed to fetch」。与收款码、催发截图、7 天数据截图同一套做法。
+ *
+ * 付款日期不传：服务端一律取北京时间的当天（流程线 F4）。
  */
 export async function uploadPaymentProof(
   settlementId: string,
-  paymentDate: string,
   file: File
 ): Promise<Settlement> {
   const form = new FormData();
-  form.append("payment_date", paymentDate);
   form.append("file", file, file.name);
   const resp = await apiClient.post<Settlement>(
     `/api/settlements/${settlementId}/payment-proof/upload`,
