@@ -17,10 +17,11 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 from decimal import Decimal
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 from uuid import uuid4
 
 import pytest
+from pydantic import BaseModel
 from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -57,9 +58,9 @@ from app.modules.report.pr_scope import PR_SCOPE_ALL, UNASSIGNED, PrScope, PrSco
 from app.modules.report.production_service import ProductionService
 from app.modules.report.store_daily_service import StoreDailyService
 from app.modules.report.summary_models import PR_PROGRESS_METRICS, PrWorkProgressSummary
-from app.modules.report.summary_read import SummaryReadRepository
+from app.modules.report.summary_read import ReportFreshness, SummaryReadRepository
 from app.modules.report.summary_refresh_service import SummaryRefreshService
-from app.modules.report.work_progress_models import StoreDaily
+from app.modules.report.work_progress_models import StoreDaily, TargetPlanning
 from app.modules.report.work_progress_service import WorkProgressService
 from app.modules.urge.service import UrgeService
 
@@ -3049,6 +3050,162 @@ class TestStoreReport:
             # 手填 0 也算录了：x / y = 2 / 3，率 = 5 ÷ (100 + 250)
             assert (month.refund_only_days, month.day_count) == (2, 3)
             assert month.refund_only_rate == Decimal("0.0143")
+        finally:
+            tenant_id_ctx.reset(tok)
+
+
+# BI 看板（7e R6，设计 2.6）：一个响应三个入口，各记一笔来源
+_BI_LABELS = ("bi_store", "bi_workload", "bi_goods")
+
+
+def _is_numeric(annotation: Any) -> bool:
+    """字段声明里有 int / Decimal（含 ``X | None``）；bool 不算。"""
+    return any(a in (int, Decimal) for a in (get_args(annotation) or (annotation,)))
+
+
+def _numeric_values(model: BaseModel, prefix: str, out: dict[str, list[Any]]) -> None:
+    """按字段路径收集数值（列表元素合并到 ``x[]``，列表本身记长度）。"""
+    for name, field in type(model).model_fields.items():
+        value = getattr(model, name)
+        path = f"{prefix}{name}"
+        if isinstance(value, BaseModel):
+            _numeric_values(value, f"{path}.", out)
+        elif isinstance(value, list):
+            out.setdefault(f"{path}[]", []).append(len(value))
+            for item in value:
+                if isinstance(item, BaseModel):
+                    _numeric_values(item, f"{path}[].", out)
+        elif _is_numeric(field.annotation):
+            out.setdefault(path, []).append(value)
+
+
+async def _seed_bi(
+    session: AsyncSession,
+    tenant: Any,
+    product_factory: Any,
+    blogger_factory: Any,
+    promotion_factory: Any,
+    factory: Any,
+) -> dict[str, Any]:
+    """``_seed``（两商品 + 刷单 + 手填 + 全部催发状态）+ 店铺日期并集 + pr1 的月目标篇数。"""
+    seeded = await _seed(
+        session, tenant, product_factory, blogger_factory, promotion_factory, factory
+    )
+    session.add(
+        TargetPlanning(
+            tenant_id=tenant.id,
+            pr_id=seeded["pr1"].id,
+            style_id=seeded["style_a"].id,
+            period_month=MONTH,
+            min_target=8,
+        )
+    )
+    await session.commit()
+    # 它在最后刷新整月，_seed 的数据一起进汇总表
+    await _seed_store_and_refresh(
+        session, tenant, product_factory, blogger_factory, promotion_factory
+    )
+    return seeded
+
+
+class _FreshnessSpy:
+    def __init__(self) -> None:
+        self.calls = 0
+
+
+class TestBiDashboard:
+    """BI 全页两路逐字等；整页一次 ``freshness``，三块同一来源（设计 2.6 / 第 8 节）。"""
+
+    @pytest.mark.parametrize("granularity", ["day", "week"])
+    @pytest.mark.parametrize("exclude_brushing", [True, False])
+    async def test_summary_equals_live_one_source(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        factory: Any,
+        recorder: _SourceRecorder,
+        monkeypatch: pytest.MonkeyPatch,
+        exclude_brushing: bool,
+        granularity: str,
+    ) -> None:
+        spy = _FreshnessSpy()
+        real = SummaryReadRepository.freshness
+
+        async def counting(
+            self: SummaryReadRepository, tenant_id: Any, date_from: date, date_to: date
+        ) -> ReportFreshness:
+            spy.calls += 1
+            return await real(self, tenant_id, date_from, date_to)
+
+        monkeypatch.setattr(SummaryReadRepository, "freshness", counting)
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            await _seed_bi(
+                session, tenant_a, product_factory, blogger_factory, promotion_factory, factory
+            )
+            svc = BiService(session)
+            kwargs: dict[str, Any] = {
+                "granularity": granularity,
+                "exclude_brushing": exclude_brushing,
+                "field_ctx": _SUPER_CTX,
+            }
+            via_summary = await svc.get_dashboard(tenant_a.id, (M_LO, M_HI), **kwargs)
+            assert spy.calls == 1
+            assert recorder.calls == [(label, "summary") for label in _BI_LABELS]
+
+            monkeypatch.setattr(settings, "REPORT_SUMMARY_READS_ENABLED", False)
+            via_live = await svc.get_dashboard(tenant_a.id, (M_LO, M_HI), **kwargs)
+            assert spy.calls == 2
+            assert recorder.calls[3:] == [(label, "live") for label in _BI_LABELS]
+            assert _dump(via_summary) == _dump(via_live)
+
+            # 场景有效性：响应里每个数值字段（含列表长度）至少一处非零
+            values: dict[str, list[Any]] = {}
+            _numeric_values(via_summary, "", values)
+            dead = sorted(p for p, vs in values.items() if not any(v not in (None, 0) for v in vs))
+            assert dead == [], f"这些字段全是 0 / None，场景失效：{dead}"
+            assert any(r.target_count for r in via_summary.store.workload), "目标篇数没读到"
+            assert any(r.pr_id is None for r in via_summary.store.workload), "未分配行没进来"
+        finally:
+            tenant_id_ctx.reset(tok)
+
+    async def test_blocks_do_not_judge_source_themselves(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        factory: Any,
+        recorder: _SourceRecorder,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """第一次 freshness 判汇总、之后都判实时：哪块自己再判一次，就会混进 live。"""
+        spy = _FreshnessSpy()
+        real = SummaryReadRepository.freshness
+
+        async def summary_then_live(
+            self: SummaryReadRepository, tenant_id: Any, date_from: date, date_to: date
+        ) -> ReportFreshness:
+            spy.calls += 1
+            if spy.calls == 1:
+                return await real(self, tenant_id, date_from, date_to)
+            return ReportFreshness(date_from, date_to, "live", None)
+
+        monkeypatch.setattr(SummaryReadRepository, "freshness", summary_then_live)
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            await _seed_bi(
+                session, tenant_a, product_factory, blogger_factory, promotion_factory, factory
+            )
+            await BiService(session).get_dashboard(
+                tenant_a.id, (M_LO, M_HI), exclude_brushing=True, field_ctx=_SUPER_CTX
+            )
+            assert recorder.calls == [(label, "summary") for label in _BI_LABELS]
+            assert spy.calls == 1
         finally:
             tenant_id_ctx.reset(tok)
 
