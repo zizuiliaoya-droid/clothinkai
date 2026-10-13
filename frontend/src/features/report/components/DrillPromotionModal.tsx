@@ -1,4 +1,5 @@
-// 报表下钻弹窗（7e R1，报表视图设计 2.1 / 2.5）：工作进度表点 PR 行 → 该 PR 在区间内的推广单。
+// 报表下钻弹窗（7e R1，报表视图设计 2.1 / 2.5）：工作进度表点 PR 行 → 该 PR 在区间内的推广单；
+// R5 起也按商品 / 季节 / 周取单，表格单独导出给周明细的行展开用。
 // 字段是后端白名单；金额读不到（字段权限）显示「—」；detail_url R1 ~ R7 恒 null，不渲染链接（R8 再接详情抽屉）。
 import { useState } from "react";
 import { Alert, Modal, Table, Typography } from "antd";
@@ -8,6 +9,7 @@ import { getDrillPromotions } from "@/features/report/api";
 import {
   DRILL_PAGE_SIZE,
   drillPromotionParams,
+  drillTargetKey,
   type DrillPromotionTarget,
 } from "@/features/report/drill";
 import type { DrillPromotionRow } from "@/features/report/types";
@@ -45,10 +47,10 @@ const COLUMNS: ColumnsType<DrillPromotionRow> = [
 
 const SCROLL_X = COLUMNS.reduce((sum, c) => sum + (Number(c.width) || 0), 0);
 
-function DrillPromotionTable({ target }: { target: DrillPromotionTarget }) {
+export function DrillPromotionTable({ target }: { target: DrillPromotionTarget }) {
   const [page, setPage] = useState(1);
   const { data, isFetching, error } = useQuery({
-    queryKey: ["report-drill-promotions", target.prId, target.dateFrom, target.dateTo, page],
+    queryKey: ["report-drill-promotions", drillTargetKey(target), page],
     queryFn: () => getDrillPromotions(drillPromotionParams(target, page)),
     placeholderData: keepPreviousData,
   });
@@ -95,7 +97,7 @@ export function DrillPromotionModal({ target, onClose }: Props) {
   return (
     <Modal
       open={target != null}
-      title={target ? `${target.prName} 的推广单` : undefined}
+      title={target ? `${target.title} 的推广单` : undefined}
       onCancel={onClose}
       footer={null}
       width={1100}
@@ -104,7 +106,7 @@ export function DrillPromotionModal({ target, onClose }: Props) {
       {target ? (
         // 换对象时整块重建，页码回到第一页
         <DrillPromotionTable
-          key={`${target.prId ?? "unassigned"}|${target.dateFrom}|${target.dateTo}`}
+          key={drillTargetKey(target)}
           target={target}
         />
       ) : null}

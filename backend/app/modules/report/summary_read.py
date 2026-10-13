@@ -304,6 +304,92 @@ class SummaryReadRepository:
         }
         return as_mappings((await self._s.execute(sql, params)).mappings().all())
 
+    async def work_progress_by_goods(
+        self,
+        *,
+        tenant_id: UUID,
+        date_from: date,
+        date_to: date,
+        seasons: Sequence[str] | None,
+        pr_id: PrParam,
+    ) -> list[Mapping[str, Any]]:
+        """⇄ ``aggregate_by_pr(by_goods=True, seasons, pr_id)`` 再按商品相加（7e R5 单品卡片）。
+
+        一行一个归属商品（``goods_main_id``），没归属商品的单落在 NULL 那一行（选了季节时
+        JOIN 不上、没有这一行，同实时）。显示名与排序在 service 里两路共用，这里只按 id 排。
+        ``seasons`` / ``pr_id`` 不给默认值：漏传直接报错。
+        """
+        sums = ",\n".join(f"COALESCE(SUM(s.{c}), 0) AS {c}" for c in PR_PROGRESS_METRICS)
+        scope_sql, scope_params = pr_scope_from_param(pr_id).sql("s.pr_id")
+        goods_season_sql, season_params = goods_filter_clauses(seasons)
+        goods_join = "LEFT JOIN goods_main g ON g.id = s.goods_main_id" if seasons else ""
+        sql = text(
+            f"""
+            SELECT
+              s.goods_main_id AS goods_main_id,
+              {sums}
+            FROM pr_work_progress_summary s
+            {goods_join}
+            WHERE s.tenant_id = :tenant_id
+              AND s.stat_date BETWEEN :date_from AND :date_to
+              {scope_sql}
+              {goods_season_sql}
+            GROUP BY s.goods_main_id
+            ORDER BY s.goods_main_id NULLS LAST
+            """
+        )
+        params = {
+            "tenant_id": tenant_id,
+            "date_from": date_from,
+            "date_to": date_to,
+            **scope_params,
+            **season_params,
+        }
+        return as_mappings((await self._s.execute(sql, params)).mappings().all())
+
+    async def work_progress_by_week(
+        self,
+        *,
+        tenant_id: UUID,
+        date_from: date,
+        date_to: date,
+        seasons: Sequence[str] | None,
+        pr_id: PrParam,
+    ) -> list[Mapping[str, Any]]:
+        """⇄ 逐周（∩ 区间）调 ``aggregate_by_pr(by_goods=False, seasons, pr_id)`` 再跨 PR 相加
+        （7e R5 周明细）。一行一个 ISO 周（``week_start`` = 周一），只出有行的周，按周升序。
+
+        汇总表一行一天，直接对 ``stat_date`` 分桶；首尾周靠 ``BETWEEN`` 截到区间。
+        ``seasons`` / ``pr_id`` 不给默认值：漏传直接报错。
+        """
+        sums = ",\n".join(f"COALESCE(SUM(s.{c}), 0) AS {c}" for c in PR_PROGRESS_METRICS)
+        scope_sql, scope_params = pr_scope_from_param(pr_id).sql("s.pr_id")
+        week_season_sql, season_params = goods_filter_clauses(seasons)
+        goods_join = "LEFT JOIN goods_main g ON g.id = s.goods_main_id" if seasons else ""
+        sql = text(
+            f"""
+            SELECT
+              {bucket_expr("week", "s.stat_date")} AS week_start,
+              {sums}
+            FROM pr_work_progress_summary s
+            {goods_join}
+            WHERE s.tenant_id = :tenant_id
+              AND s.stat_date BETWEEN :date_from AND :date_to
+              {scope_sql}
+              {week_season_sql}
+            GROUP BY 1
+            ORDER BY 1
+            """
+        )
+        params = {
+            "tenant_id": tenant_id,
+            "date_from": date_from,
+            "date_to": date_to,
+            **scope_params,
+            **season_params,
+        }
+        return as_mappings((await self._s.execute(sql, params)).mappings().all())
+
     # ------------------------------------------------------------------ #
     # 店铺数据 ⇄ StoreDailyRepository.aggregate
     # ------------------------------------------------------------------ #

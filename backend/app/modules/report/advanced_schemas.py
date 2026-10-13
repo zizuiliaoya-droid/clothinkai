@@ -13,9 +13,13 @@ from pydantic_core import PydanticCustomError
 # ----------------------------- 工作进度 ----------------------------- #
 
 
-class PrWorkProgress(BaseModel):
-    pr_id: UUID | None = None
-    pr_name: str
+class WorkProgressMetrics(BaseModel):
+    """工作进度的指标段：PR 表、单品卡片、周明细共用（7e R5，行构造见 ``work_progress_rows``）。
+
+    比率都在求和之后现算，分母 ≤ 0 → null。金额列与金额派生的四列（单篇均价、两个金额发布率、
+    CPL）在 F3 读不到时为 null。
+    """
+
     quote_count: int
     in_schedule_count: int
     urge_count: int
@@ -37,7 +41,83 @@ class PrWorkProgress(BaseModel):
     like_count: int
     # F3 聚合金额：读不到时为 null（R1 恒给，见 report/field_mask.py）
     cost: Decimal | None
+    """样品成本之和（旧列，R5 起页面不再展示，接口保留）。"""
     cpl: Decimal | None = None
+    """CPL = 推广成本 ÷ 折算点赞（R5 起分子从 ``cost`` 换成 ``promo_cost``，默 17）。"""
+    # 7e R2 落盘、R5 起给出的列
+    quote_amount: Decimal | None = None
+    published_quote_amount: Decimal | None = None
+    effective_quote_amount: Decimal | None = None
+    """有效约稿服务费：扣取消与召回（同完成率分母）。"""
+    unpublished_quote_amount: Decimal | None = None
+    cancelled_quote_amount: Decimal | None = None
+    promo_cost: Decimal | None = None
+    """推广成本（站外）：未删除推广单的应付之和，不看发布 / 召回状态（默 8 / 默 17）。"""
+    unpublished_count: int
+    shipped_count: int
+    shipped_published_count: int
+    # PRD 公式（求和后现算）
+    avg_published_quote: Decimal | None = None
+    """发布单篇均价 = 已发布服务费 ÷ 发布量。"""
+    amount_publish_rate: Decimal | None = None
+    """金额发布率 = 已发布服务费 ÷ 总约稿服务费。"""
+    total_amount_publish_rate: Decimal | None = None
+    """总金额发布率 = 已发布服务费 ÷ 有效约稿服务费。"""
+    ship_publish_rate: Decimal | None = None
+    """发货发布率 =（已发货且已发布）÷ 已发货。"""
+
+
+class PrWorkProgress(WorkProgressMetrics):
+    pr_id: UUID | None = None
+    pr_name: str
+
+
+class WorkProgressGoodsRow(WorkProgressMetrics):
+    """单品卡片的一行（7e R5）。**不返回商品编码**：页面靠显示名认商品。
+
+    「未归属商品」行：``goods_id`` / ``goods_title`` / ``goods_short_name`` 都是 null。
+    """
+
+    goods_id: UUID | None = None
+    goods_title: str | None = None
+    goods_short_name: str | None = None
+    display_name: str
+    """显示名：有简称用简称，没填回落全称；未归属 =「未归属商品」。"""
+
+
+class WorkProgressGoodsPage(BaseModel):
+    """单品卡片 / 「查看全部」的一页。``items`` 与 ``total`` 只含有归属的商品；
+
+    没归属商品的单汇成 ``unassigned``（没选季节且有这类单时才有），前端放在最后一页末尾。
+    """
+
+    date_from: date
+    date_to: date
+    total: int
+    limit: int
+    offset: int
+    items: list[WorkProgressGoodsRow]
+    unassigned: WorkProgressGoodsRow | None = None
+
+
+class WorkProgressWeekRow(WorkProgressMetrics):
+    """周明细的一行（7e R5，Q15）：按合作日期 ISO 周分桶。
+
+    ``date_from`` / ``date_to`` 是该周 ∩ 筛选区间的实际起止（首尾周被截断），下钻按它们取单。
+    """
+
+    week_start: date
+    """ISO 周一（桶键）；首周可能早于 ``date_from``。"""
+    date_from: date
+    date_to: date
+
+
+class WorkProgressWeeks(BaseModel):
+    """周明细：只出有单的周，按 ``week_start`` 升序；各周之和 = PR 表合计（K5）。"""
+
+    date_from: date
+    date_to: date
+    items: list[WorkProgressWeekRow]
 
 
 # ----------------------------- 下钻单据 ----------------------------- #
@@ -457,4 +537,5 @@ __all__ = [
     "StoreDailyRow",
     "TargetCreate",
     "TargetWithActual",
+    "WorkProgressMetrics",
 ]

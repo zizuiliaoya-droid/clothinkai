@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import io
 from collections.abc import AsyncIterator
 from datetime import timedelta
 from decimal import Decimal
@@ -22,6 +23,7 @@ from uuid import uuid4
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from openpyxl import load_workbook
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -90,6 +92,41 @@ async def seeded(
     await promo(pr=flow_users.pr2, cost_snapshot=Decimal("40.00"))
     await promo(cost_snapshot=Decimal("7.00"))
     return flow_users
+
+
+@pytest.fixture
+async def goods_seeded(
+    session: AsyncSession,
+    seeded: Any,
+    product_factory: Any,
+    blogger_factory: Any,
+    promotion_factory: Any,
+) -> Any:
+    """在 ``seeded`` 之上：pr 一单归属商品甲、pr2 一单归属商品乙（单品卡片 / 周明细的只看本人）。"""
+    from app.modules.product.goods_models import GoodsMain
+
+    style = await product_factory.style(style_code=f"RG{uuid4().hex[:8]}")
+    blogger = await blogger_factory.blogger()
+    made: list[Any] = []
+    for user in (seeded.pr, seeded.pr2):
+        goods = GoodsMain(
+            tenant_id=seeded.tenant.id,
+            goods_code=f"RG{uuid4().hex[:8]}",
+            goods_title=f"商品{uuid4().hex[:4]}",
+        )
+        session.add(goods)
+        await session.flush()
+        await promotion_factory.promotion(
+            style=style,
+            blogger=blogger,
+            pr=user,
+            goods_main_id=goods.id,
+            internal_code=f"RG{uuid4().hex[:10].upper()}",
+            cooperation_date=_M_LO + timedelta(days=9),
+        )
+        made.append(goods)
+    await session.flush()
+    return seeded, made[0], made[1]
 
 
 @pytest.mark.usefixtures("tenant_ctx")
@@ -168,6 +205,183 @@ class TestWorkProgress:
             f"{_WP}?preset=custom&date_from={_M_LO}&date_to={hi}",
         )
         assert resp.status_code == 200, resp.text
+
+    @pytest.mark.parametrize("sub", ["", "/goods", "/weeks"], ids=["pr", "goods", "weeks"])
+    @pytest.mark.parametrize(
+        "season_q",
+        ["".join(f"&season=s{i}" for i in range(21)), f"&season={'x' * 65}"],
+        ids=["21_seasons", "65_chars"],
+    )
+    async def test_invalid_season_422(
+        self, session: AsyncSession, flow_users: Any, season_q: str, sub: str
+    ) -> None:
+        """三个接口都校验季节（≤ 20 个、每个 ≤ 64 字）。"""
+        query = f"preset=custom&date_from={_M_LO}&date_to={_M_HI}{season_q}"
+        resp = await _call(session, flow_users.pr_manager, "GET", f"{_WP}{sub}?{query}")
+        assert (resp.status_code, resp.json()["code"]) == (422, "VALIDATION_ERROR")
+
+    async def test_season_keeps_only_matching_goods(
+        self,
+        session: AsyncSession,
+        seeded: Any,
+        promotion_factory: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+    ) -> None:
+        """带季节只统计归属商品季节命中的单：seeded 的单都没归属商品，选了季节就不算。"""
+        from app.modules.product.goods_models import GoodsMain
+
+        tenant = seeded.tenant
+        goods = GoodsMain(
+            tenant_id=tenant.id,
+            goods_code=f"WS{uuid4().hex[:8]}",
+            goods_title="季节商品",
+            season="2026秋",
+        )
+        session.add(goods)
+        await session.flush()
+        style = await product_factory.style(style_code=f"WS{uuid4().hex[:8]}")
+        blogger = await blogger_factory.blogger()
+        await promotion_factory.promotion(
+            style=style,
+            blogger=blogger,
+            pr=seeded.pr,
+            goods_main_id=goods.id,
+            internal_code=f"WS{uuid4().hex[:10].upper()}",
+            cooperation_date=_M_LO + timedelta(days=3),
+            quote_amount=Decimal("88.00"),
+        )
+        await session.flush()
+
+        bare = await _call(session, seeded.finance, "GET", f"{_WP}?month={_MONTH}")
+        autumn = await _call(session, seeded.finance, "GET", f"{_WP}?month={_MONTH}&season=2026秋")
+        other = await _call(session, seeded.finance, "GET", f"{_WP}?month={_MONTH}&season=春夏")
+        assert bare.status_code == autumn.status_code == other.status_code == 200
+        # 场景有效性：不带季节时 pr 有 3 单（seeded 2 + 本单）、共 3 行
+        assert {r["pr_id"]: r["quote_count"] for r in bare.json()}[str(seeded.pr.id)] == 3
+        assert [(r["pr_id"], r["quote_count"], r["quote_amount"]) for r in autumn.json()] == [
+            (str(seeded.pr.id), 1, "88.00")
+        ]
+        assert other.json() == []
+
+    async def test_goods_route_defaults(self, session: AsyncSession, seeded: Any) -> None:
+        """单品卡片（7e R5）：默认 ``limit`` 12、``offset`` 0；seeded 的单都没归属商品 → 只有信封里的未归属。"""
+        resp = await _call(
+            session,
+            seeded.finance,
+            "GET",
+            f"{_WP}/goods?preset=custom&date_from={_M_LO}&date_to={_M_HI}",
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert (body["items"], body["total"], body["limit"], body["offset"]) == ([], 0, 12, 0)
+        assert (body["date_from"], body["date_to"]) == (str(_M_LO), str(_M_HI))
+        assert body["unassigned"]["display_name"] == "未归属商品"
+        assert body["unassigned"]["quote_count"] == 4
+        assert "goods_code" not in body["unassigned"]
+
+    async def test_weeks_route(self, session: AsyncSession, seeded: Any) -> None:
+        """周明细（7e R5）：区间原样回传；各周约稿量之和 = PR 表合计；行起止都在区间内。"""
+        query = f"preset=custom&date_from={_M_LO}&date_to={_M_HI}"
+        resp = await _call(session, seeded.finance, "GET", f"{_WP}/weeks?{query}")
+        table = await _call(session, seeded.finance, "GET", f"{_WP}?{query}")
+        assert resp.status_code == table.status_code == 200, resp.text
+        body = resp.json()
+        assert (body["date_from"], body["date_to"]) == (str(_M_LO), str(_M_HI))
+        assert body["items"]
+        assert sum(r["quote_count"] for r in body["items"]) == sum(
+            r["quote_count"] for r in table.json()
+        )
+        for r in body["items"]:
+            assert str(_M_LO) <= r["date_from"] <= r["date_to"] <= str(_M_HI)
+            assert r["week_start"] <= r["date_from"]
+
+    async def test_goods_pr_sees_only_self(self, session: AsyncSession, goods_seeded: Any) -> None:
+        """只持 ``read_own`` 的 PR：卡片只有本人的商品与本人的未归属单；财务看全部。"""
+        users, own_goods, other_goods = goods_seeded
+        query = f"{_WP}/goods?preset=custom&date_from={_M_LO}&date_to={_M_HI}"
+        own = await _call(session, users.pr, "GET", query)
+        everyone = await _call(session, users.finance, "GET", query)
+        assert own.status_code == everyone.status_code == 200, own.text
+        own_body, all_body = own.json(), everyone.json()
+        assert [(r["goods_id"], r["quote_count"]) for r in own_body["items"]] == [
+            (str(own_goods.id), 1)
+        ]
+        assert str(other_goods.id) not in {r["goods_id"] for r in own_body["items"]}
+        assert own_body["total"] == 1
+        assert own_body["unassigned"]["quote_count"] == 2  # seeded 里 pr 的两单
+        # 场景有效性：财务能看到别人的商品与全部未归属单
+        assert {r["goods_id"] for r in all_body["items"]} == {
+            str(own_goods.id),
+            str(other_goods.id),
+        }
+        assert all_body["unassigned"]["quote_count"] == 4
+
+    async def test_weeks_pr_sees_only_self(self, session: AsyncSession, goods_seeded: Any) -> None:
+        """只持 ``read_own`` 的 PR：各周之和 = 本人那一行 PR 表；财务各周之和 = 全部 PR 表合计。"""
+        users, _own_goods, _other_goods = goods_seeded
+        query = f"preset=custom&date_from={_M_LO}&date_to={_M_HI}"
+
+        async def totals(user: Any) -> tuple[int, int]:
+            weeks = await _call(session, user, "GET", f"{_WP}/weeks?{query}")
+            table = await _call(session, user, "GET", f"{_WP}?{query}")
+            assert weeks.status_code == table.status_code == 200, weeks.text
+            return (
+                sum(r["quote_count"] for r in weeks.json()["items"]),
+                sum(r["quote_count"] for r in table.json()),
+            )
+
+        assert await totals(users.pr) == (3, 3)  # seeded 2 + 本人商品 1
+        assert await totals(users.finance) == (6, 6)
+
+    async def test_weeks_warehouse_forbidden(self, session: AsyncSession, flow_users: Any) -> None:
+        resp = await _call(session, flow_users.warehouse, "GET", f"{_WP}/weeks")
+        assert (resp.status_code, resp.json()["code"]) == (403, "PERMISSION_DENIED")
+
+    @pytest.mark.parametrize("query", ["limit=101", "limit=0", "offset=-1"])
+    async def test_goods_paging_422(
+        self, session: AsyncSession, flow_users: Any, query: str
+    ) -> None:
+        resp = await _call(session, flow_users.pr_manager, "GET", f"{_WP}/goods?{query}")
+        assert resp.status_code == 422, resp.text
+
+    async def test_goods_limit_100_ok(self, session: AsyncSession, flow_users: Any) -> None:
+        resp = await _call(session, flow_users.pr_manager, "GET", f"{_WP}/goods?limit=100")
+        assert resp.status_code == 200, resp.text
+
+    async def test_goods_warehouse_forbidden(self, session: AsyncSession, flow_users: Any) -> None:
+        resp = await _call(session, flow_users.warehouse, "GET", f"{_WP}/goods")
+        assert (resp.status_code, resp.json()["code"]) == (403, "PERMISSION_DENIED")
+
+    async def test_goods_requires_login(self, session: AsyncSession) -> None:
+        from app.core.db import get_session
+        from app.main import app
+
+        async def _session_override() -> AsyncIterator[AsyncSession]:
+            yield session
+
+        app.dependency_overrides[get_session] = _session_override
+        try:
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+                resp = await c.get(f"{_WP}/goods")
+        finally:
+            app.dependency_overrides.pop(get_session, None)
+        assert resp.status_code == 401
+
+    @pytest.mark.parametrize("role", ["pr", "finance", "pr_manager"])
+    async def test_season_options_open_to_work_progress_readers(
+        self, session: AsyncSession, flow_users: Any, role: str
+    ) -> None:
+        """季节下拉只回季节名：持工作进度 read / read_own 就能拿（7e R5，原来只认投产读权限）。"""
+        resp = await _call(session, getattr(flow_users, role), "GET", "/api/reports/season-options")
+        assert resp.status_code == 200, resp.text
+        assert isinstance(resp.json()["items"], list)
+
+    async def test_season_options_warehouse_forbidden(
+        self, session: AsyncSession, flow_users: Any
+    ) -> None:
+        resp = await _call(session, flow_users.warehouse, "GET", "/api/reports/season-options")
+        assert (resp.status_code, resp.json()["code"]) == (403, "PERMISSION_DENIED")
 
 
 _PP = "/api/reports/publish-progress"
@@ -403,6 +617,60 @@ class TestExport:
             assert resp.headers["content-type"].startswith(
                 "application/vnd.openxmlformats-officedocument.spreadsheetml"
             )
+
+    async def test_work_progress_three_sheets_and_season(
+        self,
+        session: AsyncSession,
+        seeded: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        """工作进度导出（7e R5）：三个 sheet；带季节只剩命中的单；单品末行未归属、不导商品编码。"""
+        from app.modules.product.goods_models import GoodsMain
+
+        goods = GoodsMain(
+            tenant_id=seeded.tenant.id,
+            goods_code=f"XS{uuid4().hex[:8]}",
+            goods_title="季节导出商品",
+            season="2026秋",
+        )
+        session.add(goods)
+        await session.flush()
+        await promotion_factory.promotion(
+            style=await product_factory.style(style_code=f"XS{uuid4().hex[:8]}"),
+            blogger=await blogger_factory.blogger(),
+            pr=seeded.pr,
+            goods_main_id=goods.id,
+            internal_code=f"XS{uuid4().hex[:10].upper()}",
+            cooperation_date=_M_LO + timedelta(days=3),
+            quote_amount=Decimal("66.00"),
+        )
+        await session.flush()
+
+        async def sheets(query: str) -> dict[str, list[tuple[Any, ...]]]:
+            resp = await _call(session, seeded.finance, "GET", _export("work-progress") + query)
+            assert resp.status_code == 200, resp.text
+            wb = load_workbook(io.BytesIO(resp.content), data_only=False)
+            assert wb.sheetnames == ["PR 进度", "单品汇总", "周明细"]
+            return {n: list(wb[n].iter_rows(values_only=True)) for n in wb.sheetnames}
+
+        bare = await sheets("")
+        autumn = await sheets("&season=2026秋")
+        header = bare["PR 进度"][0]
+        assert "推广成本" in header and "成本" not in header
+        quote_col = header.index("约篇量")
+        # 场景有效性：不带季节时 pr / pr2 / 未分配三行共 5 单；单品 = 季节商品 + 末行未归属
+        assert sum(r[quote_col] for r in bare["PR 进度"][1:]) == 5
+        assert [r[0] for r in bare["单品汇总"][1:]] == ["季节导出商品", "未归属商品"]
+        assert sum(r[quote_col + 2] for r in bare["周明细"][1:]) == 5
+        # 带季节：三个 sheet 都只剩命中的那一单，没有未归属行
+        amount_col = header.index("约稿服务费")
+        assert [(r[quote_col], r[amount_col]) for r in autumn["PR 进度"][1:]] == [(1, 66.0)]
+        assert [(r[0], r[quote_col]) for r in autumn["单品汇总"][1:]] == [("季节导出商品", 1)]
+        assert sum(r[quote_col + 2] for r in autumn["周明细"][1:]) == 1
+        cells = {c for s in bare.values() for r in s for c in r}
+        assert goods.goods_code not in cells
 
     @pytest.mark.parametrize("kind", ["work-progress", "production", "store-daily"])
     async def test_operations_all_types(

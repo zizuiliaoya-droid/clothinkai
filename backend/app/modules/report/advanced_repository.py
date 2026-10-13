@@ -407,6 +407,26 @@ class WorkProgressRepository:
         }
         return as_mappings((await self._s.execute(sql, params)).mappings().all())
 
+    async def goods_display_meta(
+        self, tenant_id: UUID, ids: Sequence[UUID]
+    ) -> dict[UUID, tuple[str, str | None]]:
+        """商品 id → (全称, 简称)，单品卡片两条路径共用（7e R5）。
+
+        不过滤 ``is_deleted``：推广单归属到已删除商品时卡片照样要有这一行，
+        否则「商品行 + 未归属 = PR 表合计」对不上。不取商品编码。
+        """
+        if not ids:
+            return {}
+        sql = text(
+            """
+            SELECT g.id AS id, g.goods_title AS goods_title, g.short_name AS short_name
+            FROM goods_main g
+            WHERE g.tenant_id = :tenant_id AND g.id = ANY(CAST(:ids AS uuid[]))
+            """
+        )
+        rows = (await self._s.execute(sql, {"tenant_id": tenant_id, "ids": list(ids)})).all()
+        return {r.id: (r.goods_title, r.short_name) for r in rows}
+
 
 class TargetPlanningRepository:
     def __init__(self, session: AsyncSession) -> None:

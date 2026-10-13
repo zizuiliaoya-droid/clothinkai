@@ -18,15 +18,47 @@ import type {
   SummaryRefreshResult,
   TargetWithActual,
   TimeGranularity,
+  WorkProgressGoodsPage,
+  WorkProgressWeeks,
 } from "./types";
 import type { StoreManualPatch } from "./store/storeManual";
 
-/** 工作进度按区间统计（7e R1）；只持 read_own 时后端只返回本人那一行。 */
+/** 工作进度三个接口共用的筛选：区间 + 季节多选（重复键，7e R5）。 */
+export interface WorkProgressParams {
+  preset?: string;
+  date_from?: string;
+  date_to?: string;
+  season?: string[];
+}
+
+/** 工作进度按区间统计（7e R1；R5 加季节）；只持 read_own 时后端只返回本人那一行。 */
 export async function getWorkProgress(
-  params: { preset?: string; date_from?: string; date_to?: string } = {}
+  params: WorkProgressParams = {}
 ): Promise<PrWorkProgress[]> {
   const resp = await apiClient.get<PrWorkProgress[]>(
     "/api/reports/work-progress",
+    { params }
+  );
+  return resp.data;
+}
+
+/** 工作进度单品卡片 / 「查看全部」（7e R5）：limit 1 ~ 100，offset ≥ 0。 */
+export async function getWorkProgressGoods(
+  params: WorkProgressParams & { limit?: number; offset?: number } = {}
+): Promise<WorkProgressGoodsPage> {
+  const resp = await apiClient.get<WorkProgressGoodsPage>(
+    "/api/reports/work-progress/goods",
+    { params }
+  );
+  return resp.data;
+}
+
+/** 工作进度周明细（7e R5）：ISO 周分桶，首尾周截到区间。 */
+export async function getWorkProgressWeeks(
+  params: WorkProgressParams = {}
+): Promise<WorkProgressWeeks> {
+  const resp = await apiClient.get<WorkProgressWeeks>(
+    "/api/reports/work-progress/weeks",
     { params }
   );
   return resp.data;
@@ -116,7 +148,7 @@ export async function getProduction(
 
 /**
  * 投产页季节选项（8a-3，C-02）：字典 season 启用值 + 商品上出现过的值。
- * 只要投产报表读权限（主管也能拿到）；查询键 ["reports", "season-options"]。
+ * 投产或工作进度（含只看本人）读权限即可（7e R5 放宽）；查询键 ["reports", "season-options"]。
  */
 export async function getReportSeasonOptions(): Promise<string[]> {
   const resp = await apiClient.get<{ items: string[] }>("/api/reports/season-options");

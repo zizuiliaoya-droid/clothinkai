@@ -47,7 +47,7 @@ _SUPER_CTX = FieldPermissionContext(frozenset(), frozenset(), frozenset(), is_su
 async def _wp_month(session: AsyncSession, tenant_id: Any, month: str) -> list[PrWorkProgress]:
     """整月 × 全部 PR（``month`` 参数的换算与路由同一个 ``_month_range``）。"""
     return await WorkProgressService(session).get_for_range(
-        tenant_id, *_month_range(month), scope=PR_SCOPE_ALL, field_ctx=_SUPER_CTX
+        tenant_id, *_month_range(month), seasons=None, scope=PR_SCOPE_ALL, field_ctx=_SUPER_CTX
     )
 
 

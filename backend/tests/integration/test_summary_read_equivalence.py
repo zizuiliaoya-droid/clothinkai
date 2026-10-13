@@ -42,8 +42,17 @@ from app.modules.report.advanced_repository import (
     StoreDailyRepository,
     WorkProgressRepository,
 )
-from app.modules.report.advanced_schemas import ProductionRow, PrWorkProgress, StoreReportRow
+from app.modules.report.advanced_schemas import (
+    ProductionRow,
+    PrWorkProgress,
+    StoreReportRow,
+    WorkProgressGoodsPage,
+    WorkProgressMetrics,
+    WorkProgressWeekRow,
+    WorkProgressWeeks,
+)
 from app.modules.report.domain import bucket_start
+from app.modules.report.drill_service import DrillService
 from app.modules.report.pr_scope import PR_SCOPE_ALL, UNASSIGNED, PrScope, PrScopeKind
 from app.modules.report.production_service import ProductionService
 from app.modules.report.store_daily_service import StoreDailyService
@@ -320,8 +329,34 @@ async def _wp(
     hi: date,
     *,
     scope: PrScope = PR_SCOPE_ALL,
+    seasons: list[str] | None = None,
 ) -> list[PrWorkProgress]:
-    return await svc.get_for_range(tenant.id, lo, hi, scope=scope, field_ctx=_SUPER_CTX)
+    return await svc.get_for_range(
+        tenant.id, lo, hi, seasons=seasons, scope=scope, field_ctx=_SUPER_CTX
+    )
+
+
+async def _wpg(
+    svc: WorkProgressService,
+    tenant: Any,
+    lo: date,
+    hi: date,
+    *,
+    scope: PrScope = PR_SCOPE_ALL,
+    seasons: list[str] | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> WorkProgressGoodsPage:
+    return await svc.get_goods(
+        tenant.id,
+        lo,
+        hi,
+        seasons=seasons,
+        scope=scope,
+        field_ctx=_SUPER_CTX,
+        limit=limit,
+        offset=offset,
+    )
 
 
 def _dump(models: Any) -> Any:
@@ -1469,6 +1504,9 @@ def _norm_wp(row: Any) -> dict[str, Any]:
 
 
 class TestWorkProgress:
+    @pytest.mark.parametrize(
+        "seasons", [None, ["春夏"], ["春夏", "秋冬"]], ids=["no_filter", "spring", "both"]
+    )
     async def test_summary_equals_live(
         self,
         session: AsyncSession,
@@ -1479,49 +1517,70 @@ class TestWorkProgress:
         factory: Any,
         recorder: _SourceRecorder,
         monkeypatch: pytest.MonkeyPatch,
+        seasons: list[str] | None,
     ) -> None:
+        """service 两路逐字相等（含 R5 新列与 PRD 公式列），季节在两路同一口径。"""
         tok = tenant_id_ctx.set(tenant_a.id)
         try:
             seeded = await _seed(
                 session, tenant_a, product_factory, blogger_factory, promotion_factory, factory
             )
+            pr3 = await _seed_wp_amounts(
+                session, tenant_a, product_factory, promotion_factory, factory, seeded
+            )
             await session.commit()
             await _refresh(session, tenant_a, M_LO, M_HI)
 
             svc = WorkProgressService(session)
-            via_summary = await _wp(svc, tenant_a, M_LO, M_HI)
-            assert ("work_progress", "summary") in recorder.calls
+            via_summary = await _wp(svc, tenant_a, M_LO, M_HI, seasons=seasons)
+            assert recorder.calls == [("work_progress", "summary")]
 
             monkeypatch.setattr(settings, "REPORT_SUMMARY_READS_ENABLED", False)
-            via_live = await _wp(svc, tenant_a, M_LO, M_HI)
-            assert ("work_progress", "live") in recorder.calls
+            via_live = await _wp(svc, tenant_a, M_LO, M_HI, seasons=seasons)
+            assert recorder.calls[1:] == [("work_progress", "live")]
             assert _dump(via_summary) == _dump(via_live)
 
-            # 场景有效性：14 个计数每一个都要在某一行出现非零值
-            counters = (
-                "quote_count",
-                "in_schedule_count",
-                "urge_count",
-                "important_urge_count",
-                "overdue_count",
-                "publish_count",
-                "info_complete_count",
-                "cancel_count",
-                "recall_due_count",
-                "recall_success_count",
-                "effective_quote_count",
-                "hit_count",
-                "like_count",
-                "cost",
-            )
-            for c in counters:
+            by_pr = {r.pr_id: r for r in via_summary}
+            if seasons == ["春夏"]:
+                # pr3 只剩 ② ③ ④（季节在 SQL 里过滤，不是取全部后在 service 筛）
+                assert (by_pr[pr3.id].quote_count, by_pr[pr3.id].promo_cost) == (
+                    3,
+                    Decimal("400.00"),
+                )
+                return
+            if seasons is not None:
+                assert by_pr[pr3.id].quote_count == 5  # ⑥ 没归属商品不算
+                return
+
+            # 场景有效性：每个指标字段（含 R5 新列与公式列）都要在某一行出现非零值
+            metric_fields = [
+                c for c in PrWorkProgress.model_fields if c not in ("pr_id", "pr_name")
+            ]
+            for c in metric_fields:
                 assert any(getattr(r, c) for r in via_summary), f"场景没有产生非零的 {c}"
 
-            by_pr = {r.pr_id: r for r in via_summary}
             # 抖音折算：两天各 1.5，合计 3（逐日取整会得到 4）
             assert by_pr[seeded["pr2"].id].like_count == 3
             # 未分配 PR 的那一行在
             assert None in by_pr
+            # pr3 手算（单据见 _seed_wp_amounts）：已发布服务费 300、发布 1 篇；
+            # 约稿服务费 820、有效 640；已发货 2、其中已发布 1；推广成本 870、没有点赞 → CPL null
+            row = by_pr[pr3.id]
+            assert (
+                row.avg_published_quote,
+                row.amount_publish_rate,
+                row.total_amount_publish_rate,
+                row.ship_publish_rate,
+                row.promo_cost,
+                row.cpl,
+            ) == (
+                Decimal("300.00"),
+                Decimal("0.3659"),
+                Decimal("0.4688"),
+                Decimal("0.5000"),
+                Decimal("870.00"),
+                None,
+            )
         finally:
             tenant_id_ctx.reset(tok)
 
@@ -1769,6 +1828,628 @@ class TestWorkProgress:
                 )
             ).all()
             assert {g: int(n) for g, n in stored} == {goods_a: 3, goods_b: 2, None: 1}
+        finally:
+            tenant_id_ctx.reset(tok)
+
+
+# 工作进度可相加的列（计数与金额）：单品行 + 未归属 = PR 表合计
+_WP_ADDITIVE = tuple(c for c in PR_PROGRESS_METRICS if c != "like_count")
+
+
+async def _seed_goods_tie(
+    session: AsyncSession,
+    tenant: Any,
+    product_factory: Any,
+    blogger_factory: Any,
+    promotion_factory: Any,
+    factory: Any,
+) -> tuple[GoodsMain, GoodsMain]:
+    """两个同简称商品、约稿量都是 2：约稿量与显示名都相同，只能靠商品 id 兜底排序。
+
+    id 大的那个是一个 PR 的 2 单（实时 ``aggregate_by_pr`` 按约稿量排在前面），id 小的那个
+    分在两个 PR 各 1 单（排在后面）—— 实时的输入顺序与 id 顺序相反，漏了兜底键就会排反。
+    返回 ``(id 小的, id 大的)``。
+    """
+    blogger = await blogger_factory.blogger()
+    made: list[tuple[GoodsMain, Any]] = []
+    for _ in range(2):
+        style = await product_factory.style(style_code=f"ET{uuid4().hex[:6]}")
+        goods = await _goods(
+            session,
+            tenant,
+            style,
+            code=f"G_T_{uuid4().hex[:5]}",
+            season="春夏",
+            short_name="同名款",
+        )
+        made.append((goods, style))
+    (lo, lo_style), (hi, hi_style) = sorted(made, key=lambda m: m[0].id)
+
+    async def promo(goods: GoodsMain, style: Any, pr: Any) -> None:
+        await promotion_factory.promotion(
+            style=style,
+            blogger=blogger,
+            pr=pr,
+            goods_main_id=goods.id,
+            cooperation_date=D2,
+            internal_code=f"DT{uuid4().hex[:10].upper()}",
+        )
+
+    pr_x, pr_y, pr_z = [await factory.user(tenant) for _ in range(3)]
+    await promo(hi, hi_style, pr_x)
+    await promo(hi, hi_style, pr_x)
+    await promo(lo, lo_style, pr_y)
+    await promo(lo, lo_style, pr_z)
+    await session.flush()
+    return lo, hi
+
+
+class TestWorkProgressGoods:
+    """单品卡片（7e R5，设计 2.5）：汇总 ``work_progress_by_goods`` ⇄ 实时按商品相加。"""
+
+    @pytest.mark.parametrize(
+        "seasons", [None, ["春夏"], ["春夏", "秋冬"]], ids=["no_filter", "spring", "both"]
+    )
+    async def test_summary_equals_live(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        factory: Any,
+        recorder: _SourceRecorder,
+        monkeypatch: pytest.MonkeyPatch,
+        seasons: list[str] | None,
+    ) -> None:
+        """两路逐字相等，``record_source`` 每次恰好一条；响应不带商品编码。"""
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            seeded = await _seed(
+                session, tenant_a, product_factory, blogger_factory, promotion_factory, factory
+            )
+            await _seed_wp_amounts(
+                session, tenant_a, product_factory, promotion_factory, factory, seeded
+            )
+            await session.commit()
+            await _refresh(session, tenant_a, M_LO, M_HI)
+
+            svc = WorkProgressService(session)
+            via_summary = await _wpg(svc, tenant_a, M_LO, M_HI, seasons=seasons)
+            assert recorder.calls == [("work_progress_goods", "summary")]
+
+            monkeypatch.setattr(settings, "REPORT_SUMMARY_READS_ENABLED", False)
+            via_live = await _wpg(svc, tenant_a, M_LO, M_HI, seasons=seasons)
+            assert recorder.calls[1:] == [("work_progress_goods", "live")]
+            assert _dump(via_summary) == _dump(via_live)
+
+            dumped = _dump(via_summary)
+            assert "goods_code" not in dumped["items"][0]
+            goods_a, goods_b = seeded["goods_a"].id, seeded["goods_b"].id
+            ids = [r.goods_id for r in via_summary.items]
+            if seasons is None:
+                # 场景有效性：两个商品 + 未归属（⑥ 一单）
+                assert ids == [goods_a, goods_b]
+                assert via_summary.unassigned is not None
+                assert via_summary.unassigned.display_name == "未归属商品"
+                assert via_summary.unassigned.quote_count == 1
+                # 每个指标字段（含 R5 新列与公式列）都要在某张卡 / 未归属行出现非零值
+                rows = [*via_summary.items, via_summary.unassigned]
+                for c in WorkProgressMetrics.model_fields:
+                    assert any(getattr(r, c) for r in rows), f"场景没有产生非零的 {c}"
+            else:
+                # 选了季节：没归属商品的单不算，信封里也没有「未归属商品」
+                assert ids == ([goods_a] if seasons == ["春夏"] else [goods_a, goods_b])
+                assert via_summary.unassigned is None
+            assert via_summary.total == len(ids)
+        finally:
+            tenant_id_ctx.reset(tok)
+
+    @pytest.mark.parametrize("who", ["pr1", "unassigned"])
+    async def test_scoped_summary_equals_live(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        factory: Any,
+        recorder: _SourceRecorder,
+        monkeypatch: pytest.MonkeyPatch,
+        who: str,
+    ) -> None:
+        """只看本人（``PrScope(PR, pr1)``）与「未分配」：两路逐字相等，卡片之和 = 同范围的 PR 表那一行。"""
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            seeded = await _seed(
+                session, tenant_a, product_factory, blogger_factory, promotion_factory, factory
+            )
+            await _seed_wp_amounts(
+                session, tenant_a, product_factory, promotion_factory, factory, seeded
+            )
+            await session.commit()
+            await _refresh(session, tenant_a, M_LO, M_HI)
+            goods_a, goods_b = seeded["goods_a"].id, seeded["goods_b"].id
+            if who == "pr1":
+                scope = PrScope(PrScopeKind.PR, seeded["pr1"].id)
+                expected_pr = seeded["pr1"].id
+                # pr1：goods_a 8 单（含按款式推定的）、goods_b 1 单
+                expected_items = [(goods_a, 8), (goods_b, 1)]
+            else:
+                scope = PrScope(PrScopeKind.UNASSIGNED)
+                expected_pr = None
+                expected_items = [(goods_a, 1)]  # 未分配那一单按款式推定归属 goods_a
+
+            svc = WorkProgressService(session)
+            via_summary = await _wpg(svc, tenant_a, M_LO, M_HI, scope=scope)
+            assert recorder.calls == [("work_progress_goods", "summary")]
+
+            monkeypatch.setattr(settings, "REPORT_SUMMARY_READS_ENABLED", False)
+            via_live = await _wpg(svc, tenant_a, M_LO, M_HI, scope=scope)
+            assert recorder.calls[1:] == [("work_progress_goods", "live")]
+            assert _dump(via_summary) == _dump(via_live)
+
+            # 场景有效性：全量里 goods_a 有 12 单，范围内只剩本范围的单；没有未归属商品的单
+            assert [(r.goods_id, r.quote_count) for r in via_summary.items] == expected_items
+            assert via_summary.unassigned is None
+            pr_rows = await _wp(svc, tenant_a, M_LO, M_HI, scope=scope)
+            assert [r.pr_id for r in pr_rows] == [expected_pr]
+            for c in _WP_ADDITIVE:
+                assert sum(getattr(r, c) for r in via_summary.items) == getattr(pr_rows[0], c), c
+        finally:
+            tenant_id_ctx.reset(tok)
+
+    async def test_pr3_promo_cost_hand_computed(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        factory: Any,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """pr3（单据见 ``_seed_wp_amounts``）：推广成本不看发布 / 召回，含 ④ 未发布召回成功的运费 30。"""
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            seeded = await _seed(
+                session, tenant_a, product_factory, blogger_factory, promotion_factory, factory
+            )
+            pr3 = await _seed_wp_amounts(
+                session, tenant_a, product_factory, promotion_factory, factory, seeded
+            )
+            await session.commit()
+            await _refresh(session, tenant_a, M_LO, M_HI)
+            svc = WorkProgressService(session)
+            scope = PrScope(PrScopeKind.PR, pr3.id)
+            goods_a, goods_b = seeded["goods_a"], seeded["goods_b"]
+
+            for reads_enabled in (True, False):
+                monkeypatch.setattr(settings, "REPORT_SUMMARY_READS_ENABLED", reads_enabled)
+                page = await _wpg(svc, tenant_a, M_LO, M_HI, scope=scope)
+                case = f"summary_reads={reads_enabled}"
+                got = [
+                    (r.goods_id, r.display_name, r.goods_short_name, r.quote_count, r.promo_cost)
+                    for r in page.items
+                ]
+                assert got == [
+                    # ② 150 + ③ 120 + ④ 100 + 运费 30
+                    (goods_a.id, "A 简称", "A 简称", 3, Decimal("400.00")),
+                    # ① 300 + 样品 20、⑤ 80；没填简称 → 显示全称
+                    (goods_b.id, goods_b.goods_title, None, 2, Decimal("400.00")),
+                ], case
+                assert page.unassigned is not None, case
+                assert (page.unassigned.quote_count, page.unassigned.promo_cost) == (
+                    1,
+                    Decimal("70.00"),
+                ), case
+
+                spring = await _wpg(svc, tenant_a, M_LO, M_HI, scope=scope, seasons=["春夏"])
+                assert [(r.goods_id, r.promo_cost) for r in spring.items] == [
+                    (goods_a.id, Decimal("400.00"))
+                ], case
+                assert spring.unassigned is None, case
+        finally:
+            tenant_id_ctx.reset(tok)
+
+    async def test_totals_drill_and_rates_after_sum(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        factory: Any,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """商品行 + 未归属 = PR 表合计；卡片推广成本 = 该商品下钻行之和；跨 PR 合并后比率再除。"""
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            seeded = await _seed(
+                session, tenant_a, product_factory, blogger_factory, promotion_factory, factory
+            )
+            await _seed_wp_amounts(
+                session, tenant_a, product_factory, promotion_factory, factory, seeded
+            )
+            await session.commit()
+            await _refresh(session, tenant_a, M_LO, M_HI)
+            svc = WorkProgressService(session)
+            goods_a = seeded["goods_a"]
+
+            for reads_enabled in (True, False):
+                monkeypatch.setattr(settings, "REPORT_SUMMARY_READS_ENABLED", reads_enabled)
+                case = f"summary_reads={reads_enabled}"
+                page = await _wpg(svc, tenant_a, M_LO, M_HI)
+                pr_rows = await _wp(svc, tenant_a, M_LO, M_HI)
+                assert page.unassigned is not None, case
+                goods_rows = [*page.items, page.unassigned]
+                for c in _WP_ADDITIVE:
+                    assert sum(getattr(r, c) for r in goods_rows) == sum(
+                        getattr(r, c) for r in pr_rows
+                    ), f"{case} {c}"
+                assert sum(r.like_count for r in goods_rows) == sum(r.like_count for r in pr_rows)
+
+                card = next(r for r in page.items if r.goods_id == goods_a.id)
+                # goods_a 跨 pr1（8 单，有效 5、发布 1）、pr3（3 单，有效 2）、未分配（1 单）：
+                # 合计后 1 ÷ 8，不是首行 pr1 的 1 ÷ 5
+                assert (card.quote_count, card.effective_quote_count, card.publish_count) == (
+                    12,
+                    8,
+                    1,
+                ), case
+                assert card.month_complete_rate == Decimal("0.1250"), case
+
+            drill = await DrillService(session).list_promotions(
+                tenant_a.id,
+                M_LO,
+                M_HI,
+                pr_scope=PR_SCOPE_ALL,
+                goods_id=goods_a.id,
+                seasons=None,
+                publish_status=None,
+                page=1,
+                page_size=100,
+                field_ctx=_SUPER_CTX,
+            )
+            assert drill.total == card.quote_count
+            assert card.promo_cost == sum((i.total_promo_cost or Decimal(0)) for i in drill.items)
+            # 场景有效性：下钻里确有「未发布且召回成功、运费 30」那一单
+            assert any(
+                i.publish_status == "未发布"
+                and i.recall_status == "召回成功"
+                and i.total_promo_cost == Decimal("130.00")
+                for i in drill.items
+            )
+        finally:
+            tenant_id_ctx.reset(tok)
+
+    async def test_tie_broken_by_goods_id(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        factory: Any,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """约稿量、显示名都相同 → 商品 id 升序兜底（两路一致，不依赖 SQL 的行序）。"""
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            lo, hi = await _seed_goods_tie(
+                session, tenant_a, product_factory, blogger_factory, promotion_factory, factory
+            )
+            await session.commit()
+            await _refresh(session, tenant_a, M_LO, M_HI)
+            svc = WorkProgressService(session)
+            for reads_enabled in (True, False):
+                monkeypatch.setattr(settings, "REPORT_SUMMARY_READS_ENABLED", reads_enabled)
+                page = await _wpg(svc, tenant_a, M_LO, M_HI)
+                assert [(r.goods_id, r.display_name, r.quote_count) for r in page.items] == [
+                    (lo.id, "同名款", 2),
+                    (hi.id, "同名款", 2),
+                ], f"summary_reads={reads_enabled}"
+        finally:
+            tenant_id_ctx.reset(tok)
+
+    async def test_paging_and_total(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        factory: Any,
+    ) -> None:
+        """``total`` 只数有归属的商品，切片在排序之后；「未归属商品」每页都在信封里。"""
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            seeded = await _seed(
+                session, tenant_a, product_factory, blogger_factory, promotion_factory, factory
+            )
+            await _seed_wp_amounts(
+                session, tenant_a, product_factory, promotion_factory, factory, seeded
+            )
+            await session.commit()
+            await _refresh(session, tenant_a, M_LO, M_HI)
+            svc = WorkProgressService(session)
+            pages = [await _wpg(svc, tenant_a, M_LO, M_HI, limit=1, offset=o) for o in (0, 1, 2)]
+            assert [[r.goods_id for r in p.items] for p in pages] == [
+                [seeded["goods_a"].id],
+                [seeded["goods_b"].id],
+                [],
+            ]
+            assert [(p.total, p.limit, p.offset) for p in pages] == [
+                (2, 1, 0),
+                (2, 1, 1),
+                (2, 1, 2),
+            ]
+            assert all(p.unassigned is not None for p in pages)
+            assert (pages[0].date_from, pages[0].date_to) == (M_LO, M_HI)
+        finally:
+            tenant_id_ctx.reset(tok)
+
+
+# 周明细场景的区间：M_LO 当天或之前的周三 ~ D3 当天或之后的周五（首尾周都被截断）
+WEEK_LO = M_LO - timedelta(days=(M_LO.weekday() - 2) % 7)
+WEEK_HI = D3 + timedelta(days=(4 - D3.weekday()) % 7)
+_WEEK_NON_METRIC = {"week_start", "date_from", "date_to"}
+
+
+async def _wpw(
+    svc: WorkProgressService,
+    tenant: Any,
+    lo: date,
+    hi: date,
+    *,
+    scope: PrScope = PR_SCOPE_ALL,
+    seasons: list[str] | None = None,
+) -> WorkProgressWeeks:
+    return await svc.get_weeks(
+        tenant.id, lo, hi, seasons=seasons, scope=scope, field_ctx=_SUPER_CTX
+    )
+
+
+async def _seed_week_edges(
+    session: AsyncSession, promotion_factory: Any, seeded: dict[str, Any]
+) -> None:
+    """周明细的边界单（在 ``_seed`` + ``_seed_wp_amounts`` 之上）。
+
+    - 首周周一、末周周日各一单：在周内但在区间外，查整周就会多算
+    - 区间首日、末日各一单：截断后的首尾周都要算到
+    - D2 那周 pr1、未分配各一张抖音单（点赞 1.5）：跨 PR 逐行取整再相加会少 1
+    """
+    style_a, pr1, pr2 = seeded["style_a"], seeded["pr1"], seeded["pr2"]
+
+    async def promo(**kw: Any) -> None:
+        kw.setdefault("internal_code", f"DK{uuid4().hex[:10].upper()}")
+        await promotion_factory.promotion(style=style_a, blogger=seeded["blogger"], **kw)
+
+    await promo(pr=pr1, cooperation_date=WEEK_LO - timedelta(days=2), quote_amount=Decimal("11"))
+    await promo(pr=pr1, cooperation_date=WEEK_HI + timedelta(days=2), quote_amount=Decimal("12"))
+    await promo(pr=pr2, cooperation_date=WEEK_LO, quote_amount=Decimal("21.00"))
+    await promo(pr=pr2, cooperation_date=WEEK_HI, quote_amount=Decimal("33.00"))
+    for pr in (pr1, None):
+        await promo(
+            pr=pr, cooperation_date=D2, publish_status="已发布", platform="抖音", like_count=15
+        )
+    await session.flush()
+
+
+class TestWorkProgressWeeks:
+    """周明细（7e R5，Q15）：汇总 ``work_progress_by_week`` ⇄ 实时逐周调 ``aggregate_by_pr``。"""
+
+    async def _seed_all(
+        self,
+        session: AsyncSession,
+        tenant: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        factory: Any,
+    ) -> dict[str, Any]:
+        seeded = await _seed(
+            session, tenant, product_factory, blogger_factory, promotion_factory, factory
+        )
+        await _seed_wp_amounts(session, tenant, product_factory, promotion_factory, factory, seeded)
+        await _seed_week_edges(session, promotion_factory, seeded)
+        await session.commit()
+        return seeded
+
+    @pytest.mark.parametrize("seasons", [None, ["春夏"]], ids=["no_filter", "spring"])
+    async def test_summary_equals_live(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        factory: Any,
+        recorder: _SourceRecorder,
+        monkeypatch: pytest.MonkeyPatch,
+        seasons: list[str] | None,
+    ) -> None:
+        """两路逐字相等（``record_source`` 每次恰好一条）；首尾周截到区间并标实际起止。"""
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            await self._seed_all(
+                session, tenant_a, product_factory, blogger_factory, promotion_factory, factory
+            )
+            await _refresh(session, tenant_a, WEEK_LO, WEEK_HI)
+
+            svc = WorkProgressService(session)
+            via_summary = await _wpw(svc, tenant_a, WEEK_LO, WEEK_HI, seasons=seasons)
+            assert recorder.calls == [("work_progress_weeks", "summary")]
+
+            monkeypatch.setattr(settings, "REPORT_SUMMARY_READS_ENABLED", False)
+            via_live = await _wpw(svc, tenant_a, WEEK_LO, WEEK_HI, seasons=seasons)
+            assert recorder.calls[1:] == [("work_progress_weeks", "live")]
+            assert _dump(via_summary) == _dump(via_live)
+
+            items = via_summary.items
+            assert (via_summary.date_from, via_summary.date_to) == (WEEK_LO, WEEK_HI)
+            starts = [r.week_start for r in items]
+            assert len(starts) >= 2
+            assert starts == sorted(set(starts))
+            assert all(s.weekday() == 0 for s in starts)
+            for r in items:
+                assert (r.date_from, r.date_to) == (
+                    max(r.week_start, WEEK_LO),
+                    min(r.week_start + timedelta(days=6), WEEK_HI),
+                ), r.week_start
+            # 场景有效性：首周从周三截起、末周截到周五（区间首尾日都有单）
+            assert items[0].date_from == WEEK_LO != items[0].week_start
+            assert items[-1].date_to == WEEK_HI != items[-1].week_start + timedelta(days=6)
+
+            if seasons is None:
+                metric_fields = [
+                    c for c in WorkProgressWeekRow.model_fields if c not in _WEEK_NON_METRIC
+                ]
+                for c in metric_fields:
+                    assert any(getattr(r, c) for r in items), f"场景没有产生非零的 {c}"
+        finally:
+            tenant_id_ctx.reset(tok)
+
+    @pytest.mark.parametrize("seasons", [None, ["春夏"]], ids=["no_filter", "spring"])
+    async def test_week_totals_equal_pr_totals(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        factory: Any,
+        monkeypatch: pytest.MonkeyPatch,
+        seasons: list[str] | None,
+    ) -> None:
+        """K5：同区间同季节，各周计数与金额之和 = PR 表合计（两路都是）；点赞在仓储层比精确和。"""
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            await self._seed_all(
+                session, tenant_a, product_factory, blogger_factory, promotion_factory, factory
+            )
+            await _refresh(session, tenant_a, WEEK_LO, WEEK_HI)
+            svc = WorkProgressService(session)
+
+            for reads_enabled in (True, False):
+                monkeypatch.setattr(settings, "REPORT_SUMMARY_READS_ENABLED", reads_enabled)
+                case = f"summary_reads={reads_enabled}"
+                weeks = await _wpw(svc, tenant_a, WEEK_LO, WEEK_HI, seasons=seasons)
+                pr_rows = await _wp(svc, tenant_a, WEEK_LO, WEEK_HI, seasons=seasons)
+                assert len(weeks.items) >= 2, case
+                assert sum(r.quote_count for r in pr_rows) > 0, case
+                for c in _WP_ADDITIVE:
+                    assert sum(getattr(r, c) for r in weeks.items) == sum(
+                        getattr(r, c) for r in pr_rows
+                    ), f"{case} {c}"
+
+            # 点赞：页面上每行各自取整，比精确值要在仓储层（K5 SQL 同口径）
+            summary = SummaryReadRepository(session)
+            by_week = await summary.work_progress_by_week(
+                tenant_id=tenant_a.id,
+                date_from=WEEK_LO,
+                date_to=WEEK_HI,
+                seasons=seasons,
+                pr_id=None,
+            )
+            by_pr = await summary.work_progress_by_pr(
+                tenant_id=tenant_a.id,
+                date_from=WEEK_LO,
+                date_to=WEEK_HI,
+                seasons=seasons,
+                pr_id=None,
+            )
+            live = await WorkProgressRepository(session).aggregate_by_pr(
+                tenant_id=tenant_a.id,
+                date_from=WEEK_LO,
+                date_to=WEEK_HI,
+                today=TODAY,
+                thresholds=await UrgeService(session).get_urge_thresholds(tenant_a.id),
+                by_goods=False,
+                seasons=seasons,
+                pr_id=None,
+            )
+
+            def likes(rows: Any) -> Decimal:
+                return sum((Decimal(str(r["like_count"])) for r in rows), Decimal(0))
+
+            assert likes(by_week) == likes(by_pr) == likes(live)
+            # 场景有效性：确有带小数的 PR 行（逐行取整再相加就会差）
+            assert any(Decimal(str(r["like_count"])) % 1 for r in live)
+        finally:
+            tenant_id_ctx.reset(tok)
+
+    @pytest.mark.parametrize("who", ["pr1", "unassigned"])
+    async def test_scoped_summary_equals_live(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        factory: Any,
+        recorder: _SourceRecorder,
+        monkeypatch: pytest.MonkeyPatch,
+        who: str,
+    ) -> None:
+        """只看本人（``PrScope(PR, pr1)``）与「未分配」：两路逐字相等，各周之和 = 同范围的 PR 表那一行。"""
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            seeded = await self._seed_all(
+                session, tenant_a, product_factory, blogger_factory, promotion_factory, factory
+            )
+            await _refresh(session, tenant_a, WEEK_LO, WEEK_HI)
+            if who == "pr1":
+                scope = PrScope(PrScopeKind.PR, seeded["pr1"].id)
+                expected_pr = seeded["pr1"].id
+            else:
+                scope = PrScope(PrScopeKind.UNASSIGNED)
+                expected_pr = None
+
+            svc = WorkProgressService(session)
+            via_summary = await _wpw(svc, tenant_a, WEEK_LO, WEEK_HI, scope=scope)
+            assert recorder.calls == [("work_progress_weeks", "summary")]
+
+            monkeypatch.setattr(settings, "REPORT_SUMMARY_READS_ENABLED", False)
+            via_live = await _wpw(svc, tenant_a, WEEK_LO, WEEK_HI, scope=scope)
+            assert recorder.calls[1:] == [("work_progress_weeks", "live")]
+            assert _dump(via_summary) == _dump(via_live)
+
+            pr_rows = await _wp(svc, tenant_a, WEEK_LO, WEEK_HI, scope=scope)
+            everyone = await _wpw(svc, tenant_a, WEEK_LO, WEEK_HI)
+            # 场景有效性：范围内只剩那一个 PR，且确实比全量少（范围真的下推了）
+            assert [r.pr_id for r in pr_rows] == [expected_pr]
+            assert via_summary.items
+            scoped_total = sum(r.quote_count for r in via_summary.items)
+            assert 0 < scoped_total < sum(r.quote_count for r in everyone.items)
+            for c in _WP_ADDITIVE:
+                assert sum(getattr(r, c) for r in via_summary.items) == getattr(pr_rows[0], c), c
+        finally:
+            tenant_id_ctx.reset(tok)
+
+    async def test_partial_coverage_whole_range_live(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        factory: Any,
+        recorder: _SourceRecorder,
+    ) -> None:
+        """区间末日没刷过 → 整段走实时（不拼汇总 + 实时），末周照样截到区间止。"""
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            await self._seed_all(
+                session, tenant_a, product_factory, blogger_factory, promotion_factory, factory
+            )
+            await _refresh(session, tenant_a, WEEK_LO, WEEK_HI - timedelta(days=1))
+            svc = WorkProgressService(session)
+            weeks = await _wpw(svc, tenant_a, WEEK_LO, WEEK_HI)
+            assert recorder.calls == [("work_progress_weeks", "live")]
+            assert weeks.items[-1].date_to == WEEK_HI
+            pr_rows = await _wp(svc, tenant_a, WEEK_LO, WEEK_HI)
+            assert sum(r.quote_count for r in weeks.items) == sum(r.quote_count for r in pr_rows)
         finally:
             tenant_id_ctx.reset(tok)
 
