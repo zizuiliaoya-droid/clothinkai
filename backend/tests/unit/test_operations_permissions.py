@@ -224,6 +224,8 @@ class TestNoSpillOutsideProduct:
         changed = {(s, a) for s, a in checks if old.has(s, a) != new.has(s, a)}
         assert changed, "运营应该多了商品写权限"
         allowed = {tuple(p.split(":", 1)) for p in _OPS_061_ADDED}
+        # 066（7e R7）：运营能看平台指标配置（GET /api/settings/promotion-platforms），不能改
+        allowed.add(("metric_config", "read"))
         outside = {
             (s, a) for s, a in changed if s.split(".", 1)[0] != "product" and (s, a) not in allowed
         }

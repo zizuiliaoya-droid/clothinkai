@@ -57,6 +57,7 @@ from app.modules.finance.api import router as finance_router
 from app.modules.finance.order_adjustment_api import router as order_adjustment_router
 from app.modules.flow.api import router as line_router
 from app.modules.importer.api import router as import_router
+from app.modules.metric_config.api import router as metric_config_router
 from app.modules.negotiation.api import router as negotiation_router
 from app.modules.product.api import router as product_router
 from app.modules.product.dict_api import router as dict_router
@@ -476,6 +477,7 @@ def create_app() -> FastAPI:
     app.include_router(negotiation_router)  # 谈款审核 /api/negotiations
     app.include_router(line_router)  # 流程线时间线 /api/lines/{line_id}/events
     app.include_router(urge_router)  # 催发任务 /api/urge
+    app.include_router(metric_config_router)  # 7e R7 平台指标 /api/settings/promotion-platforms
     app.include_router(credential_router)  # U12 平台凭据 /api/credentials
     app.include_router(crawler_router)  # U13 采集 Worker /api/crawler/tasks
     app.include_router(worker_token_router)  # U13 Worker Token /api/crawler/worker-tokens
