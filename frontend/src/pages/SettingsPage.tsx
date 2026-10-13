@@ -16,6 +16,7 @@ import {
 import type { TabsProps } from "antd";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { NetworkDiagnosticsPanel } from "@/features/security/components/NetworkDiagnosticsPanel";
+import { PromotionPlatformSettingTab } from "@/pages/settings/PromotionPlatformSettingTab";
 import {
   getWecomConfig,
   testWecom,
@@ -147,9 +148,25 @@ export function SettingsPage() {
       s.user?.roles.some((r) => r === "admin" || r === "platform_admin") ??
       false
   );
+  // 「平台指标」读权限 metric_config:read 只授 pr_manager / operations，管理员靠 *；PR / 财务看不到这个 Tab
+  const canViewPlatformMetrics = useAuthStore(
+    (s) =>
+      s.user?.roles.some((r) =>
+        ["admin", "platform_admin", "pr_manager", "operations"].includes(r)
+      ) ?? false
+  );
 
   const items: TabsProps["items"] = [
     { key: "wecom", label: "企业微信", children: <WecomSettingsPanel /> },
+    ...(canViewPlatformMetrics
+      ? [
+          {
+            key: "platform-metrics",
+            label: "平台指标",
+            children: <PromotionPlatformSettingTab />,
+          },
+        ]
+      : []),
     // 网络诊断会回显原始转发头（暴露内部网络结构），只给系统管理员
     ...(isSystemAdmin
       ? [

@@ -11,7 +11,7 @@ export const pct = (v: string | null) => (v == null ? "—" : `${(Number(v) * 10
 /** 金额加 ¥；读不到（null）→「—」。 */
 export const money = (v: string | null) => (v == null ? "—" : `¥${v}`);
 
-export const LIKE_HINT = "折算点赞：抖音 / 快手按 ×0.1 计";
+export const LIKE_HINT = "折算点赞：按系统设置 · 平台指标的系数折算（默认抖音 / 快手 ×0.1）";
 export const TOTAL_AMOUNT_PUBLISH_RATE_HINT = "已发布服务费 ÷ 有效约稿服务费（扣取消与召回）";
 export const PROMO_COST_HINT =
   "站外推广成本：含服务费、样品、运费，不看发布状态（未发布、已召回的单也算）";
