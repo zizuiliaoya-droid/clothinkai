@@ -186,6 +186,9 @@ export function PromotionListPage() {
   });
   // 「金额改动」页签与菜单只看页级标记（与金额改动接口同一判定），不看行上的报价值
   const canAmountLog = Boolean(data?.ui?.actions?.amount_log);
+  // 「新建推广」「导入站外推广」只看页级 ui（流程线 PR-5：持 promotion_create:write 才有，PR 看不到）
+  const canCreate = data?.ui?.actions?.create?.state === "enabled";
+  const canImport = data?.ui?.actions?.import?.state === "enabled";
 
   /** 审核通过。寄拍没有寄回单号时后端会拒，错误信息直接透出给操作人。 */
   const approveMutation = useMutation({
@@ -212,7 +215,10 @@ export function PromotionListPage() {
     onError: (err) => flowFeedback.handleError(err),
   });
 
-  /** 发货 5 项：顺序与禁用原因由 buildMenuItems 按 row.ui 定；没有的项不出现。 */
+  /**
+   * 按 row.ui 出的菜单项（发货、催发、留言、改归属商品 / 收件 / 颜色尺码）：顺序与禁用原因由 buildMenuItems 定；
+   * 没有的项不出现。
+   */
   function shipMenuItems(record: Promotion): NonNullable<MenuProps["items"]> {
     const built = buildMenuItems("promotion", record.ui, {
       actions: {
@@ -236,10 +242,15 @@ export function PromotionListPage() {
               onOk: () => shipIncludeMutation.mutateAsync(record.id).catch(() => undefined),
             }),
         },
+        // 催发任务在这里发起最顺手：PR 本来就在这页看哪单还没发出来。
+        // 与催发任务页共用 UrgeModal，可以直接附聊天截图（7a-3）
+        urge: { label: "催发", onClick: () => setUrgeTarget(record) },
         // 留言在抽屉底部（6.6）：菜单项只负责打开抽屉
         comment: { label: "留言", onClick: () => openLine(record) },
       },
       edits: {
+        // PR-5 起归属商品只有主管、管理员能改（11-53），PR 的 edits 里没有 goods
+        goods: { label: "改归属商品", onClick: () => setGoodsTarget(record) },
         receiver: { label: "改收件信息", onClick: () => setReceiverTarget(record) },
         goods_items: { label: "改颜色尺码", onClick: () => setItemsTarget(record) },
       },
@@ -504,11 +515,6 @@ export function PromotionListPage() {
             onClick: () => setExtraTarget(record),
           },
           {
-            key: "goods",
-            label: "改归属商品",
-            onClick: () => setGoodsTarget(record),
-          },
-          {
             key: "publish",
             label: "标记发布",
             disabled: record.publish_status !== "未发布",
@@ -533,14 +539,6 @@ export function PromotionListPage() {
                 },
               ]
             : []),
-          {
-            // 催发任务在这里发起最顺手：PR 本来就在这页看哪单还没发出来。
-            // 与催发任务页共用 UrgeModal，可以直接附聊天截图（7a-3）
-            key: "urge",
-            label: "催发",
-            disabled: !["未发布", "异常"].includes(record.publish_status),
-            onClick: () => setUrgeTarget(record),
-          },
           {
             key: "recall",
             label: "召回",
@@ -626,21 +624,27 @@ export function PromotionListPage() {
     <Card
       title={<Typography.Title level={4} style={{ margin: 0 }}>推广管理</Typography.Title>}
       extra={
-        <Space>
-          <ImportUploadButton
-            source="manual_promotion"
-            label="导入站外推广"
-            invalidateKeys={[["promotions"]]}
-            templateColumns={SOURCE_FIELD_NAMES}
-          />
-          <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            onClick={() => setOpen(true)}
-          >
-            新建推广
-          </Button>
-        </Space>
+        canCreate || canImport ? (
+          <Space>
+            {canImport && (
+              <ImportUploadButton
+                source="manual_promotion"
+                label="导入站外推广"
+                invalidateKeys={[["promotions"]]}
+                templateColumns={SOURCE_FIELD_NAMES}
+              />
+            )}
+            {canCreate && (
+              <Button
+                type="primary"
+                icon={<PlusOutlined />}
+                onClick={() => setOpen(true)}
+              >
+                新建推广
+              </Button>
+            )}
+          </Space>
+        ) : undefined
       }
     >
       <Space style={{ marginBottom: 16 }} wrap>

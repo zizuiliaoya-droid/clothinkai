@@ -21,6 +21,8 @@ interface Props {
   onUploaded?: (batchId: string) => void;
   /** 文件超过大小上限时接在报错后的提示（可选，如商品资料的「请分批导出」）。 */
   tooLargeHint?: string;
+  /** 上传成功提示后面接的一句（可选，如结款页的「结果在『系统管理 → 导入记录』里看」）。 */
+  successHint?: string;
   size?: "small" | "middle" | "large";
 }
 
@@ -39,6 +41,7 @@ export function ImportUploadButton({
   columnsNote = DEFAULT_COLUMNS_NOTE,
   onUploaded,
   tooLargeHint,
+  successHint,
   size = "middle",
 }: Props) {
   const qc = useQueryClient();
@@ -56,7 +59,7 @@ export function ImportUploadButton({
       setUploading(true);
       try {
         const resp = await uploadImportFile(source, file as File);
-        message.success("上传成功，已创建导入批次，解析中…");
+        message.success(`上传成功，已创建导入批次，解析中…${successHint ?? ""}`);
         refresh();
         onUploaded?.(resp.batch_id);
       } catch (err) {
