@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // 工作进度页（7e R5 S7）：季节锁定 = 筛选记忆（清空写 []）、URL 季节只本次生效；PR 表新列与「推广成本」改名；
-// 导出与下钻带季节；403 显示无权限提示；只看本人没有导出按钮。
+// 导出与下钻带季节；403 显示无权限提示；只看本人没有导出按钮。S8 单品卡片与「查看全部」；S9 周明细（实际起止、行展开下钻）。
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
@@ -10,10 +10,12 @@ import type {
   ReportCapabilities,
   WorkProgressGoodsPage,
   WorkProgressGoodsRow,
+  WorkProgressWeekRow,
 } from "@/features/report/types";
 
 const workProgressMock = vi.fn();
 const goodsMock = vi.fn();
+const weeksMock = vi.fn();
 const exportMock = vi.fn();
 const drillMock = vi.fn();
 const getPrefMock = vi.fn();
@@ -25,6 +27,7 @@ const caps = vi.hoisted(() => ({
 vi.mock("@/features/report/api", () => ({
   getWorkProgress: (...args: unknown[]) => workProgressMock(...args),
   getWorkProgressGoods: (...args: unknown[]) => goodsMock(...args),
+  getWorkProgressWeeks: (...args: unknown[]) => weeksMock(...args),
   exportReport: (...args: unknown[]) => exportMock(...args),
   getDrillPromotions: (...args: unknown[]) => drillMock(...args),
   getReportSeasonOptions: () => Promise.resolve(["2026秋", "2026冬"]),
@@ -168,6 +171,8 @@ beforeEach(() => {
   workProgressMock.mockResolvedValue([prRow()]);
   goodsMock.mockReset();
   goodsMock.mockResolvedValue(goodsPage([], null));
+  weeksMock.mockReset();
+  weeksMock.mockResolvedValue({ date_from: "2026-10-01", date_to: "2026-10-31", items: [] });
   exportMock.mockReset();
   exportMock.mockResolvedValue("work-progress.xlsx");
   drillMock.mockReset();
@@ -441,5 +446,95 @@ describe("WorkProgressPage 单品卡片", () => {
     expect(await screen.findByText("没有权限查看工作进度表")).toBeTruthy();
     expect(container.querySelector(".ant-table")).toBeNull();
     expect(goodsMock).toHaveBeenCalledTimes(1);
+  });
+});function weekRow(week_start: string, date_from: string, date_to: string): WorkProgressWeekRow {
+  const { pr_id: _prId, pr_name: _prName, ...metrics } = prRow();
+  void _prId;
+  void _prName;
+  return { ...metrics, week_start, date_from, date_to };
+}
+/** 区间 2025-12-24（周三）~ 2026-01-09（周五）：首尾周被截断，中间一周跨年。 */
+const WEEK_ROWS = [
+  weekRow("2025-12-22", "2025-12-24", "2025-12-28"),
+  weekRow("2025-12-29", "2025-12-29", "2026-01-04"),
+  weekRow("2026-01-05", "2026-01-05", "2026-01-09"),
+];
+function serveWeeks(items: WorkProgressWeekRow[]) {
+  weeksMock.mockResolvedValue({ date_from: "2025-12-24", date_to: "2026-01-09", items });
+}
+const weeksRegion = () => screen.findByRole("region", { name: "周明细" });
+describe("WorkProgressPage 周明细", () => {
+  it("周期列按实际起止：首周从周三起、末周到周五止，跨年那周起止带年份；请求带季节", async () => {
+    getPrefMock.mockResolvedValue({ season: ["2026秋"] });
+    serveWeeks(WEEK_ROWS);
+    renderPage();
+    const region = await weeksRegion();
+    await within(region).findByText("12-24 ~ 12-28");
+    expect(within(region).getByText("2025-12-29 ~ 2026-01-04")).toBeTruthy();
+    expect(within(region).getByText("01-05 ~ 01-09")).toBeTruthy();
+    // 周一（桶键）不当成起日显示
+    expect(region.textContent).not.toContain("12-22");
+    expect(region.querySelector(".ant-table-thead")?.textContent).toContain("推广成本");
+    expect(weeksMock.mock.calls[0][0]).toMatchObject({ season: ["2026秋"] });
+  });
+  it("展开周行：下钻 = 行上实际起止 + 季节，不限 PR / 商品；再点收起", async () => {
+    getPrefMock.mockResolvedValue({ season: ["2026秋"] });
+    serveWeeks(WEEK_ROWS);
+    renderPage();
+    const region = await weeksRegion();
+    const toggle = await within(region).findByRole("button", {
+      name: "展开 12-24 ~ 12-28 的推广单",
+    });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(drillMock).not.toHaveBeenCalled();
+    fireEvent.click(toggle);
+    await waitFor(() => expect(drillMock).toHaveBeenCalled());
+    expect(drillMock.mock.calls[0][0]).toEqual({
+      date_from: "2025-12-24",
+      date_to: "2025-12-28",
+      season: ["2026秋"],
+      page: 1,
+      page_size: 20,
+    });
+    expect(within(region).getByText("合作日期 2025-12-24 至 2025-12-28")).toBeTruthy();
+    const collapse = within(region).getByRole("button", { name: "收起 12-24 ~ 12-28 的推广单" });
+    expect(collapse.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(collapse);
+    await waitFor(() =>
+      expect(
+        within(region)
+          .getByRole("button", { name: "展开 12-24 ~ 12-28 的推广单" })
+          .getAttribute("aria-expanded")
+      ).toBe("false")
+    );
+  });
+  it("键盘：展开按钮是 Tab 可达的原生按钮（Enter / 空格由浏览器转成点击）", async () => {
+    serveWeeks(WEEK_ROWS);
+    renderPage();
+    const region = await weeksRegion();
+    const toggle = await within(region).findByRole("button", {
+      name: "展开 2025-12-29 ~ 2026-01-04 的推广单",
+    });
+    expect(toggle.tagName).toBe("BUTTON");
+    expect(toggle.getAttribute("type")).toBe("button");
+    expect(toggle.tabIndex).toBeGreaterThanOrEqual(0);
+    toggle.focus();
+    expect(document.activeElement).toBe(toggle);
+    fireEvent.click(toggle);
+    await waitFor(() => expect(drillMock).toHaveBeenCalled());
+    expect(drillMock.mock.calls[0][0]).toMatchObject({
+      date_from: "2025-12-29",
+      date_to: "2026-01-04",
+    });
+    expect(drillMock.mock.calls[0][0]).not.toHaveProperty("season");
+  });
+  it("周明细接口 403：整页显示无权限提示", async () => {
+    weeksMock.mockRejectedValue(
+      Object.assign(new Error("403"), { response: { status: 403, data: { code: "PERMISSION_DENIED" } } })
+    );
+    const { container } = renderPage();
+    expect(await screen.findByText("没有权限查看工作进度表")).toBeTruthy();
+    expect(container.querySelector(".ant-table")).toBeNull();
+    expect(weeksMock).toHaveBeenCalledTimes(1);
   });
 });

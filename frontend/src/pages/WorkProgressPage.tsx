@@ -40,6 +40,8 @@ import {
 import { WorkProgressGoodsCards } from "@/features/report/workProgress/WorkProgressGoodsCards";
 import { useWorkProgressGoodsCards } from "@/features/report/workProgress/workProgressGoods";
 import { WorkProgressGoodsModal } from "@/features/report/workProgress/WorkProgressGoodsModal";
+import { useWorkProgressWeeks } from "@/features/report/workProgress/workProgressWeeks";
+import { WorkProgressWeeksTable } from "@/features/report/workProgress/WorkProgressWeeksTable";
 import { isForbiddenError } from "@/features/warehouse/shipmentForm";
 import { extractErrorMessage } from "@/services/apiClient";
 import {
@@ -88,6 +90,8 @@ export function WorkProgressPage() {
   // 单品卡片（前 12 个商品）与「查看全部」弹窗：同一套区间 + 季节
   const goodsQuery = useWorkProgressGoodsCards(queryParams, enabled && ready);
   const [goodsModalOpen, setGoodsModalOpen] = useState(false);
+  // 周明细：同一套区间 + 季节，行上带实际起止（展开下钻用它，不依赖新鲜度接口）
+  const weeksQuery = useWorkProgressWeeks(queryParams, enabled && ready);
   // 导出、数据新鲜度、下钻都用这同一个区间。下钻要具体日期：用新鲜度接口里服务端解析的起止
   // （与 <ReportFreshness> 同一个查询，不多发请求；预设模式下前端手里没有日期）
   const { data: freshness } = useSummaryFreshness(preset, dateFrom, dateTo, enabled && ready);
@@ -147,7 +151,11 @@ export function WorkProgressPage() {
   ];
 
   // 菜单按 capabilities 已隐藏；直接输入 URL 进来、接口 403 时给明确提示，不显示空表
-  if (isForbiddenError(error) || isForbiddenError(goodsQuery.error)) {
+  if (
+    isForbiddenError(error) ||
+    isForbiddenError(goodsQuery.error) ||
+    isForbiddenError(weeksQuery.error)
+  ) {
     return <ReportForbidden name="工作进度表" />;
   }
 
@@ -228,6 +236,11 @@ export function WorkProgressPage() {
               }
             : {}
         }
+      />
+      <WorkProgressWeeksTable
+        data={weeksQuery.data}
+        loading={weeksQuery.isLoading}
+        season={seasons}
       />
       <WorkProgressGoodsModal
         open={goodsModalOpen}

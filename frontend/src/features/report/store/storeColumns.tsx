@@ -27,9 +27,12 @@ function monthLastDay(yearMonth: string): string {
 /**
  * 行上的周期（实际起止 = 桶 ∩ 请求区间）：日「YYYY-MM-DD」；
  * 周「MM-DD ~ MM-DD」，跨年时起止都带年份；月：整月「YYYY-MM」，不完整的月「YYYY-MM（MM-DD ~ MM-DD）」，
- * 免得默认「近 30 天」下半个月的合计看着像整月。
+ * 免得默认「近 30 天」下半个月的合计看着像整月。工作进度周明细（7e R5）也用周规则。
  */
-export function storePeriodLabel(row: StoreReportRow, granularity: StoreGranularity): string {
+export function storePeriodLabel(
+  row: Pick<StoreReportRow, "date_from" | "date_to">,
+  granularity: StoreGranularity
+): string {
   const { date_from: from, date_to: to } = row;
   if (granularity === "month") {
     const ym = from.slice(0, 7);
