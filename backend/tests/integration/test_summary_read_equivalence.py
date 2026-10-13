@@ -33,7 +33,9 @@ from app.core.security.field_permissions import FieldPermissionContext
 from app.core.tenancy import tenant_id_ctx
 from app.modules.collect.models import AdDaily, QianniuDaily
 from app.modules.finance.order_adjustment_models import OrderAdjustment
+from app.modules.metric_config.models import PromotionPlatformSetting
 from app.modules.metric_config.service import PlatformMetricSettingService
+from app.modules.metric_config.settings import DEFAULT_LIKE_COEFFICIENTS
 from app.modules.product.goods_models import GoodsMain, GoodsStyleItem
 from app.modules.product.platform_product_models import PlatformProduct
 from app.modules.promotion.urge_calculator import get_today
@@ -269,7 +271,7 @@ async def _seed(
         goods_main_id=goods_a.id,
         cooperation_date=D2,
         publish_status="已发布",
-        like_count=600,  # ≥ 500 → 爆文
+        like_count=1200,  # ≥ 小红书默认阈值 1000 → 爆文
         cost_snapshot=Decimal("30.00"),
         quote_amount=Decimal("400.00"),
     )
@@ -2460,6 +2462,110 @@ class TestWorkProgressWeeks:
             assert weeks.items[-1].date_to == WEEK_HI
             pr_rows = await _wp(svc, tenant_a, WEEK_LO, WEEK_HI)
             assert sum(r.quote_count for r in weeks.items) == sum(r.quote_count for r in pr_rows)
+        finally:
+            tenant_id_ctx.reset(tok)
+
+
+# 7e R7 S4：工作进度爆文数按平台阈值。与默认结论相反的一组：抖音 10000 → 10、小红书 1000 → 2000
+_HIT_CONFIG = {"抖音": 10, "小红书": 2000}
+_ODD_PLATFORM = "YT7612472372899"
+
+
+async def _configure_hit_thresholds(session: AsyncSession, tenant: Any) -> None:
+    for platform, threshold in _HIT_CONFIG.items():
+        session.add(
+            PromotionPlatformSetting(
+                tenant_id=tenant.id,
+                platform=platform,
+                like_coefficient=DEFAULT_LIKE_COEFFICIENTS[platform],
+                hit_threshold=threshold,
+            )
+        )
+    await session.flush()
+
+
+class TestWorkProgressHitThreshold:
+    """爆文数 = 已发布且原始点赞 ≥ 本平台阈值（设计 2.7，原来一律 ≥ 500）。
+
+    单据（``_seed`` 之上 pr1 再加两张已发布的单，都归 goods_a）：
+    - pr1：小红书 1200（``_seed``）、小红书 600、录错平台 1000（回落阈值 1000，两种配置都算）
+    - pr2：抖音 15 赞 × 2（``_seed``，归 goods_b）
+    默认：pr1 = 2（1200、录错平台）、pr2 = 0；配置后：pr1 = 1（只剩录错平台）、pr2 = 2。
+    PR 表、单品卡片、周明细都是汇总与实时两路逐字相等，``record_source`` 每次恰好一条。
+    """
+
+    @pytest.mark.parametrize("configured", [False, True], ids=["defaults", "configured"])
+    async def test_hit_count_by_platform_threshold(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        factory: Any,
+        recorder: _SourceRecorder,
+        monkeypatch: pytest.MonkeyPatch,
+        configured: bool,
+    ) -> None:
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            seeded = await _seed(
+                session, tenant_a, product_factory, blogger_factory, promotion_factory, factory
+            )
+            for platform, likes in (("小红书", 600), (_ODD_PLATFORM, 1000)):
+                await promotion_factory.promotion(
+                    style=seeded["style_a"],
+                    blogger=seeded["blogger"],
+                    pr=seeded["pr1"],
+                    goods_main_id=seeded["goods_a"].id,
+                    cooperation_date=D2,
+                    publish_status="已发布",
+                    platform=platform,
+                    like_count=likes,
+                    internal_code=f"DH{uuid4().hex[:10].upper()}",
+                )
+            if configured:
+                await _configure_hit_thresholds(session, tenant_a)
+            await session.commit()
+            # 先配置再刷新：汇总表落盘的 hit_count 也按配置的阈值
+            await _refresh(session, tenant_a, WEEK_LO, M_HI)
+
+            pr1, pr2 = seeded["pr1"].id, seeded["pr2"].id
+            goods_a, goods_b = seeded["goods_a"].id, seeded["goods_b"].id
+            if configured:
+                want_pr = {pr1: 1, pr2: 2, None: 0}
+                want_goods = {goods_a: 1, goods_b: 2}
+            else:
+                want_pr = {pr1: 2, pr2: 0, None: 0}
+                want_goods = {goods_a: 2, goods_b: 0}
+
+            svc = WorkProgressService(session)
+            summary_pr = await _wp(svc, tenant_a, M_LO, M_HI)
+            summary_goods = await _wpg(svc, tenant_a, M_LO, M_HI)
+            summary_weeks = await _wpw(svc, tenant_a, WEEK_LO, WEEK_HI)
+            assert recorder.calls == [
+                ("work_progress", "summary"),
+                ("work_progress_goods", "summary"),
+                ("work_progress_weeks", "summary"),
+            ]
+
+            monkeypatch.setattr(settings, "REPORT_SUMMARY_READS_ENABLED", False)
+            live_pr = await _wp(svc, tenant_a, M_LO, M_HI)
+            live_goods = await _wpg(svc, tenant_a, M_LO, M_HI)
+            live_weeks = await _wpw(svc, tenant_a, WEEK_LO, WEEK_HI)
+            assert recorder.calls[3:] == [
+                ("work_progress", "live"),
+                ("work_progress_goods", "live"),
+                ("work_progress_weeks", "live"),
+            ]
+            assert _dump(summary_pr) == _dump(live_pr)
+            assert _dump(summary_goods) == _dump(live_goods)
+            assert _dump(summary_weeks) == _dump(live_weeks)
+
+            assert {r.pr_id: r.hit_count for r in summary_pr} == want_pr
+            assert {r.goods_id: r.hit_count for r in summary_goods.items} == want_goods
+            assert summary_goods.unassigned is None
+            assert sum(r.hit_count for r in summary_weeks.items) == sum(want_pr.values())
         finally:
             tenant_id_ctx.reset(tok)
 

@@ -17,11 +17,14 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import as_mappings
-from app.modules.metric_config.settings import PlatformMetricSettings, effective_like_sum
+from app.modules.metric_config.settings import (
+    PlatformMetricSettings,
+    effective_like_sum,
+    hit_condition_sql,
+)
 from app.modules.promotion.display_name import display_short_name_sql
 from app.modules.promotion.urge_calculator import URGE_STATUS_SQL_EXPR, UrgeThresholds
 from app.modules.report.pr_scope import PrParam, PrScope, pr_scope_from_param
-from app.services.metric.work_progress import HIT_STAT_THRESHOLD
 
 _URGE = URGE_STATUS_SQL_EXPR
 
@@ -315,7 +318,7 @@ class WorkProgressRepository:
         """按 PR（``by_goods`` 时按 PR × 归属商品）聚合区间内的推广单。
 
         - ``thresholds`` 决定档期内 / 催发 / 重要催发三档的分界，必须是租户配置
-        - ``metric_settings`` 给点赞折算系数（7e R7），必须是租户配置，不给默认值
+        - ``metric_settings`` 给点赞折算系数与爆文阈值（7e R7），必须是租户配置，不给默认值
         - ``by_goods`` 必填、不给默认值：汇总表刷新要 True（行多一列 ``goods_main_id``，
           归属 = ``_PROMO_GOODS_LATERAL``，没归属商品的单落在 NULL 那一行），报表读取要 False
         - ``seasons``：只统计归属商品季节命中的单（没归属商品的单不算）
@@ -358,8 +361,10 @@ class WorkProgressRepository:
                 WHERE p.publish_status <> '已取消'
                   AND p.recall_status = '未召回'
               ) AS effective_quote_count,
+              -- 爆文数：原始点赞 ≥ 本平台阈值（7e R7，原来一律 ≥ 500）
               COUNT(*) FILTER (WHERE p.publish_status='已发布'
-                               AND p.like_count >= :hit_stat) AS hit_count,
+                               AND {hit_condition_sql("p.like_count", "p.platform")})
+                AS hit_count,
               {effective_like_sum("p.like_count", "p.platform")} AS like_count,
               COALESCE(SUM(p.cost_snapshot), 0) AS cost,
               -- 7e R2：服务费四分 + 推广成本 + 未发布 / 发货计数（R5 的公式用）
@@ -403,7 +408,6 @@ class WorkProgressRepository:
             "today": today,
             **thresholds.sql_params(),
             **metric_settings.sql_params(),
-            "hit_stat": HIT_STAT_THRESHOLD,
             **scope_params,
             **season_params,
         }

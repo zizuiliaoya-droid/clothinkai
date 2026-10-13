@@ -170,7 +170,7 @@ class TestWorkProgress:
             pr = await factory.user(tenant_a, roles=[pr_role])
             style = await product_factory.style()
             blogger = await blogger_factory.blogger()
-            # 同 PR 本月 2 篇：1 已发布(含 like) + 1 未发布
+            # 同 PR 本月 3 篇：2 已发布（小红书 600 / 1200 赞）+ 1 未发布
             await promotion_factory.promotion(
                 style=style,
                 blogger=blogger,
@@ -179,6 +179,14 @@ class TestWorkProgress:
                 publish_status="已发布",
                 like_count=600,
                 cost_snapshot=Decimal("300"),
+            )
+            await promotion_factory.promotion(
+                style=style,
+                blogger=blogger,
+                pr=pr,
+                cooperation_date=date(2026, 5, 12),
+                publish_status="已发布",
+                like_count=1200,
             )
             await promotion_factory.promotion(
                 style=style,
@@ -202,11 +210,12 @@ class TestWorkProgress:
             mine = [r for r in rows if r.pr_id == pr.id]
             assert len(mine) == 1
             row = mine[0]
-            assert row.quote_count == 2
-            assert row.publish_count == 1
-            assert row.hit_count == 1  # like 600 >= HIT_STAT_THRESHOLD(500)
-            assert row.effective_quote_count == 2  # 无召回、无取消
-            assert row.month_complete_rate == Decimal("0.5000")
+            assert row.quote_count == 3
+            assert row.publish_count == 2
+            # 小红书默认阈值 1000（7e R7 S4，原来一律 ≥ 500）：600 不算、1200 算
+            assert row.hit_count == 1
+            assert row.effective_quote_count == 3  # 无召回、无取消
+            assert row.month_complete_rate == Decimal("0.6667")
         finally:
             tenant_id_ctx.reset(tok)
 
