@@ -5,7 +5,7 @@
 // 日表行内编辑（S8）：只在 capabilities.store_write 时出；一次一行，只发改了的字段，成功后作废店铺查询。
 // 下钻（S9）：月表点行 → 周表、周表点行 → 日表，带行上实际起止。
 import { type MouseEvent, useEffect, useId, useMemo, useRef, useState } from "react";
-import { Alert, Button, Card, Space, Table, Typography, message } from "antd";
+import { Alert, Button, Card, Grid, Space, Table, Typography, message } from "antd";
 import { DownloadOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
@@ -170,7 +170,9 @@ export function StoreReportView({ granularity }: { granularity: StoreGranularity
         },
       }
     : undefined;
-  const columns = buildStoreColumns(granularity, rows, edit);
+  // 窄屏（< md）「操作」列不固定：左「日期」右「操作」都固定时 375 宽度下数据列被挤没（评审 r1 L4）
+  const screens = Grid.useBreakpoint();
+  const columns = buildStoreColumns(granularity, rows, edit, { pinActions: screens.md === true });
   // 下钻（S9）：周 / 月整行可点，跳下一级并带行上实际起止；点在周期链接上时由链接自己跳，不重复压栈
   const navigate = useNavigate();
   const onRow =

@@ -214,13 +214,17 @@ describe("StoreReportView 已录 x / y 天", () => {
     expect(periods).toEqual(["09-07 ~ 09-13", "09-02 ~ 09-06"]);
   });
 
-  it("月表：周期显示「YYYY-MM」", async () => {
+  it("月表：整月显示「YYYY-MM」，不完整的月带实际起止", async () => {
     storeMock.mockResolvedValue(
-      report("month", [row({ date_from: "2026-09-02", date_to: "2026-09-30", day_count: 20 })])
+      report("month", [
+        row({ date_from: "2026-09-02", date_to: "2026-09-30", day_count: 20 }),
+        row({ date_from: "2026-08-01", date_to: "2026-08-31", day_count: 31 }),
+      ])
     );
     const { container } = renderView("month");
     const body = tableBody(container);
-    expect(await within(body).findByText("2026-09")).toBeTruthy();
+    expect(await within(body).findByText("2026-09（09-02 ~ 09-30）")).toBeTruthy();
+    expect(within(body).getByText("2026-08")).toBeTruthy();
     expect(within(body).getByText("已录 1 / 20 天")).toBeTruthy();
   });
 });
@@ -250,7 +254,9 @@ describe("StoreReportView 下钻（7e R4 S9）", () => {
   it("月表：周期链接到周表，带行上实际起止", async () => {
     storeMock.mockResolvedValue(report("month", [row(MONTH_ROW)]));
     const { container } = renderView("month");
-    const link = await within(tableBody(container)).findByRole("link", { name: "2026-09" });
+    const link = await within(tableBody(container)).findByRole("link", {
+      name: "2026-09（09-02 ~ 09-30）",
+    });
     expect(link.getAttribute("href")).toBe(
       "/store/weekly?preset=custom&date_from=2026-09-02&date_to=2026-09-30"
     );
@@ -447,5 +453,32 @@ describe("StoreReportView 行内编辑（7e R4 S8）", () => {
     );
     expect(updateMock).not.toHaveBeenCalled();
     expect(screen.queryByRole("spinbutton", { name: `${DAY} 直通车消耗` })).toBeNull();
+  });
+
+  // 评审 r1 L4：375 宽度下左「日期」右「操作」都固定会把数据列挤没，窄屏（< md）不固定「操作」
+  const actionsHeader = (container: HTMLElement) =>
+    Array.from(container.querySelectorAll("thead th")).find((th) => th.textContent === "操作");
+
+  it("窄屏（< 768）：「操作」列不固定在右侧", async () => {
+    const { container } = await startEdit();
+    const th = actionsHeader(container);
+    expect(th).toBeTruthy();
+    expect(th?.className).not.toContain("ant-table-cell-fix-right");
+  });
+
+  it("宽屏（≥ 768）：「操作」列固定在右侧", async () => {
+    const original = window.matchMedia;
+    window.matchMedia = ((query: string) => ({
+      ...original(query),
+      matches: true,
+    })) as typeof window.matchMedia;
+    try {
+      const { container } = await startEdit();
+      await waitFor(() =>
+        expect(actionsHeader(container)?.className).toContain("ant-table-cell-fix-right")
+      );
+    } finally {
+      window.matchMedia = original;
+    }
   });
 });

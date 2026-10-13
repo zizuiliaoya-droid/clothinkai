@@ -3,7 +3,7 @@
 // 列名：「访客数」改名「商品访客数合计」（默 16，悬停说明会重复计）；「支付订单数」改正为「支付件数」。
 // 比率都在后端分桶求和后现算，分母为 0 / 负时为 null，这里显示「—」。「其中直播」两列只展示。
 // 下钻（S9）：月行 → 周表、周行 → 日表，带行上实际起止（storeDrillHref）。
-// 日表能写时（S8）手填三项与仅退款在编辑行里换成金额框，末尾多一列「操作」。
+// 日表能写时（S8）手填三项与仅退款在编辑行里换成金额框，末尾多一列「操作」（窄屏不固定）。
 import type { ColumnsType } from "antd/es/table";
 import { Link } from "react-router-dom";
 import { HeaderHint } from "../components/HeaderHint";
@@ -18,11 +18,30 @@ export const VISITORS_HINT = "按商品累加：同一访客看了多个商品�
 const money = (v: string | null) => (v == null ? "—" : `¥${v}`);
 const roi = (v: string | null) => (v == null ? "—" : Number(v).toFixed(2));
 
-/** 行上的周期：日「YYYY-MM-DD」，周「MM-DD ~ MM-DD」（实际起止），月「YYYY-MM」。 */
+/** 某月最后一天的「DD」（"2026-02" → "28"）。 */
+function monthLastDay(yearMonth: string): string {
+  const [y, m] = yearMonth.split("-").map(Number);
+  return String(new Date(Date.UTC(y, m, 0)).getUTCDate()).padStart(2, "0");
+}
+
+/**
+ * 行上的周期（实际起止 = 桶 ∩ 请求区间）：日「YYYY-MM-DD」；
+ * 周「MM-DD ~ MM-DD」，跨年时起止都带年份；月：整月「YYYY-MM」，不完整的月「YYYY-MM（MM-DD ~ MM-DD）」，
+ * 免得默认「近 30 天」下半个月的合计看着像整月。
+ */
 export function storePeriodLabel(row: StoreReportRow, granularity: StoreGranularity): string {
-  if (granularity === "month") return row.date_from.slice(0, 7);
-  if (granularity === "week") return `${row.date_from.slice(5)} ~ ${row.date_to.slice(5)}`;
-  return row.date_from;
+  const { date_from: from, date_to: to } = row;
+  if (granularity === "month") {
+    const ym = from.slice(0, 7);
+    const whole = from === `${ym}-01` && to === `${ym}-${monthLastDay(ym)}`;
+    return whole ? ym : `${ym}（${from.slice(5)} ~ ${to.slice(5)}）`;
+  }
+  if (granularity === "week") {
+    return from.slice(0, 4) === to.slice(0, 4)
+      ? `${from.slice(5)} ~ ${to.slice(5)}`
+      : `${from} ~ ${to}`;
+  }
+  return from;
 }
 
 /**
@@ -75,11 +94,15 @@ function manualColumn(
   };
 }
 
-/** `edit` 只在日表且能写时传：手填四列可编辑，末尾加「操作」列。 */
+/**
+ * `edit` 只在日表且能写时传：手填四列可编辑，末尾加「操作」列。
+ * `pinActions`：「操作」列是否固定在右侧。窄屏（< md）传 false，否则左「日期」右「操作」两列固定会把数据列挤没。
+ */
 export function buildStoreColumns(
   granularity: StoreGranularity,
   rows: StoreReportRow[],
-  edit?: StoreManualEditing
+  edit?: StoreManualEditing,
+  { pinActions = true }: { pinActions?: boolean } = {}
 ): ColumnsType<StoreReportRow> {
   return [
     {
@@ -142,7 +165,7 @@ export function buildStoreColumns(
             title: "操作",
             key: "actions",
             width: 130,
-            fixed: "right" as const,
+            fixed: pinActions ? ("right" as const) : undefined,
             render: (_: unknown, r: StoreReportRow) => <ManualActionsCell edit={edit} row={r} />,
           },
         ]
