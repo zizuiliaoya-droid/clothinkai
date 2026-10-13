@@ -1,7 +1,7 @@
 // 阶段 / 状态 → Tag 文案与颜色（流程线设计 8.1）。颜色只做辅助，Tag 上一定有文字。
 //
 // 用 Record<联合类型, …> 让 tsc 强制写全。推广单 22 个阶段与发货 3 态随 PR-2，谈款 7 态随 PR-3；
-// 推广单结款状态 7 个随结款的 PR 补进来（现在是旧值，配色沿用 PromotionListPage）。
+// 推广单结款状态 7 个随 PR-6（文案照 3.4「界面显示」列）。
 
 import type { NegotiationStatus } from "@/features/negotiation/types";
 import type { SettlementStatus, ShipStatus } from "@/features/promotion/types";
@@ -120,13 +120,18 @@ export const NEGOTIATION_STATUS_STYLE: Record<NegotiationStatus, StageStyle> = {
   已定稿: { label: "已定稿", color: "green" },
 };
 
-/** 推广单上的结款状态（settlement_status）。 */
+/**
+ * 推广单上的结款状态（settlement_status，7 个，3.4）。文案 = 3.4「界面显示」列；
+ * 配色与同名阶段（PROMOTION_STAGE_STYLE）一致，未发布不上色。
+ */
 export const PROMOTION_SETTLEMENT_STYLE: Record<SettlementStatus, StageStyle> = {
-  未核查: { label: "未核查", color: "default" },
-  待核查: { label: "待核查", color: "gold" },
-  待付款: { label: "待付款", color: "blue" },
-  已付款: { label: "已付款", color: "green" },
-  已驳回: { label: "已驳回", color: "red" },
+  未核查: { label: "未发布", color: "default" },
+  待核查: { label: "待主管审核", color: "gold" },
+  待付款: { label: "待财务付款", color: "blue" },
+  已付款: { label: "待传结款截图", color: "cyan" },
+  已驳回: { label: "推广驳回 · 待重提", color: "volcano" },
+  结款驳回: { label: "结款驳回 · 待重提", color: "volcano" },
+  已结款: { label: "已结款", color: "green" },
 };
 
 function lookup(table: Record<string, StageStyle>, value: string | null | undefined): StageStyle {

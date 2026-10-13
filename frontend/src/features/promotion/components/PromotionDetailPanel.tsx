@@ -10,14 +10,9 @@ import { useQuery } from "@tanstack/react-query";
 import { FieldBlock } from "@/features/flow/FieldBlock";
 import { shipStatusStyle } from "@/features/flow/stageStyle";
 import { goodsDisplayName } from "@/features/product/api";
-import { getPromotion } from "@/features/promotion/api";
+import { getPromotion, promotionDetailKey } from "@/features/promotion/api";
 import { itemSpecLines, shipDetailLines } from "@/features/promotion/shipDisplay";
 import type { Promotion } from "@/features/promotion/types";
-
-/** 在 ["promotions"] 前缀下：列表页弹窗成功 invalidate ["promotions"] 时一起重拉。 */
-function promotionDetailKey(promotionId: string) {
-  return ["promotions", "detail", promotionId] as const;
-}
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (

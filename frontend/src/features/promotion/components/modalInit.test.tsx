@@ -79,7 +79,6 @@ describe("拆出的弹窗按 target 填初值", () => {
         <SourceExtraModal
           target={promo({ source_extra: { 订单号: "ORD-9", 负责PR: "小王" } })}
           onClose={() => {}}
-          canManagePaymentQr={false}
         />
       )
     );

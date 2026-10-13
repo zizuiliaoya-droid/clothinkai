@@ -43,7 +43,7 @@ export function MetricsModal({ target, onClose }: Props) {
         v.file
       ),
     onSuccess: () => {
-      message.success("数据已录入，进入待复盘");
+      message.success("数据已录入");
       onClose();
       setMetricsFile(null);
       form.resetFields();
@@ -84,7 +84,7 @@ export function MetricsModal({ target, onClose }: Props) {
         }}
       >
         <Typography.Paragraph type="secondary">
-          发布满 7 天后录一次。三个指标和截图都必填，录完进入待复盘。
+          已结款且发布满 7 天后录一次，只能录一次。三个指标和截图都必填。
         </Typography.Paragraph>
         <Space size="large">
           <Form.Item

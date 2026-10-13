@@ -15,14 +15,41 @@ export type RecallStatus =
   | "召回成功"
   | "召回失败";
 
+/**
+ * 推广单结款状态 7 个（流程线 3.4）。界面文案见 stageStyle 的 PROMOTION_SETTLEMENT_STYLE：
+ * 未核查 = 未发布、待核查 = 待主管审核、已驳回 = 推广驳回 · 待重提、待付款 = 待财务付款、
+ * 结款驳回 = 结款驳回 · 待重提、已付款 = 待传结款截图、已结款 = 已结款。
+ */
 export type SettlementStatus =
   | "未核查"
   | "待核查"
   | "待付款"
   | "已付款"
-  | "已驳回";
+  | "已驳回"
+  | "结款驳回"
+  | "已结款";
 
 export type ReviewAction = "approve" | "reject";
+
+/**
+ * 审核通过的去向（7.3，只在审核通过的响应里有）：settlement_created 已生成结款单（待财务付款）、
+ * settled_directly 应付 0 直接记已结款、imported_settlement_paid 已有导入的已付款结款单（待传结款截图）。
+ */
+export type ReviewOutcome = "settlement_created" | "settled_directly" | "imported_settlement_paid";
+
+/** 推广详情的结款块（7.3）：只在详情与动作返回里有；金额读不到为 null。 */
+export interface PromotionSettlementBlock {
+  settlement_id: string;
+  status: string;
+  amount: string | null;
+  extra_items: { item_type: string; amount: string | null; remark: string | null }[];
+  total_amount: string | null;
+  payment_amount: string | null;
+  payment_adjust_note: string | null;
+  payment_date: string | null;
+  /** 结款单最近一次被财务驳回的原因；没驳回过为 null。 */
+  reject_reason: string | null;
+}
 
 /** 复盘状态（PRD 改动 4）。已结款 → 录 7 天数据 → 待复盘 → 待确认 → 已完成。 */
 export type RetroStatus = "未开始" | "待复盘" | "待确认" | "已完成";
@@ -162,6 +189,18 @@ export interface Promotion {
   /** 最近一次驳回后重新提交的说明（只留最近一轮）。 */
   resubmit_note: string | null;
   resubmitted_at: string | null;
+  // 结款（流程线 PR-6）。旧缓存 / 旧 mock 没有这几个键，按可选收
+  /** 只在审核通过的响应里有：成功提示按它出，不看 settlement_status。 */
+  review_outcome?: ReviewOutcome | null;
+  settled_at?: string | null;
+  /** 7 天数据可以录的第一天（发布日 + 7）；没有发布日为 null。 */
+  metrics_available_from?: string | null;
+  /** 行角标：复盘列的「待录数据」「满 7 天 · 待结款」读它。 */
+  badges?: string[];
+  /** 结款聊天截图签名 URL：只在详情与动作返回里签，列表为 null。 */
+  settlement_chat_signed_url?: string | null;
+  /** 结款块：只在详情与动作返回里有；没有结款单或看不到为 null。 */
+  settlement?: PromotionSettlementBlock | null;
   // 通用
   is_active: boolean;
   created_at: string;
@@ -297,6 +336,10 @@ export interface PromotionReviewRequest {
   review_reason_category?: RejectReasonCategory | null;
 }
 
+/** 结款重提（R7）：财务驳回结款单后 PR 重提，说明 1 ~ 2000 字必填。 */
+export interface PromotionSettlementResubmitRequest {
+  note: string;
+}
 /** 驳回后重新提交。note 必填；链接 / 日期不传就不改。 */
 export interface PromotionResubmitRequest {
   note: string;

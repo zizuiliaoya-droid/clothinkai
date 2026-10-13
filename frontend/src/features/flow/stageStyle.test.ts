@@ -14,7 +14,11 @@ import {
 
 const TABLES = [
   ["谈款状态", NEGOTIATION_STATUS_STYLE, [...NEGOTIATION_STATUSES]],
-  ["推广单结款状态", PROMOTION_SETTLEMENT_STYLE, ["未核查", "待核查", "待付款", "已付款", "已驳回"]],
+  [
+    "推广单结款状态",
+    PROMOTION_SETTLEMENT_STYLE,
+    ["未核查", "待核查", "待付款", "已付款", "已驳回", "结款驳回", "已结款"],
+  ],
   ["推广单阶段", PROMOTION_STAGE_STYLE, [...PROMOTION_STAGES]],
   ["发货状态", SHIP_STATUS_STYLE, ["待发货", "待打单", "已发货"]],
 ] as const;
@@ -60,9 +64,27 @@ describe("stageStyle", () => {
     expect(negotiationStatusStyle("已定稿").color).toBe("green");
   });
 
+  it("推广单结款状态 7 个：文案 = 3.4「界面显示」列，配色与同名阶段一致", () => {
+    const values = ["未核查", "待核查", "待付款", "已付款", "已驳回", "结款驳回", "已结款"] as const;
+    expect(Object.fromEntries(values.map((s) => [s, promotionSettlementStyle(s).label]))).toEqual({
+      未核查: "未发布",
+      待核查: "待主管审核",
+      待付款: "待财务付款",
+      已付款: "待传结款截图",
+      已驳回: "推广驳回 · 待重提",
+      结款驳回: "结款驳回 · 待重提",
+      已结款: "已结款",
+    });
+    expect(promotionSettlementStyle("未核查").color).toBe("default");
+    expect(promotionSettlementStyle("已结款").color).toBe("green");
+    // 其余 5 个文案就是阶段名：颜色跟阶段一致
+    for (const s of ["待核查", "待付款", "已付款", "已驳回", "结款驳回"] as const) {
+      const { label, color } = promotionSettlementStyle(s);
+      expect(color).toBe(promotionStageStyle(label).color);
+    }
+  });
+
   it("沿用现有页面的配色", () => {
-    expect(promotionSettlementStyle("已付款")).toEqual({ label: "已付款", color: "green" });
-    expect(promotionSettlementStyle("未核查")).toEqual({ label: "未核查", color: "default" });
     // 催发 3 档沿用推广列表「是否催发」列的颜色
     expect(promotionStageStyle("催发").color).toBe("orange");
     expect(promotionStageStyle("重要催发").color).toBe("red");
@@ -78,7 +100,7 @@ describe("stageStyle", () => {
   it("不认识的值回落为原文 + default，空值回落为「未知」（Tag 上一定有字）", () => {
     // 旧 4 态的「审核通过」「待审核」迁移后不再出现，出现了也照原文显示
     expect(negotiationStatusStyle("审核通过")).toEqual({ label: "审核通过", color: "default" });
-    expect(promotionSettlementStyle("待财务付款")).toEqual({ label: "待财务付款", color: "default" });
+    expect(promotionSettlementStyle("待结算")).toEqual({ label: "待结算", color: "default" });
     expect(promotionStageStyle("待老板审核")).toEqual({ label: "待老板审核", color: "default" });
     expect(shipStatusStyle("已打单")).toEqual({ label: "已打单", color: "default" });
     expect(negotiationStatusStyle("")).toEqual({ label: "未知", color: "default" });
