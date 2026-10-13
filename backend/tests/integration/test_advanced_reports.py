@@ -36,6 +36,7 @@ from app.modules.report.store_daily_service import StoreDailyService
 from app.modules.report.summary_models import ReportSummaryCoverage
 from app.modules.report.summary_refresh_service import SummaryRefreshService
 from app.modules.report.target_planning_service import TargetPlanningService
+from app.modules.report.work_progress_models import StoreDaily
 from app.modules.report.work_progress_service import WorkProgressService, _month_range
 
 pytestmark = pytest.mark.asyncio
@@ -595,6 +596,54 @@ class TestStoreDaily:
                 (ops_id, None, {"date": str(day), **snap1}),
                 (ops_id, snap1, {"date": str(day), **snap2}),
             ]
+        finally:
+            tenant_id_ctx.reset(tok)
+
+    async def test_null_only_on_missing_day_inserts_nothing(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        operations_role: Any,
+    ) -> None:
+        """没有行的日子只传 null（评审 r1 L3）：不插全空的行（这天不进日期并集）、不写审计。"""
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            ops = await factory.user(tenant_a, roles=[operations_role])
+            day = date(2026, 5, 21)
+            svc = StoreDailyService(session)
+            audit_count = (
+                select(func.count())
+                .select_from(AuditLog)
+                .where(
+                    AuditLog.tenant_id == tenant_a.id,
+                    AuditLog.action == "report.store_daily.update",
+                )
+            )
+            audits_before = (await session.execute(audit_count)).scalar_one()
+            row = await svc.upsert_manual(
+                tenant_a.id,
+                day,
+                StoreDailyManualUpdate(zhitongche_spend=None, refund_only_amount=None),
+                ops,
+            )
+            assert (row.date, row.zhitongche_spend, row.refund_only_amount, row.remark) == (
+                day,
+                None,
+                None,
+                None,
+            )
+            rows = (
+                await session.execute(
+                    select(func.count())
+                    .select_from(StoreDaily)
+                    .where(StoreDaily.tenant_id == tenant_a.id, StoreDaily.date == day)
+                )
+            ).scalar_one()
+            assert rows == 0
+            report = await svc.get_store_report(tenant_a.id, (day, day), "day")
+            assert report.items == []
+            assert (await session.execute(audit_count)).scalar_one() == audits_before
         finally:
             tenant_id_ctx.reset(tok)
 

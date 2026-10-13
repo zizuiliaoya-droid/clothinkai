@@ -30,6 +30,15 @@ from app.modules.report.store_buckets import bucket_store_rows
 from app.modules.report.summary_read import SummaryReadRepository, record_source
 from app.modules.report.work_progress_models import StoreDaily
 
+# 手填写入按 (租户, 日期) 加的事务级锁（随 commit / rollback 释放）。阻塞版：同一天的两次录入很短，排队即可。
+# CAST 必须写：参数类型推断不出来时 asyncpg 会报 IndeterminateDatatype。
+_MANUAL_LOCK_SQL = text("SELECT pg_advisory_xact_lock(hashtextextended(CAST(:key AS text), 0))")
+
+
+def _manual_lock_key(tenant_id: UUID, day: date) -> str:
+    return f"store_daily_manual:{tenant_id}:{day.isoformat()}"
+
+
 # 新三页的 record_source / 耗时标签（旧接口仍用 store_daily）
 _REPORT_LABELS = {"day": "store_daily", "week": "store_weekly", "month": "store_monthly"}
 
@@ -214,7 +223,8 @@ class StoreDailyService:
     ) -> StoreDaily:
         """写手填层（设计 2.4）：只写传了的字段，传 ``null`` 就清空（``model_fields_set``）。
 
-        日期先判再写：晚于今天 / 早于 2020-01-01 → 422。审计记改前改后（同一事务）；
+        日期先判再写：晚于今天 / 早于 2020-01-01 → 422。同一天的写入按 (租户, 日期) 排队，
+        审计记改前改后（同一事务）；没有行时只传 null 不插空行、不写审计；
         手填层读取时 LEFT JOIN，录完立即生效，不清汇总覆盖。
         """
         if day > get_today():
@@ -222,6 +232,8 @@ class StoreDailyService:
         if day < _EARLIEST_MANUAL_DAY:
             raise StoreDailyDateTooEarlyError()
         set_fields = payload.model_dump(include=payload.model_fields_set)
+        # 按 (租户, 日期) 排队：还没有行时 FOR UPDATE 锁不住东西，并发首录会都记 before = None
+        await self._session.execute(_MANUAL_LOCK_SQL, {"key": _manual_lock_key(tenant_id, day)})
         # 改前：锁住已有行（只取列，不进 identity map）；还没有行 → None
         before_row = (
             await self._session.execute(
@@ -230,6 +242,10 @@ class StoreDailyService:
                 .with_for_update()
             )
         ).one_or_none()
+        if before_row is None and all(v is None for v in set_fields.values()):
+            # 没有行、传的又全是 null：没有可清的，不插全空的行（否则这天进日期并集、日表多一行 0）
+            await self._session.commit()
+            return StoreDaily(tenant_id=tenant_id, date=day, **set_fields)
         stmt = (
             pg_insert(StoreDaily)
             .values(tenant_id=tenant_id, date=day, **set_fields)
