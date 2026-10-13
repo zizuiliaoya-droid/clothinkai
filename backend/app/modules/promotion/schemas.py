@@ -655,6 +655,8 @@ class PromotionResponse(BaseModel):
     payment_qr_attachment_id: UUID | None = None
     payment_qr_signed_url: str | None = None
     settlement_payment_proof_signed_url: str | None = None
+    settlement_chat_signed_url: str | None = None
+    """结款聊天截图（R9，流程线 7.3）：只在详情与各动作的返回里签，列表为 None；可见性同收款码。"""
 
     # 重复警告（仅 create / detail 视图填入）
     duplicate_warnings: list[PromotionDuplicateWarning] = Field(default_factory=list)

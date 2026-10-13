@@ -433,6 +433,36 @@ async def resubmit_settlement(
 
 
 @router.post(
+    "/promotions/{promotion_id}/settlement-chat",
+    response_model=PromotionResponse,
+    dependencies=[require_permission("promotion", "write")],
+)
+async def upload_settlement_chat(
+    promotion_id: UUID,
+    user: CurrentActiveUser,
+    service: PromotionServiceDep,
+    file: Annotated[UploadFile, File(description="结款聊天截图（JPG / PNG / WebP）")],
+) -> PromotionResponse:
+    """流程线 R9 上传结款聊天截图：财务付款后，推广单 已付款 → 已结款.
+
+    - 只在推广单 = 已付款（其余 422 ILLEGAL_STATE_TRANSITION）；截图必传（不合格 422
+      SETTLEMENT_CHAT_SCREENSHOT_REQUIRED）
+    - 同事务写截图、``settled_at`` 与时间线 ``promotion.settled``；后端代传，失败删对象
+    """
+    try:
+        data = await file.read(10 * 1024 * 1024 + 1)
+    finally:
+        await file.close()
+    return await service.upload_settlement_chat(
+        promotion_id,
+        filename=file.filename,
+        mime_type=file.content_type,
+        data=data,
+        user=user,
+    )
+
+
+@router.post(
     "/promotions/{promotion_id}/return-waybill",
     response_model=PromotionResponse,
     dependencies=[require_permission("promotion", "write")],

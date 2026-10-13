@@ -229,6 +229,15 @@ class BrandCommentScreenshotRequiredError(ValidationError):
     code = "BRAND_COMMENT_SCREENSHOT_REQUIRED"
 
 
+class SettlementChatScreenshotRequiredError(ValidationError):
+    """结款聊天截图必传（流程线 3.4 R9）：财务付款后 PR 把截图传上来，推广单才到已结款。
+
+    图片不合格（空、超 10 MB、不是图）也抛这个 —— 截图是「博主知道已付款」的凭据。
+    """
+
+    code = "SETTLEMENT_CHAT_SCREENSHOT_REQUIRED"
+
+
 class RetroContentMissingError(ValidationError):
     """确认复盘时找不到复盘文字。
 
@@ -311,6 +320,7 @@ __all__ = [
     "SelfReviewForbiddenError",
     "SequenceOverflowError",
     "SettlementAlreadyExistsError",
+    "SettlementChatScreenshotRequiredError",
     "SettlementNotPaidError",
     "ShippedAtInFutureError",
     "SourceExtraKeyRetiredError",

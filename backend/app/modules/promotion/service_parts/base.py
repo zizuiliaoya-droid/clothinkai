@@ -795,6 +795,12 @@ class PromotionServiceBase:
                         )
                 except Exception:
                     log.warning("promotion_payment_attachment_signed_url_failed")
+        # 结款聊天截图（R9）：跟收款码同一个可见开关（4.6）；只在详情签，列表不逐行查（7.3）
+        settlement_chat_url: str | None = None
+        if can_see_payment_attachments and view != "list":
+            settlement_chat_url = await self._signed_url_for(
+                promotion.settlement_chat_attachment_id
+            )
 
         resolved_style_image_key = style_main_image_key
         if not style_main_image_preloaded:
@@ -1017,6 +1023,7 @@ class PromotionServiceBase:
             payment_qr_attachment_id=visible_payment_qr_id,
             payment_qr_signed_url=payment_qr_url,
             settlement_payment_proof_signed_url=settlement_proof_url,
+            settlement_chat_signed_url=settlement_chat_url,
             duplicate_warnings=[],
             ui=ui,
         )
