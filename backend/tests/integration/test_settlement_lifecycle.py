@@ -144,7 +144,7 @@ class TestExtraItem:
         blogger_factory: Any,
         settlement_factory: Any,
     ) -> None:
-        """EP06-S05：增加赞奖 → total_amount = amount + extra（运费停用，F2，见 test_settlement_flow）。"""
+        """EP06-S05：增加赞奖 → total_amount = amount + extra（运费过渡期可加，见 test_settlement_flow）。"""
         token = tenant_id_ctx.set(tenant_a.id)
         try:
             user = await factory.user(tenant_a, roles=[pr_manager_role])

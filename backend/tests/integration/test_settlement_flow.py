@@ -2,7 +2,7 @@
 
 - F1：``SettlementRequested`` 建单直接落在「待付款」，同事务写 ``settlement.created``
 - F0：只给上线前停在「待核查」的旧单走完；新单（待付款）approve → 422
-- F2：增加结算项「运费」停用 → 422
+- F2：增加结算项「运费」过渡期保留（设计 10.3 PR-6「过渡期」，PR-8 与 R33 同时停用）
 - F3：实付 ≥ 0；实付 ≠ 应付（``total_amount``）时调整说明必填（422 ``FLOW_GATE_MISSING``）
 - F4：付款日期一律取北京时间的当天，客户端传的日期忽略（D5：容器是 UTC）
 - 每一步各写一条结款组事件（6.3），付款事件的附件 = 付款凭证
@@ -33,7 +33,6 @@ from app.core.exceptions import (
 )
 from app.core.tenancy import tenant_id_ctx
 from app.modules.finance.enums import ExtraItemType
-from app.modules.finance.exceptions import ExtraItemNotAllowedError
 from app.modules.finance.exceptions import (
     StateTransitionConflictError as SettlementStateConflictError,
 )
@@ -256,9 +255,9 @@ class TestReviewApprove:
 
 
 class TestExtraItem:
-    """F2：类型「运费」停用（避免与 R33 重复），其他类型照常并写事件。"""
+    """F2：增加结算项照常并写事件；「运费」过渡期保留（设计 10.3 PR-6，PR-8 与 R33 同时停用）。"""
 
-    async def test_shipping_item_rejected(
+    async def test_shipping_item_allowed_in_transition(
         self,
         session: AsyncSession,
         tenant_a: Any,
@@ -268,28 +267,45 @@ class TestExtraItem:
         blogger_factory: Any,
         settlement_factory: Any,
     ) -> None:
+        """召回仍走旧流程，寄回运费在 PR-8 之前只能走结款单追加项：可加、金额进合计、写事件。"""
         token = tenant_id_ctx.set(tenant_a.id)
         try:
             manager = await factory.user(tenant_a, roles=[pr_manager_role])
             s = await _settlement(
                 settlement_factory, product_factory, blogger_factory, status="待付款"
             )
-            with pytest.raises(ExtraItemNotAllowedError) as exc_info:
-                await SettlementService(session).add_extra_item(
-                    s.id,
-                    SettlementExtraItemCreateRequest(
-                        item_type=ExtraItemType.SHIPPING, amount=Decimal("12.00")
-                    ),
-                    manager,
-                )
-            assert exc_info.value.status_code == 422
-            assert exc_info.value.details["item_type"] == "运费"
+            resp = await SettlementService(session).add_extra_item(
+                s.id,
+                SettlementExtraItemCreateRequest(
+                    item_type=ExtraItemType.SHIPPING, amount=Decimal("12.00")
+                ),
+                manager,
+            )
+            assert resp.total_amount == Decimal("512.00")
+            assert [(it.item_type, it.amount) for it in resp.extra_items] == [
+                ("运费", Decimal("12.00"))
+            ]
             items = (
-                await session.execute(
-                    select(SettlementExtraItem).where(SettlementExtraItem.settlement_id == s.id)
+                (
+                    await session.execute(
+                        select(SettlementExtraItem).where(SettlementExtraItem.settlement_id == s.id)
+                    )
                 )
-            ).all()
-            assert items == []
+                .scalars()
+                .all()
+            )
+            assert [(it.item_type, it.amount) for it in items] == [("运费", Decimal("12.00"))]
+            events = await _events(
+                session, s.promotion_id, LineEventType.SETTLEMENT_EXTRA_ITEM_ADDED
+            )
+            assert len(events) == 1
+            assert events[0].payload == {
+                "settlement_id": str(s.id),
+                "item_type": "运费",
+                "item_amount": "12.00",
+                "total_amount": "512.00",
+            }
+            assert_payload_registered(events[0].payload)
         finally:
             tenant_id_ctx.reset(token)
 
