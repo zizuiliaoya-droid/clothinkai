@@ -271,13 +271,16 @@ describe("PromotionListPage 按 ui 出按钮与菜单项", () => {
     renderPage([promotion()], promotion({ ui: DETAIL_UI }), {
       actions: { ...PAGE_UI_AMOUNT.actions, create: ENABLED, import: ENABLED },
     });
-    expect(await screen.findByRole("button", { name: /新建推广/ })).toBeTruthy();
+    // 先等列表响应落到页面，按钮在响应之后才判
+    await screen.findAllByText("XHS-20261009-001");
+    expect(screen.getByRole("button", { name: /新建推广/ })).toBeTruthy();
     expect(screen.getByRole("button", { name: /导入站外推广/ })).toBeTruthy();
   });
 
   it("只有 import：出导入、不出新建", async () => {
     renderPage([promotion()], promotion({ ui: DETAIL_UI }), { actions: { import: ENABLED } });
-    expect(await screen.findByRole("button", { name: /导入站外推广/ })).toBeTruthy();
+    await screen.findAllByText("XHS-20261009-001");
+    expect(screen.getByRole("button", { name: /导入站外推广/ })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /新建推广/ })).toBeNull();
   });
 
