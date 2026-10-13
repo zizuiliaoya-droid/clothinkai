@@ -590,6 +590,18 @@ describe("WorkProgressPage BI 下钻落点（7e R6 S7）", () => {
     expect(savePrefMock).not.toHaveBeenCalled();
   });
 
+  it("记忆里有季节（评审 r1 M1）：PR 表与落点下钻都不带季节、不显示锁定，照常开下钻", async () => {
+    getPrefMock.mockResolvedValue({ preset: "this_month", season: ["2026秋"] });
+    renderPage(`/work-progress?${RANGE}&pr_id=${PR1}`);
+    expect(await screen.findByText("小王 的推广单")).toBeTruthy();
+    expect(workProgressMock.mock.calls[0][0]).toMatchObject({ date_from: "2026-10-01" });
+    expect(workProgressMock.mock.calls[0][0].season).toBeUndefined();
+    await waitFor(() => expect(drillMock).toHaveBeenCalled());
+    expect(drillMock.mock.calls[0][0]).toMatchObject({ pr_id: PR1 });
+    expect(drillMock.mock.calls[0][0].season).toBeUndefined();
+    expect(screen.queryByText(LOCK_HINT)).toBeNull();
+  });
+
   it("pr_id=unassigned：开「未分配」行的下钻，传 unassigned", async () => {
     workProgressMock.mockResolvedValue([prRow(), prRow({ pr_id: null, pr_name: "未分配" })]);
     renderPage(`/work-progress?${RANGE}&pr_id=unassigned`);

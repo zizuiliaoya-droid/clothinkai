@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // 单品投产页（7e R3 S9）：毛利三列按 capabilities.production_margin 显示 / 隐藏；
 // 站外加购为 null 显示「—」并有说明；停用链接提示 0 条不显示；页面文字里没有商品编码。
-// 7e R6 S7：BI 下钻落点 ?goods_id= 数据到后对该商品开一次趋势，不写记忆。
+// 7e R6 S7：BI 下钻落点 ?goods_id= 数据到后对该商品开一次趋势，不写记忆；评审 r1 M1：落点不套记忆里的季节。
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
@@ -16,6 +16,7 @@ const productionMock = vi.fn();
 const capsMock = vi.fn();
 const trendMock = vi.fn();
 const savePrefMock = vi.fn();
+const getPrefMock = vi.fn();
 vi.mock("@/features/report/api", () => ({
   getProduction: (...args: unknown[]) => productionMock(...args),
   getReportCapabilities: (...args: unknown[]) => capsMock(...args),
@@ -33,7 +34,7 @@ vi.mock("@/features/report/api", () => ({
   exportReport: () => Promise.resolve("x.xlsx"),
 }));
 vi.mock("@/features/preference/api", () => ({
-  getFilterPreference: () => Promise.resolve({}),
+  getFilterPreference: (...args: unknown[]) => getPrefMock(...args),
   saveFilterPreference: (...args: unknown[]) => savePrefMock(...args),
 }));
 
@@ -67,6 +68,8 @@ beforeEach(() => {
   trendMock.mockResolvedValue({ points: [] });
   savePrefMock.mockReset();
   savePrefMock.mockResolvedValue(undefined);
+  getPrefMock.mockReset();
+  getPrefMock.mockResolvedValue({});
   useAuthStore.setState({
     user: {
       id: "u1",
@@ -294,6 +297,29 @@ describe("ProductionPage BI 下钻落点（7e R6 S7）", () => {
     await new Promise((resolve) => setTimeout(resolve, 800));
     expect(screen.queryByText("投产趋势 · 条纹上衣")).toBeNull();
     expect(savePrefMock).not.toHaveBeenCalled();
+  });
+
+  it("记忆里有季节：落点请求不带季节（与 BI 同为全季节），照常开趋势；改刷单开关后记忆里的季节不丢", async () => {
+    getPrefMock.mockResolvedValue({ preset: "last_7d", season: ["2026秋"], exclude_brushing: true });
+    capsMock.mockResolvedValue(caps(false));
+    productionMock.mockResolvedValue(report());
+    renderPage(LANDING);
+    expect(await screen.findByText("投产趋势 · 条纹上衣")).toBeTruthy();
+    expect(productionMock).toHaveBeenCalledTimes(1);
+    expect(productionMock.mock.calls[0][0]).toMatchObject({ preset: "custom", exclude_brushing: false });
+    expect(productionMock.mock.calls[0][0].season).toBeUndefined();
+    await waitFor(() => expect(trendMock).toHaveBeenCalled());
+    expect(screen.queryAllByText("2026秋")).toHaveLength(0);
+
+    // 关掉趋势，手动改刷单开关：写记忆时季节仍是用户存的「2026秋」
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByText("投产趋势 · 条纹上衣")).toBeNull());
+    fireEvent.click(screen.getByRole("switch", { name: "剔除刷单" }));
+    await waitFor(() => expect(savePrefMock).toHaveBeenCalled(), { timeout: 2000 });
+    expect(savePrefMock).toHaveBeenLastCalledWith(
+      "product_roi",
+      expect.objectContaining({ season: ["2026秋"], exclude_brushing: true })
+    );
   });
 
   it("goods_id 不在本区间的数据里：不弹趋势", async () => {

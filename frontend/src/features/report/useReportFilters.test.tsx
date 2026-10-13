@@ -129,3 +129,70 @@ describe("useReportFilters", () => {
     expect(result.current.r.filters).toEqual({ ...DEFAULTS, preset: "this_month" });
   });
 });
+
+// 7e R6 评审 r1 M1：带落点键（BI 下钻的 goods_id / pr_id）的链接不套记忆里的 URL 键（季节），
+// 落点只本次生效，之后改别的筛选时记忆里的季节按原值写回。
+const LANDING_SCHEMA: ReportFilterSchema<Filters> = {
+  ...SCHEMA,
+  pr_id: { kind: "pr_id", url: true, memory: false, landing: true },
+};
+const LANDING_URL = "/work-progress?preset=custom&date_from=2026-10-01&date_to=2026-10-31&pr_id=unassigned";
+const SAVED: Partial<Filters> = { preset: "last_7d", season: ["记忆季"], granularity: "week" };
+
+function setupLanding(url: string) {
+  getPrefMock.mockResolvedValue(SAVED);
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const wrapper = ({ children }: { children: ReactNode }) => (
+    <QueryClientProvider client={client}>
+      <MemoryRouter initialEntries={[url]}>{children}</MemoryRouter>
+    </QueryClientProvider>
+  );
+  return renderHook(() => useReportFilters<Filters>("pr_work_progress", LANDING_SCHEMA, DEFAULTS), {
+    wrapper,
+  });
+}
+
+describe("useReportFilters 落点链接", () => {
+  it("URL 带落点键：季节回落默认（不套记忆），不能从 URL 读的粒度照旧用记忆", async () => {
+    const { result } = setupLanding(LANDING_URL);
+    await waitFor(() => expect(result.current.ready).toBe(true));
+    expect(result.current.filters).toEqual({
+      preset: "custom",
+      date_from: "2026-10-01",
+      date_to: "2026-10-31",
+      season: [],
+      pr_id: "unassigned",
+      granularity: "week",
+    });
+  });
+
+  it("没带落点键：记忆里的季节照常生效", async () => {
+    const { result } = setupLanding("/work-progress?preset=custom&date_from=2026-10-01&date_to=2026-10-31");
+    await waitFor(() => expect(result.current.ready).toBe(true));
+    expect(result.current.filters.season).toEqual(["记忆季"]);
+  });
+
+  it("落点后改别的筛选：记忆里的季节按原值写回，不被清空", async () => {
+    const { result } = setupLanding(LANDING_URL);
+    await waitFor(() => expect(result.current.ready).toBe(true));
+    act(() => result.current.setFilters({ granularity: "month" }));
+    expect(result.current.filters.season).toEqual([]);
+    await waitFor(() => expect(savePrefMock).toHaveBeenCalledTimes(1), { timeout: 2000 });
+    expect(savePrefMock).toHaveBeenCalledWith("pr_work_progress", {
+      preset: "custom",
+      season: ["记忆季"],
+      granularity: "month",
+    });
+  });
+
+  it("落点后手动改季节：写用户选的季节", async () => {
+    const { result } = setupLanding(LANDING_URL);
+    await waitFor(() => expect(result.current.ready).toBe(true));
+    act(() => result.current.setFilters({ season: ["2026秋"] }));
+    await waitFor(() => expect(savePrefMock).toHaveBeenCalledTimes(1), { timeout: 2000 });
+    expect(savePrefMock).toHaveBeenCalledWith(
+      "pr_work_progress",
+      expect.objectContaining({ season: ["2026秋"] })
+    );
+  });
+});

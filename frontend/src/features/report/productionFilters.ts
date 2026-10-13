@@ -9,7 +9,7 @@ export interface ProductionFilters {
   date_to?: string;
   season: string[];
   exclude_brushing: boolean;
-  /** BI 下钻落点（7e R6）：只从 URL 带入、不记；数据到后对该商品开一次趋势。 */
+  /** BI 下钻落点（7e R6）：只从 URL 带入、不记；数据到后对该商品开一次趋势。带它进来时不套记忆里的季节。 */
   goods_id?: string;
 }
 
@@ -22,7 +22,7 @@ export const PRODUCTION_FILTER_SCHEMA: ReportFilterSchema<ProductionFilters> = {
   date_to: { kind: "date", url: true, memory: false },
   season: { kind: "string_list", url: true, memory: true },
   exclude_brushing: { kind: "boolean", url: true, memory: true },
-  goods_id: { kind: "uuid", url: true, memory: false },
+  goods_id: { kind: "uuid", url: true, memory: false, landing: true },
 };
 
 export const PRODUCTION_FILTER_DEFAULTS: ProductionFilters = {

@@ -1,5 +1,6 @@
 // BI 下钻（7e R6，设计 2.6）：ROI 柱 / 饼 / 单品行 → 单品投产，PR 工作量行 → 工作进度。
-// 链接带 preset=custom + 响应上的实际起止；投产再带刷单开关。BI 没有季节筛选，不带 season（偏差 9）。
+// 链接带 preset=custom + 响应上的实际起止；投产再带刷单开关。BI 没有季节筛选，不带 season（偏差 9）；
+// 落点页见到 goods_id / pr_id（schema 的 landing 键）就不套记忆里的季节，与 BI 同为全季节（评审 r1 M1）。
 // 能不能点看 capabilities：只管显示，后端 403 才是闸门。
 import { UNASSIGNED_PR } from "../reportFilters";
 import type { ReportCapabilities } from "../types";
