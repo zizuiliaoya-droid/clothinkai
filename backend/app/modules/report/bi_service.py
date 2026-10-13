@@ -18,22 +18,29 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security.field_permissions import FieldPermissionContext
 from app.modules.product.goods_schemas import goods_display_name
-from app.modules.report.advanced_repository import TargetPlanningRepository
+from app.modules.report.advanced_repository import BiNotesRepository, TargetPlanningRepository
 from app.modules.report.advanced_schemas import (
     BiChartDatum,
     BiDashboard,
     BiGoodsBlock,
+    BiGoodsNotes,
     BiGoodsRow,
+    BiNotePoint,
     BiPromotionSummary,
     BiStoreBlock,
     BiStoreSummary,
     BiTrendPoint,
     BiWorkloadRow,
     ProductionRow,
+    ProductionTrend,
     PrWorkProgress,
     StoreReportRow,
 )
-from app.modules.report.field_mask import aggregate_promo_amounts_visible
+from app.modules.report.drill_service import validate_drill_range
+from app.modules.report.field_mask import (
+    aggregate_promo_amounts_visible,
+    promotion_amounts_visible,
+)
 from app.modules.report.pr_scope import PR_SCOPE_ALL
 from app.modules.report.production_service import ProductionService
 from app.modules.report.store_buckets import bucket_store_rows, total_store_row
@@ -52,6 +59,8 @@ _Q4 = Decimal("0.0001")
 _ZERO = Decimal("0")
 _LABEL_MAX_STYLE_CODES = 3
 _OTHER_LABEL = "其他"
+# 散点最多点数（设计 2.6）：超出按发布日期取最近这么多，响应标 truncated
+MAX_NOTE_POINTS = 500
 
 
 def bi_chart_labels(rows: Sequence[ProductionRow]) -> list[str]:
@@ -82,6 +91,7 @@ class BiService:
         self._work = WorkProgressService(session)
         self._production = ProductionService(session)
         self._targets = TargetPlanningRepository(session)
+        self._notes = BiNotesRepository(session)
 
     async def get_dashboard(
         self,
@@ -147,6 +157,69 @@ class BiService:
             exclude_brushing=exclude_brushing,
             store=store,
             goods=self._goods_block(goods_rows),
+        )
+
+    async def get_goods_trend(
+        self,
+        tenant_id: UUID,
+        goods_id: UUID,
+        time_range: tuple[date, date],
+        *,
+        granularity: str,
+        exclude_brushing: bool,
+    ) -> ProductionTrend:
+        """Tab2 单品日趋势：直接用投产趋势（读源判断与参数不变），只是判权挂 ``report.bi:read``。"""
+        return await self._production.get_trend(
+            tenant_id,
+            goods_id,
+            time_range,
+            granularity=granularity,
+            exclude_brushing=exclude_brushing,
+        )
+
+    async def get_goods_notes(
+        self,
+        tenant_id: UUID,
+        goods_id: UUID,
+        date_from: date,
+        date_to: date,
+        *,
+        field_ctx: FieldPermissionContext,
+    ) -> BiGoodsNotes:
+        """笔记散点：区间内合作、归属该商品、已发布且录过 7 天数据的单，按发布日期升序。
+
+        超过 500 张取发布日期最近的 500 张，``truncated`` 为真。商品不存在或不属本租户 → 空结果。
+        站外推广成本按 F2（``quote_amount`` 与 ``cost_snapshot`` 都可读才给），读不到给 null。
+        """
+        validate_drill_range(date_from, date_to)
+        rows = await self._notes.notes(
+            tenant_id=tenant_id,
+            goods_id=goods_id,
+            date_from=date_from,
+            date_to=date_to,
+            limit=MAX_NOTE_POINTS + 1,
+        )
+        truncated = len(rows) > MAX_NOTE_POINTS
+        rows = rows[:MAX_NOTE_POINTS]
+        cost_ok = promotion_amounts_visible(field_ctx)[1]
+        return BiGoodsNotes(
+            goods_id=goods_id,
+            date_from=date_from,
+            date_to=date_to,
+            truncated=truncated,
+            # SQL 按发布日期倒序取最近的，响应翻成升序（横轴从左到右）
+            points=[
+                BiNotePoint(
+                    promotion_id=r["promotion_id"],
+                    publish_date=r["publish_date"],
+                    like_count=r["like_count"],
+                    promo_cost=r["promo_cost"] if cost_ok else None,
+                    blogger_nickname=r["blogger_nickname"],
+                    platform=r["platform"],
+                    detail_url=None,
+                )
+                for r in reversed(rows)
+            ],
         )
 
     @staticmethod
@@ -265,4 +338,4 @@ class BiService:
         )
 
 
-__all__ = ["BiService", "DEFAULT_BI_LAYOUT", "bi_chart_labels"]
+__all__ = ["DEFAULT_BI_LAYOUT", "MAX_NOTE_POINTS", "BiService", "bi_chart_labels"]

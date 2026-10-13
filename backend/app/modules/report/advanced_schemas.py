@@ -564,11 +564,39 @@ class BiDashboard(BaseModel):
     goods: BiGoodsBlock
 
 
+class BiNotePoint(BaseModel):
+    """笔记散点一点 = 一张已发布、录过 7 天数据的推广单（7e R6，设计 2.6）。
+
+    x = ``publish_date``（实际发布日期），y = ``like_count``（原始值），点大小 = ``promo_cost``
+    （站外推广成本，F2：读不到给 null，前端改用固定大小）。``detail_url`` R8 之前恒 null。
+    """
+
+    promotion_id: UUID
+    publish_date: date
+    like_count: int | None
+    promo_cost: Decimal | None
+    blogger_nickname: str
+    platform: str
+    detail_url: str | None = None
+
+
+class BiGoodsNotes(BaseModel):
+    """``GET /api/reports/bi/goods/{goods_id}/notes``：≤ 500 点、按发布日期升序；超出取最近 500。"""
+
+    goods_id: UUID
+    date_from: date
+    date_to: date
+    truncated: bool
+    points: list[BiNotePoint]
+
+
 __all__ = [
     "BiChartDatum",
     "BiDashboard",
     "BiGoodsBlock",
+    "BiGoodsNotes",
     "BiGoodsRow",
+    "BiNotePoint",
     "BiPromotionSummary",
     "BiStoreBlock",
     "BiStoreSummary",

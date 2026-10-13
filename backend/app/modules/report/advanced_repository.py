@@ -1328,6 +1328,55 @@ class DrillRepository:
         return as_mappings((await self._s.execute(sql, params)).mappings().all())
 
 
+class BiNotesRepository:
+    """BI 笔记散点的推广单（7e R6，设计 2.6）。
+
+    区间按合作日期；商品归属与投产 / 下钻同一口径（``_PROMO_GOODS_LATERAL``）；只取未删除、
+    已发布、录过 7 天数据（``metrics_recorded_at``）且有实际发布日期（横轴）的单。
+    按发布日期倒序取 ``limit`` 条（调用方多取一条判断是否截断）。投影是白名单。
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    async def notes(
+        self,
+        *,
+        tenant_id: UUID,
+        goods_id: UUID,
+        date_from: date,
+        date_to: date,
+        limit: int,
+    ) -> list[Mapping[str, Any]]:
+        sql = text(
+            f"""
+            SELECT
+              p.id AS promotion_id, p.actual_publish_date AS publish_date,
+              p.like_count AS like_count, p.total_promo_cost AS promo_cost,
+              b.nickname AS blogger_nickname, p.platform AS platform
+            FROM promotion p
+            {_PROMO_GOODS_LATERAL}
+            JOIN blogger b ON b.id = p.blogger_id
+            WHERE p.tenant_id = CAST(:tenant_id AS uuid) AND p.is_active = true
+              AND p.cooperation_date BETWEEN CAST(:date_from AS date) AND CAST(:date_to AS date)
+              AND p.publish_status = '已发布'
+              AND p.metrics_recorded_at IS NOT NULL
+              AND p.actual_publish_date IS NOT NULL
+              AND {_PROMO_GOODS_ID} = CAST(:goods_id AS uuid)
+            ORDER BY p.actual_publish_date DESC, p.id DESC
+            LIMIT CAST(:limit AS int)
+            """
+        )
+        params = {
+            "tenant_id": tenant_id,
+            "goods_id": goods_id,
+            "date_from": date_from,
+            "date_to": date_to,
+            "limit": limit,
+        }
+        return as_mappings((await self._s.execute(sql, params)).mappings().all())
+
+
 async def style_exists(session: AsyncSession, tenant_id: UUID, style_id: UUID) -> bool:
     sql = text("SELECT 1 FROM style WHERE id = :sid AND tenant_id = :tid LIMIT 1")
     return (
@@ -1340,6 +1389,7 @@ __all__ = [
     "PRODUCTION_ADDITIVE_COLUMNS",
     "PRODUCTION_COUNT_COLUMNS",
     "PRODUCTION_MONEY_COLUMNS",
+    "BiNotesRepository",
     "DrillFilters",
     "DrillRepository",
     "ProductionRepository",

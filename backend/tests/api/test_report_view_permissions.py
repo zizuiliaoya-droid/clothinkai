@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import io
 from collections.abc import AsyncIterator
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 from uuid import uuid4
@@ -647,6 +647,270 @@ class TestBi:
         resp = await _call(session, flow_users.finance, "GET", f"{_BI}?{_BI_RANGE}")
         assert resp.status_code == 200, resp.text
         assert resp.json()["exclude_brushing"] is True
+
+
+# ------------------- BI 单品日趋势与笔记散点（7e R6，设计 2.6） ------------------- #
+
+_RECORDED = datetime(2026, 1, 1, tzinfo=UTC)
+
+
+def _bi_goods(goods_id: Any, tail: str) -> str:
+    return f"{_BI}/goods/{goods_id}/{tail}"
+
+
+def _notes(goods_id: Any, lo: Any = _M_LO, hi: Any = _M_HI) -> str:
+    return f"{_bi_goods(goods_id, 'notes')}?date_from={lo}&date_to={hi}"
+
+
+@pytest.fixture
+async def bi_goods_seeded(
+    session: AsyncSession,
+    flow_users: Any,
+    tenant_b: Any,
+    product_factory: Any,
+    blogger_factory: Any,
+    promotion_factory: Any,
+) -> Any:
+    """商品 A：千牛两天销售（趋势）+ 两张进散点的单 + 各差一个条件的 6 张；商品 B 一张；
+    别租户的商品 X 一张（条件都满足）。"""
+    from types import SimpleNamespace
+
+    from app.modules.collect.models import QianniuDaily
+    from app.modules.product.goods_models import GoodsMain
+    from app.modules.product.platform_product_models import PlatformProduct
+
+    tenant = flow_users.tenant
+    style = await product_factory.style(style_code=f"BG{uuid4().hex[:8]}")
+    blogger = await blogger_factory.blogger()
+
+    async def goods(t: Any) -> Any:
+        tok = tenant_id_ctx.set(t.id)
+        try:
+            g = GoodsMain(tenant_id=t.id, goods_code=f"BG{uuid4().hex[:8]}", goods_title="散点")
+            session.add(g)
+            await session.flush()
+        finally:
+            tenant_id_ctx.reset(tok)
+        return g
+
+    a, b, x = await goods(tenant), await goods(tenant), await goods(tenant_b)
+    pp = PlatformProduct(
+        tenant_id=tenant.id,
+        platform="千牛",
+        platform_id=f"P{uuid4().hex[:10]}",
+        style_id=style.id,
+        goods_main_id=a.id,
+        channel="普通",
+        is_active=True,
+    )
+    session.add(pp)
+    await session.flush()
+    for offset, pay in ((2, "800.00"), (6, "300.00")):
+        session.add(
+            QianniuDaily(
+                tenant_id=tenant.id,
+                platform_product_id=pp.id,
+                platform_id_snapshot=pp.platform_id,
+                date=_M_LO + timedelta(days=offset),
+                visitors=50,
+                pay_amount=Decimal(pay),
+                pay_orders=2,
+                refund_amount=Decimal("0.00"),
+            )
+        )
+
+    async def promo(goods_main: Any, **kw: Any) -> Any:
+        base: dict[str, Any] = {
+            "pr": flow_users.pr,
+            "goods_main_id": goods_main.id,
+            "cooperation_date": _M_LO + timedelta(days=1),
+            "actual_publish_date": _M_LO + timedelta(days=5),
+            "publish_status": "已发布",
+            "metrics_recorded_at": _RECORDED,
+            "like_count": 120,
+            "quote_amount": Decimal("300.00"),
+            "cost_snapshot": Decimal("20.00"),
+        }
+        base.update(kw)
+        return await promotion_factory.promotion(
+            style=style, blogger=blogger, internal_code=f"BG{uuid4().hex[:10].upper()}", **base
+        )
+
+    late = await promo(a)
+    # 发布更早、点赞原始值 0：响应按发布日期升序排在前面
+    early = await promo(a, actual_publish_date=_M_LO + timedelta(days=3), like_count=0)
+    # 以下各差一个条件，都不进散点
+    await promo(a, metrics_recorded_at=None, like_count=50)
+    await promo(a, publish_status="未发布", actual_publish_date=None)
+    await promo(a, publish_status="已取消")
+    await promo(a, is_active=False)
+    await promo(a, cooperation_date=_M_LO - timedelta(days=1))
+    await promo(a, actual_publish_date=None)
+    await promo(b)
+    await promo(x, tenant=tenant_b)
+    await session.flush()
+    return SimpleNamespace(users=flow_users, a=a, b=b, x=x, late=late, early=early, blogger=blogger)
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+class TestBiGoods:
+    async def test_finance_trend_but_not_production_trend(
+        self, session: AsyncSession, bi_goods_seeded: Any
+    ) -> None:
+        s = bi_goods_seeded
+        fin = s.users.finance
+        bi = await _call(session, fin, "GET", f"{_bi_goods(s.a.id, 'trend')}?{_BI_RANGE}")
+        assert bi.status_code == 200, bi.text
+        prod = await _call(
+            session, fin, "GET", f"/api/reports/production/trend?goods_id={s.a.id}&{_BI_RANGE}"
+        )
+        assert (prod.status_code, prod.json()["code"]) == (403, "PERMISSION_DENIED")
+        notes = await _call(session, fin, "GET", _notes(s.a.id))
+        assert notes.status_code == 200, notes.text
+
+    @pytest.mark.parametrize("role", ["pr", "warehouse"])
+    async def test_forbidden(self, session: AsyncSession, flow_users: Any, role: str) -> None:
+        gid = uuid4()
+        for path in (f"{_bi_goods(gid, 'trend')}?{_BI_RANGE}", _notes(gid)):
+            resp = await _call(session, getattr(flow_users, role), "GET", path)
+            assert (resp.status_code, resp.json()["code"]) == (403, "PERMISSION_DENIED"), path
+
+    @pytest.mark.parametrize(
+        ("granularity", "exclude_brushing"), [("day", "false"), ("week", "true")]
+    )
+    async def test_trend_equals_production_trend(
+        self,
+        session: AsyncSession,
+        bi_goods_seeded: Any,
+        granularity: str,
+        exclude_brushing: str,
+    ) -> None:
+        s = bi_goods_seeded
+        params = f"{_BI_RANGE}&granularity={granularity}&exclude_brushing={exclude_brushing}"
+        bi = await _call(session, s.users.admin, "GET", f"{_bi_goods(s.a.id, 'trend')}?{params}")
+        prod = await _call(
+            session,
+            s.users.admin,
+            "GET",
+            f"/api/reports/production/trend?goods_id={s.a.id}&{params}",
+        )
+        assert bi.status_code == prod.status_code == 200, (bi.text, prod.text)
+        assert bi.json() == prod.json()
+        # 场景有效性：有销售点、有站外花费
+        points = bi.json()["points"]
+        assert any(p["pay_amount"] != "0.00" for p in points)
+        assert any(p["promo_cost"] != "0.00" for p in points)
+
+    async def test_notes_filters_and_order(
+        self, session: AsyncSession, bi_goods_seeded: Any
+    ) -> None:
+        """只回本商品、本租户、已发布、录过 7 天数据、合作日期在区间、有发布日期的单，按发布日期升序。"""
+        s = bi_goods_seeded
+        resp = await _call(session, s.users.admin, "GET", _notes(s.a.id))
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert (body["goods_id"], body["date_from"], body["date_to"], body["truncated"]) == (
+            str(s.a.id),
+            str(_M_LO),
+            str(_M_HI),
+            False,
+        )
+        assert body["points"] == [
+            {
+                "promotion_id": str(p.id),
+                "publish_date": str(p.actual_publish_date),
+                "like_count": like,
+                "promo_cost": "320.00",
+                "blogger_nickname": s.blogger.nickname,
+                "platform": "小红书",
+                "detail_url": None,
+            }
+            for p, like in ((s.early, 0), (s.late, 120))
+        ]
+        # 商品 B 只有自己那一张
+        b_points = (await _call(session, s.users.admin, "GET", _notes(s.b.id))).json()["points"]
+        assert len(b_points) == 1
+
+    async def test_notes_operations_cost_null(
+        self, session: AsyncSession, bi_goods_seeded: Any
+    ) -> None:
+        """F2：运营读不到逐单 ``quote_amount`` → 点大小（站外推广成本）null，其余与管理员相同。"""
+        s = bi_goods_seeded
+        ops = (await _call(session, s.users.operations, "GET", _notes(s.a.id))).json()
+        admin = (await _call(session, s.users.admin, "GET", _notes(s.a.id))).json()
+        assert [p["promo_cost"] for p in admin["points"]] == ["320.00", "320.00"]
+        assert [p["promo_cost"] for p in ops["points"]] == [None, None]
+        for p in admin["points"]:
+            p["promo_cost"] = None
+        assert ops == admin
+
+    async def test_notes_other_tenant_or_missing_empty(
+        self, session: AsyncSession, bi_goods_seeded: Any
+    ) -> None:
+        s = bi_goods_seeded
+        for gid in (s.x.id, uuid4()):
+            resp = await _call(session, s.users.admin, "GET", _notes(gid))
+            assert resp.status_code == 200, resp.text
+            assert (resp.json()["points"], resp.json()["truncated"]) == ([], False)
+
+    async def test_notes_truncated_over_500(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        """500 张 → 不截；第 501 张（发布最早）→ 取最近 500、``truncated`` 为真。"""
+        from app.modules.product.goods_models import GoodsMain
+
+        g = GoodsMain(
+            tenant_id=flow_users.tenant.id, goods_code=f"BT{uuid4().hex[:8]}", goods_title="多"
+        )
+        session.add(g)
+        await session.flush()
+        style = await product_factory.style(style_code=f"BT{uuid4().hex[:8]}")
+        blogger = await blogger_factory.blogger()
+
+        async def promo(publish_offset: int) -> Any:
+            return await promotion_factory.promotion(
+                style=style,
+                blogger=blogger,
+                goods_main_id=g.id,
+                internal_code=f"BT{uuid4().hex[:12].upper()}",
+                cooperation_date=_M_LO,
+                actual_publish_date=_M_LO + timedelta(days=publish_offset),
+                publish_status="已发布",
+                metrics_recorded_at=_RECORDED,
+                like_count=1,
+            )
+
+        for i in range(500):
+            await promo(2 + i % 20)
+        full = (await _call(session, flow_users.admin, "GET", _notes(g.id))).json()
+        assert (len(full["points"]), full["truncated"]) == (500, False)
+
+        oldest = await promo(1)
+        resp = (await _call(session, flow_users.admin, "GET", _notes(g.id))).json()
+        assert (len(resp["points"]), resp["truncated"]) == (500, True)
+        assert str(oldest.id) not in {p["promotion_id"] for p in resp["points"]}
+        dates = [p["publish_date"] for p in resp["points"]]
+        assert dates == sorted(dates)
+
+    async def test_notes_invalid_422(self, session: AsyncSession, flow_users: Any) -> None:
+        admin = flow_users.admin
+        bad_uuid = await _call(session, admin, "GET", _notes("not-a-uuid"))
+        assert bad_uuid.status_code == 422, bad_uuid.text
+        too_long = await _call(
+            session, admin, "GET", _notes(uuid4(), _M_LO, _M_LO + timedelta(days=367))
+        )
+        assert too_long.status_code == 422, too_long.text
+        reversed_range = await _call(session, admin, "GET", _notes(uuid4(), _M_HI, _M_LO))
+        assert reversed_range.status_code == 422, reversed_range.text
+        ok = await _call(session, admin, "GET", _notes(uuid4(), _M_LO, _M_LO + timedelta(days=366)))
+        assert ok.status_code == 200, ok.text
+        bad_trend = await _call(session, admin, "GET", f"{_bi_goods('x', 'trend')}?{_BI_RANGE}")
+        assert bad_trend.status_code == 422, bad_trend.text
 
 
 def _export(kind: str) -> str:
