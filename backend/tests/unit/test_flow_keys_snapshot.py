@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from app.modules.flow.line_events import EVENT_GROUP, EVENT_GROUP_KEYS, LineEventType
 from app.modules.flow.matrix import ACTION_KEYS, FIELD_KEYS, KINDS, PAGE_ACTION_KEYS
 from app.modules.promotion.stage_calculator import PROMOTION_STAGES, STAGE_COLUMN
 
@@ -28,6 +29,8 @@ def build_snapshot() -> dict[str, Any]:
         "FIELD_KEYS": {k: list(FIELD_KEYS[k]) for k in KINDS},
         "PROMOTION_STAGES": list(PROMOTION_STAGES),
         "STAGE_COLUMN": {s: STAGE_COLUMN[s] for s in PROMOTION_STAGES},
+        # 时间线（PR-4 D16）：前端按它给每个事件类型配文案与分组图标
+        "EVENT_GROUP": {t.value: EVENT_GROUP[t] for t in LineEventType},
     }
 
 
@@ -45,7 +48,7 @@ def test_snapshot_matches_constants() -> None:
     assert (
         got == expected
     ), "flow_keys.snapshot.json 与后端常量不一致：UPDATE_FLOW_SNAPSHOT=1 重写并同步前端"
-    for section in ("ACTION_KEYS", "PAGE_ACTION_KEYS", "FIELD_KEYS", "STAGE_COLUMN"):
+    for section in ("ACTION_KEYS", "PAGE_ACTION_KEYS", "FIELD_KEYS", "STAGE_COLUMN", "EVENT_GROUP"):
         assert list(got[section]) == list(expected[section]), section
 
 
@@ -62,3 +65,5 @@ def test_snapshot_covers_every_kind_and_stage() -> None:
     assert len(snap["PROMOTION_STAGES"]) == len(set(snap["PROMOTION_STAGES"])) == 22
     assert set(snap["STAGE_COLUMN"]) == set(snap["PROMOTION_STAGES"])
     assert set(snap["STAGE_COLUMN"].values()) == set("ABCDEFGH")
+    assert list(snap["EVENT_GROUP"]) == [t.value for t in LineEventType]
+    assert set(snap["EVENT_GROUP"].values()) == set(EVENT_GROUP_KEYS)

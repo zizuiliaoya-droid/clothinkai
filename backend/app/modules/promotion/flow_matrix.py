@@ -1,5 +1,5 @@
-"""推广单 / 仓库行的能力矩阵（流程线 5.3；PR-2 只有收件、颜色尺码明细、发货信息三类字段行与
-推送 / 撤回 / 纳入发货 / 回填四个动作行）。
+"""推广单 / 仓库行的能力矩阵（流程线 5.3；PR-2 有收件、颜色尺码明细、发货信息三类字段行与
+推送 / 撤回 / 纳入发货 / 回填四个动作行；PR-4 加「时间线」字段行与「留言 / 贴图」动作行）。
 
 import 本模块即把 ``MATRICES["promotion"]`` 与 ``MATRICES["warehouse"]`` 登记进 ``flow.matrix``；
 ``promotion/flow_doc.py`` import 它，所以用到快照的地方都已注册。
@@ -133,6 +133,11 @@ _fill(_shipping, "A", Cell(grey=(_READ,), hint=SHIPPING_GREY_HINT))
 _fill(_shipping, "BCDEFG", _SHIPPING_FILLABLE)
 _fill(_shipping, "H", Cell(edit=(_STAR,), read=(_READ_OR_WAREHOUSE,)))
 
+# 时间线（PR-4）：A ~ D 读/读/读/—/读/—；E ~ H 财务也读（结款组，事件按分组的过滤在读接口，6.5）；仓库页不放时间线
+_timeline: dict[str, Cell | tuple[Cell, ...]] = {}
+_fill(_timeline, "ABCD", Cell(read=(_READ,)))
+_fill(_timeline, "EFGH", Cell(read=(AnyOf(_READ, _FINANCE_READ),)))
+
 # ---------------------------------------------------------------------------
 # 动作行（状态机在 PromotionDoc / WarehouseDoc.allowed_actions）
 # ---------------------------------------------------------------------------
@@ -156,6 +161,10 @@ _ship_fill: dict[str, Cell | tuple[Cell, ...]] = {}
 _fill(_ship_fill, "BCDEFG", Cell(edit=(_FILL,)))
 _fill(_ship_fill, "H", Cell(edit=(_STAR,)))
 
+# 留言 / 贴图（PR-4）：全阶段 改/改/改/隐/隐/隐（运营只读、财务与仓库不进推广页）
+_comment: dict[str, Cell | tuple[Cell, ...]] = {}
+_fill(_comment, "ABCDEFGH", Cell(edit=(_WRITE,)))
+
 PROMOTION_MATRIX = Matrix(
     kind="promotion",
     stages=PROMOTION_STAGES,
@@ -163,9 +172,11 @@ PROMOTION_MATRIX = Matrix(
         Row("ship_include", "action", _ship_include),
         Row("ship_push", "action", _ship_push),
         Row("ship_withdraw", "action", _ship_withdraw),
+        Row("comment", "action", _comment),
         Row("goods_items", "field", _goods_items),
         Row("receiver", "field", _receiver),
         Row("shipping", "field", _shipping),
+        Row("timeline", "field", _timeline),
     ),
     # 5.4 PATCH 字段归属：PR-2 入矩阵的只有收件三项与 sku_id，其余 PATCH 字段沿用现状
     patch_groups={

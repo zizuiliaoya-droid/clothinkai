@@ -92,6 +92,8 @@ export interface Promotion {
   goods_main_id: string | null;
   blogger_id: string;
   pr_id: string | null;
+  /** 主线号（流程线 6.2）：点一行开时间线抽屉用它。 */
+  line_id: string | null;
   // 快照
   style_code_snapshot: string;
   /** 建单时的款式简称快照。界面的品名用 display_short_name。 */
@@ -338,6 +340,8 @@ export interface PromotionPage {
   total: number;
   page: number;
   page_size: number;
+  /** 页级 ui.actions.amount_log：能读金额改动接口才有，「金额改动」页签与菜单只看它。 */
+  ui: Pick<UiState, "actions">;
 }
 
 export interface PromotionListFilters {

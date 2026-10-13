@@ -50,7 +50,7 @@ _SCRIPT = textwrap.dedent(
     ).compile(dialect=postgresql.dialect())
     print("GOODS_FK_TARGETS=" + ",".join(goods_targets) + ";" + ",".join(item_targets))
 
-    # 流程线 M2（061）：谈款商品明细与事件表。各自的模块显式 import 了全部 FK 目标表
+    # 流程线 M2（063）：谈款商品明细与事件表。各自的模块显式 import 了全部 FK 目标表
     from app.modules.flow.models import LineEvent
     from app.modules.negotiation.models import NegotiationItem
 

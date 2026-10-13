@@ -262,3 +262,70 @@ class TestScopes:
         assert str(history.id) in ids and str(pending.id) not in ids
         bad = await _call(session, user, "GET", "/api/promotions/?ship_status=%E5%BE%85%E6%8E%A8")
         assert bad.status_code == 422
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+class TestCreateFieldWrite:
+    """``POST /api/promotions/`` 直接新建仍按建单人查字段写权限（PR-3 收尾评审 L2）：
+    路由显式传 ``reviewed_negotiation_copy=False``，误改成 True 就会放过被撤销的服务费 / 收件写权限。"""
+
+    @pytest.mark.parametrize(
+        ("scope", "field"),
+        [
+            ("field.promotion.quote_amount:write", "quote_amount"),
+            ("field.promotion.receiver_name:write", "receiver_name"),
+        ],
+    )
+    async def test_revoked_field_write_403(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        scope: str,
+        field: str,
+    ) -> None:
+        from sqlalchemy import select
+
+        from app.modules.auth.models import Permission, UserPermissionOverride
+        from app.modules.promotion.enums import CooperationMode
+
+        style = await product_factory.style()
+        blogger = await blogger_factory.blogger()
+        body = {
+            "cooperation_mode": CooperationMode.GIFT.value,
+            "style_id": str(style.id),
+            "blogger_id": str(blogger.id),
+            "platform": "小红书",
+            "quote_amount": "100.00",
+            "receiver_name": "张三",
+        }
+        # 场景有效：同一份 body，没被撤销的 PR 建得出来
+        ok = await _call(session, flow_users.pr, "POST", "/api/promotions/", body)
+        assert ok.status_code == 201, ok.text
+
+        perm = (
+            await session.execute(select(Permission).where(Permission.scope == scope))
+        ).scalar_one()
+        session.add(
+            UserPermissionOverride(
+                tenant_id=tenant_a.id,
+                user_id=flow_users.pr_manager.id,
+                permission_id=perm.id,
+                effect="revoke",
+            )
+        )
+        await session.flush()
+        resp = await _call(session, flow_users.pr_manager, "POST", "/api/promotions/", body)
+        assert (resp.status_code, resp.json()["code"]) == (
+            403,
+            "FIELD_PERMISSION_DENIED",
+        ), resp.text
+        assert resp.json()["details"]["fields"] == [field]
+        count = (
+            await session.execute(
+                sa_text("SELECT COUNT(*) FROM promotion WHERE style_id = :s"), {"s": style.id}
+            )
+        ).scalar_one()
+        assert count == 1

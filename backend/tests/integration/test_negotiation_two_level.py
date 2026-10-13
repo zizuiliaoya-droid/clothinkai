@@ -53,7 +53,11 @@ from app.modules.negotiation.schemas import (
     NegotiationReviewRequest,
     NegotiationUpdate,
 )
-from app.modules.negotiation.service import FINALIZED_CONFLICT_MESSAGE, NegotiationService
+from app.modules.negotiation.service import (
+    FINALIZED_CONFLICT_MESSAGE,
+    REASSIGNED_CONFLICT_MESSAGE,
+    NegotiationService,
+)
 from app.modules.product.goods_models import GoodsMain, GoodsStyleItem
 from app.modules.promotion.enums import CooperationMode
 from app.modules.promotion.exceptions import InvalidReceiverPhoneError
@@ -461,7 +465,10 @@ class TestUi:
         manager = await svc.get(pending.id, flow_users.pr_manager)
         assert manager.ui is not None
         assert manager.ui["column"] == "主管待审"
-        assert manager.ui["actions"] == {"manager_review": {"state": "enabled"}}
+        assert manager.ui["actions"] == {
+            "manager_review": {"state": "enabled"},
+            "comment": {"state": "enabled"},
+        }
         admin = await svc.get(pending.id, flow_users.admin)
         assert admin.ui is not None
         assert admin.ui["actions"]["manager_review"] == {
@@ -470,8 +477,11 @@ class TestUi:
         }
         finance = await svc.get(pending.id, flow_users.finance)
         assert finance.ui is not None
-        assert finance.ui["actions"] == {}
+        assert finance.ui["actions"] == {
+            "comment": {"state": "disabled", "reason": "只读角色不能留言"}
+        }
         assert "receiver" not in finance.ui["fields"]
+        assert finance.ui["fields"]["timeline"] == {"state": "read"}
 
 
 # ---------------------------------------------------------------------------
@@ -1387,7 +1397,7 @@ class TestTwoLevelReview:
         ]
         own = await svc.get(n.id, flow_users.pr)
         assert own.ui is not None
-        assert set(own.ui["actions"]) == {"copy"}
+        assert set(own.ui["actions"]) == {"copy", "comment"}
 
     async def test_final_return(
         self, session: AsyncSession, flow_users: Any, world: _World
@@ -2049,21 +2059,28 @@ class TestReceiverReassignRace:
     """
 
     @staticmethod
-    def _reassign_after_load(monkeypatch: pytest.MonkeyPatch, new_pr_id: Any) -> None:
+    def _change_after_load(
+        monkeypatch: pytest.MonkeyPatch, set_sql: str, params: dict[str, Any]
+    ) -> None:
+        """``_load_for_action`` 之后用 ``UPDATE negotiation SET <set_sql>`` 改库并提交（别的请求先到）。"""
         original = NegotiationService._load_for_action
 
-        async def _load_then_reassign(
+        async def _load_then_change(
             self: NegotiationService, negotiation_id: Any, user: Any
         ) -> Any:
             loaded = await original(self, negotiation_id, user)
             await self._session.execute(
-                sa_text("UPDATE negotiation SET pr_id = :pr WHERE id = :id"),
-                {"pr": new_pr_id, "id": negotiation_id},
+                sa_text(f"UPDATE negotiation SET {set_sql} WHERE id = :id"),
+                {**params, "id": negotiation_id},
             )
             await self._session.commit()
             return loaded
 
-        monkeypatch.setattr(NegotiationService, "_load_for_action", _load_then_reassign)
+        monkeypatch.setattr(NegotiationService, "_load_for_action", _load_then_change)
+
+    @classmethod
+    def _reassign_after_load(cls, monkeypatch: pytest.MonkeyPatch, new_pr_id: Any) -> None:
+        cls._change_after_load(monkeypatch, "pr_id = :pr", {"pr": new_pr_id})
 
     @staticmethod
     async def _negotiation_row(session: AsyncSession, negotiation_id: Any) -> Any:
@@ -2090,10 +2107,44 @@ class TestReceiverReassignRace:
         with pytest.raises(NegotiationStateConflictError) as exc:
             await NegotiationService(session).confirm_receiver(nid, _confirm(), flow_users.pr)
         assert (exc.value.code, exc.value.status_code) == ("NEGOTIATION_STATE_CONFLICT", 409)
+        # 单还在待补收货地址、只是被转走了：不能说「已定稿」（PR-3 收尾评审 L1）
+        assert exc.value.message == REASSIGNED_CONFLICT_MESSAGE
         assert await _promotion_count(session, line_id) == 0
         row = await self._negotiation_row(session, nid)
         assert (row[0], row[1], row[3]) == (new_pr, "待补收货地址", None)
         assert [e for e in await _events(session, nid) if e[0] == "negotiation.finalized"] == []
+
+    @pytest.mark.parametrize("change", ["finalized", "status_moved"])
+    async def test_confirm_conflict_message_follows_reread_state(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        world: _World,
+        promotion_factory: Any,
+        monkeypatch: pytest.MonkeyPatch,
+        change: str,
+    ) -> None:
+        """条件 UPDATE 0 行的文案按回滚后重读到的状态给，错误码都是 409 ``NEGOTIATION_STATE_CONFLICT``：
+        别人先定稿 → 「已定稿，推广单已生成」；pr_id 没变、状态变了 → 默认「刚被别人处理过」。"""
+        n = await _receiver_pending(world, flow_users.pr, flow_users)
+        nid, line_id = n.id, n.line_id
+        if change == "finalized":
+            other = await promotion_factory.promotion(
+                style=world.style, blogger=world.blogger, pr=flow_users.pr
+            )
+            self._change_after_load(
+                monkeypatch, "status = '已定稿', promotion_id = :p", {"p": other.id}
+            )
+            expected = FINALIZED_CONFLICT_MESSAGE
+        else:
+            self._change_after_load(monkeypatch, "status = '主管待审'", {})
+            expected = NegotiationStateConflictError.message
+        with pytest.raises(NegotiationStateConflictError) as exc:
+            await NegotiationService(session).confirm_receiver(nid, _confirm(), flow_users.pr)
+        assert (exc.value.code, exc.value.status_code) == ("NEGOTIATION_STATE_CONFLICT", 409)
+        assert exc.value.message == expected
+        assert expected != REASSIGNED_CONFLICT_MESSAGE
+        assert await _promotion_count(session, line_id) == 0
 
     async def test_save_conflicts_after_reassign(
         self,

@@ -10,6 +10,7 @@ from app.core.metrics import (
     promotion_state_transitions_total,
 )
 from app.modules.auth.models import User
+from app.modules.flow.line_events import LineEventRepository, LineEventType
 from app.modules.promotion.enums import (
     PublishStatus,
     SettlementStatus,
@@ -39,6 +40,9 @@ from app.modules.promotion.state_machines import (
     PublishStatusMachine,
 )
 from app.modules.urge.enums import UrgeCloseReason
+
+# 取消连带撤回仓库队列时 ship.withdrawn 的 note（流程线 6.3「撤回原因」）
+CANCEL_WITHDRAW_NOTE = "推广已取消，已从仓库队列撤回"
 
 
 class PromotionPublishMixin(PromotionServiceBase):
@@ -116,6 +120,23 @@ class PromotionPublishMixin(PromotionServiceBase):
                 status_field="settlement",
             ).inc()
 
+        # 时间线（流程线 6.3）：同事务写 promotion.published，附件 = 品牌词评论截图。
+        # 写在审计之前：后面任何一步失败，事件跟着回滚（6.4）
+        await LineEventRepository(self._session).append(
+            tenant_id=promotion.tenant_id,
+            line_id=promotion.line_id,
+            event_type=LineEventType.PROMOTION_PUBLISHED,
+            actor_id=user.id,
+            promotion_id=promotion_id,
+            from_state=PublishStatus.UNPUBLISHED.value,
+            to_state=PublishStatus.PUBLISHED.value,
+            attachment_id=promotion.brand_comment_attachment_id,
+            payload={
+                "publish_url": payload.publish_url,
+                "actual_publish_date": payload.actual_publish_date.isoformat(),
+            },
+        )
+
         # 审计
         await self._audit.log(
             action="promotion.publish",
@@ -148,7 +169,7 @@ class PromotionPublishMixin(PromotionServiceBase):
             await self._log_event_dispatch_failure(published_event, exc, user, blocking=False)
 
         # PRD 改动 2：博主确认发布 → 催发任务自动关闭。同事务，不另起一次提交。
-        await self._close_urge_task(promotion_id, user, UrgeCloseReason.PUBLISHED)
+        await self._close_urge_task(promotion, user, UrgeCloseReason.PUBLISHED)
 
         await self._session.commit()
         return await self._to_response(updated, user)
@@ -205,6 +226,31 @@ class PromotionPublishMixin(PromotionServiceBase):
         if withdrawn is not None:
             updated = withdrawn
 
+        # 时间线（流程线 6.3）：promotion.cancelled；待打单被撤回的再记一条 ship.withdrawn（发货组）
+        events = LineEventRepository(self._session)
+        await events.append(
+            tenant_id=promotion.tenant_id,
+            line_id=promotion.line_id,
+            event_type=LineEventType.PROMOTION_CANCELLED,
+            actor_id=user.id,
+            promotion_id=promotion_id,
+            from_state=PublishStatus.UNPUBLISHED.value,
+            to_state=PublishStatus.CANCELLED.value,
+            note=payload.cancel_reason,
+        )
+        if withdrawn is not None:
+            await events.append(
+                tenant_id=promotion.tenant_id,
+                line_id=promotion.line_id,
+                event_type=LineEventType.SHIP_WITHDRAWN,
+                actor_id=user.id,
+                promotion_id=promotion_id,
+                from_state=ShipStatus.PRINTING.value,
+                to_state=ShipStatus.PENDING.value,
+                note=CANCEL_WITHDRAW_NOTE,
+                payload={"by_cancel": True},
+            )
+
         cancel_after: dict[str, str] = {"publish_status": PublishStatus.CANCELLED.value}
         if withdrawn is not None:
             cancel_after["ship_status"] = ShipStatus.PENDING.value
@@ -217,7 +263,7 @@ class PromotionPublishMixin(PromotionServiceBase):
         )
 
         # 单据取消了就别再催了
-        await self._close_urge_task(promotion_id, user, UrgeCloseReason.CANCELLED)
+        await self._close_urge_task(promotion, user, UrgeCloseReason.CANCELLED)
 
         await self._session.commit()
         return await self._to_response(updated, user)
@@ -283,6 +329,15 @@ class PromotionPublishMixin(PromotionServiceBase):
             )
             old_id = promotion.brand_comment_attachment_id
             promotion.brand_comment_attachment_id = attachment_id
+            # 时间线（流程线 6.3）：每次上传一条带附件的事件，重传后旧图仍挂在时间线上
+            await LineEventRepository(self._session).append(
+                tenant_id=promotion.tenant_id,
+                line_id=promotion.line_id,
+                event_type=LineEventType.PROMOTION_BRAND_COMMENT_UPLOADED,
+                actor_id=user.id,
+                promotion_id=promotion.id,
+                attachment_id=attachment_id,
+            )
             await self._audit.log(
                 action="promotion.brand_comment.bind",
                 resource="promotion",

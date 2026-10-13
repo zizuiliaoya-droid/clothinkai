@@ -1,3 +1,4 @@
+import { LINE_EVENTS_ALL } from "@/features/flow/api";
 import { useEffect, useState } from "react";
 import { Button, Form, Input, Modal, Select, Space, Typography, Upload, message } from "antd";
 import { DeleteOutlined, EyeOutlined, UploadOutlined } from "@ant-design/icons";
@@ -60,6 +61,7 @@ export function SourceExtraModal({ target, onClose, canManagePaymentQr }: Props)
       onClose();
       extraForm.resetFields();
       void qc.invalidateQueries({ queryKey: ["promotions"] });
+      void qc.invalidateQueries({ queryKey: LINE_EVENTS_ALL });
     },
     onError: (err) => message.error(extractErrorMessage(err)),
   });
@@ -86,6 +88,7 @@ export function SourceExtraModal({ target, onClose, canManagePaymentQr }: Props)
       setQrUpdated(updated);
       setPaymentQrFile(null);
       void qc.invalidateQueries({ queryKey: ["promotions"] });
+      void qc.invalidateQueries({ queryKey: LINE_EVENTS_ALL });
       message.success("博主收款码已上传");
     } catch (err) {
       message.error(extractErrorMessage(err));
@@ -106,6 +109,7 @@ export function SourceExtraModal({ target, onClose, canManagePaymentQr }: Props)
       });
       setPaymentQrFile(null);
       void qc.invalidateQueries({ queryKey: ["promotions"] });
+      void qc.invalidateQueries({ queryKey: LINE_EVENTS_ALL });
       message.success("收款码已移除");
     } catch (err) {
       message.error(extractErrorMessage(err));

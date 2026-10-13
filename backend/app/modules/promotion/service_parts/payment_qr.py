@@ -5,10 +5,12 @@ from __future__ import annotations
 from uuid import UUID
 
 from app.modules.auth.models import User
+from app.modules.flow.line_events import LineEventRepository, LineEventType
 from app.modules.promotion.exceptions import (
     InvalidPaymentQrAttachmentError,
     PromotionNotFoundError,
 )
+from app.modules.promotion.models import Promotion
 from app.modules.promotion.schemas import (
     PromotionPaymentQrBindRequest,
     PromotionPaymentQrUploadInitRequest,
@@ -120,6 +122,7 @@ class PromotionPaymentQrMixin(PromotionServiceBase):
             )
             old_id = promotion.payment_qr_attachment_id
             promotion.payment_qr_attachment_id = attachment_id
+            await self._append_payment_qr_uploaded(promotion, user, attachment_id)
             await self._audit.log(
                 action="promotion.payment_qr.bind",
                 resource="promotion",
@@ -168,6 +171,8 @@ class PromotionPaymentQrMixin(PromotionServiceBase):
             raise InvalidPaymentQrAttachmentError("收款码附件无效或尚未上传完成")
         old_id = promotion.payment_qr_attachment_id
         promotion.payment_qr_attachment_id = attachment.id
+        if old_id != attachment.id:
+            await self._append_payment_qr_uploaded(promotion, user, attachment.id)
         await self._audit.log(
             action="promotion.payment_qr.bind",
             resource="promotion",
@@ -178,6 +183,20 @@ class PromotionPaymentQrMixin(PromotionServiceBase):
         )
         await self._session.commit()
         return await self._to_response(promotion, user)
+
+    async def _append_payment_qr_uploaded(
+        self, promotion: Promotion, user: User, attachment_id: UUID
+    ) -> None:
+        """时间线（流程线 6.3）：每次上传 / 换绑一条带附件的事件，重传后旧码仍挂在时间线上；
+        附件读时过 `promotion.payment_qr` 字段规则（6.5 第 3 层）。"""
+        await LineEventRepository(self._session).append(
+            tenant_id=promotion.tenant_id,
+            line_id=promotion.line_id,
+            event_type=LineEventType.PROMOTION_PAYMENT_QR_UPLOADED,
+            actor_id=user.id,
+            promotion_id=promotion.id,
+            attachment_id=attachment_id,
+        )
 
     async def remove_payment_qr(self, promotion_id: UUID, user: User) -> None:
         promotion = await self._repo.get_by_id(promotion_id)

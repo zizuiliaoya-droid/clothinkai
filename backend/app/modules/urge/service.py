@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.attachment import AttachmentService, attachment_service, check_image_payload
 from app.core.audit import AuditService
 from app.modules.auth.models import User
+from app.modules.flow.line_events import LineEventRepository, LineEventType
 from app.modules.promotion.urge_calculator import UrgeThresholds, get_today
 from app.modules.urge.enums import UrgeCloseReason, UrgeTaskStatus, UrgeTriggerType
 from app.modules.urge.exceptions import (
@@ -60,6 +61,8 @@ log = logging.getLogger(__name__)
 
 _SCREENSHOT_MAX_BYTES = 10 * 1024 * 1024
 _SCREENSHOT_PURPOSE = "urge_screenshot"
+# 自动扫描写的主线事件：actor_id = NULL，payload.system 标出是谁写的（流程线 6.3）
+_SYSTEM_URGE_SCAN = "urge_scan"
 
 # 催发任务只对「还没发出来」的单据成立。已发布/已取消/已删除建任务没有意义，
 # 还会把看板的「待催发」数字搞脏。
@@ -99,6 +102,7 @@ class UrgeService:
         self._configs = UrgeConfigRepository(session)
         self._audit = AuditService(session)
         self._attachments = attachments or attachment_service
+        self._events = LineEventRepository(session)
 
     # ------------------------------------------------------------------ #
     # 配置
@@ -237,7 +241,7 @@ class UrgeService:
         上传失败要补偿删除 R2 对象（照 ``upload_payment_qr`` 的骨架），否则留下孤儿对象。
         """
         promo = await self._load_urgeable_promotion(promotion_id, user)
-        task_id, _ = await self._tasks.ensure_task(
+        task_id, created = await self._tasks.ensure_task(
             tenant_id=user.tenant_id,
             promotion_id=promotion_id,
             blogger_id=promo["blogger_id"],
@@ -260,9 +264,10 @@ class UrgeService:
                     details={"promotion_id": str(promotion_id), "task_id": str(task_id)},
                 )
 
+            record_id = uuid4()
             self._records.add(
                 UrgeRecord(
-                    id=uuid4(),
+                    id=record_id,
                     tenant_id=user.tenant_id,
                     urge_task_id=task_id,
                     promotion_id=promotion_id,
@@ -273,6 +278,27 @@ class UrgeService:
                 )
             )
             await self._session.flush()
+            # 时间线（流程线 6.3）：现建的任务先记 task_opened，再记这次 sent；同事务，写失败整单回滚
+            line_id = promo["line_id"]
+            if created:
+                await self._append_task_opened(
+                    tenant_id=user.tenant_id,
+                    line_id=line_id,
+                    promotion_id=promotion_id,
+                    task_id=task_id,
+                    actor_id=user.id,
+                )
+            await self._append_sent(
+                tenant_id=user.tenant_id,
+                line_id=line_id,
+                promotion_id=promotion_id,
+                task_id=task_id,
+                record_id=record_id,
+                urge_count=int(bumped["urge_count"]),
+                user=user,
+                note=note,
+                attachment_id=attachment_id,
+            )
             await self._audit.log(
                 action="urge.manual",
                 resource="urge_task",
@@ -314,21 +340,31 @@ class UrgeService:
         task_ids: builtins.list[UUID] = []
         skipped = 0
         for row in candidates:
-            task_id, _ = await self._tasks.ensure_task(
+            task_id, created = await self._tasks.ensure_task(
                 tenant_id=user.tenant_id,
                 promotion_id=row["promotion_id"],
                 blogger_id=row["blogger_id"],
                 pr_id=row["pr_id"],
             )
+            # 时间线：line_id 随候选 SQL 一起取，不逐条查
+            if created:
+                await self._append_task_opened(
+                    tenant_id=user.tenant_id,
+                    line_id=row["line_id"],
+                    promotion_id=row["promotion_id"],
+                    task_id=task_id,
+                    actor_id=user.id,
+                )
             bumped = await self._tasks.bump_urge_count(
                 task_id=task_id, tenant_id=user.tenant_id, now=now
             )
             if bumped is None:
                 skipped += 1
                 continue
+            record_id = uuid4()
             self._records.add(
                 UrgeRecord(
-                    id=uuid4(),
+                    id=record_id,
                     tenant_id=user.tenant_id,
                     urge_task_id=task_id,
                     promotion_id=row["promotion_id"],
@@ -336,6 +372,16 @@ class UrgeService:
                     note=note,
                     created_by=user.id,
                 )
+            )
+            await self._append_sent(
+                tenant_id=user.tenant_id,
+                line_id=row["line_id"],
+                promotion_id=row["promotion_id"],
+                task_id=task_id,
+                record_id=record_id,
+                urge_count=int(bumped["urge_count"]),
+                user=user,
+                note=note,
             )
             task_ids.append(task_id)
 
@@ -389,6 +435,17 @@ class UrgeService:
             )
         )
         await self._session.flush()
+        await self._events.append(
+            tenant_id=user.tenant_id,
+            line_id=await self._tasks.promotion_line_id(
+                tenant_id=user.tenant_id, promotion_id=task.promotion_id
+            ),
+            event_type=LineEventType.URGE_CLOSED,
+            actor_id=user.id,
+            promotion_id=task.promotion_id,
+            note=reason,
+            payload={"urge_task_id": str(task_id), "close_reason": UrgeCloseReason.MANUAL.value},
+        )
         await self._audit.log(
             action="urge.close",
             resource="urge_task",
@@ -455,6 +512,18 @@ class UrgeService:
                 is not None
             ):
                 result.tasks_closed += 1
+                await self._events.append(
+                    tenant_id=tenant_id,
+                    line_id=stale["line_id"],
+                    event_type=LineEventType.URGE_CLOSED,
+                    actor_id=None,
+                    promotion_id=stale["promotion_id"],
+                    payload={
+                        "urge_task_id": str(stale["task_id"]),
+                        "close_reason": reason.value,
+                        "system": _SYSTEM_URGE_SCAN,
+                    },
+                )
 
         candidates = await self._tasks.find_auto_scan_candidates(
             tenant_id=tenant_id,
@@ -472,6 +541,14 @@ class UrgeService:
             )
             if created:
                 result.tasks_created += 1
+                # 只记开任务；之后逐天的自动催发不进时间线（11-22），在「催发记录」页签看
+                await self._append_task_opened(
+                    tenant_id=tenant_id,
+                    line_id=row["line_id"],
+                    promotion_id=row["promotion_id"],
+                    task_id=task_id,
+                    actor_id=None,
+                )
             bumped = await self._tasks.bump_urge_count(
                 task_id=task_id, tenant_id=tenant_id, now=now, auto_on=today
             )
@@ -522,6 +599,63 @@ class UrgeService:
     # 内部
     # ------------------------------------------------------------------ #
 
+    async def _append_task_opened(
+        self,
+        *,
+        tenant_id: UUID,
+        line_id: UUID,
+        promotion_id: UUID,
+        task_id: UUID,
+        actor_id: UUID | None,
+    ) -> None:
+        """``urge.task_opened``：手动催时现建（actor = 催的人）或自动扫描建（actor NULL、带 system）。"""
+        payload: dict[str, Any] = {
+            "trigger": (
+                UrgeTriggerType.MANUAL.value if actor_id is not None else UrgeTriggerType.AUTO.value
+            ),
+            "urge_task_id": str(task_id),
+        }
+        if actor_id is None:
+            payload["system"] = _SYSTEM_URGE_SCAN
+        await self._events.append(
+            tenant_id=tenant_id,
+            line_id=line_id,
+            event_type=LineEventType.URGE_TASK_OPENED,
+            actor_id=actor_id,
+            promotion_id=promotion_id,
+            payload=payload,
+        )
+
+    async def _append_sent(
+        self,
+        *,
+        tenant_id: UUID,
+        line_id: UUID,
+        promotion_id: UUID,
+        task_id: UUID,
+        record_id: UUID,
+        urge_count: int,
+        user: User,
+        note: str | None,
+        attachment_id: UUID | None = None,
+    ) -> None:
+        """``urge.sent``：手动催一次（单条或批量），引用这条 urge_record、不复制明细（6.1）。"""
+        await self._events.append(
+            tenant_id=tenant_id,
+            line_id=line_id,
+            event_type=LineEventType.URGE_SENT,
+            actor_id=user.id,
+            promotion_id=promotion_id,
+            note=note,
+            attachment_id=attachment_id,
+            payload={
+                "trigger": UrgeTriggerType.MANUAL.value,
+                "urge_task_id": str(task_id),
+                "urge_record_id": str(record_id),
+                "urge_count": urge_count,
+            },
+        )
+
     async def _load_urgeable_promotion(self, promotion_id: UUID, user: User) -> dict[str, Any]:
         """取推广单并校验「还能催」。
 
@@ -534,7 +668,7 @@ class UrgeService:
             await self._session.execute(
                 _text(
                     """
-                    SELECT id, blogger_id, pr_id, publish_status, is_active
+                    SELECT id, blogger_id, pr_id, publish_status, is_active, line_id
                     FROM promotion
                     WHERE id = :pid AND tenant_id = :tid
                     """

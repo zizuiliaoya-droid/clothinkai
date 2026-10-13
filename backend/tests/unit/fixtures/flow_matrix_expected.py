@@ -182,6 +182,15 @@ _PROMOTION_ROWS: dict[tuple[str, str], list[tuple[list[str], str]]] = {
     ("action", "ship_withdraw"): [(_labels("B"), "读改改隐隐隐")],
     # 纳入发货：格在 C 列（是不是历史单由状态机判，格不分）
     ("action", "ship_include"): [(_labels("C") + _labels("C", history=True), "隐改改隐隐隐")],
+    # 时间线（PR-4）：A ~ D 财务「—」、E 列起财务读；仓库页不放时间线；历史单不分
+    ("field", "timeline"): [
+        (_labels("ABCD") + _labels("CD", history=True), "读读读隐读隐"),
+        (_labels("EFGH") + _labels("EF", history=True), "读读读读读隐"),
+    ],
+    # 留言 / 贴图（PR-4）：全阶段 PR / 主管 / 管理员改，财务、运营、仓库不出现
+    ("action", "comment"): [
+        (_labels("ABCDEFGH") + _labels("CDEF", history=True), "改改改隐隐隐"),
+    ],
 }
 
 _WAREHOUSE_ROWS: dict[tuple[str, str], list[tuple[list[str], str]]] = {
@@ -265,6 +274,12 @@ _NEG_ROWS: dict[tuple[str, str], dict[str, str]] = {
         "已定稿": "读读读隐隐",
         SELF_BUILT: "隐灰灰隐隐",
     },
+    # 时间线（PR-4）：草稿只有本人；其余看得到这张谈款的人都读
+    ("field", "timeline"): {
+        "草稿": "读隐隐隐隐",
+        **dict.fromkeys(NEGOTIATION_STATES[1:], _ALL_READ),
+        SELF_BUILT: "隐读读读读",
+    },
     ("field", "overdue_badge"): {"主管待审": "读读读隐隐", SELF_BUILT: "隐读读隐隐"},
     ("field", "others_in_progress"): {"草稿": "读隐隐隐隐", "老板退回": "读隐隐隐隐"},
     ("action", "edit"): {"草稿": "改隐隐隐隐", "老板退回": "改读读隐隐"},
@@ -275,6 +290,12 @@ _NEG_ROWS: dict[tuple[str, str], dict[str, str]] = {
     ("action", "receiver_save"): {"待补收货地址": "改改改隐隐"},
     ("action", "receiver_confirm"): {"待补收货地址": "改改改隐隐"},
     ("action", "copy"): {"审核驳回": "改隐隐隐隐"},
+    # 留言 / 贴图（PR-4，N11）：草稿只有本人；其余 PR / 主管 / 管理员改，财务、运营读
+    ("action", "comment"): {
+        "草稿": "改隐隐隐隐",
+        **dict.fromkeys(NEGOTIATION_STATES[1:], "改改改读读"),
+        SELF_BUILT: "隐改改读读",
+    },
 }
 
 

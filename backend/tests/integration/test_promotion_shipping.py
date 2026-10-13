@@ -28,9 +28,10 @@ from app.core.exceptions import (
 from app.core.tenancy import tenant_id_ctx
 from app.modules.auth.models import Permission, User, UserPermissionOverride
 from app.modules.flow.exceptions import FlowGateMissingError
+from app.modules.flow.line_events import LineEventType
 from app.modules.product.goods_models import GoodsMain, GoodsStyleItem
 from app.modules.product.service import SkuService
-from app.modules.promotion.enums import CooperationMode
+from app.modules.promotion.enums import CooperationMode, ShipCourier
 from app.modules.promotion.exceptions import (
     FieldPermissionDenied,
     InvalidReceiverPhoneError,
@@ -47,10 +48,12 @@ from app.modules.promotion.schemas import (
     PromotionShipPushRequest,
     PromotionShipWithdrawRequest,
     PromotionUpdate,
+    PromotionWarehouseWaybillRequest,
 )
 from app.modules.promotion.service import PromotionService
 from tests.concurrency import committed, default_tenant_id, run_concurrently
 from tests.conftest import purge_promotions
+from tests.flow_event_helpers import assert_payload_registered, events_of
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
@@ -1052,17 +1055,24 @@ class TestFlowUi:
         pr = (await svc.get_promotion(promo.id, flow_users.pr)).ui
         assert pr == {
             "column": "A",
-            "actions": {"ship_push": {"state": "disabled", "reason": "需管理员或 PR 主管确认"}},
+            "actions": {
+                "ship_push": {"state": "disabled", "reason": "需管理员或 PR 主管确认"},
+                "comment": {"state": "enabled"},
+            },
             "fields": {
                 "goods_items": {"state": "read"},
                 "receiver": {"state": "edit"},
                 "shipping": {"state": "grey", "hint": "推送后由仓库回填"},
+                "timeline": {"state": "read"},
             },
         }
         # 主管：可点，缺项全是弹窗里能补的
         manager = (await svc.get_promotion(promo.id, flow_users.pr_manager)).ui
         assert manager is not None
-        assert manager["actions"] == {"ship_push": {"state": "enabled", "missing": _ALL_GATES}}
+        assert manager["actions"] == {
+            "ship_push": {"state": "enabled", "missing": _ALL_GATES},
+            "comment": {"state": "enabled"},
+        }
         # 运营只读、财务什么都没有
         ops = (await svc.get_promotion(promo.id, flow_users.operations)).ui
         assert ops is not None
@@ -1070,6 +1080,7 @@ class TestFlowUi:
         assert ops["fields"] == {
             "goods_items": {"state": "read"},
             "shipping": {"state": "grey", "hint": "推送后由仓库回填"},
+            "timeline": {"state": "read"},
         }
         assert (await svc.get_promotion(promo.id, flow_users.finance)).ui == {
             "column": "A",
@@ -1124,7 +1135,10 @@ class TestFlowUi:
         rows = {p.id: p.ui for p in page.items}
         assert rows[partial.id] is not None and rows[full.id] is not None
         assert rows[partial.id]["actions"] == got["actions"]
-        assert rows[full.id]["actions"] == {"ship_push": {"state": "enabled"}}
+        assert rows[full.id]["actions"] == {
+            "ship_push": {"state": "enabled"},
+            "comment": {"state": "enabled"},
+        }
 
     async def test_list_ui_has_edits_not_fields(
         self,
@@ -1143,15 +1157,16 @@ class TestFlowUi:
         )
         rows = {p.id: p.ui for p in page.items}
         # 历史单（发货为空）按 A 列：PR 能改收件；已发货的 C 列只读
-        assert rows[history.id] == {"column": "C", "actions": {}, "edits": ["receiver"]}
-        assert rows[shipped.id] == {"column": "C", "actions": {}, "edits": []}
+        comment = {"comment": {"state": "enabled"}}
+        assert rows[history.id] == {"column": "C", "actions": comment, "edits": ["receiver"]}
+        assert rows[shipped.id] == {"column": "C", "actions": comment, "edits": []}
         manager = await PromotionService(session).list_promotions(
             filters=PromotionListFilters(), page=1, page_size=100, user=flow_users.pr_manager
         )
         row = next(p for p in manager.items if p.id == history.id)
         assert row.ui == {
             "column": "C",
-            "actions": {"ship_include": {"state": "enabled"}},
+            "actions": {"ship_include": {"state": "enabled"}, "comment": {"state": "enabled"}},
             "edits": ["goods_items", "receiver"],
         }
 
@@ -1748,7 +1763,10 @@ class TestShipPush:
         assert resp.ship_pushed_by_name == await _user_name(session, manager.id)
         assert resp.ui is not None
         assert resp.ui["column"] == "B"
-        assert resp.ui["actions"] == {"ship_withdraw": {"state": "enabled"}}
+        assert resp.ui["actions"] == {
+            "ship_withdraw": {"state": "enabled"},
+            "comment": {"state": "enabled"},
+        }
         # 列表与详情同一份发货字段（推送人整页一次查）
         page = await PromotionService(session).list_promotions(
             filters=PromotionListFilters(), page=1, page_size=100, user=manager
@@ -2323,6 +2341,199 @@ class TestCreateNeedShipping:
 # ---------------------------------------------------------------------------
 # S8 并发：30 个独立连接同时推送同一张单（都带补选明细）→ 1 成功、29 个 409、0 个 500（A3 / A8）
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# 流程线 PR-4 S11：发货动作同事务写 ship.* 事件（6.3 发货行），只挂 promotion_id
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+class TestShipEvents:
+    async def test_include(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        promo = await _promotion(flow_users, product_factory, blogger_factory, promotion_factory)
+        line_id = promo.line_id
+        await PromotionService(session).ship_include(promo.id, flow_users.pr_manager)
+        (event,) = await events_of(session, line_id=line_id)
+        assert event.event_type == LineEventType.SHIP_INCLUDED.value
+        assert (event.from_state, event.to_state) == (None, "待发货")
+        assert (event.promotion_id, event.negotiation_id) == (promo.id, None)
+        assert event.actor_id == flow_users.pr_manager.id
+        assert event.payload == {}
+
+    async def test_push_with_dialog_fill(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        suit: _Suit,
+    ) -> None:
+        """弹窗补的明细与改了的收件只进 ship.pushed（不另写 receiver_changed / items_changed，
+        否则仓库页一推送就显示「已更新」）；收件 diff 只列真改了的项，明细不放编码。"""
+        blogger = await blogger_factory.blogger()
+        promo = await promotion_factory.promotion(
+            style=suit.top,
+            blogger=blogger,
+            pr=flow_users.pr,
+            goods_main_id=suit.goods.id,
+            ship_status="待发货",
+            **_RECEIVER,
+        )
+        line_id = promo.line_id
+        await PromotionService(session).ship_push(
+            promo.id,
+            PromotionShipPushRequest(
+                items=_items((suit.pants, suit.pants_sku), (suit.top, suit.top_sku)),
+                receiver_name=" 李四 ",
+                receiver_address=_RECEIVER["receiver_address"],
+            ),
+            flow_users.pr_manager,
+        )
+        (event,) = await events_of(session, line_id=line_id)
+        assert event.event_type == LineEventType.SHIP_PUSHED.value
+        assert (event.from_state, event.to_state) == ("待发货", "待打单")
+        assert event.promotion_id == promo.id
+        assert event.payload == {
+            "items": [["阔腿裤", "白色", "L"], ["上衣", "黑色", "M"]],
+            "diff": {"receiver_name": {"before": "张三", "after": "李四"}},
+        }
+        assert_payload_registered(event.payload)
+
+    async def test_push_without_dialog_has_no_diff(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        style = await product_factory.style(short_name="连衣裙")
+        sku = await product_factory.sku(style, color="红色", size="S")
+        blogger = await blogger_factory.blogger()
+        promo = await promotion_factory.promotion(
+            style=style,
+            blogger=blogger,
+            pr=flow_users.pr,
+            sku_id=sku.id,
+            ship_status="待发货",
+            **_RECEIVER,
+            items=[(style, sku)],
+        )
+        line_id = promo.line_id
+        await PromotionService(session).ship_push(
+            promo.id, PromotionShipPushRequest(), flow_users.pr_manager
+        )
+        (event,) = await events_of(session, line_id=line_id)
+        assert event.event_type == LineEventType.SHIP_PUSHED.value
+        assert event.payload == {"items": [["连衣裙", "红色", "S"]]}
+
+    async def test_push_gate_failure_writes_no_event(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        suit: _Suit,
+    ) -> None:
+        blogger = await blogger_factory.blogger()
+        promo = await promotion_factory.promotion(
+            style=suit.top,
+            blogger=blogger,
+            pr=flow_users.pr,
+            goods_main_id=suit.goods.id,
+            ship_status="待发货",
+        )
+        await session.commit()
+        pid, line_id, manager = promo.id, promo.line_id, flow_users.pr_manager
+        with pytest.raises(FlowGateMissingError):
+            await PromotionService(session).ship_push(pid, PromotionShipPushRequest(), manager)
+        assert await events_of(session, line_id=line_id) == []
+
+    async def test_withdraw(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        promo = await _promotion(
+            flow_users, product_factory, blogger_factory, promotion_factory, ship_status="待打单"
+        )
+        line_id = promo.line_id
+        await PromotionService(session).ship_withdraw(
+            promo.id, PromotionShipWithdrawRequest(reason=" 地址写错了 "), flow_users.pr_manager
+        )
+        (event,) = await events_of(session, line_id=line_id)
+        assert event.event_type == LineEventType.SHIP_WITHDRAWN.value
+        assert (event.from_state, event.to_state) == ("待打单", "待发货")
+        assert event.note == "地址写错了"
+        assert event.payload == {}
+
+    async def test_fill_then_change_waybill(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        """回填 → ship.filled（快递、单号、发货时间）；已发货改单号 → ship.waybill_changed 只列改了的；
+        同样的值再提交一次不写。"""
+        from datetime import UTC, datetime, timedelta, timezone
+
+        promo = await _promotion(
+            flow_users, product_factory, blogger_factory, promotion_factory, ship_status="待打单"
+        )
+        line_id, pid, warehouse = promo.line_id, promo.id, flow_users.warehouse
+        svc = PromotionService(session)
+        shipped_at = datetime.now(UTC).replace(microsecond=0) - timedelta(hours=2)
+        await svc.update_warehouse_waybill(
+            pid,
+            PromotionWarehouseWaybillRequest(
+                courier=ShipCourier.SF, waybill=" SF1 ", shipped_at=shipped_at
+            ),
+            warehouse,
+        )
+        # 同一时刻换个时区写法：发货时间按时刻比，不算改动
+        same_at = shipped_at.astimezone(timezone(timedelta(hours=8)))
+        await svc.update_warehouse_waybill(
+            pid,
+            PromotionWarehouseWaybillRequest(
+                courier=ShipCourier.ZTO, waybill="SF1", shipped_at=same_at
+            ),
+            warehouse,
+        )
+        await svc.update_warehouse_waybill(
+            pid,
+            PromotionWarehouseWaybillRequest(
+                courier=ShipCourier.ZTO, waybill="SF1", shipped_at=same_at
+            ),
+            warehouse,
+        )
+        filled, changed = await events_of(session, line_id=line_id)
+        assert filled.event_type == LineEventType.SHIP_FILLED.value
+        assert (filled.from_state, filled.to_state) == ("待打单", "已发货")
+        assert filled.actor_id == warehouse.id
+        assert filled.payload == {
+            "courier": "顺丰",
+            "waybill": "SF1",
+            "shipped_at": shipped_at.isoformat(),
+        }
+        assert changed.event_type == LineEventType.SHIP_WAYBILL_CHANGED.value
+        assert (changed.from_state, changed.to_state) == (None, None)
+        assert changed.payload == {"diff": {"ship_courier": {"before": "顺丰", "after": "中通"}}}
+        for e in (filled, changed):
+            assert e.promotion_id == pid
+            assert_payload_registered(e.payload)
 
 
 class TestShipPushConcurrent:
