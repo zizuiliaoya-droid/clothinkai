@@ -224,8 +224,9 @@ export function PromotionPlatformSettingTab() {
   return (
     <>
       <Typography.Paragraph style={MUTED_STYLE}>
-        点赞数达到所在平台的爆文阈值算爆文（推广列表、工作进度爆文数、博主「带货型」都按它判）。
-        折算点赞 = 点赞数 × 折算系数，用于报表的点赞数与 CPL。
+        {/* 两句拼成一个字符串：JSX 换行会在中文句号后多出一个空格 */}
+        {"点赞数达到所在平台的爆文阈值算爆文（推广列表、工作进度爆文数、博主「带货型」都按它判）。" +
+          "折算点赞 = 点赞数 × 折算系数，用于报表的点赞数与 CPL。"}
       </Typography.Paragraph>
       {!canEdit && (
         <Alert type="info" showIcon style={{ marginBottom: 16 }} message={READONLY_TEXT} />
