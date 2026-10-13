@@ -2,7 +2,8 @@
 
 只验任务自己的分支：任务选项、上下文设置（租户 contextvar + system_context +
 ``set_config``）、只调 ``recompute_quality_for_tenant``、DB 抖动原样抛给 autoretry、
-重试用完那次记 error + Sentry、其他异常不抛（不重试）但记 error + Sentry。
+重试用完那次记 error + Sentry、其他异常不抛（不重试）但记 error + Sentry，返回值带
+``ok: False`` 与异常类型名（成功带 ``ok: True``，空租户也是成功）。
 重算本身的行为在 ``tests/integration/test_blogger_recompute.py``。
 """
 
@@ -38,7 +39,11 @@ def _ctx() -> dict[str, Any]:
     return {"tenant": tenant_id_ctx.get(), "bypass": is_bypass_rls(), "actor": actor_type_ctx.get()}
 
 
-def _patch(monkeypatch: pytest.MonkeyPatch, raise_exc: Exception | None = None) -> dict[str, Any]:
+def _patch(
+    monkeypatch: pytest.MonkeyPatch,
+    raise_exc: Exception | None = None,
+    result: dict[str, int] | None = None,
+) -> dict[str, Any]:
     rec: dict[str, Any] = {"sql": [], "calls": [], "commits": 0, "sentry": []}
 
     class _FakeSession:
@@ -62,7 +67,7 @@ def _patch(monkeypatch: pytest.MonkeyPatch, raise_exc: Exception | None = None) 
             rec["calls"].append((tenant_id, _ctx()))
             if raise_exc is not None:
                 raise raise_exc
-            return dict(_RESULT)
+            return dict(_RESULT if result is None else result)
 
     monkeypatch.setattr(tasks, "AsyncSessionApp", _session)
     monkeypatch.setattr(tasks, "BloggerTagService", _FakeTagService)
@@ -109,7 +114,7 @@ class TestTaskBody:
 
         out = await tasks._recompute_quality_impl(_fake_task(0), tid)
 
-        assert out == _RESULT
+        assert out == {**_RESULT, "ok": True}
         assert rec["commits"] == 1
         want_ctx = {"tenant": tid, "bypass": True, "actor": "system"}
         # set_config 在调用重算之前、带同一个租户
@@ -133,11 +138,30 @@ class TestTaskBody:
 
         out = await tasks._recompute_quality_impl(_fake_task(0), uuid4())
 
-        assert out == {"updated": 0, "unchanged": 0, "failed": 0}
+        # 整批失败要和空租户分得开：带失败标记与异常类型名
+        assert out == {
+            "updated": 0,
+            "unchanged": 0,
+            "failed": 0,
+            "ok": False,
+            "error": "RuntimeError",
+        }
         assert rec["sentry"] == [boom]
         assert rec["commits"] == 0
         assert any(r.levelno >= logging.ERROR for r in caplog.records)
         assert tenant_id_ctx.get() is None
+
+    async def test_empty_tenant_is_success_with_zero_counts(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        zero = {"updated": 0, "unchanged": 0, "failed": 0}
+        rec = _patch(monkeypatch, result=zero)
+
+        out = await tasks._recompute_quality_impl(_fake_task(0), uuid4())
+
+        assert out == {**zero, "ok": True}
+        assert rec["commits"] == 1
+        assert rec["sentry"] == []
 
     async def test_db_error_raised_for_retry_without_report(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture

@@ -98,18 +98,21 @@ async def _recompute_one_tenant(tenant_id: UUID) -> dict[str, int]:
     max_retries=3,
     default_retry_delay=10,
 )
-def recompute_blogger_quality_tags(self: Task, tenant_id: str) -> dict[str, int]:
+def recompute_blogger_quality_tags(self: Task, tenant_id: str) -> dict[str, Any]:
     """只重算一个租户的质量标签（「高性价比」「带货型」）。
 
     由 ``PUT /api/settings/promotion-platforms`` 提交后投递，参数只有保存配置的那个租户
     （JSON 序列化，传字符串）。不复用 ``recompute_all_blogger_tags``：那条会重写博主类型与
     ``is_suspected_fake``。DB 抖动（``OperationalError``）重试，最后一次仍失败记 error +
     Sentry；其他异常不重试，记 error + Sentry。已保存的配置不受影响。
+
+    返回计数加 ``ok``：成功（含空租户）为 ``True``；其他异常整批失败为 ``False``，并带
+    ``error``（异常类型名），免得和空租户的全 0 混在一起。
     """
     return run_async_task(_recompute_quality_impl(self, UUID(tenant_id)))
 
 
-async def _recompute_quality_impl(task: Task, tenant_id: UUID) -> dict[str, int]:
+async def _recompute_quality_impl(task: Task, tenant_id: UUID) -> dict[str, Any]:
     tok = tenant_id_ctx.set(tenant_id)
     try:
         async with system_context():
@@ -127,7 +130,7 @@ async def _recompute_quality_impl(task: Task, tenant_id: UUID) -> dict[str, int]
                     result["unchanged"],
                     result["failed"],
                 )
-                return result
+                return {**result, "ok": True}
     except OperationalError as exc:
         # 交给 autoretry_for 重试；重试用完的那一次先记下来
         if task.request.retries >= task.max_retries:
@@ -137,7 +140,7 @@ async def _recompute_quality_impl(task: Task, tenant_id: UUID) -> dict[str, int]
     except Exception as exc:
         log.exception("recompute_quality_failed tenant=%s", str(tenant_id))
         sentry_sdk.capture_exception(exc)
-        return {"updated": 0, "unchanged": 0, "failed": 0}
+        return {"updated": 0, "unchanged": 0, "failed": 0, "ok": False, "error": type(exc).__name__}
     finally:
         tenant_id_ctx.reset(tok)
 
