@@ -669,10 +669,12 @@ class PromotionServiceBase:
         negotiators: Mapping[UUID, UUID] | None = None,
         members_by_goods: Mapping[UUID, builtins.list[UUID]] | None = None,
         members: builtins.list[UUID] | None = None,
+        attachment_refs: PromotionAttachmentRefs | None = None,
     ) -> PromotionDoc:
-        """组矩阵快照。没透传的（阶段、明细、谈款人、套装成员）按这一张单现查。
+        """组矩阵快照。没透传的（阶段、明细、谈款人、套装成员、结款单状态）按这一张单现查。
 
-        ``members`` 是这张单已算好的成员款式（优先于 ``members_by_goods``）。
+        ``members`` 是这张单已算好的成员款式（优先于 ``members_by_goods``）；
+        ``attachment_refs`` 带结款单状态（列表整页一次查好）。
         """
         if stage is None:
             stage = await self._compute_stage(promotion)
@@ -684,11 +686,20 @@ class PromotionServiceBase:
             negotiators = await self._repo.negotiator_ids([promotion.id])
         if members is None:
             members = await self._members_of(promotion, members_by_goods)
+        if attachment_refs is None:
+            attachment_refs = (
+                await self._repo.get_payment_attachment_refs(
+                    tenant_id=promotion.tenant_id, promotion_ids=[promotion.id]
+                )
+            ).get(promotion.id)
         return build_promotion_doc(
             promotion,
             stage=stage,
             negotiator_id=negotiators.get(promotion.id),
             items_complete=goods_items_complete((i.style_id for i in items), members),
+            settlement_status=(
+                attachment_refs.settlement_status if attachment_refs is not None else None
+            ),
         )
 
     async def _to_response(
@@ -753,13 +764,14 @@ class PromotionServiceBase:
         payment_qr_url: str | None = None
         settlement_proof_url: str | None = None
         visible_payment_qr_id: UUID | None = None
+        # 引用里还有结款单状态（矩阵快照要用），所以不管看不看得到附件都取
+        if attachment_refs is None:
+            attachment_refs = (
+                await self._repo.get_payment_attachment_refs(
+                    tenant_id=user.tenant_id, promotion_ids=[promotion.id]
+                )
+            ).get(promotion.id)
         if can_see_payment_attachments:
-            if attachment_refs is None:
-                attachment_refs = (
-                    await self._repo.get_payment_attachment_refs(
-                        tenant_id=user.tenant_id, promotion_ids=[promotion.id]
-                    )
-                ).get(promotion.id)
             if attachment_refs is not None:
                 visible_payment_qr_id = attachment_refs.payment_qr_attachment_id
                 try:
@@ -897,6 +909,7 @@ class PromotionServiceBase:
             items=items,
             negotiators=negotiators,
             members=members,
+            attachment_refs=attachment_refs,
         )
         ui = ui_for(actor, doc).to_dict(view=view)
 

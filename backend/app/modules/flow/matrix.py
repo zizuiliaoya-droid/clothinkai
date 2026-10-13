@@ -5,7 +5,8 @@
 表的形状
 - 每行 ``Row(key, kind, cells)``：``kind`` 是 ``"action"``（动作键）或 ``"field"``（字段分组键），键名见下方常量；
   ``cells`` 的键是**精确阶段**（推广单用 3.8 的阶段名、谈款用状态），值是一个或几个 ``Cell``——同一阶段还要按子状态区分时，
-  用 ``when=(SettlementIn(...),)`` 这类谓词收窄，取第一个命中的格；都不命中 = 隐
+  用 ``when=(SettlementIn(...),)`` 这类谓词收窄（``PromotionSettlementIn`` 是推广单自己的结款状态），
+  取第一个命中的格；都不命中 = 隐
 - ``Cell`` 依次判 ``edit`` → 改、``read`` → 读、``grey`` → 灰，都不成立 → 隐。每级是一组判断的「且」；
   ``None`` = 这一级没人，空元组 = 所有人
 - 判断分两类：能力项（``Scope``、``ExplicitScope``、``FieldWrite``，不满足 = 缺权限）与规则项（``Owner``、``NotPrOwner``、``NoStar``、
@@ -399,9 +400,16 @@ class StageIn(_AttrIn):
 
 
 class SettlementIn(_AttrIn):
-    """结款单状态。"""
+    """结款单状态；``SettlementIn(None)`` = 还没有结款单。"""
 
     attr = "settlement_status"
+
+
+class PromotionSettlementIn(_AttrIn):
+    """推广单自己的结款状态（3.4 的 7 个值）。与 ``SettlementIn``（结款单）是两样：
+    收款码在召回中按它拆（已付款 / 已结款锁码，计划 D9）。"""
+
+    attr = "promotion_settlement_status"
 
 
 class FreightIn(_AttrIn):

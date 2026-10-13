@@ -1,6 +1,7 @@
 """推广单 / 仓库行的能力矩阵（流程线 5.3；PR-2 有收件、颜色尺码明细、发货信息三类字段行与
 推送 / 撤回 / 纳入发货 / 回填四个动作行；PR-4 加「时间线」字段行与「留言 / 贴图」动作行；
-PR-5 加商品归属、合作信息、合作模式、服务费四个字段行与催发、标记完成、停用三个动作行）。
+PR-5 加商品归属、合作信息、合作模式、服务费四个字段行与催发、标记完成、停用三个动作行；
+PR-6 加 7 天数据、收款码、结款单、结款聊天截图四个字段行与推广审核、结款重提、上传结款聊天截图、录 7 天数据四个动作行）。
 
 import 本模块即把 ``MATRICES["promotion"]`` 与 ``MATRICES["warehouse"]`` 登记进 ``flow.matrix``；
 ``promotion/flow_doc.py`` import 它，所以用到快照的地方都已注册。
@@ -20,6 +21,7 @@ import 本模块即把 ``MATRICES["promotion"]`` 与 ``MATRICES["warehouse"]`` �
 from __future__ import annotations
 
 from dataclasses import replace
+from decimal import Decimal
 from typing import Any
 
 from app.modules.flow.matrix import (
@@ -31,11 +33,16 @@ from app.modules.flow.matrix import (
     Gate,
     Matrix,
     ModeIn,
+    NotPrOwner,
+    PromotionSettlementIn,
+    PublishIn,
     Row,
     Scope,
+    SettlementIn,
     ShipIn,
     Star,
 )
+from app.modules.promotion.enums import CooperationMode, PublishStatus, RecallStatus
 from app.modules.promotion.exceptions import InvalidReceiverPhoneError
 from app.modules.promotion.receiver import RECEIVER_FIELDS, normalize_receiver_phone
 from app.modules.promotion.stage_calculator import PROMOTION_STAGES, STAGE_COLUMN
@@ -57,6 +64,15 @@ _MANAGER_EDIT = (_WRITE, _CREATE)
 _QUOTE_READ = FieldRead("promotion", "quote_amount")
 _QUOTE_WRITE = FieldWrite("promotion", "quote_amount")
 
+# PR-6：推广审核（独立一级域，PR 的 promotion.*:* 命中不了）、录 7 天数据、收款码（含字段规则，财务能读）
+_REVIEW = Scope("promotion_review", "approve")
+_METRICS_WRITE = Scope("promotion.metrics", "write")
+_QR_SCOPE = Scope("promotion.payment_qr", "write")
+_QR_READ = FieldRead("promotion", "payment_qr")
+_QR_WRITE = FieldWrite("promotion", "payment_qr")
+# 结款单的追加项 / 实付（主管、财务、管理员，3.4 F2 / F3）
+_SETTLEMENT_WRITE = FieldWrite("settlement", "payment_amount")
+
 _RECEIVER_READ = AnyOf(*(FieldRead("promotion", f) for f in RECEIVER_FIELDS))
 _RECEIVER_WRITE = AnyOf(*(FieldWrite("promotion", f) for f in RECEIVER_FIELDS))
 # 「读」里有仓库的格：仓库没有 promotion:read，只在仓库页看推送过的单
@@ -66,6 +82,17 @@ _READ_OR_FINANCE = AnyOf(_READ, _FINANCE_READ)
 
 SHIP_PUSH_REASON = "需管理员或 PR 主管确认"
 SHIPPING_GREY_HINT = "推送后由仓库回填"
+REVIEW_READ_REASON = "需 PR 主管审核"
+PAYMENT_QR_GREY_HINT = "发布后上传"
+SETTLEMENT_GREY_HINT = "主管审核通过后生成"
+SETTLEMENT_CHAT_GREY_HINT = "财务付款后上传"
+METRICS_SETTLE_HINT = "已结款后可录"
+
+
+def metrics_wait_hint(doc: Any) -> str:
+    """⁸「YYYY-MM-DD 起可录」：待满 7 天才用得到，那时一定有发布日；万一没有给句不带日期的。"""
+    available = doc.metrics_available_from
+    return f"{available.isoformat()} 起可录" if available is not None else "满 7 天后可录"
 
 
 def _phone_ok(doc: Any) -> bool:
@@ -81,6 +108,32 @@ SHIP_PUSH_GATES: tuple[Gate, ...] = (
     Gate("receiver_phone", "收件电话", in_dialog=True, present=_phone_ok),
     Gate("receiver_address", "收件地址", in_dialog=True),
     Gate("goods_items", "颜色尺码", in_dialog=True, present=lambda d: d.items_complete),
+)
+
+
+def _returned_ok(doc: Any) -> bool:
+    """R2 ④：寄拍要有寄回单号，或召回成功且有召回寄回截图；其余模式不要求。"""
+    if doc.cooperation_mode != CooperationMode.CONSIGNMENT.value:
+        return True
+    if (doc.return_waybill or "").strip():
+        return True
+    return bool(doc.recall_status == RecallStatus.RECALLED_SUCCESS.value and doc.has_recall_waybill)
+
+
+def _review_qr_ok(doc: Any) -> bool:
+    """R2 ⑤：应付（审核时 = 服务费）> 0 才要收款码。"""
+    return (doc.quote_amount or Decimal(0)) <= 0 or doc.has_payment_qr
+
+
+# 推广审核 ★¹⁵：一个动作里有通过和驳回，缺项只卡通过（D11：require(gates=False)，通过再 ensure_gates），
+# 所以按钮不禁用（in_dialog），弹窗里按 missing 禁用「通过」
+REVIEW_GATES: tuple[Gate, ...] = (
+    Gate("return_waybill", "寄回单号", in_dialog=True, present=_returned_ok),
+    Gate("payment_qr", "收款码", in_dialog=True, present=_review_qr_ok),
+)
+# 结款重提 ★¹⁷：有收款码（重提弹窗里补传）；说明必填由请求体校验
+SETTLEMENT_RESUBMIT_GATES: tuple[Gate, ...] = (
+    Gate("payment_qr", "收款码", in_dialog=True, present=lambda d: d.has_payment_qr),
 )
 
 # ---------------------------------------------------------------------------
@@ -204,6 +257,71 @@ _timeline: dict[str, Cell | tuple[Cell, ...]] = {}
 _fill(_timeline, "ABCD", Cell(read=(_READ,)))
 _fill(_timeline, "EFGH", Cell(read=(AnyOf(_READ, _FINANCE_READ),)))
 
+# 7 天数据（PR-6，⁸ + D13）：没结款（A ~ E）灰「已结款后可录」、待满 7 天灰「YYYY-MM-DD 起可录」，运营同灰；
+# 待录 7 天数据 改/改/改/隐/读/隐；录过之后（待复盘）与 H 列只有管理员改；G 隐
+_metrics: dict[str, Cell | tuple[Cell, ...]] = {}
+_fill(_metrics, "ABCDE", Cell(grey=(_READ,), hint=METRICS_SETTLE_HINT))
+_metrics["待满 7 天"] = Cell(grey=(_READ,), hint=metrics_wait_hint)
+_metrics["待录 7 天数据"] = Cell(edit=(_METRICS_WRITE,), read=(_READ,))
+_metrics["待复盘"] = Cell(edit=(_STAR,), read=(_READ,))
+_fill(_metrics, "H", Cell(edit=(_STAR,), read=(_READ,)))
+
+# 收款码（PR-6，⁹ + 计划 D9；规则同 7.3 收款码接口，持 * 只受 ① 限制）：
+# ① 没发布（A ~ C）灰「发布后上传」，管理员也一样；D 改/改/改/隐/隐/隐；
+# ② 结款单 = 待财务付款 锁；③ 推广单 已付款 / 已结款 锁（召回中的例外随 PR-8，所以 G 列也按它拆）；
+# 锁 = 读/读/改/读/隐/隐；F、H 列默认锁；①' 之外，没发布过就停用的单连管理员也只读（①）
+_QR_EDITABLE = Cell(edit=(_QR_SCOPE, _QR_READ, _QR_WRITE), read=(_READ_OR_FINANCE, _QR_READ))
+_QR_LOCKED = Cell(edit=(_STAR,), read=(_READ_OR_FINANCE, _QR_READ))
+_FINANCE_FILLED = (SettlementIn("待财务付款"),)
+
+_payment_qr: dict[str, Cell | tuple[Cell, ...]] = {}
+_fill(_payment_qr, "ABC", Cell(grey=(_WRITE, _QR_READ), hint=PAYMENT_QR_GREY_HINT))
+_fill(_payment_qr, "D", Cell(edit=(_QR_SCOPE, _QR_READ, _QR_WRITE), read=(_READ, _QR_READ)))
+_payment_qr["待财务付款"] = (replace(_QR_LOCKED, when=_FINANCE_FILLED), _QR_EDITABLE)
+_payment_qr["结款驳回 · 待重提"] = _QR_EDITABLE
+_payment_qr["待传结款截图"] = _QR_LOCKED
+_fill(_payment_qr, "F", _QR_LOCKED)
+_fill(
+    _payment_qr,
+    "G",
+    (
+        replace(_QR_LOCKED, when=_FINANCE_FILLED),
+        replace(_QR_LOCKED, when=(PromotionSettlementIn("已付款", "已结款"),)),
+        _QR_EDITABLE,
+    ),
+)
+_fill(
+    _payment_qr,
+    "H",
+    (
+        Cell(
+            read=(_READ_OR_FINANCE, _QR_READ),
+            when=(PublishIn(PublishStatus.UNPUBLISHED.value, PublishStatus.ABNORMAL.value),),
+        ),
+        _QR_LOCKED,
+    ),
+)
+
+# 结款单（PR-6，¹²：应付、追加项、实付、调整说明、付款日期、凭证）：金额跟服务费的字段规则走（运营、仓库看不到）。
+# D 灰「主管审核通过后生成」；待财务付款 读/改/改/改/隐/隐（主管加追加项、填实付、驳回，财务付款）；
+# 驳回之后、付款之后（11-63「付款后对所有人只读」）与 F、H 列 读/读/读/读/隐/隐
+_SETTLEMENT_READ = (_READ_OR_FINANCE, _QUOTE_READ)
+_settlement: dict[str, Cell | tuple[Cell, ...]] = {}
+_fill(_settlement, "D", Cell(grey=(_READ, _QUOTE_READ), hint=SETTLEMENT_GREY_HINT))
+_settlement["待财务付款"] = Cell(edit=(_SETTLEMENT_WRITE, _QUOTE_READ), read=_SETTLEMENT_READ)
+_settlement["结款驳回 · 待重提"] = Cell(read=_SETTLEMENT_READ)
+_settlement["待传结款截图"] = Cell(read=_SETTLEMENT_READ)
+_fill(_settlement, "FH", Cell(read=_SETTLEMENT_READ))
+
+# 结款聊天截图（PR-6，¹³）：跟收款码的字段规则（7.3 settlement_chat_signed_url）。
+# 财务付款前灰「财务付款后上传」（财务同灰）；待传结款截图 改/改/改/读/隐/隐；之后（F、H）读/读/改/读/隐/隐
+_CHAT_READ = (_READ_OR_FINANCE, _QR_READ)
+_settlement_chat: dict[str, Cell | tuple[Cell, ...]] = {}
+for _stage in ("待财务付款", "结款驳回 · 待重提"):
+    _settlement_chat[_stage] = Cell(grey=_CHAT_READ, hint=SETTLEMENT_CHAT_GREY_HINT)
+_settlement_chat["待传结款截图"] = Cell(edit=(_WRITE, _QR_READ), read=_CHAT_READ)
+_fill(_settlement_chat, "FH", Cell(edit=(_STAR,), read=_CHAT_READ))
+
 # ---------------------------------------------------------------------------
 # 动作行（状态机在 PromotionDoc / WarehouseDoc.allowed_actions）
 # ---------------------------------------------------------------------------
@@ -240,6 +358,42 @@ _deactivate: dict[str, Cell | tuple[Cell, ...]] = {}
 _fill(_deactivate, "ABCDG", Cell(edit=(_CREATE,)))
 _fill(_deactivate, "EFH", Cell(edit=(_STAR,)))
 
+# 推广审核通过 / 驳回（PR-6，★¹⁵）：D 读/改★/改/隐/隐/隐，审核人 ≠ 谈款人；PR 读「需 PR 主管审核」。
+# 只在待主管审核时状态机允许（推广驳回时隐）
+_review: dict[str, Cell | tuple[Cell, ...]] = {}
+_fill(
+    _review,
+    "D",
+    Cell(
+        edit=(_REVIEW, NotPrOwner()),
+        read=(_WRITE,),
+        reason=REVIEW_READ_REASON,
+        gates=REVIEW_GATES,
+    ),
+)
+
+# 结款重提（PR-6，★¹⁷）：E 改/改/改/隐/隐/隐，只在结款驳回时状态机允许
+_settlement_resubmit: dict[str, Cell | tuple[Cell, ...]] = {}
+_fill(_settlement_resubmit, "E", Cell(edit=(_WRITE,), gates=SETTLEMENT_RESUBMIT_GATES))
+
+# 上传结款聊天截图（PR-6，★¹³）：E 改/改/改/隐/隐/隐，只在待传结款截图时允许；之前灰「财务付款后上传」
+_settlement_chat_action: dict[str, Cell | tuple[Cell, ...]] = {}
+for _stage in ("待财务付款", "结款驳回 · 待重提"):
+    _settlement_chat_action[_stage] = Cell(
+        edit=(_WRITE,), grey=(_WRITE,), hint=SETTLEMENT_CHAT_GREY_HINT
+    )
+_settlement_chat_action["待传结款截图"] = Cell(edit=(_WRITE,))
+
+# 录 7 天数据（PR-6，★⁸）：D、E 灰「已结款后可录」；F 改/改/改/隐/隐/隐，只在待录 7 天数据时允许——
+# 待满 7 天灰「YYYY-MM-DD 起可录」，录过之后（待复盘）隐
+_metrics_action: dict[str, Cell | tuple[Cell, ...]] = {}
+_fill(_metrics_action, "DE", Cell(grey=(_METRICS_WRITE,), hint=METRICS_SETTLE_HINT))
+_metrics_action["待满 7 天"] = Cell(
+    edit=(_METRICS_WRITE,), grey=(_METRICS_WRITE,), hint=metrics_wait_hint
+)
+_metrics_action["待录 7 天数据"] = Cell(edit=(_METRICS_WRITE,))
+_metrics_action["待复盘"] = Cell(edit=(_METRICS_WRITE,))
+
 PROMOTION_MATRIX = Matrix(
     kind="promotion",
     stages=PROMOTION_STAGES,
@@ -251,6 +405,10 @@ PROMOTION_MATRIX = Matrix(
         Row("urge_complete", "action", _urge),
         Row("comment", "action", _comment),
         Row("deactivate", "action", _deactivate),
+        Row("review", "action", _review),
+        Row("settlement_resubmit", "action", _settlement_resubmit),
+        Row("settlement_chat", "action", _settlement_chat_action),
+        Row("metrics", "action", _metrics_action),
         Row("goods", "field", _goods),
         Row("goods_items", "field", _goods_items),
         Row("cooperation", "field", _cooperation),
@@ -259,9 +417,13 @@ PROMOTION_MATRIX = Matrix(
         Row("receiver", "field", _receiver),
         Row("shipping", "field", _shipping),
         Row("timeline", "field", _timeline),
+        Row("metrics", "field", _metrics),
+        Row("payment_qr", "field", _payment_qr),
+        Row("settlement", "field", _settlement),
+        Row("settlement_chat", "field", _settlement_chat),
     ),
-    # 5.4 PATCH 字段归属：PR-2 入矩阵的收件三项与 sku_id，PR-5 入矩阵的归属商品、合作信息、合作模式、服务费与停用；
-    # 其余 PATCH 字段（note_title、source_extra 等）沿用现状。顺序 = 403 里 fields 的顺序
+    # 5.4 PATCH 字段归属：PR-2 入矩阵的收件三项与 sku_id，PR-5 入矩阵的归属商品、合作信息、合作模式、服务费与停用，
+    # PR-6 入矩阵的点赞（7 天数据）；其余 PATCH 字段（note_title、source_extra 等）沿用现状。顺序 = 403 里 fields 的顺序
     patch_groups={
         "receiver_name": "receiver",
         "receiver_phone": "receiver",
@@ -273,6 +435,7 @@ PROMOTION_MATRIX = Matrix(
         "remark": "cooperation",
         "cooperation_mode": "cooperation_mode",
         "quote_amount": "quote_amount",
+        "like_count": "metrics",
         "is_active": "deactivate",
     },
 )
@@ -287,9 +450,17 @@ WAREHOUSE_MATRIX = Matrix(
 MATRICES.update({"promotion": PROMOTION_MATRIX, "warehouse": WAREHOUSE_MATRIX})
 
 __all__ = [
+    "METRICS_SETTLE_HINT",
+    "PAYMENT_QR_GREY_HINT",
     "PROMOTION_MATRIX",
+    "REVIEW_GATES",
+    "REVIEW_READ_REASON",
+    "SETTLEMENT_CHAT_GREY_HINT",
+    "SETTLEMENT_GREY_HINT",
+    "SETTLEMENT_RESUBMIT_GATES",
     "SHIPPING_GREY_HINT",
     "SHIP_PUSH_GATES",
     "SHIP_PUSH_REASON",
     "WAREHOUSE_MATRIX",
+    "metrics_wait_hint",
 ]

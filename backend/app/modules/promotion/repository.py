@@ -158,6 +158,8 @@ class PromotionAttachmentRefs:
     payment_qr_status: str | None = None
     settlement_proof_r2_key: str | None = None
     settlement_proof_status: str | None = None
+    settlement_status: str | None = None
+    """这张推广单结款单的状态（矩阵快照 ``PromotionDoc.settlement_status``）；没有结款单为 None。"""
 
 
 # ---------------------------------------------------------------------------
@@ -204,7 +206,10 @@ class PromotionRepository:
     async def get_payment_attachment_refs(
         self, *, tenant_id: UUID, promotion_ids: list[UUID]
     ) -> dict[UUID, PromotionAttachmentRefs]:
-        """一次批量取得收款码与结算付款凭证引用，避免列表 N+1。"""
+        """一次批量取得收款码、结算付款凭证引用与结款单状态，避免列表 N+1。
+
+        结款单一张推广单最多一张（``uq_settlement_promotion``），LEFT JOIN 不会放大行数。
+        """
         if not promotion_ids:
             return {}
         sql = text(
@@ -212,7 +217,8 @@ class PromotionRepository:
             SELECT p.id AS promotion_id, p.payment_qr_attachment_id,
                    qr.r2_key AS payment_qr_r2_key, qr.status AS payment_qr_status,
                    proof.r2_key AS settlement_proof_r2_key,
-                   proof.status AS settlement_proof_status
+                   proof.status AS settlement_proof_status,
+                   s.settlement_status AS settlement_status
             FROM promotion p
             LEFT JOIN attachment qr
               ON qr.id=p.payment_qr_attachment_id AND qr.tenant_id=p.tenant_id
@@ -241,6 +247,7 @@ class PromotionRepository:
                 payment_qr_status=row["payment_qr_status"],
                 settlement_proof_r2_key=row["settlement_proof_r2_key"],
                 settlement_proof_status=row["settlement_proof_status"],
+                settlement_status=row["settlement_status"],
             )
             for row in result.mappings().all()
         }
