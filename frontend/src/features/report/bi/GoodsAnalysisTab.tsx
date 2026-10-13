@@ -6,10 +6,9 @@ import { useQuery } from "@tanstack/react-query";
 import dayjs from "dayjs";
 import { ScatterChart, type ScatterDatum } from "@/components/Charts/ScatterChart";
 import { MiniLineChart } from "@/components/MiniLineChart/MiniLineChart";
-import { goodsDisplayName } from "@/features/product/api";
 import { getBiGoodsNotes, getBiGoodsTrend } from "../api";
-import type { BiDashboard, BiGoodsRow, TimeGranularity } from "../types";
-import { money, moneyNumber, roiText } from "./biFormat";
+import type { BiDashboard, TimeGranularity } from "../types";
+import { goodsOptionLabels, money, moneyNumber, roiText } from "./biFormat";
 import { KpiCard, MUTED } from "./StoreOverviewTab";
 
 /** 散点为空（设计 2.6：生产只有少数单录了 7 天数据）。 */
@@ -18,12 +17,6 @@ const NOTES_EMPTY_TEXT = "还没有录 7 天数据的笔记";
 const NOTES_TRUNCATED_TEXT = "只显示最近 500 篇";
 /** 散点点不了：详情页（detail_url）R8 才有。 */
 const NOTE_DETAIL_HINT = "详情页随推广单时间线上线";
-
-/** 下拉选项文字：显示名，套装加后缀区分同名的单品。 */
-function goodsOptionLabel(row: BiGoodsRow): string {
-  const name = goodsDisplayName(row.goods_title, row.goods_short_name);
-  return row.is_suit ? `${name}（套装）` : name;
-}
 
 /** 趋势横轴：点上是桶首日；月 / 年取前缀。 */
 function trendLabel(date: string, granularity: TimeGranularity): string {
@@ -46,6 +39,7 @@ interface Props {
 
 export function GoodsAnalysisTab({ data, loading, granularity, goodsId, onGoodsChange }: Props) {
   const items = data?.goods.items ?? [];
+  const optionLabels = goodsOptionLabels(items);
   const selected = items.find((g) => g.goods_id === goodsId) ?? items[0];
   const selectedId = selected?.goods_id;
   const dateFrom = data?.date_from;
@@ -109,7 +103,7 @@ export function GoodsAnalysisTab({ data, loading, granularity, goodsId, onGoodsC
           value={selectedId}
           loading={loading}
           style={{ width: 320, maxWidth: "100%" }}
-          options={items.map((g) => ({ value: g.goods_id, label: goodsOptionLabel(g) }))}
+          options={items.map((g, i) => ({ value: g.goods_id, label: optionLabels[i] }))}
           onChange={onGoodsChange}
         />
       </Space>
