@@ -64,7 +64,6 @@ from app.modules.promotion.flow_doc import (
     build_promotion_doc,
     goods_items_complete,
 )
-from app.modules.promotion.legacy_settings import HIT_THRESHOLD_LIKE_COUNT
 from app.modules.promotion.metrics_calculator import (
     calculate_cpl,
     calculate_effective_like_count,
@@ -891,7 +890,9 @@ class PromotionServiceBase:
             settings=metric_settings,
         )
         is_hit = calculate_is_hit(
-            like_count=promotion.like_count, threshold=HIT_THRESHOLD_LIKE_COUNT
+            platform=promotion.platform,
+            like_count=promotion.like_count,
+            settings=metric_settings,
         )
         cpl = calculate_cpl(
             total_promo_cost=promotion.total_promo_cost,

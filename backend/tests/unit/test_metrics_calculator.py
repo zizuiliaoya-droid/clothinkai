@@ -46,31 +46,49 @@ class TestEffectiveLikeCount:
         )
 
 
+_DEFAULTS = PlatformMetricSettings.defaults()
+
+
+def _hit(
+    platform: str, like_count: int | None, settings: PlatformMetricSettings = _DEFAULTS
+) -> bool:
+    return calculate_is_hit(platform=platform, like_count=like_count, settings=settings)
+
+
 class TestIsHit:
     def test_above_threshold(self) -> None:
-        assert calculate_is_hit(like_count=1500) is True
+        assert _hit("小红书", 1500) is True
 
     def test_at_threshold(self) -> None:
-        """1000 默认阈值 == is_hit (>= 比较)."""
-        assert calculate_is_hit(like_count=1000) is True
+        """小红书默认阈值 1000 == is_hit (>= 比较)."""
+        assert _hit("小红书", 1000) is True
 
     def test_below_threshold(self) -> None:
-        assert calculate_is_hit(like_count=999) is False
+        assert _hit("小红书", 999) is False
 
     def test_zero(self) -> None:
-        assert calculate_is_hit(like_count=0) is False
+        assert _hit("小红书", 0) is False
 
     def test_none(self) -> None:
-        assert calculate_is_hit(like_count=None) is False
+        assert _hit("小红书", None) is False
 
-    def test_custom_threshold(self) -> None:
-        assert calculate_is_hit(like_count=500, threshold=400) is True
-        assert calculate_is_hit(like_count=500, threshold=600) is False
+    def test_platform_threshold(self) -> None:
+        """抖音默认阈值 10000；配置后按配置值判。"""
+        assert _hit("抖音", 9999) is False
+        assert _hit("抖音", 10000) is True
+        configured = PlatformMetricSettings.from_rows([("抖音", Decimal("0.1"), 400)])
+        assert _hit("抖音", 500, configured) is True
+        assert _hit("小红书", 500, configured) is False  # 没配的平台仍是默认 1000
+
+    def test_unknown_platform_fallback(self) -> None:
+        """5 个平台之外按 1000 判。"""
+        assert _hit("未知平台", 1000) is True
+        assert _hit("未知平台", 999) is False
 
     def test_uses_raw_not_effective(self) -> None:
         """is_hit 用原始 like_count，不用折算（与 effective_like_count 不同）."""
-        # 抖音 1500 折算后 = 150，但 is_hit 依旧用 1500 ≥ 1000
-        assert calculate_is_hit(like_count=1500) is True
+        # 快手 1500 折算后 = 150，但 is_hit 依旧用 1500 ≥ 1000
+        assert _hit("快手", 1500) is True
 
 
 _RECORDED = datetime(2026, 9, 20, 8, 0, tzinfo=UTC)

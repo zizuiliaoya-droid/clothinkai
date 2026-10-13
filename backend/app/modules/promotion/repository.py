@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.metrics import promotion_sequence_lock_duration_seconds
 from app.modules.auth.models import User
+from app.modules.metric_config.settings import PlatformMetricSettings, hit_condition_sql
 from app.modules.negotiation.models import Negotiation
 from app.modules.product.goods_models import GoodsMain, GoodsStyleItem
 from app.modules.product.models import Sku, Style
@@ -80,7 +81,6 @@ class PromotionListFilters:
     is_active: bool | None = True
     only_dual_platform: bool = False
     is_hit: bool | None = None
-    hit_threshold: int = 1000
     # 「发货」筛选（流程线 7.3）：待发货 / 待打单 / 已发货 / none（历史单 = NULL）。
     # 待发货只算阶段「待推送仓库」那批：被取消的待发货单归「已完结 · 不合作」，不在待推送队列里
     ship_status: str | None = None
@@ -908,12 +908,14 @@ class PromotionRepository:
         today: date,
         urge_threshold_days: int,
         important_threshold_days: int,
+        metric_settings: PlatformMetricSettings,
     ) -> tuple[list[PromotionListRow], int]:
         """列表查询，CTE 注入 ``urge_status`` / ``dual_platform`` / ``stage`` 计算列。
 
         关键点（FB8）：
         - ``today`` 由 service 层 ``get_today()`` 注入；SQL 不用 ``CURRENT_DATE``
         - ``urge_threshold_days`` / ``important_threshold_days`` 由 service 注入
+        - ``metric_settings``：租户的平台指标，``is_hit`` 筛选按平台阈值判（7e R7）
 
         Returns:
             ``(rows, total)`` — rows 含 promotion + urge_status + dual_platform。
@@ -999,12 +1001,11 @@ class PromotionRepository:
             params["sched_to"] = filters.scheduled_publish_date_to
         if filters.only_dual_platform:
             clauses.append("dual_platform_calc = true")
-        if filters.is_hit is True:
-            clauses.append("(like_count IS NOT NULL AND like_count >= :hit_th)")
-            params["hit_th"] = filters.hit_threshold
-        elif filters.is_hit is False:
-            clauses.append("(like_count IS NULL OR like_count < :hit_th)")
-            params["hit_th"] = filters.hit_threshold
+        if filters.is_hit is not None:
+            # 与行上的 is_hit（calculate_is_hit）同口径：原始点赞 ≥ 该平台阈值；点赞为空算非爆文
+            hit_sql = hit_condition_sql("like_count", "platform")
+            clauses.append(hit_sql if filters.is_hit else f"NOT {hit_sql}")
+            params["hit_th"] = metric_settings.sql_params()["hit_th"]
         if filters.keyword:
             # 前三列命中 GIN trgm 索引（idx_promotion_internal_code_trgm 等）。
             # 商品简称 / 全称 / 编码来自 LEFT JOIN 的 goods_main（7a-8）：界面上不再显示

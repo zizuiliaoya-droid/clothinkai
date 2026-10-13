@@ -15,7 +15,6 @@ from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal
 
 from app.modules.metric_config.settings import PlatformMetricSettings
-from app.modules.promotion.legacy_settings import HIT_THRESHOLD_LIKE_COUNT
 
 
 def calculate_effective_like_count(
@@ -44,19 +43,26 @@ def calculate_effective_like_count(
 
 def calculate_is_hit(
     *,
+    platform: str,
     like_count: int | None,
-    threshold: int = HIT_THRESHOLD_LIKE_COUNT,
+    settings: PlatformMetricSettings,
 ) -> bool:
     """BR-U04-32: 爆文判定。
 
-    使用**原始** like_count 与阈值比较（与 effective_like_count 不同）。
-    阈值调整后实时按新阈值判定。
+    使用**原始** like_count 与该平台的阈值比较（与 effective_like_count 不同）。
+    阈值读租户的平台指标配置（默认抖音 10000、其余 1000；5 个平台之外按 1000），
+    与 SQL 侧 ``hit_condition_sql`` 同口径。
+
+    Args:
+        platform: 平台名。
+        like_count: 原始点赞数；None 表示未采集，不算爆文。
+        settings: 租户的平台指标（``PlatformMetricSettingService.get_settings``），不给默认值。
 
     None / 0 → False。
     """
     if like_count is None:
         return False
-    return like_count >= threshold
+    return like_count >= settings.hit_threshold(platform)
 
 
 def calculate_cpl(

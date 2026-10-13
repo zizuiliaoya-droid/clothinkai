@@ -64,7 +64,6 @@ from app.modules.promotion.exceptions import (
     StateTransitionConflictError,
 )
 from app.modules.promotion.flow_matrix import PROMOTION_MATRIX
-from app.modules.promotion.legacy_settings import HIT_THRESHOLD_LIKE_COUNT
 from app.modules.promotion.models import (
     Promotion,
 )
@@ -667,12 +666,15 @@ class PromotionService(
             is_active=filters.is_active,
             only_dual_platform=filters.only_dual_platform,
             is_hit=filters.is_hit,
-            hit_threshold=HIT_THRESHOLD_LIKE_COUNT,
             ship_status=filters.ship_status,
         )
 
         # 阈值读租户配置（后台可改），整页共用一次查询
         thresholds = await UrgeService(self._session).get_urge_thresholds(user.tenant_id)
+        # 平台指标（折算系数、爆文阈值）整页读一次（7e R7）：is_hit 筛选与行上的 is_hit 同一份
+        metric_settings = await PlatformMetricSettingService(self._session).get_settings(
+            user.tenant_id
+        )
         rows, total = await self._repo.list_with_cte(
             tenant_id=user.tenant_id,
             filters=repo_filters,
@@ -681,13 +683,10 @@ class PromotionService(
             today=today,
             urge_threshold_days=thresholds.urge_days,
             important_threshold_days=thresholds.important_days,
+            metric_settings=metric_settings,
         )
 
         promotion_search_results_count.observe(total)
-        # 平台指标（折算系数）整页读一次（7e R7）
-        metric_settings = await PlatformMetricSettingService(self._session).get_settings(
-            user.tenant_id
-        )
 
         attachment_refs = await self._repo.get_payment_attachment_refs(
             tenant_id=user.tenant_id,

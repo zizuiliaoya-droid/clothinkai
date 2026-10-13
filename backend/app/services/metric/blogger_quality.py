@@ -6,7 +6,7 @@
 - 显式 ``WHERE tenant_id = :tid``（测试引擎 bypass 角色 RLS OFF，全局聚合必须显式过滤）。
 - ``LIMIT QUALITY_AGG_LIMIT`` 截断超大历史，保证 ≤200ms。
 - CPL 折算复用 U04 ``metrics_calculator``（平台系数读租户配置 ``settings``，调用方按租户读一次
-  传进来，不给默认值）；hit 用原始 like_count 与阈值比较。
+  传进来，不给默认值）；hit 用原始 like_count 与同一份配置里该平台的阈值比较。
 - safe_div（复用 U08 services/metric/common）分母 0/None→None。
 """
 
@@ -26,7 +26,6 @@ from app.modules.blogger.tag_config import (
     TAG_HIGH_VALUE,
 )
 from app.modules.metric_config.settings import PlatformMetricSettings
-from app.modules.promotion.legacy_settings import HIT_THRESHOLD_LIKE_COUNT
 from app.modules.promotion.metrics_calculator import (
     calculate_cpl,
     calculate_effective_like_count,
@@ -85,9 +84,13 @@ async def avg_cpl_for_blogger(
 
 
 async def hit_rate_for_blogger(
-    blogger_id: UUID, session: AsyncSession, tenant_id: UUID
+    blogger_id: UUID,
+    session: AsyncSession,
+    tenant_id: UUID,
+    *,
+    settings: PlatformMetricSettings,
 ) -> Decimal | None:
-    """该博主历史推广的爆文率（is_hit 数 / 总数）。
+    """该博主历史推广的爆文率（is_hit 数 / 总数）。爆文按平台阈值判（``settings``）。
 
     无推广样本 → None。
     """
@@ -97,7 +100,7 @@ async def hit_rate_for_blogger(
     hit_count = sum(
         1
         for p in rows
-        if calculate_is_hit(like_count=p.like_count, threshold=HIT_THRESHOLD_LIKE_COUNT)
+        if calculate_is_hit(platform=p.platform, like_count=p.like_count, settings=settings)
     )
     return safe_div(hit_count, len(rows), quantize=Decimal("0.0001"))
 
@@ -114,7 +117,7 @@ async def compute_quality_tags(
     cpl = await avg_cpl_for_blogger(blogger_id, session, tenant_id, settings=settings)
     if cpl is not None and cpl <= HIGH_CPL_THRESHOLD:
         tags.append(TAG_HIGH_VALUE)
-    hit = await hit_rate_for_blogger(blogger_id, session, tenant_id)
+    hit = await hit_rate_for_blogger(blogger_id, session, tenant_id, settings=settings)
     if hit is not None and hit >= HIT_RATE_THRESHOLD:
         tags.append(TAG_BESTSELLER)
     return tags

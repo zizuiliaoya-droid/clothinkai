@@ -16,6 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.tenancy import tenant_id_ctx
 from app.modules.blogger.service import BloggerService
 from app.modules.blogger.tag_config import TAG_BESTSELLER, TAG_HIGH_VALUE
+from app.modules.metric_config.models import PromotionPlatformSetting
+from app.modules.metric_config.service import PlatformMetricSettingService
 from app.modules.metric_config.settings import PlatformMetricSettings
 from app.services.metric.blogger_quality import (
     avg_cpl_for_blogger,
@@ -103,8 +105,45 @@ class TestBloggerQualityAggregation:
             # 2 篇爆文(>=1000) + 2 篇普通 → hit_rate=0.5
             for lc in (2000, 1500, 100, 50):
                 await promotion_factory.promotion(style=style, blogger=blogger, like_count=lc)
-            rate = await hit_rate_for_blogger(blogger.id, session, tenant_a.id)
+            rate = await hit_rate_for_blogger(blogger.id, session, tenant_a.id, settings=_DEFAULTS)
             assert rate == Decimal("0.5000")
+        finally:
+            tenant_id_ctx.reset(token)
+
+    async def test_bestseller_uses_platform_threshold(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        """7e R7：「带货型」的爆文按平台阈值判。抖音 1500 赞：默认阈值 10000 不算，配 1000 后算。"""
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            style = await product_factory.style()
+            blogger = await blogger_factory.blogger(follower_count=50_000)
+            await promotion_factory.promotion(
+                style=style, blogger=blogger, like_count=1500, platform="抖音"
+            )
+            svc = PlatformMetricSettingService(session)
+            before = await compute_quality_tags(
+                blogger.id, session, tenant_a.id, settings=await svc.get_settings(tenant_a.id)
+            )
+            session.add(
+                PromotionPlatformSetting(
+                    tenant_id=tenant_a.id,
+                    platform="抖音",
+                    like_coefficient=Decimal("0.100"),
+                    hit_threshold=1000,
+                )
+            )
+            await session.flush()
+            after = await compute_quality_tags(
+                blogger.id, session, tenant_a.id, settings=await svc.get_settings(tenant_a.id)
+            )
+            assert TAG_BESTSELLER not in before
+            assert TAG_BESTSELLER in after
         finally:
             tenant_id_ctx.reset(token)
 
@@ -117,7 +156,10 @@ class TestBloggerQualityAggregation:
         token = tenant_id_ctx.set(tenant_a.id)
         try:
             blogger = await blogger_factory.blogger(follower_count=50_000)
-            assert await hit_rate_for_blogger(blogger.id, session, tenant_a.id) is None
+            assert (
+                await hit_rate_for_blogger(blogger.id, session, tenant_a.id, settings=_DEFAULTS)
+                is None
+            )
         finally:
             tenant_id_ctx.reset(token)
 
