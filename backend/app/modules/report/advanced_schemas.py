@@ -211,6 +211,14 @@ class StoreDailyManualUpdate(BaseModel):
     refund_only_amount: Decimal | None = None
     remark: str | None = Field(default=None, max_length=200)
 
+    @field_validator("remark", mode="before")
+    @classmethod
+    def _blank_remark_is_none(cls, v: object) -> object:
+        """空串 / 纯空白备注 = 清空（R4 评审 r2 L1）：没有行时走「只传 null 不插行」的短路。"""
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+
     # 校验一律抛 PydanticCustomError：Field(ge=...) 把 Decimal、ValueError 把异常对象放进错误的 ctx，
     # 422 响应序列化时变 500
     @field_validator("ad_spend_total", "zhitongche_spend", "yinli_spend", "refund_only_amount")

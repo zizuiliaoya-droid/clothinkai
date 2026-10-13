@@ -4,6 +4,8 @@
 // 比率都在后端分桶求和后现算，分母为 0 / 负时为 null，这里显示「—」。「其中直播」两列只展示。
 // 下钻（S9）：月行 → 周表、周行 → 日表，带行上实际起止（storeDrillHref）。
 // 日表能写时（S8）手填三项与仅退款在编辑行里换成金额框，末尾多一列「操作」（窄屏不固定）。
+// 指标列的键序与列名 = 后端 store_columns.snapshot.json（导出类型 store 按它写，7e R6 S11），
+// storeColumns.test.ts 守两边一致：改列先改后端常量、重写快照，再改这里。
 import type { ColumnsType } from "antd/es/table";
 import { Link } from "react-router-dom";
 import { HeaderHint } from "../components/HeaderHint";

@@ -275,7 +275,8 @@ export async function getDrillPromotions(
   return resp.data;
 }
 
-export type ReportExportType = "work-progress" | "store-daily" | "production";
+/** store = 店铺日 / 周 / 月三页（列跟页面走，7e R6）；store-daily 是旧的 7 列导出，保留不变。 */
+export type ReportExportType = "work-progress" | "store-daily" | "store" | "production";
 
 export interface ReportExportParams {
   preset?: string;

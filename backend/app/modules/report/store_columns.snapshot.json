@@ -1,0 +1,94 @@
+[
+  {
+    "key": "visitors",
+    "header": "商品访客数合计"
+  },
+  {
+    "key": "pay_amount",
+    "header": "支付金额"
+  },
+  {
+    "key": "pay_orders",
+    "header": "支付件数"
+  },
+  {
+    "key": "refund_amount",
+    "header": "退款金额"
+  },
+  {
+    "key": "brushing_amount",
+    "header": "刷单本金"
+  },
+  {
+    "key": "actual_sales",
+    "header": "实际销售额"
+  },
+  {
+    "key": "ad_spend",
+    "header": "万相台"
+  },
+  {
+    "key": "ad_spend_total",
+    "header": "全站推消耗"
+  },
+  {
+    "key": "zhitongche_spend",
+    "header": "直通车消耗"
+  },
+  {
+    "key": "yinli_spend",
+    "header": "引力魔方消耗"
+  },
+  {
+    "key": "internal_spend",
+    "header": "站内推广费"
+  },
+  {
+    "key": "promo_cost",
+    "header": "站外推广成本"
+  },
+  {
+    "key": "total_spend",
+    "header": "推广总额"
+  },
+  {
+    "key": "total_spend_ratio",
+    "header": "推广总占比"
+  },
+  {
+    "key": "internal_ratio",
+    "header": "站内占比"
+  },
+  {
+    "key": "external_ratio",
+    "header": "站外占比"
+  },
+  {
+    "key": "net_spend_ratio",
+    "header": "净推广占比"
+  },
+  {
+    "key": "net_roi",
+    "header": "净投产"
+  },
+  {
+    "key": "roi_ex_brushing",
+    "header": "投产（扣除刷单）"
+  },
+  {
+    "key": "refund_only_amount",
+    "header": "仅退款"
+  },
+  {
+    "key": "refund_only_rate",
+    "header": "仅退款率"
+  },
+  {
+    "key": "live_pay_amount",
+    "header": "其中直播支付"
+  },
+  {
+    "key": "live_ad_spend",
+    "header": "其中直播站内花费"
+  }
+]

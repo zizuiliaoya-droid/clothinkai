@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import io
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 from uuid import uuid4
@@ -1024,7 +1024,7 @@ def _export(kind: str) -> str:
 class TestExport:
     @pytest.mark.parametrize(
         ("kind", "status"),
-        [("work-progress", 200), ("production", 403), ("store-daily", 403)],
+        [("work-progress", 200), ("production", 403), ("store-daily", 403), ("store", 403)],
     )
     async def test_finance_by_report_type(
         self, session: AsyncSession, flow_users: Any, kind: str, status: int
@@ -1094,7 +1094,7 @@ class TestExport:
         cells = {c for s in bare.values() for r in s for c in r}
         assert goods.goods_code not in cells
 
-    @pytest.mark.parametrize("kind", ["work-progress", "production", "store-daily"])
+    @pytest.mark.parametrize("kind", ["work-progress", "production", "store-daily", "store"])
     async def test_operations_all_types(
         self, session: AsyncSession, flow_users: Any, kind: str
     ) -> None:
@@ -1109,8 +1109,9 @@ class TestExport:
         assert before.json()["details"]["required_scope"] == "report.production"
         await _override(session, fin, "report.production:read", "grant")
         assert (await _call(session, fin, "GET", _export("production"))).status_code == 200
-        store = await _call(session, fin, "GET", _export("store-daily"))
-        assert store.json()["details"]["required_scope"] == "report.store_daily"
+        for kind in ("store-daily", "store"):
+            store = await _call(session, fin, "GET", _export(kind))
+            assert store.json()["details"]["required_scope"] == "report.store_daily", kind
 
     async def test_invalid_type_still_400(self, session: AsyncSession, flow_users: Any) -> None:
         """类型先校验：不认识的类型照旧 400，不因为没有对应读权限变成 403。"""
@@ -1144,7 +1145,7 @@ class TestExport:
 
 
 _CAPS = "/api/reports/capabilities"
-_ALL_EXPORTS = ["work-progress", "production", "store-daily"]
+_ALL_EXPORTS = ["work-progress", "production", "store-daily", "store"]
 
 # 6 个真实角色逐字段期望（报表视图设计第 4 节「能力端点」）
 _CAPS_EXPECTED: dict[str, dict[str, Any]] = {
@@ -1666,6 +1667,39 @@ class TestStoreDailyPut:
             session, flow_users.operations, "PUT", f"{_PUT_STORE}/{day or _M_LO}", body
         )
         assert (resp.status_code, resp.json()["code"]) == (422, code), resp.text
+
+    @pytest.mark.parametrize("blank", ["", "   ", "\t \n"])
+    async def test_blank_remark_is_null(
+        self, session: AsyncSession, flow_users: Any, blank: str
+    ) -> None:
+        """空串 / 纯空白备注归成 null（R4 评审 r2 L1）：没有行时不插空行，有行时清空备注。"""
+        ops = flow_users.operations
+        day = date(2021, 3, 3)
+        count_sql = text(
+            "SELECT count(*) FROM store_daily "
+            "WHERE tenant_id = CAST(:t AS uuid) AND date = CAST(:d AS date)"
+        )
+        params = {"t": str(flow_users.tenant.id), "d": day}
+        assert (await session.execute(count_sql, params)).scalar_one() == 0
+        missing = await _call(session, ops, "PUT", f"{_PUT_STORE}/{day}", {"remark": blank})
+        assert missing.status_code == 200, missing.text
+        assert missing.json() == {"ok": True, "date": str(day), **_MANUAL_NONE}
+        # 没有行、只传了空备注：不插金额全空的行（这天不进日期并集）
+        assert (await session.execute(count_sql, params)).scalar_one() == 0
+
+        first = await _call(session, ops, "PUT", f"{_PUT_STORE}/{day}", {"remark": "首录"})
+        assert first.json()["remark"] == "首录"
+        cleared = await _call(session, ops, "PUT", f"{_PUT_STORE}/{day}", {"remark": blank})
+        assert cleared.status_code == 200, cleared.text
+        assert cleared.json()["remark"] is None
+        stored = await session.execute(
+            text(
+                "SELECT remark FROM store_daily "
+                "WHERE tenant_id = CAST(:t AS uuid) AND date = CAST(:d AS date)"
+            ),
+            params,
+        )
+        assert stored.scalar_one() is None
 
     async def test_pr_manager_forbidden(self, session: AsyncSession, flow_users: Any) -> None:
         """主管只读：PUT 403。"""

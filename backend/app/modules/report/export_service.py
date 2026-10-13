@@ -7,7 +7,7 @@ import sys
 from collections.abc import Sequence
 from datetime import date
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 from fastapi.responses import StreamingResponse
@@ -28,6 +28,12 @@ from app.modules.report.production_columns import (
     export_header,
 )
 from app.modules.report.production_service import ProductionService
+from app.modules.report.store_columns import (
+    STORE_COLUMNS,
+    STORE_PERIOD_HEADERS,
+    StoreExportGranularity,
+    store_period_cells,
+)
 from app.modules.report.store_daily_service import StoreDailyService
 from app.modules.report.work_progress_columns import (
     GOODS_HEADERS,
@@ -48,9 +54,12 @@ _READ_PERMISSION: dict[str, tuple[str, str]] = {
     "work-progress": ("report.work_progress", "read"),
     "production": ("report.production", "read"),
     "store-daily": ("report.store_daily", "read"),
+    # 店铺日 / 周 / 月三页（7e R6 S11）：列跟页面走；旧 store-daily 的 7 列结构不变
+    "store": ("report.store_daily", "read"),
 }
 _REPORT_TYPES = set(_READ_PERMISSION)
 _GRANULARITIES = {"day", "week", "month", "year"}
+_STORE_GRANULARITIES = set(STORE_PERIOD_HEADERS)
 
 
 def exportable_report_types(perms: EffectivePermissions) -> list[str]:
@@ -138,8 +147,12 @@ class ReportExportService:
                 f"缺少权限 {scope}:{action}",
                 details={"required_scope": scope, "required_action": action},
             )
-        if granularity not in _GRANULARITIES:
+        if granularity not in _GRANULARITIES or (
+            report_type == "store" and granularity not in _STORE_GRANULARITIES
+        ):
             raise ReportExportTypeInvalidError(f"不支持的时间粒度: {granularity}")
+        # 店铺三页的文件名 / sheet 名带粒度：store-day / store-week / store-month
+        name = f"store-{granularity}" if report_type == "store" else report_type
         # (sheet 名, 表头, 行)：工作进度三个 sheet（7e R5），其他类型一个、以类型命名
         sheets: list[tuple[str, Sequence[str], list[list[Any]]]]
         if report_type == "work-progress":
@@ -156,7 +169,7 @@ class ReportExportService:
                 granularity=granularity,
                 field_ctx=field_ctx,
             )
-            sheets = [(report_type, headers, rows)]
+            sheets = [(name, headers, rows)]
         wb = Workbook(write_only=True)
         for title, sheet_headers, sheet_rows in sheets:
             ws = wb.create_sheet(title)
@@ -167,7 +180,7 @@ class ReportExportService:
         wb.save(buf)
         buf.seek(0)
         report_export_total.labels(report_type=report_type, result="success").inc()
-        fname = f"{report_type}_{time_range[0]}_{time_range[1]}.xlsx"
+        fname = f"{name}_{time_range[0]}_{time_range[1]}.xlsx"
         return StreamingResponse(
             buf,
             media_type=_XLSX_MEDIA,
@@ -228,6 +241,29 @@ class ReportExportService:
                 for row in source_rows
             ]
             return [*_STORE_HEADERS, *extra_keys], rows
+
+        if report_type == "store":
+            # 店铺日 / 周 / 月三页（7e R6 S11）：行 = 页面那份 get_store_report（按日期升序），
+            # 列 = 共用列定义；周 / 月写行上实际起止（桶 ∩ 请求区间），extra 排最后
+            store_granularity = cast(StoreExportGranularity, granularity)
+            store_report = await StoreDailyService(self._s).get_store_report(
+                tenant_id, time_range, store_granularity
+            )
+            extra_keys = sorted({key for item in store_report.items for key in item.extra})
+            headers = [
+                *STORE_PERIOD_HEADERS[store_granularity],
+                *(col.header for col in STORE_COLUMNS),
+                *extra_keys,
+            ]
+            rows = [
+                [
+                    *store_period_cells(item, store_granularity),
+                    *(getattr(item, col.key) for col in STORE_COLUMNS),
+                    *[_numeric_extra(item.extra.get(key)) for key in extra_keys],
+                ]
+                for item in store_report.items
+            ]
+            return headers, rows
 
         raise ReportExportTypeInvalidError(f"不支持的报表类型: {report_type}")
 
