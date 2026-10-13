@@ -26,7 +26,7 @@ from app.modules.report.advanced_schemas import (
     Recent7Range,
 )
 from app.modules.report.extra_metrics import aggregate_extra
-from app.modules.report.summary_read import SummaryReadRepository, record_source
+from app.modules.report.summary_read import Source, SummaryReadRepository, record_source
 from app.services.metric import style_roi
 
 _CENT = Decimal("0.01")
@@ -78,19 +78,28 @@ class ProductionService:
         seasons: Sequence[str] | None,
         use_summary: bool,
         metric_label: str,
+        source: Source | None = None,
     ) -> list[Mapping[str, Any]]:
-        """区间被汇总表完整覆盖就读汇总表，否则实时聚合（见 summary_read 模块说明）。"""
-        if use_summary:
-            fresh = await self._summary.freshness(tenant_id, date_from, date_to)
-            if fresh.source == "summary":
-                record_source(metric_label, "summary")
-                return await self._summary.production_by_goods(
-                    tenant_id=tenant_id,
-                    date_from=date_from,
-                    date_to=date_to,
-                    exclude_brushing=exclude_brushing,
-                    seasons=seasons,
-                )
+        """区间被汇总表完整覆盖就读汇总表，否则实时聚合（见 summary_read 模块说明）。
+
+        ``source`` 给了就照它读、不再判（BI 整页只判一次，7e R6）；None 时 ``use_summary``
+        真才判，假就实时。
+        """
+        if source is None:
+            source = (
+                (await self._summary.freshness(tenant_id, date_from, date_to)).source
+                if use_summary
+                else "live"
+            )
+        if source == "summary":
+            record_source(metric_label, "summary")
+            return await self._summary.production_by_goods(
+                tenant_id=tenant_id,
+                date_from=date_from,
+                date_to=date_to,
+                exclude_brushing=exclude_brushing,
+                seasons=seasons,
+            )
         record_source(metric_label, "live")
         return await self._repo.aggregate_by_goods(
             tenant_id=tenant_id,
@@ -107,13 +116,17 @@ class ProductionService:
         *,
         exclude_brushing: bool,
         use_summary: bool,
+        source: Source | None = None,
+        label: str = "production",
     ) -> list[ProductionRow]:
         """按商品合计的投产行（``channel=None``、``link_count=0``，不带 extra）。
 
         给 BI 单品表、企微预警、AI 策略用：它们按 ``goods_id`` 挂数 / 去重，数字同 R2。
+        ``source`` 给了就照它读、不再判（BI 整页只判一次）；``label`` 是 ``record_source`` /
+        耗时的标签。
         """
         date_from, date_to = time_range
-        with report_query_duration_seconds.labels("production").time():
+        with report_query_duration_seconds.labels(label).time():
             rows = await self._goods_rows(
                 tenant_id,
                 date_from,
@@ -121,7 +134,8 @@ class ProductionService:
                 exclude_brushing=exclude_brushing,
                 seasons=None,
                 use_summary=use_summary,
-                metric_label="production",
+                metric_label=label,
+                source=source,
             )
         return [self._to_row(r, exclude_brushing) for r in _fold_channels(rows)]
 

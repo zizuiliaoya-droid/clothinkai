@@ -55,6 +55,8 @@ def _bucket_end(start: date, granularity: str) -> date:
         return start + timedelta(days=6)
     if granularity == "month":
         return start.replace(day=calendar.monthrange(start.year, start.month)[1])
+    if granularity == "year":
+        return start.replace(month=12, day=31)
     raise ValueError(f"不支持的时间粒度: {granularity}")
 
 
@@ -140,7 +142,8 @@ def bucket_store_rows(
     date_from: date,
     date_to: date,
 ) -> list[StoreReportRow]:
-    """日行 → 日 / 周 / 月行（按桶升序）。``granularity`` 只认 day / week / month。
+    """日行 → 日 / 周 / 月 / 年行（按桶升序）。``granularity`` 只认 day / week / month / year
+    （year 只给 BI 趋势用；店铺三页的接口只收 day / week / month）。
 
     行上 ``date_from`` / ``date_to`` = 桶 ∩ ``[date_from, date_to]``；``extra`` 留空，由调用方填。
     """
@@ -155,4 +158,16 @@ def bucket_store_rows(
     ]
 
 
-__all__ = ["bucket_store_rows"]
+def total_store_row(
+    day_rows: Iterable[Mapping[str, Any]], date_from: date, date_to: date
+) -> StoreReportRow:
+    """整个区间合成一行（BI 店铺 KPI 卡，7e R6）：同一个 ``_Bucket``，公式与分桶一致。
+    没有日行也给一行（金额 0、比率 None）；行上是请求起止。
+    """
+    bucket = _Bucket()
+    for row in day_rows:
+        bucket.add_day(row)
+    return bucket.to_row(date_from, date_to)
+
+
+__all__ = ["bucket_store_rows", "total_store_row"]

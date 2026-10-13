@@ -26,7 +26,7 @@ from app.modules.report.drill_service import validate_seasons
 from app.modules.report.exceptions import ReportInvalidTimeRangeError
 from app.modules.report.field_mask import aggregate_promo_amounts_visible
 from app.modules.report.pr_scope import PrScope
-from app.modules.report.summary_read import SummaryReadRepository, record_source
+from app.modules.report.summary_read import Source, SummaryReadRepository, record_source
 from app.modules.report.work_progress_rows import (
     goods_sort_key,
     progress_metrics,
@@ -65,6 +65,8 @@ class WorkProgressService:
         seasons: Sequence[str] | None,
         scope: PrScope,
         field_ctx: FieldPermissionContext,
+        source: Source | None = None,
+        label: str = "work_progress",
     ) -> list[PrWorkProgress]:
         """按区间 × PR 聚合。区间每天都有覆盖才读汇总表，否则实时。
 
@@ -75,13 +77,16 @@ class WorkProgressService:
         ≤ 20 个、每个 ≤ 64 字，违者 422。
         ``field_ctx`` 给 F3 聚合金额（金额列与金额派生的比率）。
         三个关键字都不给默认值：漏传直接报错，不悄悄放成「全部可见」或「不筛季节」。
+        ``source`` 给了就照它读、不再判（BI 整页只判一次，7e R6）；None = 自己判。
+        ``label`` 是 ``record_source`` / 耗时的标签。
         """
         validate_seasons(seasons)
-        fresh = await self._summary.freshness(tenant_id, date_from, date_to)
+        if source is None:
+            source = (await self._summary.freshness(tenant_id, date_from, date_to)).source
         pr_id = scope.as_param()
-        with report_query_duration_seconds.labels("work_progress").time():
-            if fresh.source == "summary":
-                record_source("work_progress", "summary")
+        with report_query_duration_seconds.labels(label).time():
+            if source == "summary":
+                record_source(label, "summary")
                 rows = await self._summary.work_progress_by_pr(
                     tenant_id=tenant_id,
                     date_from=date_from,
@@ -90,7 +95,7 @@ class WorkProgressService:
                     pr_id=pr_id,
                 )
             else:
-                record_source("work_progress", "live")
+                record_source(label, "live")
                 rows = await self._repo.aggregate_by_pr(
                     tenant_id=tenant_id,
                     date_from=date_from,

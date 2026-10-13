@@ -458,6 +458,30 @@ class TargetPlanningRepository:
             (await self._s.execute(sql, {"tenant_id": tenant_id, "month": month})).mappings().all()
         )
 
+    async def targets_by_pr(
+        self, *, tenant_id: UUID, date_from: date, date_to: date
+    ) -> dict[UUID, int]:
+        """区间碰到的每个自然月的目标篇数整月相加，按 PR（BI 推广工作量 / 个人版，7e R6）。
+
+        口径同旧 ``BiRepository.aggregate_workload`` 的 targets CTE：月目标不按天折算。
+        没有目标的 PR 不出现在结果里（调用方按 0 处理）。
+        """
+        sql = text(
+            """
+            SELECT t.pr_id, COALESCE(SUM(t.min_target), 0) AS target_count
+            FROM target_planning t
+            WHERE t.tenant_id = :tenant_id
+              AND t.period_month BETWEEN
+                  to_char(CAST(:date_from AS date), 'YYYY-MM') AND
+                  to_char(CAST(:date_to AS date), 'YYYY-MM')
+            GROUP BY t.pr_id
+            """
+        )
+        rows = await self._s.execute(
+            sql, {"tenant_id": tenant_id, "date_from": date_from, "date_to": date_to}
+        )
+        return {r.pr_id: int(r.target_count) for r in rows}
+
 
 class StoreDailyRepository:
     def __init__(self, session: AsyncSession) -> None:
