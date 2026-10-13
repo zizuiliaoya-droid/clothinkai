@@ -91,7 +91,11 @@ from app.modules.promotion.schemas import (
     PromotionShipPushRequest,
     PromotionUpdate,
 )
-from app.modules.promotion.stage_calculator import compute_stage
+from app.modules.promotion.stage_calculator import (
+    compute_badges,
+    compute_stage,
+    metrics_available_from,
+)
 from app.modules.promotion.urge_calculator import (
     UrgeThresholds,
     calculate_urge_status,
@@ -912,6 +916,17 @@ class PromotionServiceBase:
             attachment_refs=attachment_refs,
         )
         ui = ui_for(actor, doc).to_dict(view=view)
+        badges = compute_badges(
+            stage=stage,
+            publish_status=promotion.publish_status,
+            settlement_status=promotion.settlement_status,
+            retro_status=promotion.retro_status,
+            metrics_recorded_at=promotion.metrics_recorded_at,
+            actual_publish_date=promotion.actual_publish_date,
+            quote_amount=promotion.quote_amount,
+            has_payment_qr=promotion.payment_qr_attachment_id is not None,
+            today=today,
+        )
 
         pushed_by = promotion.ship_pushed_by
         if pushed_by is not None and user_names is None:
@@ -973,6 +988,9 @@ class PromotionServiceBase:
             review_reason_category=promotion.review_reason_category,
             resubmit_note=promotion.resubmit_note,
             resubmitted_at=promotion.resubmitted_at,
+            settled_at=promotion.settled_at,
+            metrics_available_from=metrics_available_from(promotion.actual_publish_date),
+            badges=badges,
             is_active=promotion.is_active,
             created_at=promotion.created_at,
             updated_at=promotion.updated_at,

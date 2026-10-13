@@ -649,6 +649,7 @@ async def promotion_factory(session: AsyncSession, tenant_a: Any) -> Any:
                     "resubmit_note",
                     "resubmitted_at",
                     "brand_comment",
+                    "payment_qr",
                     # 流程线 M1（060）收件 / 发货
                     "ship_status",
                     "receiver_name",
@@ -790,6 +791,24 @@ async def promotion_factory(session: AsyncSession, tenant_a: Any) -> Any:
                         {"id": att_id, "t": t.id, "key": f"{t.id}/bc/{att_id}.png"},
                     )
                     p.brand_comment_attachment_id = att_id
+                    await session.flush()
+                # 流程线 PR-6：应付 > 0 审核通过要收款码（R2 ⑤）。payment_qr=True 同样直插 attachment 行
+                if kw.get("payment_qr"):
+                    qr_id = uuid4()
+                    await session.execute(
+                        sa_text(
+                            """
+                            INSERT INTO attachment
+                              (id, tenant_id, bucket, r2_key, purpose, filename,
+                               mime_type, size_bytes, status, created_at, updated_at)
+                            VALUES
+                              (:id, :t, 'private', :key, 'promotion_payment_qr',
+                               'qr.png', 'image/png', 128, 'ready', NOW(), NOW())
+                            """
+                        ),
+                        {"id": qr_id, "t": t.id, "key": f"{t.id}/qr/{qr_id}.png"},
+                    )
+                    p.payment_qr_attachment_id = qr_id
                     await session.flush()
                 return p
             finally:

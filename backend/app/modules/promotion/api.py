@@ -363,7 +363,8 @@ async def recall_failure(
 @router.post(
     "/promotions/{promotion_id}/review",
     response_model=PromotionResponse,
-    dependencies=[require_permission("promotion.review", "approve")],
+    # 独立一级域（流程线 4.3，默 6）：PR 的 promotion.*:* 命中不了，PR 完全没有审核权
+    dependencies=[require_permission("promotion_review", "approve")],
 )
 async def review_promotion(
     promotion_id: UUID,
@@ -371,17 +372,19 @@ async def review_promotion(
     user: CurrentActiveUser,
     service: PromotionServiceDep,
 ) -> PromotionResponse:
-    """EP05-S13 PR 主管审核（approve / reject）.
+    """EP05-S13 PR 主管审核（approve / reject），流程线 3.4 R2 ~ R4。
 
-    approve 后按合作模式分三个出口（PRD V1.4 模块二）：
+    approve 按应付分流（与合作模式无关）：
 
-    - 寄拍：必须已上传博主寄回衣服单号，否则 422；通过后到待财务付款
-    - 送拍：直接到待财务付款
-    - 置换：直接到已付款，不发 SettlementRequested（没有钱要付，不建结款单）
+    - 服务费 = 0：直接已结款（R3），写 ``settled_at``，不发 SettlementRequested、不建结款单
+    - 服务费 > 0：要收款码（缺 → 422 ``FLOW_GATE_MISSING``），发 SettlementRequested，
+      结款单直接建在待付款（R2）
+    - 已有导入的已付款结款单：推广单直接记已付款、不发事件；已有其他状态的结款单 → 409
+      ``SETTLEMENT_ALREADY_EXISTS``（R2 ⑥）
+    - 寄拍要有寄回单号（或召回成功且有召回寄回截图），缺 → 422 ``FLOW_GATE_MISSING``
 
-    驳回要同时给 review_reason 与 review_reason_category（三选一）；通过时不改这两列
-    （保留最近一次驳回，重提后通过仍看得到上一轮驳回原因，7a-4）。
-    禁止自审（reviewer != pr_id）。
+    响应带 ``review_outcome``。驳回要同时给 review_reason 与 review_reason_category（三选一）；
+    通过时不改这两列（保留最近一次驳回，7a-4）。禁止自审 → 403 ``SELF_REVIEW_FORBIDDEN``。
     """
     return await service.review(promotion_id, payload, user)
 

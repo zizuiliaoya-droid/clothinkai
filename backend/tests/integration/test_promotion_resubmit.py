@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -60,6 +61,10 @@ async def _make(
     blogger = await blogger_factory.blogger()
     kw.setdefault("publish_status", "已发布")
     kw.setdefault("settlement_status", "待核查")
+    # 流程线 PR-6：应付 > 0 审核通过要收款码；置换的服务费恒为 0（建单时压 0），按应付走 R3
+    kw.setdefault("payment_qr", True)
+    if kw.get("cooperation_mode") == "置换":
+        kw.setdefault("quote_amount", Decimal("0.00"))
     promotion = await promotion_factory.promotion(
         style=style,
         blogger=blogger,

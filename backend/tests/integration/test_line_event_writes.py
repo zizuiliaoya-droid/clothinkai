@@ -544,6 +544,7 @@ class TestReview:
             publish_status="已发布",
             settlement_status="待核查",
             cooperation_mode="送拍",
+            payment_qr=True,
         )
         line_id, pid = promo.line_id, promo.id
         await PromotionService(session).review(
@@ -587,10 +588,18 @@ class TestReview:
         await PromotionService(session).review(
             promo.id, PromotionReviewRequest(action=ReviewAction.APPROVE), flow_users.pr_manager
         )
-        (approved,) = await events_of(session, line_id=line_id)
+        # 应付 0 直接结清（R3）：review.approved 之后跟一条 promotion.settled（6.3）
+        approved, settled = await events_of(session, line_id=line_id)
         assert approved.event_type == _T.REVIEW_APPROVED.value
         assert approved.to_state == "已结款"
         assert approved.payload == {"destination": "已结款", "payable": "0.00"}
+        assert settled.event_type == _T.PROMOTION_SETTLED.value
+        assert (settled.from_state, settled.to_state, settled.attachment_id) == (
+            "待核查",
+            "已结款",
+            None,
+        )
+        assert settled.actor_id == flow_users.pr_manager.id
 
     async def test_reject_then_resubmit(
         self,

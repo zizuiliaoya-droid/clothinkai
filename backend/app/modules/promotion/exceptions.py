@@ -171,6 +171,13 @@ class SelfReviewForbiddenError(ValidationError):
     status_code = 403
 
 
+class SettlementAlreadyExistsError(DuplicateResourceError):
+    """R2 ⑥：审核通过时这张推广单已有结款单、且不是导入的已付款单（details 带结算单号与状态，管理员核对）。"""
+
+    code = "SETTLEMENT_ALREADY_EXISTS"
+    status_code = 409
+
+
 # ---------------------------------------------------------------------------
 # 复盘（PRD V1.4 改动 4）
 # ---------------------------------------------------------------------------
@@ -303,6 +310,7 @@ __all__ = [
     "ReviewReasonRequiredError",
     "SelfReviewForbiddenError",
     "SequenceOverflowError",
+    "SettlementAlreadyExistsError",
     "SettlementNotPaidError",
     "ShippedAtInFutureError",
     "SourceExtraKeyRetiredError",

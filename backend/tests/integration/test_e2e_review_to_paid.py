@@ -59,6 +59,8 @@ class TestE2EReviewToPaid:
                 publish_status="已发布",
                 settlement_status="待核查",
                 quote_amount=Decimal("500.00"),
+                # 应付 > 0 审核通过要收款码（流程线 R2 ⑤）
+                payment_qr=True,
             )
 
             # 1. U04 review approve → SettlementRequested → U05 创建 settlement

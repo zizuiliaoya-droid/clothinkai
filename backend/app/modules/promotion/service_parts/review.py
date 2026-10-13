@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -10,9 +11,10 @@ from app.core.metrics import (
     promotion_state_transitions_total,
 )
 from app.modules.auth.models import User
+from app.modules.flow.exceptions import FlowActionForbiddenError
 from app.modules.flow.line_events import LineEventRepository, LineEventType
+from app.modules.flow.matrix import ensure_gates, require
 from app.modules.promotion.enums import (
-    CooperationMode,
     PublishStatus,
     ReviewAction,
     SettlementStatus,
@@ -23,9 +25,9 @@ from app.modules.promotion.events import (
 from app.modules.promotion.exceptions import (
     PromotionNotFoundError,
     RejectReasonCategoryRequiredError,
-    ReturnWaybillRequiredError,
     ReviewReasonRequiredError,
     SelfReviewForbiddenError,
+    SettlementAlreadyExistsError,
     StateTransitionConflictError,
 )
 from app.modules.promotion.schemas import (
@@ -33,6 +35,7 @@ from app.modules.promotion.schemas import (
     PromotionResubmitRequest,
     PromotionReturnWaybillRequest,
     PromotionReviewRequest,
+    ReviewOutcome,
 )
 from app.modules.promotion.service_parts.base import (
     PromotionServiceBase,
@@ -42,6 +45,9 @@ from app.modules.promotion.service_parts.base import (
 from app.modules.promotion.state_machines import (
     SettlementStatusMachine,
 )
+
+# 结款单（finance）的「已付款」：R2 ⑥ 只认导入的已付款单（推广模块不 import finance）
+_SETTLEMENT_PAID = "已付款"
 
 
 class PromotionReviewMixin(PromotionServiceBase):
@@ -53,17 +59,34 @@ class PromotionReviewMixin(PromotionServiceBase):
         payload: PromotionReviewRequest,
         user: User,
     ) -> PromotionResponse:
-        """EP05-S13: PR 主管审核（approve / reject）.
+        """EP05-S13: PR 主管审核（approve / reject），流程线 3.4 R2 ~ R4。
 
-        approve 时同事务发 SettlementRequested 事件（FB1：required_handler）。
-        失败时 audit 脱敏 + 兜底（FB5）。
+        校验顺序：矩阵 require（状态机 → 审核权 → 不能审自己谈的单）→ 通过时 ★（寄回单号、收款码）
+        → 应付分流：应付 0 → 已结款（R3，写 ``settled_at``）；应付 > 0 → 待付款并同事务发
+        SettlementRequested（FB1：required_handler，结款单建在待付款）；已有导入的已付款结款单 →
+        已付款、不发事件；已有其他状态的结款单 → 409（R2 ⑥）。响应带 ``review_outcome``。
+        事件失败时 audit 脱敏 + 兜底（FB5）。
         review_reason / review_reason_category 只在 reject 时写，approve 不清（7a-4）。
         """
         promotion = await self._repo.get_by_id(promotion_id)
         if promotion is None:
             raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
 
-        # 自审禁止
+        # ① 状态机（只在待主管审核）② 审核权 ③ 审核人 ≠ 谈款人：矩阵 require（计划 D11）；
+        # ★ 缺项只卡通过，所以 gates=False，通过时再 ensure_gates
+        actor = await self._flow_actor(user)
+        doc = await self._promotion_doc(promotion)
+        try:
+            require(actor, doc, "review", gates=False)
+        except FlowActionForbiddenError as exc:
+            if exc.rule == "self_review":
+                raise SelfReviewForbiddenError(
+                    "不允许自审自己提交的推广",
+                    details={"promotion_id": str(promotion_id), "user_id": str(user.id)},
+                ) from exc
+            raise
+
+        # 自审还按负责 PR 判（R2 ③「≠ pr_id」；矩阵按谈款人，没有谈款才回落负责 PR）
         if promotion.pr_id is not None and promotion.pr_id == user.id:
             raise SelfReviewForbiddenError(
                 "不允许自审自己提交的推广",
@@ -80,29 +103,40 @@ class PromotionReviewMixin(PromotionServiceBase):
                 details={"publish_status": promotion.publish_status},
             )
 
-        is_barter = promotion.cooperation_mode == CooperationMode.BARTER.value
         reject_category: str | None = None
+        outcome: ReviewOutcome | None = None
         if payload.action == ReviewAction.APPROVE:
-            # 寄拍硬门槛：没有博主寄回衣服单号不许往财务走。
-            # PRD 原文「不上传单号财务看不到单据，禁止结款」，且明确要求后端校验。
-            if (
-                promotion.cooperation_mode == CooperationMode.CONSIGNMENT.value
-                and not (promotion.return_waybill or "").strip()
-            ):
-                raise ReturnWaybillRequiredError(
-                    "寄拍模式需要先上传博主寄回衣服单号才能通过审核",
-                    details={
-                        "promotion_id": str(promotion_id),
-                        "cooperation_mode": promotion.cooperation_mode,
-                    },
-                )
-            if is_barter:
-                # 置换没有博主服务费，审核通过即结清（R3 → 已结款），跳过待付款与财务付款
+            # ④ 寄拍要有寄回单号（或召回成功且有召回寄回截图）⑤ 应付 > 0 要有收款码 → 缺了 422 FLOW_GATE_MISSING
+            ensure_gates(actor, doc, "review")
+            # 应付分流（3.4）：审核时还没有结款单、追加项为 0，应付就是服务费，与合作模式无关
+            if (promotion.quote_amount or Decimal(0)) <= 0:
+                # R3：直接已结款，不发事件、不建结款单
                 to_state = SettlementStatus.SETTLED.value
                 action_name = "approve_no_payment"
+                outcome = "settled_directly"
             else:
-                to_state = SettlementStatus.PENDING_PAYMENT.value
-                action_name = "approve"
+                # ⑥ 已有结款单就不发事件（不让监听按幂等静默跳过）：导入的已付款单 → 推广单记已付款，其他 → 409
+                existing = await self._repo.settlement_brief(
+                    tenant_id=promotion.tenant_id, promotion_id=promotion_id
+                )
+                if existing is None:
+                    to_state = SettlementStatus.PENDING_PAYMENT.value
+                    action_name = "approve"
+                    outcome = "settlement_created"
+                elif existing.settlement_status == _SETTLEMENT_PAID:
+                    to_state = SettlementStatus.PAID.value
+                    action_name = "approve_imported_paid"
+                    outcome = "imported_settlement_paid"
+                else:
+                    raise SettlementAlreadyExistsError(
+                        "这张推广单已有结款单，请管理员核对",
+                        details={
+                            "promotion_id": str(promotion_id),
+                            "settlement_id": str(existing.settlement_id),
+                            "settlement_no": existing.settlement_no,
+                            "settlement_status": existing.settlement_status,
+                        },
+                    )
         else:  # REJECT
             if not payload.review_reason:
                 raise ReviewReasonRequiredError("驳回时 review_reason 必填")
@@ -132,6 +166,8 @@ class PromotionReviewMixin(PromotionServiceBase):
             # 从没驳回过的单这两列本来就是 NULL，通过时不受影响
             extra_fields["review_reason"] = payload.review_reason
             extra_fields["review_reason_category"] = reject_category
+        if to_state == SettlementStatus.SETTLED.value:
+            extra_fields["settled_at"] = now
         updated = await self._repo.update_state(
             promotion_id=promotion_id,
             tenant_id=user.tenant_id,
@@ -175,6 +211,17 @@ class PromotionReviewMixin(PromotionServiceBase):
             note=payload.review_reason if payload.action == ReviewAction.REJECT else None,
             payload=review_payload,
         )
+        if outcome == "settled_directly":
+            # R3 也算结款闭环（6.3 promotion.settled 的 R3 那条；没有聊天截图）
+            await LineEventRepository(self._session).append(
+                tenant_id=promotion.tenant_id,
+                line_id=promotion.line_id,
+                event_type=LineEventType.PROMOTION_SETTLED,
+                actor_id=user.id,
+                promotion_id=promotion_id,
+                from_state=SettlementStatus.PENDING_REVIEW.value,
+                to_state=to_state,
+            )
 
         await self._audit.log(
             action=f"promotion.review.{payload.action.value}",
@@ -189,9 +236,9 @@ class PromotionReviewMixin(PromotionServiceBase):
             user_id=user.id,
         )
 
-        # 审核通过且需要付款时才发强一致事件（FB1）。
-        # 置换直接到已结款，不建结款单 —— 发了 finance 会多出一堆金额为 0 的单子。
-        if payload.action == ReviewAction.APPROVE and not is_barter:
+        # 只有要新建结款单时才发强一致事件（FB1）。应付 0 直接已结款、已有导入的已付款结款单，
+        # 都不发 —— 前者发了 finance 会多出金额为 0 的单子，后者会被监听按幂等静默跳过
+        if outcome == "settlement_created":
             event = SettlementRequested(
                 event_id=uuid4(),
                 timestamp=now,
@@ -220,7 +267,10 @@ class PromotionReviewMixin(PromotionServiceBase):
                 raise
 
         await self._session.commit()
-        return await self._to_response(updated, user)
+        response = await self._to_response(updated, user)
+        if outcome is None:
+            return response
+        return response.model_copy(update={"review_outcome": outcome})
 
     async def resubmit(
         self,

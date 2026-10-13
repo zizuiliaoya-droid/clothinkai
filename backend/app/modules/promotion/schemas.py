@@ -488,6 +488,10 @@ class GoodsMemberResponse(BaseModel):
     """该成员款式主图的签名 URL（推广列表主图列并排显示）；没有图或签名失败为 null。"""
 
 
+ReviewOutcome = Literal["settlement_created", "settled_directly", "imported_settlement_paid"]
+"""审核通过的去向（3.4 R2 / R3 / R2 ⑥）。"""
+
+
 class PromotionResponse(BaseModel):
     """推广响应。
 
@@ -593,6 +597,17 @@ class PromotionResponse(BaseModel):
     resubmit_note: str | None = None
     """最近一次驳回后重新提交的说明（7a-4，只留最近一轮）。"""
     resubmitted_at: datetime | None = None
+    review_outcome: ReviewOutcome | None = None
+    """只在审核通过的响应里有（7.3）：``settlement_created`` 已生成结款单、``settled_directly`` 应付 0 直接结清、
+    ``imported_settlement_paid`` 已有导入的已付款结款单（R2 ⑥），前端按它出成功提示。"""
+
+    # 结款（流程线 PR-6）
+    settled_at: datetime | None = None
+    """记为已结款的时间（应付 0 审核通过，或上传结款聊天截图）；存量已结款不回填。"""
+    metrics_available_from: date | None = None
+    """7 天数据可以录的第一天（发布日 + 7）；没有发布日为 None。"""
+    badges: list[str] = Field(default_factory=list)
+    """行角标（3.8 / 7.3）：``stage_calculator.BADGES`` 里命中的，按那里的顺序。"""
 
     # 通用
     is_active: bool

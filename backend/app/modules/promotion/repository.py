@@ -162,6 +162,15 @@ class PromotionAttachmentRefs:
     """这张推广单结款单的状态（矩阵快照 ``PromotionDoc.settlement_status``）；没有结款单为 None。"""
 
 
+@dataclass(frozen=True)
+class PromotionSettlementBrief:
+    """推广单已有的结款单（R2 ⑥ 审核通过前查）。"""
+
+    settlement_id: UUID
+    settlement_no: str
+    settlement_status: str
+
+
 # ---------------------------------------------------------------------------
 # Repository
 # ---------------------------------------------------------------------------
@@ -251,6 +260,34 @@ class PromotionRepository:
             )
             for row in result.mappings().all()
         }
+
+    async def settlement_brief(
+        self, *, tenant_id: UUID, promotion_id: UUID
+    ) -> PromotionSettlementBrief | None:
+        """这张推广单已有的结款单（R2 ⑥）：结算单号与状态；没有为 None。
+        原生 SQL，不 import finance（推广模块不依赖结款模块）；一张推广单最多一张（``uq_settlement_promotion``）。
+        """
+        row = (
+            (
+                await self._session.execute(
+                    text(
+                        "SELECT id, settlement_no, settlement_status FROM settlement "
+                        "WHERE tenant_id = CAST(:tenant_id AS uuid) "
+                        "AND promotion_id = CAST(:promotion_id AS uuid)"
+                    ),
+                    {"tenant_id": tenant_id, "promotion_id": promotion_id},
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if row is None:
+            return None
+        return PromotionSettlementBrief(
+            settlement_id=row["id"],
+            settlement_no=row["settlement_no"],
+            settlement_status=row["settlement_status"],
+        )
 
     async def negotiator_ids(self, promotion_ids: Sequence[UUID]) -> dict[UUID, UUID]:
         """推广单 → 谈款的 PR（矩阵快照的 ``negotiator_id``）。没有谈款的单不在结果里；

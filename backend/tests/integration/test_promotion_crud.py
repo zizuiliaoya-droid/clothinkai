@@ -18,6 +18,7 @@ from sqlalchemy import text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.tenancy import tenant_id_ctx
+from app.modules.flow.exceptions import FlowGateMissingError
 from app.modules.promotion.enums import (
     CooperationMode,
     RejectReasonCategory,
@@ -29,7 +30,6 @@ from app.modules.promotion.exceptions import (
     InvalidGoodsReferenceError,
     InvalidStyleReferenceError,
     PromotionNotFoundError,
-    ReturnWaybillRequiredError,
 )
 from app.modules.promotion.schemas import (
     PromotionCreate,
@@ -1131,6 +1131,30 @@ async def _attach_brand_comment(
     await session.flush()
 
 
+async def _attach_payment_qr(session: AsyncSession, *, tenant_id: Any, promotion_id: Any) -> None:
+    """给推广单挂收款码（流程线 R2 ⑤：应付 > 0 审核通过要有）。直接插 attachment 行，经 ORM 绑上。"""
+    from uuid import uuid4 as _uuid4
+
+    from sqlalchemy import text as _text
+
+    from app.modules.promotion.models import Promotion
+
+    att_id = _uuid4()
+    await session.execute(
+        _text(
+            "INSERT INTO attachment (id, tenant_id, bucket, r2_key, purpose, filename, "
+            "mime_type, size_bytes, status, created_at, updated_at) "
+            "VALUES (:id, :t, 'private', :key, 'promotion_payment_qr', 'qr.png', "
+            "'image/png', 128, 'ready', NOW(), NOW())"
+        ),
+        {"id": att_id, "t": tenant_id, "key": f"{tenant_id}/qr/{att_id}.png"},
+    )
+    promotion = await session.get(Promotion, promotion_id)
+    assert promotion is not None
+    promotion.payment_qr_attachment_id = att_id
+    await session.flush()
+
+
 class TestThreeModeReviewFlow:
     """审核通过后的三个出口（PRD V1.4 模块二）。
 
@@ -1180,6 +1204,7 @@ class TestThreeModeReviewFlow:
             pr_user,
         )
         assert published.settlement_status == "待核查"
+        await _attach_payment_qr(session, tenant_id=tenant.id, promotion_id=created.id)
         return svc, published, reviewer
 
     async def test_consignment_blocked_without_return_waybill(
@@ -1204,12 +1229,14 @@ class TestThreeModeReviewFlow:
                 mode=CooperationMode.CONSIGNMENT,
                 code="FLOW_CONSIGN",
             )
-            with pytest.raises(ReturnWaybillRequiredError):
+            # 流程线 PR-6：寄回单号是推广审核的 ★ 卡点（与收款码一起报 FLOW_GATE_MISSING）
+            with pytest.raises(FlowGateMissingError) as exc:
                 await svc.review(
                     promo.id,
                     PromotionReviewRequest(action=ReviewAction.APPROVE),
                     reviewer,
                 )
+            assert [m["key"] for m in exc.value.details["missing"]] == ["return_waybill"]
             # 状态没有被推进
             still = await svc._repo.get_by_id(promo.id)
             assert still is not None
