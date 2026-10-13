@@ -102,6 +102,18 @@ class InvalidPaymentQrAttachmentError(ValidationError):
     code = "INVALID_PAYMENT_QR_ATTACHMENT"
 
 
+class PaymentQrLockedError(AppException):
+    """收款码锁定（流程线 7.3 收款码接口 ② ③，7.4 错误码表）。
+
+    ``details.lock``：``settlement_paying``（结款单待财务付款，码不对由财务驳回后重传）/
+    ``settled``（推广单已付款 / 已结款）/ ``settlement_created``（结款单已生成后不能删码，管理员也一样）。
+    持 ``*`` 的管理员不受前两种限制；召回中 / 寄回运费付款单已驳回的例外随 PR-8。
+    """
+
+    code = "PAYMENT_QR_LOCKED"
+    status_code = 409
+
+
 class PublishUrlRequiredError(ValidationError):
     """publish 时 publish_url 必填。"""
 
@@ -307,6 +319,7 @@ __all__ = [
     "InvalidBloggerReferenceError",
     "InvalidPaymentQrAttachmentError",
     "InvalidReceiverPhoneError",
+    "PaymentQrLockedError",
     "InvalidSkuReferenceError",
     "InvalidStyleReferenceError",
     "MetricsScreenshotRequiredError",

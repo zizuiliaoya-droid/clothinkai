@@ -761,9 +761,8 @@ class PromotionServiceBase:
             field: (getattr(promotion, field) if can_read_field("promotion", field, ctx) else None)
             for field in RECEIVER_FIELDS
         }
-        can_see_payment_attachments = bool(
-            ctx.role_codes & {"admin", "platform_admin", "pr", "pr_manager"}
-        )
+        # 收款码与结款凭证 / 结款聊天截图同一个开关：字段规则 promotion.payment_qr（4.6，含财务）
+        can_see_payment_attachments = can_read_field("promotion", "payment_qr", ctx)
 
         payment_qr_url: str | None = None
         settlement_proof_url: str | None = None

@@ -651,7 +651,7 @@ class PromotionResponse(BaseModel):
     # 明细应有的成员款式：套装 = 启用成员按 sort_order；单品或没有归属 = [style_id]
     goods_members: list[GoodsMemberResponse] = Field(default_factory=list)
 
-    # 结款附件（仅 PR/PR主管/管理员可见；warehouse 始终为 null）
+    # 结款附件（字段规则 promotion.payment_qr：PR / 主管 / 管理员 / 财务可见；运营、仓库为 null）
     payment_qr_attachment_id: UUID | None = None
     payment_qr_signed_url: str | None = None
     settlement_payment_proof_signed_url: str | None = None

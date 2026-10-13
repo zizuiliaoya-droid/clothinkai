@@ -777,7 +777,15 @@ class TestUploads:
         from app.core import attachment as att_mod
 
         monkeypatch.setattr(att_mod.attachment_service, "_client", _FakeS3(), raising=False)
-        promo = await _promo(flow_users, product_factory, blogger_factory, promotion_factory)
+        # 收款码发布后才能传（7.3 ①）：待主管审核的单
+        promo = await _promo(
+            flow_users,
+            product_factory,
+            blogger_factory,
+            promotion_factory,
+            publish_status="已发布",
+            settlement_status="待核查",
+        )
         line_id, pid = promo.line_id, promo.id
         svc = PromotionService(session)
         first = await svc.upload_payment_qr(
