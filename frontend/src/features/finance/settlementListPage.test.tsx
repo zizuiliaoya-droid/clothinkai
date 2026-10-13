@@ -240,6 +240,7 @@ describe("SettlementListPage 操作按行级 ui", () => {
   it("本页所有行都没有动作：整列「操作」不显示", async () => {
     renderPage([settlement({ ui: rowUi({}) }), settlement({ id: "s2", ui: null })]);
     expect(await screen.findAllByText("XHS-20261009-001")).toHaveLength(2);
+    expect(screen.queryByText("操作")).toBeNull();
     expect(screen.queryByRole("button", { name: /操作/ })).toBeNull();
   });
 
