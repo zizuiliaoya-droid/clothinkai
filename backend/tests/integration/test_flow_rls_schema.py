@@ -32,6 +32,8 @@ RLS_TABLES: tuple[str, ...] = (
     "negotiation_item",
     # PR-6（065）；PR-8 才用，空表也要有 RLS
     "return_freight_payment",
+    # 7e R7（066）
+    "promotion_platform_setting",
 )
 
 # 每个流程线 PR 新增 / 改授权的 scope 加到这里。
@@ -59,6 +61,9 @@ ROLE_SCOPES: tuple[str, ...] = (
     "promotion_create:write",
     # PR-6（065）；4 条字段 scope 只入册不绑角色，见 test_migration_065_state
     "promotion_review:approve",
+    # 7e R7（066）
+    "metric_config:read",
+    "metric_config:write",
 )
 
 _APP_ROLE = "clothing_app"
