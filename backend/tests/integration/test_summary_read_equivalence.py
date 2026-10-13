@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 import pytest
@@ -42,7 +42,8 @@ from app.modules.report.advanced_repository import (
     StoreDailyRepository,
     WorkProgressRepository,
 )
-from app.modules.report.advanced_schemas import ProductionRow, PrWorkProgress
+from app.modules.report.advanced_schemas import ProductionRow, PrWorkProgress, StoreReportRow
+from app.modules.report.domain import bucket_start
 from app.modules.report.pr_scope import PR_SCOPE_ALL, UNASSIGNED, PrScope, PrScopeKind
 from app.modules.report.production_service import ProductionService
 from app.modules.report.store_daily_service import StoreDailyService
@@ -450,6 +451,56 @@ class TestProductionReport:
             via_live = await svc.get_report(tenant_a.id, (M_LO, M_HI), use_summary=False)
             assert _dump(via_summary) == _dump(via_live)
             assert via_summary.previous
+        finally:
+            tenant_id_ctx.reset(tok)
+
+    async def test_summary_equals_live_with_margin(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        factory: Any,
+        recorder: _SourceRecorder,
+    ) -> None:
+        """毛利三列（``show_margin=True``，管理员）在汇总路径上也要算出来、与实时逐字等（R3 评审 L3）。
+
+        成本读取时现算、不进汇总表；防「只在实时分支挂毛利」——那样汇总路径三列全是 None。
+        """
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            seeded = await _seed(
+                session, tenant_a, product_factory, blogger_factory, promotion_factory, factory
+            )
+            # 两个商品的启用成员都补上成本：A 单品 30，套装 B 两款各 30 → 60
+            await session.execute(
+                update(GoodsStyleItem)
+                .where(
+                    GoodsStyleItem.goods_main_id.in_([seeded["goods_a"].id, seeded["goods_b"].id])
+                )
+                .values(single_goods_cost=Decimal("30.00"))
+            )
+            await session.commit()
+            await _refresh(session, tenant_a, M_LO, M_HI)
+            svc = ProductionService(session)
+            via_summary = await svc.get_report(tenant_a.id, (M_LO, M_HI), show_margin=True)
+            assert recorder.calls[0] == ("production", "summary")
+            via_live = await svc.get_report(
+                tenant_a.id, (M_LO, M_HI), use_summary=False, show_margin=True
+            )
+            assert ("production", "live") in recorder.calls
+            assert _dump(via_summary) == _dump(via_live)
+            # 场景有效性：两行毛利三列都有非零值（不是 None 和 None 比）
+            items = via_summary.items
+            assert len(items) == 2
+            for row in items:
+                assert row.goods_cost_total not in (None, Decimal("0"))
+                assert row.gross_profit not in (None, Decimal("0"))
+                assert row.gross_margin_rate not in (None, Decimal("0"))
+            by_goods = {r.goods_id: r for r in items}
+            assert by_goods[seeded["goods_a"].id].goods_cost_total == Decimal("300.00")
+            assert by_goods[seeded["goods_b"].id].goods_cost_total == Decimal("300.00")
         finally:
             tenant_id_ctx.reset(tok)
 
@@ -1991,6 +2042,326 @@ class TestStoreDaily:
             assert total("refund_amount") == bi["refund_amount"]
             assert total("ad_spend") == bi["internal_spend"]
             assert total("promo_cost") == bi["external_spend"]
+        finally:
+            tenant_id_ctx.reset(tok)
+
+
+# 店铺日 / 周 / 月（7e R4）
+_STORE_LABELS = {"day": "store_daily", "week": "store_weekly", "month": "store_monthly"}
+_Granularity = Literal["day", "week", "month"]
+_GRANULARITIES: tuple[_Granularity, ...] = ("day", "week", "month")
+# 桶行 = 桶内日行之和的列（手填三项与仅退款整桶没录为 None，单列在 _OPTIONAL_SUMS）
+_ADDITIVE = (
+    "visitors", "pay_amount", "pay_orders", "refund_amount", "brushing_amount", "actual_sales",
+    "ad_spend", "internal_spend", "promo_cost", "total_spend", "live_pay_amount",
+    "live_ad_spend", "refund_only_days", "day_count",
+)  # fmt: skip
+_OPTIONAL_SUMS = ("ad_spend_total", "zhitongche_spend", "yinli_spend", "refund_only_amount")
+_NON_METRIC = {"date_from", "date_to", "extra"}
+
+
+def _assert_buckets_are_day_sums(
+    buckets: list[StoreReportRow], days: list[StoreReportRow], granularity: str
+) -> None:
+    """周 / 月行的可加列 = 日接口同期日行之和；行上起止 = 桶内首末日所在的桶 ∩ 区间。"""
+    by_bucket: dict[date, list[StoreReportRow]] = {}
+    for d in days:
+        by_bucket.setdefault(bucket_start(d.date_from, granularity), []).append(d)
+    assert [bucket_start(b.date_from, granularity) for b in buckets] == sorted(by_bucket)
+    for b in buckets:
+        members = by_bucket[bucket_start(b.date_from, granularity)]
+        assert b.date_from <= members[0].date_from and members[-1].date_to <= b.date_to
+        for col in _ADDITIVE:
+            assert getattr(b, col) == sum(getattr(m, col) for m in members), (b.date_from, col)
+        for col in _OPTIONAL_SUMS:
+            values = [getattr(m, col) for m in members if getattr(m, col) is not None]
+            want = sum(values, Decimal("0")) if values else None
+            assert getattr(b, col) == want, (b.date_from, col)
+
+
+async def _store_days(
+    session: AsyncSession, tenant: Any, product_factory: Any, pays: dict[date, str]
+) -> None:
+    """只有千牛日报的日子（一个普通链接，访客 100、支付件数 5、退款 = 支付的 10%）。"""
+    style = await product_factory.style(style_code=f"SB{uuid4().hex[:6]}")
+    goods = await _goods(session, tenant, style, code=f"G_SB_{uuid4().hex[:5]}", season="春夏")
+    pp = await _pp(session, tenant, style, goods)
+    session.add_all(
+        [_qn(tenant, pp, day, pay, refund=f"{Decimal(pay) / 10:.2f}") for day, pay in pays.items()]
+    )
+    await session.flush()
+
+
+def _cross_month_first() -> date:
+    """一个不是周一的过去月初：它和前一天在同一个 ISO 周里，周表才有跨月的那周。"""
+    first = M_LO
+    while first.weekday() == 0:
+        first = (first - timedelta(days=1)).replace(day=1)
+    return first
+
+
+class TestStoreReport:
+    """店铺日 / 周 / 月三个新接口的 service（7e R4，设计 2.4 与第 8 节）。"""
+
+    @pytest.mark.parametrize("granularity", _GRANULARITIES)
+    async def test_summary_equals_live_one_source(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        recorder: _SourceRecorder,
+        monkeypatch: pytest.MonkeyPatch,
+        granularity: _Granularity,
+    ) -> None:
+        """① 两路逐字等、每个响应恰一条来源；场景有效性：每个新列至少一行非零。"""
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            seeded = await _seed_store_and_refresh(
+                session, tenant_a, product_factory, blogger_factory, promotion_factory
+            )
+            wed, hi = seeded["wed"], seeded["hi"]
+            # 引力魔方补在 W+7（第二周），第一周仍只有周三手填了直通车
+            await session.execute(
+                update(StoreDaily)
+                .where(
+                    StoreDaily.tenant_id == tenant_a.id, StoreDaily.date == wed + timedelta(days=7)
+                )
+                .values(yinli_spend=Decimal("7.00"))
+            )
+            await session.commit()
+            label = _STORE_LABELS[granularity]
+            svc = StoreDailyService(session)
+            via_summary = await svc.get_store_report(tenant_a.id, (wed, hi), granularity)
+            assert recorder.calls == [(label, "summary")]
+
+            monkeypatch.setattr(settings, "REPORT_SUMMARY_READS_ENABLED", False)
+            via_live = await svc.get_store_report(tenant_a.id, (wed, hi), granularity)
+            assert recorder.calls == [(label, "summary"), (label, "live")]
+            assert _dump(via_summary) == _dump(via_live)
+
+            # 刷新后才手填的 W+9 也在（汇总路径并了 store_daily）
+            assert via_summary.items[-1].date_to >= wed + timedelta(days=9)
+            metrics = set(StoreReportRow.model_fields) - _NON_METRIC
+            if granularity == "day":
+                assert [i.date_from for i in via_summary.items] == [
+                    wed + timedelta(days=n) for n in _STORE_DAYS
+                ]
+                # 站外推广只落在 W+3（当天实际销售额 0），日行上站外占比都是 None；周 / 月行上有
+                metrics.discard("external_ratio")
+            dead = [
+                col
+                for col in sorted(metrics)
+                if not any(getattr(i, col) not in (None, 0) for i in via_summary.items)
+            ]
+            assert dead == [], f"这些列全是 0 / None，场景失效：{dead}"
+        finally:
+            tenant_id_ctx.reset(tok)
+
+    @pytest.mark.parametrize("granularity", ["week", "month"])
+    async def test_wednesday_manual_refund_only_and_day_sums(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        recorder: _SourceRecorder,
+        granularity: _Granularity,
+    ) -> None:
+        """② 周三手填直通车、同周另一天只有万相台：逐天套默 13；③ 仅退款只录部分日子；
+        ④ 桶行可加列 = 日接口同期之和。"""
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            seeded = await _seed_store_and_refresh(
+                session, tenant_a, product_factory, blogger_factory, promotion_factory
+            )
+            wed, hi = seeded["wed"], seeded["hi"]
+            svc = StoreDailyService(session)
+            report = await svc.get_store_report(tenant_a.id, (wed, hi), granularity)
+            days = await svc.get_store_report(tenant_a.id, (wed, hi), "day")
+            assert recorder.calls == [
+                (_STORE_LABELS[granularity], "summary"),
+                ("store_daily", "summary"),
+            ]
+            _assert_buckets_are_day_sums(report.items, days.items, granularity)
+
+            first = report.items[0]
+            assert first.date_from == wed, "首行起点应是区间起点（周三），不是桶首日"
+            want = {
+                # W 手填直通车 40（当天万相台 0）+ W+2 只有万相台 60 + 20 → 120；
+                # 先分桶再判手填会算成 40
+                "internal_spend": "120.00",
+                "zhitongche_spend": "40.00",
+                "ad_spend_total": None,
+                "yinli_spend": None,
+                "ad_spend": "80.00",
+                "pay_amount": "1600.00",
+                "actual_sales": "1360.00",  # 1600 − 退款 90 − 刷单 150
+            }
+            got = _dump(first)
+            if granularity == "week":
+                assert first.date_to == wed + timedelta(days=4)  # 周日
+                # 仅退款只录了周三：x / y = 1 / 5，率 = 10 ÷ 周三支付 1200（不是 ÷ 全周 1600）
+                want |= {
+                    "refund_only_amount": "10.00",
+                    "refund_only_days": 1,
+                    "day_count": 5,
+                    "refund_only_rate": "0.0083",
+                }
+                second = report.items[1]
+                # W+7 录了仅退款 5、当天支付 0：分母 0 → None；W+9 没录
+                assert (second.refund_only_days, second.day_count) == (1, 2)
+                assert second.refund_only_amount == Decimal("5.00")
+                assert second.refund_only_rate is None
+            else:
+                assert report.items == [first]
+                # 整段：W 与 W+7 录了，率 = 15 ÷ (1200 + 0)
+                want |= {
+                    "internal_spend": "132.00",  # 再加 W+9 手填全站推 12
+                    "ad_spend_total": "12.00",
+                    "refund_only_amount": "15.00",
+                    "refund_only_days": 2,
+                    "day_count": 7,
+                    "refund_only_rate": "0.0125",
+                }
+            assert {k: got[k] for k in want} == want
+            assert (report.recorded_days, report.total_days) == (2, 7)
+            assert (days.recorded_days, days.total_days) == (2, 7)
+        finally:
+            tenant_id_ctx.reset(tok)
+
+    async def test_cross_month_week_and_month_split(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+        recorder: _SourceRecorder,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """⑤ 区间跨月：周表跨月那周一行；月表在月界切两行；行上起止 = 桶 ∩ 区间。"""
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            first = _cross_month_first()
+            lo, hi = first - timedelta(days=3), first + timedelta(days=3)
+            pays = {first - timedelta(days=1): "100.00", first: "200.00"}
+            pays[first + timedelta(days=1)] = "300.00"
+            pays.setdefault(M_LO, "50.00")
+            await _store_days(session, tenant_a, product_factory, pays)
+            await session.commit()
+            await _refresh(session, tenant_a, lo, hi)
+            svc = StoreDailyService(session)
+
+            weeks = await svc.get_store_report(tenant_a.id, (lo, hi), "week")
+            months = await svc.get_store_report(tenant_a.id, (lo, hi), "month")
+            assert recorder.calls == [("store_weekly", "summary"), ("store_monthly", "summary")]
+            monkeypatch.setattr(settings, "REPORT_SUMMARY_READS_ENABLED", False)
+            assert _dump(weeks) == _dump(await svc.get_store_report(tenant_a.id, (lo, hi), "week"))
+            assert _dump(months) == _dump(
+                await svc.get_store_report(tenant_a.id, (lo, hi), "month")
+            )
+
+            cross = next(w for w in weeks.items if w.date_from <= first <= w.date_to)
+            assert cross.date_from <= first - timedelta(days=1), "跨月那周被月界切开了"
+            want_week = sum(
+                Decimal(p)
+                for d, p in pays.items()
+                if lo <= d <= hi and bucket_start(d, "week") == bucket_start(first, "week")
+            )
+            assert cross.pay_amount == want_week
+            assert len(weeks.items) == len({bucket_start(d, "week") for d in pays if lo <= d <= hi})
+
+            assert [(m.date_from, m.date_to, m.pay_amount) for m in months.items] == [
+                (lo, first - timedelta(days=1), Decimal("100.00")),
+                (first, hi, Decimal("500.00")),
+            ]
+            # 周表区间从 M_LO 起：首行起点 = M_LO（M_LO 不是周一时也不回退到周一）
+            month_weeks = await svc.get_store_report(tenant_a.id, (M_LO, M_HI), "week")
+            assert month_weeks.items[0].date_from == M_LO
+        finally:
+            tenant_id_ctx.reset(tok)
+
+    @pytest.mark.parametrize("granularity", _GRANULARITIES)
+    async def test_partial_coverage_whole_range_live(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        recorder: _SourceRecorder,
+        granularity: _Granularity,
+    ) -> None:
+        """⑥ 区间里有一天没覆盖：整段实时，只记一次 live（不按桶各自选来源）。"""
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            seeded = await _seed_store_and_refresh(
+                session, tenant_a, product_factory, blogger_factory, promotion_factory
+            )
+            svc = StoreDailyService(session)
+            report = await svc.get_store_report(
+                tenant_a.id,
+                (M_LO - timedelta(days=1), seeded["hi"]),
+                granularity,
+            )
+            assert recorder.calls == [(_STORE_LABELS[granularity], "live")]
+            assert report.total_days == len(_STORE_DAYS)
+        finally:
+            tenant_id_ctx.reset(tok)
+
+    async def test_incremental_refresh_without_full_backfill(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+        recorder: _SourceRecorder,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """⑦ 不做前置全量，直接刷 [M_LO+15, M_HI]：周 / 月行 = 桶内日行之和，两路逐字等。"""
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            lo = M_LO + timedelta(days=15)
+            pays = {lo: "100.00", lo + timedelta(days=1): "250.00", lo + timedelta(days=8): "70.00"}
+            await _store_days(session, tenant_a, product_factory, pays)
+            session.add_all(
+                [
+                    StoreDaily(
+                        tenant_id=tenant_a.id,
+                        date=lo + timedelta(days=1),
+                        zhitongche_spend=Decimal("30.00"),
+                        refund_only_amount=Decimal("5.00"),
+                    ),
+                    StoreDaily(tenant_id=tenant_a.id, date=lo, refund_only_amount=Decimal("0")),
+                ]
+            )
+            await session.commit()
+            await _refresh(session, tenant_a, lo, M_HI)
+            svc = StoreDailyService(session)
+
+            grans: tuple[_Granularity, ...] = ("week", "month")
+            days = await svc.get_store_report(tenant_a.id, (lo, M_HI), "day")
+            assert [d.date_from for d in days.items] == sorted(pays)
+            via_summary = {g: await svc.get_store_report(tenant_a.id, (lo, M_HI), g) for g in grans}
+            assert recorder.calls == [
+                ("store_daily", "summary"),
+                ("store_weekly", "summary"),
+                ("store_monthly", "summary"),
+            ]
+            for g in grans:
+                _assert_buckets_are_day_sums(via_summary[g].items, days.items, g)
+
+            monkeypatch.setattr(settings, "REPORT_SUMMARY_READS_ENABLED", False)
+            for g in grans:
+                via_live = await svc.get_store_report(tenant_a.id, (lo, M_HI), g)
+                assert recorder.calls[-1] == (_STORE_LABELS[g], "live")
+                assert _dump(via_summary[g]) == _dump(via_live)
+
+            (month,) = via_summary["month"].items
+            assert (month.pay_amount, month.internal_spend) == (Decimal("420.00"), Decimal("30.00"))
+            # 手填 0 也算录了：x / y = 2 / 3，率 = 5 ÷ (100 + 250)
+            assert (month.refund_only_days, month.day_count) == (2, 3)
+            assert month.refund_only_rate == Decimal("0.0143")
         finally:
             tenant_id_ctx.reset(tok)
 

@@ -50,6 +50,8 @@ import {
   productionRowKey,
 } from "@/features/report/productionColumns";
 import { ProductionInactiveLinkNotice } from "@/features/report/components/ProductionCells";
+import { ReportForbidden } from "@/features/report/components/ReportForbidden";
+import { isForbiddenError } from "@/features/warehouse/shipmentForm";
 
 const TREND_GRANULARITY: Array<{ label: string; value: TimeGranularity }> = [
   { label: "按日", value: "day" },
@@ -106,10 +108,12 @@ export function ProductionPage() {
       }),
   });
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error } = useQuery({
     queryKey: ["production", preset, df, dt, excludeBrushing, season],
     // 等偏好回填完再查，避免先用默认值查一次、回填后又查一次。
     enabled: enabled && ready,
+    // 403 重试没有意义，直接显示无权限
+    retry: (count, err) => !isForbiddenError(err) && count < 1,
     queryFn: () =>
       getProduction({
         preset,
@@ -166,11 +170,16 @@ export function ProductionPage() {
     ? trendPoints[trendPoints.length - 1]
     : undefined;
 
+  // 菜单按 capabilities 已隐藏；直接输入 URL 进来、接口 403 时给明确提示，不显示空表
+  if (isForbiddenError(error)) {
+    return <ReportForbidden name="单品投产" />;
+  }
+
   return (
     <Card
       title={
         <ReportCardTitle
-          title="投产报表"
+          title="单品投产"
           freshness={
             <Space size={12} wrap>
               <ProductionInactiveLinkNotice count={data?.inactive_link_count} />

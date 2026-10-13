@@ -1,9 +1,11 @@
 """单品投产列定义（7e R3，设计 2.3）：页面与导出共用一份，列顺序 = 页面顺序。
 
-导出逐列从 :data:`PRODUCTION_COLUMNS` 取表头与单元格（extra 列仍排在最后）。前端
-``frontend/src/features/report/productionColumns.ts`` 的 ``PRODUCTION_PAGE_KEYS`` 必须与
-:data:`PRODUCTION_PAGE_KEYS` 逐项相同（``tests/unit/test_production_columns.py`` 钉住）。
-主图、趋势是页面专有列，不在这里；商品编码、商品名称、渠道、链接数只进导出
+导出逐列从 :data:`PRODUCTION_COLUMNS` 取表头与单元格（extra 列仍排在最后）。页面列
+（``page=True``）的键与表头导出成同目录的 ``production_columns.snapshot.json``：
+``tests/unit/test_production_columns.py`` 守「文件 = 常量」，前端
+``features/report/productionColumns.test.tsx`` 读同一份文件守键序与列名，只改一边就红
+（改了列：``UPDATE_REPORT_SNAPSHOT=1 pytest tests/unit/test_production_columns.py`` 重写文件）。
+主图、趋势是页面专有列，不在这里；商品编码、商品名称、渠道、千牛链接数只进导出
 （页面把名称、渠道标签、「N 条链接」都画在「商品」一列里）。
 """
 
@@ -32,7 +34,7 @@ PRODUCTION_COLUMNS: tuple[ProductionColumn, ...] = (
     ProductionColumn("goods_short_name", "商品简称", "text"),
     ProductionColumn("goods_title", "商品名称", "text", page=False),
     ProductionColumn("channel", "渠道", "text", page=False),
-    ProductionColumn("link_count", "链接数", "count", page=False),
+    ProductionColumn("link_count", "千牛链接数", "count", page=False),
     ProductionColumn("style_codes", "含款号", "codes"),
     ProductionColumn("pay_amount", "支付金额", "money"),
     ProductionColumn("pay_orders", "支付件数（不扣刷单）", "count"),

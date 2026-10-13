@@ -7,7 +7,8 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic_core import PydanticCustomError
 
 # ----------------------------- 工作进度 ----------------------------- #
 
@@ -117,11 +118,102 @@ class StoreDailyRow(BaseModel):
     extra: dict = Field(default_factory=dict)
 
 
+_MANUAL_AMOUNT_MAX = Decimal("99999999.99")
+_CENT = Decimal("0.01")
+
+
 class StoreDailyManualUpdate(BaseModel):
+    """店铺日手填层（设计 2.4）。只写传了的字段：传 ``null`` 清空、不传不动（按 ``model_fields_set``）。"""
+
     ad_spend_total: Decimal | None = None
     zhitongche_spend: Decimal | None = None
     yinli_spend: Decimal | None = None
-    remark: str | None = None
+    refund_only_amount: Decimal | None = None
+    remark: str | None = Field(default=None, max_length=200)
+
+    # 校验一律抛 PydanticCustomError：Field(ge=...) 把 Decimal、ValueError 把异常对象放进错误的 ctx，
+    # 422 响应序列化时变 500
+    @field_validator("ad_spend_total", "zhitongche_spend", "yinli_spend", "refund_only_amount")
+    @classmethod
+    def _check_amount(cls, v: Decimal | None) -> Decimal | None:
+        """金额 ≥ 0、≤ 99,999,999.99、最多两位小数，违者 422。"""
+        if v is None:
+            return v
+        if not v.is_finite() or v < 0 or v > _MANUAL_AMOUNT_MAX or v != v.quantize(_CENT):
+            raise PydanticCustomError(
+                "store_manual_amount", "金额需在 0 ~ 99,999,999.99 之间，最多两位小数"
+            )
+        return v
+
+    @model_validator(mode="after")
+    def _not_empty(self) -> StoreDailyManualUpdate:
+        # 空 body 原来会插一条空行、让这天进日期并集（计划偏差 5）
+        if not self.model_fields_set:
+            raise PydanticCustomError("store_manual_empty", "至少要传一个字段")
+        return self
+
+
+class StoreReportRow(BaseModel):
+    """店铺日 / 周 / 月一行（7e R4，设计 2.4）。由 ``report/store_buckets.py`` 从日行算出。
+
+    ``date_from`` / ``date_to`` 是行上的实际起止 = 桶（自然日 / ISO 周 / 自然月）∩ 请求区间，
+    日行两者相同。可加列先按天算好再求和（站内推广费逐天套默 13），比率在求和之后现算。
+    公式见 PRD §9 + Q17；「其中直播」两列只展示，不参与任何公式。
+    """
+
+    date_from: date
+    date_to: date
+    visitors: int
+    pay_amount: Decimal
+    pay_orders: int
+    refund_amount: Decimal
+    brushing_amount: Decimal
+    actual_sales: Decimal
+    """实际销售额 = 支付 − 退款 − 刷单本金。"""
+    ad_spend: Decimal
+    """万相台合计。"""
+    # 手填三项：整桶没填为 None（页面显示「—」），填了几天就加那几天
+    ad_spend_total: Decimal | None = None
+    zhitongche_spend: Decimal | None = None
+    yinli_spend: Decimal | None = None
+    internal_spend: Decimal
+    """站内推广费：逐天判断，某天手填了三项任一就用三项之和（默 13），否则万相台。"""
+    promo_cost: Decimal
+    """站外推广成本（全店已发布推广单）。"""
+    total_spend: Decimal
+    live_pay_amount: Decimal
+    live_ad_spend: Decimal
+    refund_only_amount: Decimal | None = None
+    """仅退款：只加已录入的日子；整桶都没录为 None。"""
+    total_spend_ratio: Decimal | None = None
+    """推广总占比 = 推广总额 ÷ 支付总额。"""
+    internal_ratio: Decimal | None = None
+    external_ratio: Decimal | None = None
+    net_spend_ratio: Decimal | None = None
+    """净推广占比 = 推广总额 ÷ 实际销售额。"""
+    net_roi: Decimal | None = None
+    """净投产 = 实际销售额 ÷ 推广总额。"""
+    roi_ex_brushing: Decimal | None = None
+    """投产（扣除刷单）=（支付总额 − 刷单本金）÷ 推广总额。"""
+    refund_only_rate: Decimal | None = None
+    """仅退款率 = Σ仅退款 ÷ Σ支付，分子分母都只取已录仅退款的日子（默 14）。"""
+    refund_only_days: int
+    """「已录 x / y 天」的 x。"""
+    day_count: int
+    """「已录 x / y 天」的 y：桶内有日行的日子数（没有日行的日子在日表里录不了）。"""
+    extra: dict = Field(default_factory=dict)
+
+
+class StoreReport(BaseModel):
+    """``GET /api/reports/store/{daily|weekly|monthly}`` 的响应（一个响应只有一种来源）。"""
+
+    granularity: Literal["day", "week", "month"]
+    date_from: date
+    date_to: date
+    items: list[StoreReportRow]
+    recorded_days: int
+    """整段已录仅退款的天数（日表标题旁「已录 x / y 天」）。"""
+    total_days: int
 
 
 # ----------------------------- 投产报表 ----------------------------- #

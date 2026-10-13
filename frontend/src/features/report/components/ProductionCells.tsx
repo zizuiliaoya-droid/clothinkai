@@ -1,10 +1,11 @@
 // 单品投产表格里的单元格组件（7e R3）：列定义在 ../productionColumns.ts，这里只放要渲染 JSX 的格子。
 import { Button, Tag, Tooltip, Typography } from "antd";
-import { ExclamationCircleOutlined, QuestionCircleOutlined } from "@ant-design/icons";
+import { ExclamationCircleOutlined } from "@ant-design/icons";
 import { goodsDisplayName } from "@/features/product/api";
 import { GoodsNameCell } from "@/components/GoodsNameCell/GoodsNameCell";
 import { StyleImageThumbnail } from "@/components/StyleImageThumbnail/StyleImageThumbnail";
 import type { ProductionRow } from "../types";
+import { HeaderHint } from "./HeaderHint";
 
 export function ProductionImageCell({ row }: { row: ProductionRow }) {
   return (
@@ -48,20 +49,12 @@ export function ProductionGoodsCell({ row }: { row: ProductionRow }) {
   );
 }
 
-/** 支付件数列头：注明剔除刷单开关不扣件数（件数始终含刷单）。 */
+/**
+ * 支付件数列头：注明剔除刷单开关不扣件数（件数始终含刷单）。
+ * 说明挂在列头文字上（HeaderHint，Tab 停一次），不放问号图标：rc-table 测量行会克隆列头，图标会让 Tab 多停一次（R3 评审 L4）。
+ */
 export function ProductionPayOrdersTitle() {
-  return (
-    <span>
-      支付件数{" "}
-      <Tooltip title="剔除刷单开关不扣件数" trigger={["hover", "focus"]}>
-        <QuestionCircleOutlined
-          aria-label="支付件数说明"
-          tabIndex={0}
-          style={{ color: MUTED, cursor: "help" }}
-        />
-      </Tooltip>
-    </span>
-  );
+  return <HeaderHint label="支付件数" hint="剔除刷单开关不扣件数" />;
 }
 
 const OFFSITE_EMPTY_HINT = "所选区间千牛与万相台没有同一天的数据";

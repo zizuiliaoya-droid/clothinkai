@@ -14,10 +14,12 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security.field_permissions import FieldPermissionContext
 from app.core.tenancy import tenant_id_ctx
+from app.modules.auth.models import AuditLog
 from app.modules.collect.models import AdDaily, QianniuDaily
 from app.modules.finance.order_adjustment_models import OrderAdjustment
 from app.modules.product.goods_models import GoodsMain, GoodsStyleItem
@@ -31,7 +33,10 @@ from app.modules.report.advanced_schemas import (
 from app.modules.report.pr_scope import PR_SCOPE_ALL
 from app.modules.report.production_service import ProductionService
 from app.modules.report.store_daily_service import StoreDailyService
+from app.modules.report.summary_models import ReportSummaryCoverage
+from app.modules.report.summary_refresh_service import SummaryRefreshService
 from app.modules.report.target_planning_service import TargetPlanningService
+from app.modules.report.work_progress_models import StoreDaily
 from app.modules.report.work_progress_service import WorkProgressService, _month_range
 
 pytestmark = pytest.mark.asyncio
@@ -440,6 +445,205 @@ class TestStoreDaily:
             )
             await session.commit()
             assert row.zhitongche_spend == Decimal("80.00")
+        finally:
+            tenant_id_ctx.reset(tok)
+
+    async def test_null_clears_unset_untouched(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        operations_role: Any,
+    ) -> None:
+        """传 ``null`` 清空（C-15），没传的字段不动；读回日行也是清空后的值。"""
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            ops = await factory.user(tenant_a, roles=[operations_role])
+            day = date(2026, 5, 17)
+            svc = StoreDailyService(session)
+            await svc.upsert_manual(
+                tenant_a.id,
+                day,
+                StoreDailyManualUpdate(
+                    zhitongche_spend=Decimal("50.00"),
+                    yinli_spend=Decimal("30.00"),
+                    refund_only_amount=Decimal("12.50"),
+                    remark="首录",
+                ),
+                ops,
+            )
+            row = await svc.upsert_manual(
+                tenant_a.id,
+                day,
+                StoreDailyManualUpdate(zhitongche_spend=None, remark=None),
+                ops,
+            )
+            assert (row.zhitongche_spend, row.remark) == (None, None)
+            assert (row.yinli_spend, row.refund_only_amount) == (
+                Decimal("30.00"),
+                Decimal("12.50"),
+            )
+            report = await svc.get_store_report(tenant_a.id, (day, day), "day")
+            (item,) = report.items
+            assert item.zhitongche_spend is None
+            assert (item.yinli_spend, item.internal_spend) == (Decimal("30.00"), Decimal("30.00"))
+            assert item.refund_only_amount == Decimal("12.50")
+        finally:
+            tenant_id_ctx.reset(tok)
+
+    async def test_refund_only_live_on_summary_path(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        operations_role: Any,
+        product_factory: Any,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """刷新之后才录仅退款：汇总路径立即读到（LEFT JOIN 手填层），覆盖记录一条不少。"""
+        import app.modules.report.store_daily_service as store_mod
+
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            ops = await factory.user(tenant_a, roles=[operations_role])
+            style = await product_factory.style()
+            pp = await _platform_product(session, tenant_a, style)
+            day = date(2026, 5, 18)
+            await _qianniu(session, tenant_a, pp, day, pay="800.00")
+            await session.flush()
+            await SummaryRefreshService(session).refresh(
+                tenant_id=tenant_a.id, date_from=day, date_to=day
+            )
+            await session.commit()
+            count_sql = (
+                select(func.count())
+                .select_from(ReportSummaryCoverage)
+                .where(ReportSummaryCoverage.tenant_id == tenant_a.id)
+            )
+            covered = (await session.execute(count_sql)).scalar_one()
+            assert covered >= 1
+
+            svc = StoreDailyService(session)
+            await svc.upsert_manual(
+                tenant_a.id, day, StoreDailyManualUpdate(refund_only_amount=Decimal("20.00")), ops
+            )
+            assert (await session.execute(count_sql)).scalar_one() == covered
+
+            calls: list[tuple[str, str]] = []
+            monkeypatch.setattr(store_mod, "record_source", lambda r, s: calls.append((r, s)))
+            report = await svc.get_store_report(tenant_a.id, (day, day), "day")
+            assert calls == [("store_daily", "summary")]
+            (item,) = report.items
+            assert item.pay_amount == Decimal("800.00")
+            assert (item.refund_only_amount, item.refund_only_rate) == (
+                Decimal("20.00"),
+                Decimal("0.0250"),
+            )
+            assert (report.recorded_days, report.total_days) == (1, 1)
+        finally:
+            tenant_id_ctx.reset(tok)
+
+    async def test_audit_before_after(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        operations_role: Any,
+    ) -> None:
+        """审计记谁、哪天、改前改后：首录 before 为空，第二次 before = 上一次的 after。"""
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            ops = await factory.user(tenant_a, roles=[operations_role])
+            ops_id = ops.id
+            day = date(2026, 5, 19)
+            svc = StoreDailyService(session)
+            first = await svc.upsert_manual(
+                tenant_a.id,
+                day,
+                StoreDailyManualUpdate(zhitongche_spend=Decimal("40.00"), remark="直通车"),
+                ops,
+            )
+            row_id = str(first.id)
+            await svc.upsert_manual(
+                tenant_a.id,
+                day,
+                StoreDailyManualUpdate(refund_only_amount=Decimal("9.90"), zhitongche_spend=None),
+                ops,
+            )
+            entries = (
+                (
+                    await session.execute(
+                        select(AuditLog)
+                        .where(
+                            AuditLog.action == "report.store_daily.update",
+                            AuditLog.resource_id == row_id,
+                        )
+                        .order_by(AuditLog.id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            snap1 = {
+                "ad_spend_total": None,
+                "zhitongche_spend": "40.00",
+                "yinli_spend": None,
+                "refund_only_amount": None,
+                "remark": "直通车",
+            }
+            snap2 = {**snap1, "zhitongche_spend": None, "refund_only_amount": "9.90"}
+            assert [(e.user_id, e.before, e.after) for e in entries] == [
+                (ops_id, None, {"date": str(day), **snap1}),
+                (ops_id, snap1, {"date": str(day), **snap2}),
+            ]
+        finally:
+            tenant_id_ctx.reset(tok)
+
+    async def test_null_only_on_missing_day_inserts_nothing(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        operations_role: Any,
+    ) -> None:
+        """没有行的日子只传 null（评审 r1 L3）：不插全空的行（这天不进日期并集）、不写审计。"""
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            ops = await factory.user(tenant_a, roles=[operations_role])
+            day = date(2026, 5, 21)
+            svc = StoreDailyService(session)
+            audit_count = (
+                select(func.count())
+                .select_from(AuditLog)
+                .where(
+                    AuditLog.tenant_id == tenant_a.id,
+                    AuditLog.action == "report.store_daily.update",
+                )
+            )
+            audits_before = (await session.execute(audit_count)).scalar_one()
+            row = await svc.upsert_manual(
+                tenant_a.id,
+                day,
+                StoreDailyManualUpdate(zhitongche_spend=None, refund_only_amount=None),
+                ops,
+            )
+            assert (row.date, row.zhitongche_spend, row.refund_only_amount, row.remark) == (
+                day,
+                None,
+                None,
+                None,
+            )
+            rows = (
+                await session.execute(
+                    select(func.count())
+                    .select_from(StoreDaily)
+                    .where(StoreDaily.tenant_id == tenant_a.id, StoreDaily.date == day)
+                )
+            ).scalar_one()
+            assert rows == 0
+            report = await svc.get_store_report(tenant_a.id, (day, day), "day")
+            assert report.items == []
+            assert (await session.execute(audit_count)).scalar_one() == audits_before
         finally:
             tenant_id_ctx.reset(tok)
 

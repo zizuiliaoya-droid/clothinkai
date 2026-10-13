@@ -11,12 +11,15 @@ import type {
   PrWorkProgress,
   ReportCapabilities,
   ReportFreshness,
-  StoreDailyRow,
+  StoreDailyManualResult,
+  StoreGranularity,
+  StoreReport,
   StyleCardPage,
   SummaryRefreshResult,
   TargetWithActual,
   TimeGranularity,
 } from "./types";
+import type { StoreManualPatch } from "./store/storeManual";
 
 /** 工作进度按区间统计（7e R1）；只持 read_own 时后端只返回本人那一行。 */
 export async function getWorkProgress(
@@ -63,18 +66,32 @@ export async function getPublishCards(
   return resp.data;
 }
 
-export async function getStoreDaily(
-  params: {
-    preset?: string;
-    date_from?: string;
-    date_to?: string;
-    /** 按周 / 月 / 年由后端分桶，date 是桶首日；不传 = 按日。 */
-    granularity?: TimeGranularity;
-  } = {}
-): Promise<StoreDailyRow[]> {
-  const resp = await apiClient.get<StoreDailyRow[]>(
-    "/api/reports/store-daily",
-    { params }
+const STORE_REPORT_PATHS: Record<StoreGranularity, string> = {
+  day: "/api/reports/store/daily",
+  week: "/api/reports/store/weekly",
+  month: "/api/reports/store/monthly",
+};
+
+/** 店铺日明细 / 周汇总 / 月度汇总（7e R4）：后端按「ISO 周（自然月）∩ 区间」分桶，行上带实际起止。 */
+export async function getStoreReport(
+  granularity: StoreGranularity,
+  params: { preset?: string; date_from?: string; date_to?: string } = {}
+): Promise<StoreReport> {
+  const resp = await apiClient.get<StoreReport>(STORE_REPORT_PATHS[granularity], { params });
+  return resp.data;
+}
+
+/**
+ * 店铺日手填（7e R4）：只发改了的字段，null = 清空；要 report.store_daily:write。
+ * 晚于今天 → 422 STORE_DAILY_FUTURE_DATE，金额不合法 → 422，提示在 message 里。
+ */
+export async function updateStoreDaily(
+  day: string,
+  patch: StoreManualPatch
+): Promise<StoreDailyManualResult> {
+  const resp = await apiClient.put<StoreDailyManualResult>(
+    `/api/reports/store-daily/${encodeURIComponent(day)}`,
+    patch
   );
   return resp.data;
 }
