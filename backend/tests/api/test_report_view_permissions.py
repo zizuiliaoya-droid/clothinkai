@@ -206,15 +206,18 @@ class TestWorkProgress:
         )
         assert resp.status_code == 200, resp.text
 
+    @pytest.mark.parametrize("sub", ["", "/goods", "/weeks"], ids=["pr", "goods", "weeks"])
     @pytest.mark.parametrize(
         "season_q",
         ["".join(f"&season=s{i}" for i in range(21)), f"&season={'x' * 65}"],
         ids=["21_seasons", "65_chars"],
     )
     async def test_invalid_season_422(
-        self, session: AsyncSession, flow_users: Any, season_q: str
+        self, session: AsyncSession, flow_users: Any, season_q: str, sub: str
     ) -> None:
-        resp = await _call(session, flow_users.pr_manager, "GET", f"{_WP}?month={_MONTH}{season_q}")
+        """三个接口都校验季节（≤ 20 个、每个 ≤ 64 字）。"""
+        query = f"preset=custom&date_from={_M_LO}&date_to={_M_HI}{season_q}"
+        resp = await _call(session, flow_users.pr_manager, "GET", f"{_WP}{sub}?{query}")
         assert (resp.status_code, resp.json()["code"]) == (422, "VALIDATION_ERROR")
 
     async def test_season_keeps_only_matching_goods(
