@@ -1,0 +1,98 @@
+[
+  {
+    "key": "goods_short_name",
+    "header": "商品简称"
+  },
+  {
+    "key": "style_codes",
+    "header": "含款号"
+  },
+  {
+    "key": "pay_amount",
+    "header": "支付金额"
+  },
+  {
+    "key": "pay_orders",
+    "header": "支付件数（不扣刷单）"
+  },
+  {
+    "key": "refund_amount",
+    "header": "退款金额"
+  },
+  {
+    "key": "return_rate",
+    "header": "退货退款率"
+  },
+  {
+    "key": "confirmed_amount",
+    "header": "实际销售金额"
+  },
+  {
+    "key": "promo_cost",
+    "header": "站外推广费"
+  },
+  {
+    "key": "ad_spend",
+    "header": "站内投放"
+  },
+  {
+    "key": "total_spend",
+    "header": "推广总花费"
+  },
+  {
+    "key": "pre_return_roi",
+    "header": "退货前投产比"
+  },
+  {
+    "key": "net_roi",
+    "header": "净投产比"
+  },
+  {
+    "key": "unit_deal_cost",
+    "header": "推广单件成交成本"
+  },
+  {
+    "key": "add_cart_count",
+    "header": "总加购数"
+  },
+  {
+    "key": "add_cart_cost",
+    "header": "总加购成本"
+  },
+  {
+    "key": "ad_add_cart_count",
+    "header": "站内加购"
+  },
+  {
+    "key": "ad_add_cart_cost",
+    "header": "站内加购成本"
+  },
+  {
+    "key": "offsite_add_cart",
+    "header": "站外加购"
+  },
+  {
+    "key": "recent7_pay_amount",
+    "header": "支付金额"
+  },
+  {
+    "key": "recent7_total_spend",
+    "header": "推广总花费"
+  },
+  {
+    "key": "recent7_net_roi",
+    "header": "净投产比"
+  },
+  {
+    "key": "goods_cost_total",
+    "header": "销售货品总成本"
+  },
+  {
+    "key": "gross_profit",
+    "header": "单品毛利"
+  },
+  {
+    "key": "gross_margin_rate",
+    "header": "单品利润率"
+  }
+]

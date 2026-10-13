@@ -43,10 +43,33 @@ export function AppLayout() {
   // PR / 主管 / 财务 / 运营点进去是 403，菜单里就不放。只管显示，后端 403 才是闸门
   const canViewWarehouse = isSystemAdmin || roles.includes("warehouse");
   // 报表菜单按 capabilities（/me 只给角色，算不了 scope）：能力没回来前不显示，免得先出现再收回。
-  // 「BI看板」只给看全部的人；个人版随 R6。只管显示，后端 403 才是闸门
+  // 「BI看板」只给看全部的人；个人版随 R6。7e R4 起发文进度表、单品投产、店铺日 / 周 / 月也按能力显隐
+  // （财务没有这几张表的读权限，菜单里就不出现）。只管显示，后端 403 才是闸门
   const { data: reportCaps } = useReportCapabilities();
   const canViewWorkProgress = reportCaps?.work_progress != null;
+  const canViewPublishProgress = reportCaps?.publish_progress != null;
   const canViewBi = reportCaps?.bi === "full";
+  const canViewProduction = reportCaps?.production ?? false;
+  const canViewStore = reportCaps?.store_read ?? false;
+  // 「投产分析」分组（7e R4，设计 2.4）：单品投产 + 店铺日 / 周 / 月；空组不出
+  const roiItems = [
+    ...(canViewProduction
+      ? [{ key: "/production", label: <Link to="/production">单品投产</Link> }]
+      : []),
+    ...(canViewStore
+      ? [
+          { key: "/store/daily", label: <Link to="/store/daily">店铺日明细</Link> },
+          { key: "/store/weekly", label: <Link to="/store/weekly">店铺周汇总</Link> },
+          { key: "/store/monthly", label: <Link to="/store/monthly">店铺月度汇总</Link> },
+        ]
+      : []),
+  ];
+  const reportItems: NonNullable<MenuProps["items"]> = [
+    ...(roiItems.length
+      ? [{ key: "roi", type: "group" as const, label: "投产分析", children: roiItems }]
+      : []),
+    ...(canViewBi ? [{ key: "/bi", label: <Link to="/bi">BI看板</Link> }] : []),
+  ];
 
   async function handleLogout() {
     try {
@@ -128,10 +151,14 @@ export function AppLayout() {
           key: "/publish-target",
           label: <Link to="/publish-target">爆款约篇数量</Link>,
         },
-        {
-          key: "/publish-progress",
-          label: <Link to="/publish-progress">发文进度表</Link>,
-        },
+        ...(canViewPublishProgress
+          ? [
+              {
+                key: "/publish-progress",
+                label: <Link to="/publish-progress">发文进度表</Link>,
+              },
+            ]
+          : []),
       ],
     },
     {
@@ -147,16 +174,17 @@ export function AppLayout() {
         { key: "/balance", label: <Link to="/balance">余额核对</Link> },
       ],
     },
-    {
-      key: "report",
-      icon: <BarChartOutlined />,
-      label: "报表与分析",
-      children: [
-        { key: "/store-daily", label: <Link to="/store-daily">店铺数据</Link> },
-        { key: "/production", label: <Link to="/production">投产报表</Link> },
-        ...(canViewBi ? [{ key: "/bi", label: <Link to="/bi">BI看板</Link> }] : []),
-      ],
-    },
+    // 整组没有可看的报表（含能力没回来前）就不出「报表与分析」
+    ...(reportItems.length
+      ? [
+          {
+            key: "report",
+            icon: <BarChartOutlined />,
+            label: "报表与分析",
+            children: reportItems,
+          },
+        ]
+      : []),
     {
       key: "system",
       icon: <SettingOutlined />,

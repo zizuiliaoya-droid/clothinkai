@@ -89,6 +89,57 @@ class TestAdvancedReportApiContract:
             (tenant_id, (date(2026, 6, 1), date(2026, 6, 30)), {"granularity": "week"})
         ]
 
+    async def test_openapi_exposes_store_report_pages(self) -> None:
+        """7e R4：日 / 周 / 月三个新接口只有 GET；旧 /store-daily 标 deprecated（保留一个版本）。"""
+        from app.main import app
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            resp = await ac.get("/api/openapi.json")
+        paths = resp.json()["paths"]
+        for page in ("daily", "weekly", "monthly"):
+            assert set(paths[f"/api/reports/store/{page}"]) == {"get"}, page
+            ref = paths[f"/api/reports/store/{page}"]["get"]["responses"]["200"]["content"]
+            assert ref["application/json"]["schema"]["$ref"].endswith("/StoreReport"), page
+        assert paths["/api/reports/store-daily"]["get"].get("deprecated") is True
+        assert not paths["/api/reports/store/daily"]["get"].get("deprecated", False)
+
+    @pytest.mark.parametrize("page", ["daily", "weekly", "monthly"])
+    async def test_store_report_requires_auth(self, page: str) -> None:
+        from app.main import app
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            resp = await ac.get(f"/api/reports/store/{page}")
+        assert resp.status_code == 401
+
+    @pytest.mark.parametrize(
+        ("handler", "granularity"),
+        [
+            ("get_store_report_daily", "day"),
+            ("get_store_report_weekly", "week"),
+            ("get_store_report_monthly", "month"),
+        ],
+    )
+    async def test_store_report_forwards_granularity(self, handler: str, granularity: str) -> None:
+        from app.modules.report import advanced_api
+
+        calls: list[tuple[object, ...]] = []
+
+        class FakeStoreDailyService:
+            async def get_store_report(self, *args: object) -> object:
+                calls.append(args)
+                return "report"
+
+        tenant_id = uuid4()
+        result = await getattr(advanced_api, handler)(
+            user=SimpleNamespace(tenant_id=tenant_id),
+            service=FakeStoreDailyService(),
+            preset="custom",
+            date_from=date(2026, 6, 3),
+            date_to=date(2026, 6, 30),
+        )
+        assert result == "report"
+        assert calls == [(tenant_id, (date(2026, 6, 3), date(2026, 6, 30)), granularity)]
+
     async def test_summary_refresh_requires_auth(self) -> None:
         from app.main import app
 

@@ -224,6 +224,18 @@ describe("ProductionPage 停用链接提示", () => {
   });
 });
 
+describe("ProductionPage 无权限（7e R4 S7）", () => {
+  it("接口 403：显示「没有权限查看单品投产」，不出表格", async () => {
+    capsMock.mockResolvedValue({ ...caps(false), production: false, export: [] });
+    productionMock.mockRejectedValue(
+      Object.assign(new Error("403"), { response: { status: 403, data: { code: "PERMISSION_DENIED" } } })
+    );
+    const { container } = renderPage();
+    expect(await screen.findByText("没有权限查看单品投产")).toBeTruthy();
+    expect(container.querySelector(".ant-table")).toBeNull();
+  });
+});
+
 describe("ProductionPage 页面文字", () => {
   it("没有商品编码；有渠道标签与近 7 天列组表头", async () => {
     capsMock.mockResolvedValue(caps(true));

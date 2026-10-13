@@ -29,7 +29,10 @@ import { BalancePage } from "@/pages/BalancePage";
 import { WorkProgressPage } from "@/pages/WorkProgressPage";
 import { PublishTargetPage } from "@/pages/PublishTargetPage";
 import { PublishProgressPage } from "@/pages/PublishProgressPage";
-import { StoreDailyPage } from "@/pages/StoreDailyPage";
+import { StoreDailyPage } from "@/pages/store/StoreDailyPage";
+import { StoreWeeklyPage } from "@/pages/store/StoreWeeklyPage";
+import { StoreMonthlyPage } from "@/pages/store/StoreMonthlyPage";
+import { LegacyStoreRedirect } from "@/pages/store/LegacyStoreRedirect";
 import { ProductionPage } from "@/pages/ProductionPage";
 import { DesignListPage } from "@/pages/DesignListPage";
 import { UserListPage } from "@/pages/UserListPage";
@@ -232,7 +235,11 @@ function AppRoutes() {
         <Route path="/brush-orders" element={<Navigate to="/order-adjustments" replace />} />
         <Route path="/balance" element={<BalancePage />} />
         {/* 报表与分析 */}
-        <Route path="/store-daily" element={<StoreDailyPage />} />
+        {/* 店铺报表拆成日 / 周 / 月三页（7e R4）；旧书签 /store-daily 带查询串跳到日明细 */}
+        <Route path="/store/daily" element={<StoreDailyPage />} />
+        <Route path="/store/weekly" element={<StoreWeeklyPage />} />
+        <Route path="/store/monthly" element={<StoreMonthlyPage />} />
+        <Route path="/store-daily" element={<LegacyStoreRedirect />} />
         <Route path="/production" element={<ProductionPage />} />
         <Route path="/bi" element={<BiDashboardPage />} />
         {/* 系统管理 */}
