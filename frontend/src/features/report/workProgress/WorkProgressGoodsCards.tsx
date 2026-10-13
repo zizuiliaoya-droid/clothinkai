@@ -1,7 +1,8 @@
 // 工作进度单品卡片（7e R5，报表视图设计 2.5）：前 12 个商品（约稿量降序），点商品名下钻该商品在区间内的推广单。
 // 「未归属商品」不上卡片，只在「查看全部」弹窗的最后一页末尾；页面文字里不出现商品编码。
-import { Button, Card, Col, Empty, Row, Spin, Typography } from "antd";
+import { Alert, Button, Card, Col, Empty, Row, Spin, Typography } from "antd";
 import { GoodsNameCell } from "@/components/GoodsNameCell/GoodsNameCell";
+import { extractErrorMessage } from "@/services/apiClient";
 import type { DrillPromotionTarget } from "../drill";
 import type { WorkProgressGoodsPage, WorkProgressGoodsRow } from "../types";
 import { money, pct } from "./workProgressColumns";
@@ -68,13 +69,15 @@ function GoodsCard({
 interface Props {
   data: WorkProgressGoodsPage | undefined;
   loading: boolean;
+  /** 取数失败（非 403；403 由页面整页提示）：出错误提示，照「查看全部」弹窗的写法。 */
+  error?: unknown;
   /** 当前季节（没选为 undefined），下钻带上。 */
   season: string[] | undefined;
   onDrill: (target: DrillPromotionTarget) => void;
   onShowAll: () => void;
 }
 
-export function WorkProgressGoodsCards({ data, loading, season, onDrill, onShowAll }: Props) {
+export function WorkProgressGoodsCards({ data, loading, error, season, onDrill, onShowAll }: Props) {
   const items = data?.items ?? [];
   // 没归属商品的单只在「查看全部」里，所以只要有它也给入口
   const hasAny = items.length > 0 || data?.unassigned != null;
@@ -99,6 +102,14 @@ export function WorkProgressGoodsCards({ data, loading, season, onDrill, onShowA
         </Typography.Title>
         {hasAny && <Button onClick={onShowAll}>查看全部</Button>}
       </div>
+      {error ? (
+        <Alert
+          type="error"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message={extractErrorMessage(error, "单品汇总加载失败")}
+        />
+      ) : null}
       <Spin spinning={loading}>
         {items.length > 0 ? (
           <Row gutter={[12, 12]}>

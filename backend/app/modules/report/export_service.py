@@ -279,7 +279,7 @@ class ReportExportService:
 
         按请求区间 + 季节导；能走到这里的都持 ``work_progress:read``，看全部 PR（``PR_SCOPE_ALL``）。
         三份数据与页面同一组 service 方法；单品一次取全部（``limit`` 的 1 ~ 100 是路由的校验，
-        service 只切片），「未归属商品」放最后一行；周行写所在周的周一与实际起止。
+        service 只切片），「未归属商品」放最后一行（商品全称留空）；周行写所在周的周一与实际起止。
         """
         service = WorkProgressService(self._s)
         pr_rows = await service.get_for_range(
@@ -305,7 +305,7 @@ class ReportExportService:
             (
                 SHEET_GOODS,
                 GOODS_HEADERS,
-                [[r.display_name, *_metric_cells(r)] for r in goods_rows],
+                [[r.display_name, r.goods_title, *_metric_cells(r)] for r in goods_rows],
             ),
             (
                 SHEET_WEEKS,

@@ -1,6 +1,7 @@
 """工作进度导出的列定义（7e R5，设计 2.5）：三个 sheet 共用一段指标列。
 
-- 「PR 进度」= PR + 指标段；「单品汇总」= 商品显示名 + 指标段（末行「未归属商品」，不导商品编码）；
+- 「PR 进度」= PR + 指标段；
+  「单品汇总」= 商品显示名 + 商品全称（7e R6；未归属留空）+ 指标段（末行「未归属商品」，不导商品编码）；
   「周明细」= 所在周的周一 + 实际起止 + 指标段
 - 指标段覆盖 ``WorkProgressMetrics`` 除 ``cost`` 外的全部字段（``cost`` 是旧的样品成本，R5 起
   页面与导出都不再给，「成本」改成「推广成本」= ``promo_cost``）；
@@ -62,7 +63,7 @@ SHEET_GOODS = "单品汇总"
 SHEET_WEEKS = "周明细"
 
 PR_HEADERS: tuple[str, ...] = ("PR", *WORK_PROGRESS_METRIC_HEADERS)
-GOODS_HEADERS: tuple[str, ...] = ("商品", *WORK_PROGRESS_METRIC_HEADERS)
+GOODS_HEADERS: tuple[str, ...] = ("商品", "商品全称", *WORK_PROGRESS_METRIC_HEADERS)
 WEEK_HEADERS: tuple[str, ...] = (
     "所在周（周一）",
     "实际起",

@@ -1048,13 +1048,16 @@ class TestExport:
         blogger_factory: Any,
         promotion_factory: Any,
     ) -> None:
-        """工作进度导出（7e R5）：三个 sheet；带季节只剩命中的单；单品末行未归属、不导商品编码。"""
+        """工作进度导出（7e R5）：三个 sheet；带季节只剩命中的单；单品末行未归属、不导商品编码。
+        单品第 2 列商品全称（7e R6 S12），未归属留空。
+        """
         from app.modules.product.goods_models import GoodsMain
 
         goods = GoodsMain(
             tenant_id=seeded.tenant.id,
             goods_code=f"XS{uuid4().hex[:8]}",
             goods_title="季节导出商品",
+            short_name="季节短名",
             season="2026秋",
         )
         session.add(goods)
@@ -1084,12 +1087,19 @@ class TestExport:
         quote_col = header.index("约篇量")
         # 场景有效性：不带季节时 pr / pr2 / 未分配三行共 5 单；单品 = 季节商品 + 末行未归属
         assert sum(r[quote_col] for r in bare["PR 进度"][1:]) == 5
-        assert [r[0] for r in bare["单品汇总"][1:]] == ["季节导出商品", "未归属商品"]
+        assert bare["单品汇总"][0][:2] == ("商品", "商品全称")
+        assert [r[:2] for r in bare["单品汇总"][1:]] == [
+            ("季节短名", "季节导出商品"),
+            ("未归属商品", None),
+        ]
         assert sum(r[quote_col + 2] for r in bare["周明细"][1:]) == 5
         # 带季节：三个 sheet 都只剩命中的那一单，没有未归属行
         amount_col = header.index("约稿服务费")
         assert [(r[quote_col], r[amount_col]) for r in autumn["PR 进度"][1:]] == [(1, 66.0)]
-        assert [(r[0], r[quote_col]) for r in autumn["单品汇总"][1:]] == [("季节导出商品", 1)]
+        goods_quote_col = autumn["单品汇总"][0].index("约篇量")
+        assert [(r[0], r[1], r[goods_quote_col]) for r in autumn["单品汇总"][1:]] == [
+            ("季节短名", "季节导出商品", 1)
+        ]
         assert sum(r[quote_col + 2] for r in autumn["周明细"][1:]) == 1
         cells = {c for s in bare.values() for r in s for c in r}
         assert goods.goods_code not in cells

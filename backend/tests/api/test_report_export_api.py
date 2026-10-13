@@ -476,10 +476,16 @@ class TestReportExportApiContract:
         old_cost = Decimal("987.65")
         pr_row = SimpleNamespace(pr_name="PR甲", cost=old_cost, **metrics)
         goods_rows = [
-            SimpleNamespace(display_name=name, cost=old_cost, **metrics)
-            for name in ("短裙", "外套", "=1+1")
+            SimpleNamespace(display_name=name, goods_title=title, cost=old_cost, **metrics)
+            for name, title in (
+                ("短裙", "2026秋 A 字半身短裙"),
+                ("外套", "2026秋 羊毛双面呢外套"),
+                ("=1+1", "=1+1"),
+            )
         ]
-        unassigned = SimpleNamespace(display_name="未归属商品", cost=old_cost, **metrics)
+        unassigned = SimpleNamespace(
+            display_name="未归属商品", goods_title=None, cost=old_cost, **metrics
+        )
         week_rows = [
             SimpleNamespace(
                 week_start=date(2026, 7, 27),
@@ -541,16 +547,23 @@ class TestReportExportApiContract:
         assert sheets["单品汇总"][0] == GOODS_HEADERS
         assert sheets["周明细"][0] == WEEK_HEADERS
         assert "推广成本" in PR_HEADERS and "成本" not in PR_HEADERS
-        assert PR_HEADERS[1:] == GOODS_HEADERS[1:] == WEEK_HEADERS[3:]
+        assert GOODS_HEADERS[:2] == ("商品", "商品全称")
+        assert PR_HEADERS[1:] == GOODS_HEADERS[2:] == WEEK_HEADERS[3:]
         expected_metrics = tuple(
             float(v) if isinstance(v, Decimal) else v for v in metrics.values()
         )
         assert sheets["PR 进度"][1:] == [("PR甲", *expected_metrics)]
         assert 987.65 not in sheets["PR 进度"][1]
 
-        # 单品：全部商品（不止一页）+ 末行未归属；危险文本照样转义；不导商品编码
-        assert [r[0] for r in sheets["单品汇总"][1:]] == ["短裙", "外套", "'=1+1", "未归属商品"]
-        assert all(r[1:] == expected_metrics for r in sheets["单品汇总"][1:])
+        # 单品：全部商品（不止一页）+ 末行未归属；第 2 列商品全称（未归属留空）；危险文本照样转义；
+        # 不导商品编码
+        assert [r[:2] for r in sheets["单品汇总"][1:]] == [
+            ("短裙", "2026秋 A 字半身短裙"),
+            ("外套", "2026秋 羊毛双面呢外套"),
+            ("'=1+1", "'=1+1"),
+            ("未归属商品", None),
+        ]
+        assert all(r[2:] == expected_metrics for r in sheets["单品汇总"][1:])
 
         # 周：所在周的周一 + 实际起止（首周起 = 区间起，不是周一）
         week_dates = [tuple(c.date() for c in r[:3]) for r in sheets["周明细"][1:]]
@@ -575,7 +588,7 @@ class TestReportExportApiContract:
         from app.modules.report import export_service as module
 
         metrics = {c.key: 1 for c in WORK_PROGRESS_METRIC_COLUMNS}
-        goods = SimpleNamespace(display_name="短裙", **metrics)
+        goods = SimpleNamespace(display_name="短裙", goods_title="A 字半身短裙", **metrics)
 
         class FakeWorkProgressService:
             def __init__(self, _session: object) -> None:

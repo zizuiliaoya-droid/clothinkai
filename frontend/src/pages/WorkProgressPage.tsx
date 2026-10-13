@@ -233,6 +233,7 @@ export function WorkProgressPage() {
       <WorkProgressGoodsCards
         data={goodsQuery.data}
         loading={goodsQuery.isLoading}
+        error={goodsQuery.error}
         season={seasons}
         onDrill={setDrillTarget}
         onShowAll={() => setGoodsModalOpen(true)}
@@ -261,6 +262,7 @@ export function WorkProgressPage() {
       <WorkProgressWeeksTable
         data={weeksQuery.data}
         loading={weeksQuery.isLoading}
+        error={weeksQuery.error}
         season={seasons}
       />
       <WorkProgressGoodsModal

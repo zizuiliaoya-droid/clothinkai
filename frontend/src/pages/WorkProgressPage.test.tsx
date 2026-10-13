@@ -447,6 +447,22 @@ describe("WorkProgressPage 单品卡片", () => {
     expect(container.querySelector(".ant-table")).toBeNull();
     expect(goodsMock).toHaveBeenCalledTimes(1);
   });
+  it("单品接口 500：卡片区出错误提示（后端 message），PR 表与周明细照常", async () => {
+    goodsMock.mockRejectedValue(
+      Object.assign(new Error("500"), {
+        response: { status: 500, data: { code: "INTERNAL_ERROR", message: "单品服务暂不可用" } },
+      })
+    );
+    serveWeeks(WEEK_ROWS);
+    renderPage();
+    const region = await screen.findByRole("region", { name: "单品汇总" });
+    // 非 403 重试一次后才落到错误，放宽等待
+    const alert = await within(region).findByRole("alert", {}, { timeout: 4000 });
+    expect(alert.textContent).toContain("单品服务暂不可用");
+    expect(screen.queryByText("没有权限查看工作进度表")).toBeNull();
+    expect(await screen.findByText("小王")).toBeTruthy();
+    expect(within(await weeksRegion()).queryByRole("alert")).toBeNull();
+  });
 });function weekRow(week_start: string, date_from: string, date_to: string): WorkProgressWeekRow {
   const { pr_id: _prId, pr_name: _prName, ...metrics } = prRow();
   void _prId;
@@ -536,6 +552,17 @@ describe("WorkProgressPage 周明细", () => {
     expect(await screen.findByText("没有权限查看工作进度表")).toBeTruthy();
     expect(container.querySelector(".ant-table")).toBeNull();
     expect(weeksMock).toHaveBeenCalledTimes(1);
+  });
+  it("周明细接口 500：周明细区出错误提示（无 message 用兜底文字），不出无权限页", async () => {
+    weeksMock.mockRejectedValue(
+      Object.assign(new Error(""), { response: { status: 500, data: { code: "INTERNAL_ERROR" } } })
+    );
+    renderPage();
+    const region = await weeksRegion();
+    const alert = await within(region).findByRole("alert", {}, { timeout: 4000 });
+    expect(alert.textContent).toContain("周明细加载失败");
+    expect(screen.queryByText("没有权限查看工作进度表")).toBeNull();
+    expect(within(await screen.findByRole("region", { name: "单品汇总" })).queryByRole("alert")).toBeNull();
   });
 });
 
