@@ -24,6 +24,7 @@
 
 商品资料（manual_style_sku）只认 product.import:write（跟单、运营、管理员）。
 站外推广（manual_promotion）的上传 / 重试只认 promotion_create:write（主管、管理员；流程线 PR-5）。
+结款单（manual_settlement）的上传 / 重试 / 查看只认 finance.settlement:pay（财务、管理员；流程线 PR-5）。
 
 降级语义：业务异常 → 全局 error handler 自动映射；系统失败自然冒泡 5xx + Sentry。
 """

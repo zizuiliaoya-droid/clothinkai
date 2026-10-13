@@ -208,11 +208,45 @@ class TestPromotionSource:
 
 
 @pytest.mark.unit
+class TestSettlementSource:
+    """流程线 PR-5（4.4、7.6）：结款单导入的四项都只认 finance.settlement:pay（财务、管理员）。"""
+
+    SOURCE = "manual_settlement"
+    PAYERS = frozenset({"admin", "platform_admin", "finance"})
+
+    def test_all_four_only_payers(self) -> None:
+        assert _who(_can_upload(self.SOURCE)) == self.PAYERS
+        assert _who(lambda p: access.can_write(p, self.SOURCE)) == self.PAYERS
+        assert _who(_can_map(self.SOURCE)) == self.PAYERS
+        assert _who(_can_resolve(self.SOURCE)) == self.PAYERS
+
+    def test_view_keeps_batch_readers(self) -> None:
+        # 持 importer.batch:read 的照旧能看；财务靠来源自己的 view
+        assert _who(lambda p: access.can_view(p, self.SOURCE)) == {
+            *self.PAYERS,
+            "operations",
+            "pr",
+            "pr_manager",
+        }
+
+    @pytest.mark.parametrize("code", ["pr", "pr_manager"])
+    def test_pr_denied_details(self, code: str) -> None:
+        perms = _role_perms(code)
+        assert perms.has("importer.batch", "write")
+        with pytest.raises(PermissionDeniedError) as exc:
+            access.require_write(perms, self.SOURCE)
+        assert exc.value.details == {
+            "required_scope": "finance.settlement",
+            "required_action": "pay",
+            "source": self.SOURCE,
+        }
+
+
+@pytest.mark.unit
 class TestOtherSources:
     @pytest.mark.parametrize(
         "source",
         [
-            "manual_settlement",
             "qianniu",
             "wanxiangtai",
             "manual_tao_order",
@@ -243,9 +277,10 @@ class TestVisibleSources:
     def test_merchandiser_only_style_sku(self) -> None:
         assert access.visible_sources(_role_perms("merchandiser")) == frozenset({STYLE_SKU})
 
-    @pytest.mark.parametrize(
-        "code", ["finance", "pattern_maker", "warehouse", "designer", "design_assistant"]
-    )
+    def test_finance_only_settlement(self) -> None:
+        assert access.visible_sources(_role_perms("finance")) == frozenset({"manual_settlement"})
+
+    @pytest.mark.parametrize("code", ["pattern_maker", "warehouse", "designer", "design_assistant"])
     def test_none_visible(self, code: str) -> None:
         assert access.visible_sources(_role_perms(code)) == frozenset()
 
