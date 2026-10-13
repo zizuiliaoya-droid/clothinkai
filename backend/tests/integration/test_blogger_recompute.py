@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 from sqlalchemy import select
+from sqlalchemy.exc import DBAPIError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.tenancy import tenant_id_ctx
@@ -371,6 +372,42 @@ class TestRecomputeQualityOnly:
             assert result == {"updated": 1, "unchanged": 0, "failed": 1}
             assert rows[bad.id]["quality_tags"] == [TAG_HIGH_VALUE]
             assert rows[ok.id]["quality_tags"] == []
+        finally:
+            tenant_id_ctx.reset(token)
+
+    @pytest.mark.parametrize(
+        "exc",
+        [
+            OperationalError("SELECT 1", {}, Exception("connection reset")),
+            DBAPIError("SELECT 1", {}, Exception("server closed the connection")),
+        ],
+        ids=["operational", "dbapi"],
+    )
+    async def test_db_error_raised_not_counted(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        blogger_factory: Any,
+        monkeypatch: pytest.MonkeyPatch,
+        exc: DBAPIError,
+    ) -> None:
+        """数据库错误不按单个博主计 failed：原样抛给任务层的 autoretry，余下博主不再算。"""
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            for _ in range(3):
+                await blogger_factory.blogger(quality_tags=[TAG_HIGH_VALUE])
+            calls: list[Any] = []
+
+            async def _db_down(blogger_id: Any, *a: Any, **k: Any) -> list[str]:
+                calls.append(blogger_id)
+                raise exc
+
+            monkeypatch.setattr(tag_service, "compute_quality_tags", _db_down)
+            with pytest.raises(DBAPIError) as ei:
+                await BloggerTagService(session).recompute_quality_for_tenant(tenant_a.id)
+
+            assert ei.value is exc
+            assert len(calls) == 1, "数据库错误之后不该再算余下博主"
         finally:
             tenant_id_ctx.reset(token)
 

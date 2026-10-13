@@ -17,6 +17,7 @@ import logging
 from decimal import Decimal
 from uuid import UUID
 
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.blogger.repository import BloggerRepository
@@ -115,7 +116,9 @@ class BloggerTagService:
 
         只写 ``quality_tags``：博主类型、``is_suspected_fake``、类目标签一律不动（它们不依赖
         平台指标；``recompute_for_tenant`` 会按粉丝量 / 互动比重写，有人手改过的会被冲掉）。
-        标签没变的行不赋值。单个博主失败（catch+log）不中止。
+        标签没变的行不赋值。单个博主的非数据库异常（catch+log）计 failed、不中止；
+        数据库错误（``DBAPIError`` 及其子类）原样抛出，交给任务层 ``autoretry_for`` 重试
+        （事务已 aborted，接着算余下博主只会全部失败）。
         返回 updated（标签变了的行数）/ unchanged / failed。调用方负责 commit。
         """
         bloggers = await self._repo.list_active_bloggers(tenant_id)
@@ -126,6 +129,8 @@ class BloggerTagService:
         for b in bloggers:
             try:
                 tags = await compute_quality_tags(b.id, self._session, tenant_id, settings=settings)
+            except DBAPIError:
+                raise
             except Exception:
                 log.warning("recompute_quality_failed blogger_id=%s", str(b.id))
                 failed += 1
