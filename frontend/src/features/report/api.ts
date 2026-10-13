@@ -3,6 +3,7 @@
 import { apiClient } from "@/services/apiClient";
 import type {
   BiDashboard,
+  BiGoodsNotes,
   DrillPromotionPage,
   DrillPromotionParams,
   ProductionReport,
@@ -183,6 +184,39 @@ export async function getBiDashboard(
   } = {}
 ): Promise<BiDashboard> {
   const resp = await apiClient.get<BiDashboard>("/api/reports/bi", { params });
+  return resp.data;
+}
+
+/**
+ * BI Tab2 单品趋势（7e R6）：参数与响应同 `/production/trend`，判权挂 `report.bi:read`（财务也能调）。
+ * 查询键 ["bi-goods", "trend", …]（刷新汇总后随 `bi-goods` 一起作废）。
+ */
+export async function getBiGoodsTrend(
+  goodsId: string,
+  params: {
+    preset?: string;
+    date_from?: string;
+    date_to?: string;
+    granularity?: TimeGranularity;
+    exclude_brushing?: boolean;
+  } = {}
+): Promise<ProductionTrend> {
+  const resp = await apiClient.get<ProductionTrend>(
+    `/api/reports/bi/goods/${encodeURIComponent(goodsId)}/trend`,
+    { params }
+  );
+  return resp.data;
+}
+
+/** BI Tab2 笔记散点（7e R6）：起止必填、跨度 ≤ 366 天；查询键 ["bi-goods", "notes", …]。 */
+export async function getBiGoodsNotes(
+  goodsId: string,
+  params: { date_from: string; date_to: string }
+): Promise<BiGoodsNotes> {
+  const resp = await apiClient.get<BiGoodsNotes>(
+    `/api/reports/bi/goods/${encodeURIComponent(goodsId)}/notes`,
+    { params }
+  );
   return resp.data;
 }
 

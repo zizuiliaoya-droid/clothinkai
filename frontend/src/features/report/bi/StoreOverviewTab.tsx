@@ -27,9 +27,10 @@ import {
   workProgressDrillHref,
   type BiDrillRange,
 } from "./biDrill";
+import { money, moneyNumber, roiText } from "./biFormat";
 
 /** 次要文字：slate-600，白底约 7.6:1。 */
-const MUTED = "#475569";
+export const MUTED = "#475569";
 const VISUALLY_HIDDEN = {
   position: "absolute",
   width: 1,
@@ -44,18 +45,8 @@ const VISUALLY_HIDDEN = {
 /** 饼图「其他」项的键：没有 goods_id，不可下钻。 */
 const OTHER_KEY = "__other__";
 
-const money = (value: string | null | undefined) =>
-  value == null
-    ? "—"
-    : `¥${Number(value).toLocaleString("zh-CN", {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      })}`;
-const moneyNumber = (v: number) => money(String(v));
 const percent = (value: string | null | undefined) =>
   value == null ? "—" : `${(Number(value) * 100).toFixed(1)}%`;
-const roiText = (value: string | null | undefined) =>
-  value == null ? "—" : Number(value).toFixed(2);
 
 /** 趋势横轴：行上是实际起止（桶 ∩ 区间）；周写「MM-DD~MM-DD」，月 / 年取前缀。 */
 function trendLabel(from: string, to: string, granularity: TimeGranularity): string {
@@ -77,7 +68,7 @@ function NoDrillLabel({ label, hint }: { label: ReactNode; hint: string }) {
   );
 }
 
-function KpiCard({ title, value, description }: { title: string; value: string; description?: string }) {
+export function KpiCard({ title, value, description }: { title: string; value: string; description?: string }) {
   return (
     <Card size="small" style={{ height: "100%" }}>
       <Typography.Text style={{ color: MUTED }}>{title}</Typography.Text>

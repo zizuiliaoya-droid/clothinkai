@@ -9,6 +9,7 @@ import {
   useReportTimeRange,
 } from "@/components/ReportTimeRangeFilter/ReportTimeRangeFilter";
 import { getBiDashboard } from "@/features/report/api";
+import { GoodsAnalysisTab } from "@/features/report/bi/GoodsAnalysisTab";
 import { StoreOverviewTab } from "@/features/report/bi/StoreOverviewTab";
 import { TIME_PRESETS, type ReportFilterSchema } from "@/features/report/reportFilters";
 import type { TimeGranularity, TimePreset } from "@/features/report/types";
@@ -29,12 +30,16 @@ const GRANULARITY_OPTIONS: Array<{
   { label: "按年", value: "year" },
 ];
 
+type BiTab = "store" | "goods";
+const BI_TABS: readonly BiTab[] = ["store", "goods"];
+
 /** 次要文字：slate-600，白底约 7.6:1。 */
 const MUTED = "#475569";
 
 /**
  * 筛选状态：preset / granularity / 刷单开关记忆；日期区间只从 URL 带入、不记；
  * granularity 不在 URL 白名单里，只走记忆。刷单开关管单品块（与单品趋势），店铺块是全店口径、不跟它。
+ * 当前 Tab 与 Tab2 选中的商品（7e R6）url + 记忆；URL 带来的不写记忆，用户切 Tab / 选商品才写。
  */
 interface BiFilters {
   preset: TimePreset;
@@ -42,6 +47,8 @@ interface BiFilters {
   date_to?: string;
   granularity: TimeGranularity;
   exclude_brushing: boolean;
+  tab: BiTab;
+  goods_id?: string;
 }
 
 const BI_FILTER_SCHEMA: ReportFilterSchema<BiFilters> = {
@@ -55,12 +62,15 @@ const BI_FILTER_SCHEMA: ReportFilterSchema<BiFilters> = {
     memory: true,
   },
   exclude_brushing: { kind: "boolean", url: true, memory: true },
+  tab: { kind: "enum", values: BI_TABS, url: true, memory: true },
+  goods_id: { kind: "uuid", url: true, memory: true },
 };
 
 const BI_FILTER_DEFAULTS: BiFilters = {
   preset: "last_30d",
   granularity: "day",
   exclude_brushing: true,
+  tab: "store",
 };
 
 export function BiDashboardPage() {
@@ -69,7 +79,7 @@ export function BiDashboardPage() {
     BI_FILTER_SCHEMA,
     BI_FILTER_DEFAULTS
   );
-  const { preset, granularity, exclude_brushing: excludeBrushing } = filters;
+  const { preset, granularity, exclude_brushing: excludeBrushing, tab } = filters;
   const range = toDateRange(filters.date_from, filters.date_to);
 
   const { dateFrom, dateTo, enabled } = useReportTimeRange(preset, range);
@@ -147,11 +157,26 @@ export function BiDashboardPage() {
       ) : null}
 
       <Tabs
+        activeKey={tab}
+        onChange={(key) => setFilters({ tab: key as BiTab })}
         items={[
           {
             key: "store",
             label: "店铺总览",
             children: <StoreOverviewTab data={data} loading={isLoading} caps={caps} />,
+          },
+          {
+            key: "goods",
+            label: "单品分析",
+            children: (
+              <GoodsAnalysisTab
+                data={data}
+                loading={isLoading}
+                granularity={granularity}
+                goodsId={filters.goods_id}
+                onGoodsChange={(id) => setFilters({ goods_id: id })}
+              />
+            ),
           },
         ]}
       />

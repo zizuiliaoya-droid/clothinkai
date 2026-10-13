@@ -406,6 +406,29 @@ export interface BiGoodsBlock {
   pay_share: BiChartDatum[];
 }
 
+/**
+ * 笔记散点一点（7e R6）= 一张已发布、录过 7 天数据的推广单：x = 发布日期，y = 7 天点赞（原始值），
+ * 点大小 = 站外推广成本（F2：读不到为 null，前端用固定大小）。`detail_url` R8 之前恒 null。
+ */
+export interface BiNotePoint {
+  promotion_id: string;
+  publish_date: string;
+  like_count: number | null;
+  promo_cost: string | null;
+  blogger_nickname: string;
+  platform: string;
+  detail_url: string | null;
+}
+
+/** GET /api/reports/bi/goods/{goods_id}/notes：≤ 500 点、按发布日期升序；超出取最近 500，`truncated` 为真。 */
+export interface BiGoodsNotes {
+  goods_id: string;
+  date_from: string;
+  date_to: string;
+  truncated: boolean;
+  points: BiNotePoint[];
+}
+
 /** GET /api/reports/bi（7e R6）：整页一次来源，店铺 / 单品两块。 */
 export interface BiDashboard {
   date_from: string;

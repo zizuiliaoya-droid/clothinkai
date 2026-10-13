@@ -2,12 +2,14 @@
 // BI 看板（7e R1）：BI 改挂 report.bi:read 后，加载失败的提示要指向 BI 看板权限，不再是投产报表权限。
 // 7e R6 S7：Tab1 店铺总览（两张卡改名、无商品编码）、刷单开关、下钻按 capabilities（不能点有提示）、
 // 下钻链接带区间 / 刷单开关 / goods_id / pr_id（含 unassigned）、刷新后 BI 重新取数。
+// 7e R6 S8：Tab2 单品分析（URL / 记忆带入 tab 与 goods_id、无有效选择取第一项不写记忆、切 Tab / 选商品写记忆、散点空态与截断）。
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   BiDashboard,
+  BiGoodsNotes,
   BiGoodsRow,
   BiWorkloadRow,
   ReportCapabilities,
@@ -20,11 +22,15 @@ const freshnessMock = vi.fn();
 const refreshMock = vi.fn();
 const getPrefMock = vi.fn();
 const savePrefMock = vi.fn();
+const goodsTrendMock = vi.fn();
+const goodsNotesMock = vi.fn();
 vi.mock("@/features/report/api", () => ({
   getBiDashboard: (...args: unknown[]) => biMock(...args),
   getReportCapabilities: (...args: unknown[]) => capsMock(...args),
   getSummaryFreshness: (...args: unknown[]) => freshnessMock(...args),
   refreshSummaries: (...args: unknown[]) => refreshMock(...args),
+  getBiGoodsTrend: (...args: unknown[]) => goodsTrendMock(...args),
+  getBiGoodsNotes: (...args: unknown[]) => goodsNotesMock(...args),
 }));
 vi.mock("@/features/preference/api", () => ({
   getFilterPreference: (...args: unknown[]) => getPrefMock(...args),
@@ -198,6 +204,10 @@ beforeEach(() => {
   getPrefMock.mockResolvedValue({});
   savePrefMock.mockReset();
   savePrefMock.mockResolvedValue(undefined);
+  goodsTrendMock.mockReset();
+  goodsTrendMock.mockResolvedValue({ points: [] });
+  goodsNotesMock.mockReset();
+  goodsNotesMock.mockResolvedValue(notes());
   useAuthStore.setState({
     user: { id: "u1", username: "u1", display_name: null, email: null, status: "active", roles: [] },
     isAuthenticated: true,
@@ -370,5 +380,176 @@ describe("BiDashboardPage 下钻按 capabilities", () => {
     expect(location.textContent).toContain("/production?");
     expect(location.textContent).toContain(`goods_id=${G1}`);
     expect(location.textContent).toContain("exclude_brushing=true");
+  });
+});
+
+const G2 = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+
+function notes(over: Partial<BiGoodsNotes> = {}): BiGoodsNotes {
+  return {
+    goods_id: G1,
+    date_from: "2026-09-13",
+    date_to: "2026-10-12",
+    truncated: false,
+    points: [],
+    ...over,
+  };
+}
+
+/** 两个商品的看板：G1 条纹上衣、G2 纯色衬衫（净投产为空）。 */
+function twoGoods(params: { exclude_brushing?: boolean }) {
+  return Promise.resolve(
+    dashboard({
+      exclude_brushing: params.exclude_brushing ?? true,
+      goods: {
+        items: [
+          goodsRow(),
+          goodsRow({
+            goods_id: G2,
+            goods_title: "纯色棉麻衬衫",
+            goods_short_name: "纯色衬衫",
+            pay_amount: "800.00",
+            net_roi: null,
+          }),
+        ],
+        roi_top: [],
+        pay_share: [],
+      },
+    })
+  );
+}
+
+/** 等足保存节流（600ms）再看有没有写记忆。 */
+const waitDebounce = () => new Promise((resolve) => setTimeout(resolve, 800));
+
+/** 打开商品下拉并点一个选项。 */
+async function pickGoods(label: string) {
+  const input = screen.getByRole("combobox", { name: "选择商品" });
+  const selector = input.closest(".ant-select")?.querySelector(".ant-select-selector");
+  fireEvent.mouseDown(selector as Element);
+  const option = await waitFor(() => {
+    const el = document.querySelector(`.ant-select-item-option[title="${label}"]`);
+    expect(el).toBeTruthy();
+    return el as HTMLElement;
+  });
+  fireEvent.click(option);
+}
+
+function goodsTab() {
+  return screen.getByRole("tab", { name: "单品分析" });
+}
+
+describe("BiDashboardPage 单品分析", () => {
+  beforeEach(() => {
+    biMock.mockImplementation(twoGoods);
+  });
+
+  it("URL ?tab=goods&goods_id= 进 Tab2、选中该商品、按 BI 实际起止取趋势与散点；不写记忆", async () => {
+    renderPage(`/bi?tab=goods&goods_id=${G2}`);
+    await waitFor(() => expect(goodsTrendMock).toHaveBeenCalled());
+    expect(goodsTab().getAttribute("aria-selected")).toBe("true");
+    expect(goodsTrendMock.mock.calls[0]).toEqual([
+      G2,
+      {
+        preset: "custom",
+        date_from: "2026-09-13",
+        date_to: "2026-10-12",
+        granularity: "day",
+        exclude_brushing: true,
+      },
+    ]);
+    await waitFor(() =>
+      expect(goodsNotesMock).toHaveBeenCalledWith(G2, { date_from: "2026-09-13", date_to: "2026-10-12" })
+    );
+    // 单品 KPI 是 G2 的：支付 800、净投产为空显示「—」
+    expect(await screen.findByText("¥800.00")).toBeTruthy();
+    await waitDebounce();
+    expect(savePrefMock).not.toHaveBeenCalled();
+  });
+
+  it("记忆里的 tab 与 goods_id 带入 Tab2", async () => {
+    getPrefMock.mockResolvedValue({ tab: "goods", goods_id: G2 });
+    renderPage();
+    await waitFor(() => expect(goodsTrendMock).toHaveBeenCalled());
+    expect(goodsTab().getAttribute("aria-selected")).toBe("true");
+    expect(goodsTrendMock.mock.calls.every((c) => c[0] === G2)).toBe(true);
+  });
+
+  it("goods_id 不在本区间选项里：取第一项、不写记忆", async () => {
+    renderPage(`/bi?tab=goods&goods_id=cccccccc-cccc-4ccc-8ccc-cccccccccccc`);
+    await waitFor(() => expect(goodsTrendMock).toHaveBeenCalled());
+    expect(goodsTrendMock.mock.calls[0][0]).toBe(G1);
+    await waitDebounce();
+    expect(savePrefMock).not.toHaveBeenCalled();
+  });
+
+  it("切 Tab 写记忆（默认商品不写）；选商品写 goods_id 并按新商品取数", async () => {
+    renderPage();
+    await waitData();
+    expect(goodsTrendMock).not.toHaveBeenCalled();
+    fireEvent.click(goodsTab());
+    await waitFor(() => expect(goodsTrendMock).toHaveBeenCalled());
+    expect(goodsTrendMock.mock.calls[0][0]).toBe(G1);
+    await waitFor(
+      () =>
+        expect(savePrefMock).toHaveBeenLastCalledWith(
+          "bi_dashboard",
+          expect.objectContaining({ tab: "goods" })
+        ),
+      { timeout: 2000 }
+    );
+    expect(savePrefMock.mock.calls.at(-1)?.[1]).not.toHaveProperty("goods_id");
+
+    await pickGoods("纯色衬衫");
+    await waitFor(() => expect(goodsTrendMock).toHaveBeenLastCalledWith(G2, expect.anything()));
+    await waitFor(
+      () =>
+        expect(savePrefMock).toHaveBeenLastCalledWith(
+          "bi_dashboard",
+          expect.objectContaining({ tab: "goods", goods_id: G2 })
+        ),
+      { timeout: 2000 }
+    );
+  });
+
+  it("散点为空：提示「还没有录 7 天数据的笔记」", async () => {
+    renderPage("/bi?tab=goods");
+    expect(await screen.findByText("还没有录 7 天数据的笔记")).toBeTruthy();
+    expect(screen.queryByText(/只显示最近 500 篇/)).toBeNull();
+  });
+
+  it("散点截断：提示「只显示最近 500 篇」；点不可点、悬停说明详情页随时间线上线；promo_cost 为空也画", async () => {
+    goodsNotesMock.mockResolvedValue(
+      notes({
+        truncated: true,
+        points: [
+          {
+            promotion_id: "p1",
+            publish_date: "2026-10-01",
+            like_count: 120,
+            promo_cost: "300.00",
+            blogger_nickname: "博主甲",
+            platform: "小红书",
+            detail_url: null,
+          },
+          {
+            promotion_id: "p2",
+            publish_date: "2026-10-03",
+            like_count: 80,
+            promo_cost: null,
+            blogger_nickname: "博主乙",
+            platform: "抖音",
+            detail_url: null,
+          },
+        ],
+      })
+    );
+    renderPage("/bi?tab=goods");
+    expect(await screen.findByText(/只显示最近 500 篇/)).toBeTruthy();
+    const pts = await screen.findAllByTestId("point");
+    expect(pts).toHaveLength(2);
+    expect(pts[0].getAttribute("style") ?? "").toContain("cursor: default");
+    expect(pts[0].querySelector("title")?.textContent).toContain("详情页随推广单时间线上线");
+    expect(screen.queryByText("还没有录 7 天数据的笔记")).toBeNull();
   });
 });
