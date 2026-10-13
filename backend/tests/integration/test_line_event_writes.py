@@ -877,7 +877,8 @@ class TestPatch:
             PromotionUpdate(
                 remark="博主要求周五前到", receiver_name="李四", receiver_phone="13800000000"
             ),
-            flow_users.pr,
+            # PR-5 起备注归合作信息，PR 只读（11-16）：由主管改
+            flow_users.pr_manager,
         )
         events = await events_of(session, line_id=line_id)
         assert _types(events) == [_T.PROMOTION_UPDATED.value, _T.SHIP_RECEIVER_CHANGED.value]
@@ -889,7 +890,7 @@ class TestPatch:
         assert receiver.payload == {"diff": {"receiver_name": {"before": "张三", "after": "李四"}}}
         for e in events:
             assert e.promotion_id == pid and e.negotiation_id is None
-            assert e.actor_id == flow_users.pr.id
+            assert e.actor_id == flow_users.pr_manager.id
             assert (e.from_state, e.to_state) == (None, None)
         _check_registered(events)
 
@@ -918,7 +919,7 @@ class TestPatch:
         )
         line_id = promo.line_id
         await PromotionService(session).update_promotion(
-            promo.id, PromotionUpdate(quote_amount=Decimal("666.00")), flow_users.pr
+            promo.id, PromotionUpdate(quote_amount=Decimal("666.00")), flow_users.pr_manager
         )
         (event,) = await events_of(session, line_id=line_id)
         assert event.event_type == _T.PROMOTION_UPDATED.value
@@ -988,7 +989,7 @@ class TestPatch:
         )
         line_id, pid = promo.line_id, promo.id
         resp = await _call(
-            session, flow_users.pr, "PATCH", f"/api/promotions/{pid}", {"remark": new}
+            session, flow_users.pr_manager, "PATCH", f"/api/promotions/{pid}", {"remark": new}
         )
         assert resp.status_code == 200, resp.text
         stored = (
@@ -1010,6 +1011,41 @@ class TestPatch:
         }
         _check_registered([event])
 
+    async def test_long_source_extra_value_is_clipped_per_key(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        """PR-4 收尾 LOW 2：``source_extra`` 一个键 500 字 → 落库全文；diff 里该键的值截到 200 字，
+        只有截过的一侧标 ``truncated``（没超 8 KB，不退化成字段名；注入 LOW2_NODICT）。"""
+        promo = await _promo(flow_users, product_factory, blogger_factory, promotion_factory)
+        line_id, pid = promo.line_id, promo.id
+        long_value = "长" * 499 + "尾"
+        await PromotionService(session).update_promotion(
+            pid, PromotionUpdate(source_extra={"寄样备注": long_value}), flow_users.pr
+        )
+        stored = (
+            await session.execute(
+                sa_text("SELECT source_extra FROM promotion WHERE id = :pid"), {"pid": pid}
+            )
+        ).scalar_one()
+        assert stored == {"寄样备注": long_value}
+        (event,) = await events_of(session, line_id=line_id)
+        assert event.event_type == _T.PROMOTION_UPDATED.value
+        assert event.payload == {
+            "diff": {
+                "source_extra": {
+                    "before": {"寄样备注": None},
+                    "after": {"寄样备注": "长" * 200},
+                    "truncated": ["after"],
+                }
+            }
+        }
+        _check_registered([event])
+
     async def test_huge_source_extra_falls_back_to_field_names(
         self,
         session: AsyncSession,
@@ -1024,7 +1060,7 @@ class TestPatch:
         extra = {f"自定义{i:02d}": "长" * 1000 for i in range(20)}
         resp = await _call(
             session,
-            flow_users.pr,
+            flow_users.pr_manager,
             "PATCH",
             f"/api/promotions/{pid}",
             {"source_extra": extra, "remark": "补充"},
@@ -1069,21 +1105,106 @@ class TestPatch:
         blogger_factory: Any,
         promotion_factory: Any,
     ) -> None:
-        """C1：主管只补合作模式（空 → 寄拍）→ 200、落库、写 ``promotion.updated``（diff 带 cooperation_mode，注入 C1_EARLY）。"""
+        """C1：主管只补合作模式（空 → 寄拍）→ 200、落库、写 ``promotion.updated``（diff 带 cooperation_mode，注入 C1_EARLY）。
+
+        PR-4 收尾 LOW 1：补模式连带的成本初始化一起落库 —— 寄拍样品成本置 0、报价不动，
+        金额改动记一条「模式初始化」，事件 ``amount_fields`` 只有样品成本。
+        """
         promo = await _promo(
-            flow_users, product_factory, blogger_factory, promotion_factory, cooperation_mode=None
+            flow_users,
+            product_factory,
+            blogger_factory,
+            promotion_factory,
+            cooperation_mode=None,
+            cost_snapshot=Decimal("88.00"),
         )
-        line_id = promo.line_id
+        line_id, pid = promo.line_id, promo.id
         resp, stored = await self._mode_patch(
             session, flow_users.pr_manager, promo, {"cooperation_mode": "寄拍"}
         )
         assert resp.status_code == 200, resp.text
         assert resp.json()["cooperation_mode"] == "寄拍"
         assert stored == "寄拍"
+        assert await self._db_costs(session, pid) == (Decimal("500.00"), Decimal("0.00"))
+        assert await self._amount_logs(session, pid) == [
+            ("cost_snapshot", Decimal("88.00"), Decimal("0.00"), "模式初始化")
+        ]
         (event,) = await events_of(session, line_id=line_id)
         assert event.event_type == _T.PROMOTION_UPDATED.value
-        assert event.payload["diff"] == {"cooperation_mode": {"before": None, "after": "寄拍"}}
+        assert event.payload == {
+            "diff": {"cooperation_mode": {"before": None, "after": "寄拍"}},
+            "amount_fields": ["cost_snapshot"],
+        }
         _check_registered([event])
+
+    async def test_fill_barter_only_zeroes_quote_and_inits_cost(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        """PR-4 收尾 LOW 1：主管只补置换 → 报价落 0、样品成本按商品成员成本初始化，
+        两条金额改动都是「模式初始化」，事件 ``amount_fields`` 带报价（注入 LOW1_NOCOST）。"""
+        style = await product_factory.style()
+        goods = await _goods(session, tenant_a, style, is_suit=False)
+        await session.execute(
+            sa_text(
+                "UPDATE goods_style_item SET single_goods_cost = 61.00 WHERE goods_main_id = :gid"
+            ),
+            {"gid": goods.id},
+        )
+        promo = await _promo(
+            flow_users,
+            product_factory,
+            blogger_factory,
+            promotion_factory,
+            style=style,
+            goods_main_id=goods.id,
+            cooperation_mode=None,
+            quote_amount=Decimal("500.00"),
+        )
+        line_id, pid = promo.line_id, promo.id
+        resp, stored = await self._mode_patch(
+            session, flow_users.pr_manager, promo, {"cooperation_mode": "置换"}
+        )
+        assert resp.status_code == 200, resp.text
+        assert stored == "置换"
+        assert await self._db_costs(session, pid) == (Decimal("0.00"), Decimal("61.00"))
+        assert await self._amount_logs(session, pid) == [
+            ("cost_snapshot", None, Decimal("61.00"), "模式初始化"),
+            ("quote_amount", Decimal("500.00"), Decimal("0.00"), "模式初始化"),
+        ]
+        (event,) = await events_of(session, line_id=line_id)
+        assert event.event_type == _T.PROMOTION_UPDATED.value
+        assert event.payload == {
+            "diff": {"cooperation_mode": {"before": None, "after": "置换"}},
+            "amount_fields": ["quote_amount", "cost_snapshot"],
+        }
+        _check_registered([event])
+
+    @staticmethod
+    async def _db_costs(session: AsyncSession, pid: Any) -> tuple[Any, Any]:
+        row = (
+            await session.execute(
+                sa_text("SELECT quote_amount, cost_snapshot FROM promotion WHERE id = :pid"),
+                {"pid": pid},
+            )
+        ).one()
+        return row[0], row[1]
+
+    @staticmethod
+    async def _amount_logs(session: AsyncSession, pid: Any) -> list[tuple[Any, ...]]:
+        rows = await session.execute(
+            sa_text(
+                "SELECT field_name, before_value, after_value, change_source "
+                "FROM promotion_amount_log WHERE promotion_id = :pid ORDER BY field_name"
+            ),
+            {"pid": pid},
+        )
+        return [tuple(r) for r in rows.all()]
 
     async def test_fill_mode_with_other_field_still_works(
         self,

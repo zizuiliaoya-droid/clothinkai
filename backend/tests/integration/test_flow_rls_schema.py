@@ -53,6 +53,8 @@ ROLE_SCOPES: tuple[str, ...] = (
     # 7e R2（062）只加汇总列、不改授权，这里没有条目
     # PR-3（063）；negotiation_final:approve 只入册不绑角色，见 test_migration_063_state
     "negotiation_all:read",
+    # PR-5（064）
+    "promotion_create:write",
 )
 
 _APP_ROLE = "clothing_app"

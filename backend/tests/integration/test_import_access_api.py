@@ -223,7 +223,8 @@ class TestImportAccessHttp:
             resp = await _upload(c, STYLE_SKU)
             assert resp.status_code == 202, resp.text
 
-    @pytest.mark.parametrize("role_code", ["finance", "pattern_maker", "warehouse", "designer"])
+    # 财务从流程线 PR-5 起能看结款单批次（tests/api/test_import_source_scopes.py）
+    @pytest.mark.parametrize("role_code", ["pattern_maker", "warehouse", "designer"])
     async def test_no_visible_source_403(self, as_role: Any, role_code: str) -> None:
         await as_role(role_code)
         async with _client() as c:

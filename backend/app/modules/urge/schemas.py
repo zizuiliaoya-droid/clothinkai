@@ -113,6 +113,9 @@ class UrgeTaskResponse(BaseModel):
 class UrgeTaskDetailResponse(UrgeTaskResponse):
     """任务详情 = 任务 + 完整时间线（倒序）。"""
 
+    close_screenshot_url: str | None = None
+    """「标记完成」截图的签名 URL（关闭原因 = 已完成时才有；现签不落库，签名失败为 None）。"""
+
     records: list[UrgeRecordResponse] = Field(default_factory=list)
 
 

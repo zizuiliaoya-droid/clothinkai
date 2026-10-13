@@ -42,6 +42,7 @@ from app.modules.flow.matrix import (
     Gate,
     Level,
     Matrix,
+    ModeIn,
     NoStar,
     NotFirstReviewer,
     NotPrOwner,
@@ -1010,9 +1011,14 @@ def test_ship_state_machine() -> None:
     history = P_DOCS["催发·历史单"]
     assert _real_ui(pm, history).actions == {
         "ship_include": mx.UiAction("enabled"),
+        "urge": mx.UiAction("enabled"),
+        "comment": mx.UiAction("enabled"),
+        "deactivate": mx.UiAction("enabled"),
+    }
+    assert _real_ui("pr", history).actions == {
+        "urge": mx.UiAction("enabled"),
         "comment": mx.UiAction("enabled"),
     }
-    assert _real_ui("pr", history).actions == {"comment": mx.UiAction("enabled")}
     require(PERSONAS["admin"], history, "ship_include")
     # 已发货的 C 列单、已发布的历史单都不能纳入
     for doc in (P_DOCS["催发"], P_DOCS["待主管审核·历史单"]):
@@ -1055,15 +1061,26 @@ def test_real_ui_shape() -> None:
     a = _real_ui("pr_manager", P_DOCS["待推送仓库"])
     assert a.to_dict(view="list") == {
         "column": "A",
-        "actions": {"ship_push": {"state": "enabled"}, "comment": {"state": "enabled"}},
-        "edits": ["goods_items", "receiver"],
+        "actions": {
+            "ship_push": {"state": "enabled"},
+            "urge": {"state": "enabled"},
+            "comment": {"state": "enabled"},
+            "deactivate": {"state": "enabled"},
+        },
+        "edits": ["goods", "goods_items", "cooperation", "quote_amount", "receiver"],
     }
     assert a.to_dict(view="detail")["fields"] == {
+        "goods": {"state": "edit"},
         "goods_items": {"state": "edit"},
+        "cooperation": {"state": "edit"},
+        "cooperation_mode": {"state": "read"},
+        "quote_amount": {"state": "edit"},
         "receiver": {"state": "edit"},
         "shipping": {"state": "grey", "hint": "推送后由仓库回填"},
         "timeline": {"state": "read"},
     }
+    # PR：合作信息、归属商品、服务费都只读（11-16），只能改收件
+    assert _real_ui("pr", P_DOCS["待推送仓库"]).to_dict(view="list")["edits"] == ["receiver"]
     # 财务在 C 列什么都看不到；E 列只读颜色尺码
     assert _real_ui("finance", P_DOCS["催发"]).to_dict(view="detail") == {
         "column": "C",
@@ -1071,7 +1088,11 @@ def test_real_ui_shape() -> None:
         "fields": {},
     }
     assert _real_ui("finance", P_DOCS["待财务付款"]).to_dict(view="detail")["fields"] == {
+        "goods": {"state": "read"},
         "goods_items": {"state": "read"},
+        "cooperation": {"state": "read"},
+        "cooperation_mode": {"state": "read"},
+        "quote_amount": {"state": "read"},
         "timeline": {"state": "read"},
     }
 
@@ -1102,16 +1123,36 @@ def test_receiver_follows_field_rules() -> None:
 
 def test_real_writable_fields() -> None:
     receiver = {"receiver_name", "receiver_phone", "receiver_address"}
-    managed = receiver | {"sku_id"}
+    cooperation = {"platform", "scheduled_publish_date", "remark"}
+    # PR-5 入矩阵：归属商品、合作信息、合作模式、服务费、停用（is_active 归动作 deactivate）
+    pr5 = {"goods_main_id", *cooperation, "cooperation_mode", "quote_amount", "is_active"}
+    managed = receiver | {"sku_id"} | pr5
     wf = writable_fields(PERSONAS["pr"], P_DOCS["催发"])
     assert wf.managed == managed
-    # 已发货的 C 列：PR 两组都只读；历史单按 A 列，PR 能改收件、颜色尺码仍读
+    # 已发货的 C 列：PR 全都只读；历史单按 A 列，PR 能改收件，颜色尺码、归属商品仍读
     assert wf.allowed == frozenset()
     assert writable_fields(PERSONAS["pr"], P_DOCS["催发·历史单"]).allowed == receiver
-    assert writable_fields(PERSONAS["pr_manager"], P_DOCS["待推送仓库"]).allowed == managed
-    assert writable_fields(PERSONAS["pr_manager"], P_DOCS["待仓库发货"]).allowed == receiver
+    assert writable_fields(PERSONAS["pr"], P_DOCS["待推送仓库·模式空"]).allowed == receiver
+    # 主管：合作模式有值只读、空值可补
+    pm = PERSONAS["pr_manager"]
+    assert writable_fields(pm, P_DOCS["待推送仓库"]).allowed == managed - {"cooperation_mode"}
+    assert writable_fields(pm, P_DOCS["待推送仓库·模式空"]).allowed == managed
+    assert writable_fields(pm, P_DOCS["待仓库发货"]).allowed == managed - {
+        "cooperation_mode",
+        "sku_id",
+    }
+    # 结款单生成后（E 列）：服务费所有人只读，合作信息与停用只有管理员
+    assert writable_fields(pm, P_DOCS["待财务付款·模式空"]).allowed == {
+        "goods_main_id",
+        "cooperation_mode",
+    }
     for label, doc in P_DOCS.items():
-        assert writable_fields(PERSONAS["admin"], doc).allowed == managed, label
+        expected = set(managed)
+        if doc.column in "EFGH":
+            expected.discard("quote_amount")
+        if doc.cooperation_mode is not None:
+            expected.discard("cooperation_mode")
+        assert writable_fields(PERSONAS["admin"], doc).allowed == expected, label
         assert writable_fields(PERSONAS["operations"], doc).allowed == frozenset(), label
 
     with pytest.raises(FieldPermissionDenied) as exc:
@@ -1119,8 +1160,87 @@ def test_real_writable_fields() -> None:
             PERSONAS["pr"], P_DOCS["催发"], {"sku_id", "note_title", "receiver_phone"}
         )
     assert exc.value.details["fields"] == ["receiver_phone", "sku_id"]
+    # PR 改服务费、平台、归属商品、停用：按 patch_groups 登记顺序全列（G2）
+    with pytest.raises(FieldPermissionDenied) as exc:
+        ensure_patch_allowed(
+            PERSONAS["pr"],
+            P_DOCS["待推送仓库"],
+            {"is_active", "quote_amount", "platform", "goods_main_id", "note_title"},
+        )
+    assert exc.value.details["fields"] == ["goods_main_id", "platform", "quote_amount", "is_active"]
     # 没入矩阵的字段照旧放行
-    ensure_patch_allowed(PERSONAS["pr"], P_DOCS["催发"], {"note_title", "goods_main_id"})
+    ensure_patch_allowed(PERSONAS["pr"], P_DOCS["催发"], {"note_title", "source_extra"})
+
+
+def test_patch_group_on_action_row() -> None:
+    """is_active 归动作「停用推广单」：按动作格判、不过状态机；字段行优先（5.4）。"""
+    m = MATRICES["promotion"]
+    assert m.patch_kind("deactivate") == "action"
+    assert m.patch_kind("receiver") == "field"
+    # 已停用的单（H 列）：动作格只有管理员；主管 PATCH is_active 被拒
+    off = replace(P_DOCS["已停用"], is_active=False)
+    assert "is_active" in writable_fields(PERSONAS["admin"], off).allowed
+    with pytest.raises(FieldPermissionDenied):
+        ensure_patch_allowed(PERSONAS["pr_manager"], off, {"is_active"})
+    # 动作键当分组可以登记；两种都没有的仍报错
+    base: dict[str, Any] = {"kind": "promotion", "stages": ("待推送",)}
+    Matrix(**base, rows=(Row("cancel", "action", {}),), patch_groups={"is_active": "cancel"})
+    with pytest.raises(ValueError, match="cancel"):
+        Matrix(**base, rows=(), patch_groups={"is_active": "cancel"})
+
+
+def test_promotion_urge_and_deactivate() -> None:
+    """催发（A ~ C，状态机同 _load_urgeable_promotion）与停用（11-15）的 ui 与 require。"""
+    pm, admin = PERSONAS["pr_manager"], PERSONAS["admin"]
+    c = P_DOCS["催发"]
+    for who in ("pr", "pr_manager", "admin"):
+        assert _real_ui(who, c).actions["urge"] == mx.UiAction("enabled"), who
+    for who in ("finance", "operations", "warehouse"):
+        assert "urge" not in _real_ui(who, c).actions, who
+    # 标记完成只进矩阵与期望表：任务状态在 urge_task，推广单的 ui 不出这个键
+    assert "urge_complete" not in _real_ui("pr", c).actions
+    # 停用：PR 看不到；主管 A ~ D、G；结款单生成后只有管理员
+    assert "deactivate" not in _real_ui("pr", c).actions
+    assert _real_ui(pm, c).actions["deactivate"] == mx.UiAction("enabled")
+    e = P_DOCS["待财务付款"]
+    assert "deactivate" not in _real_ui(pm, e).actions
+    assert _real_ui(admin, e).actions["deactivate"] == mx.UiAction("enabled")
+    with pytest.raises(AppException) as exc:
+        require(pm, e, "deactivate")
+    assert _code(exc) == "PERMISSION_DENIED"
+    with pytest.raises(AppException) as exc:
+        require(PERSONAS["pr"], c, "deactivate")
+    assert _code(exc) == "PERMISSION_DENIED"
+    require(admin, e, "deactivate")
+    # 状态机：已停用、已删除不能再停用；已发布、已停用的不能催
+    off = replace(P_DOCS["已停用"], is_active=False)
+    deleted = replace(P_DOCS["已删除"], publish_status="已删除")
+    for doc in (off, deleted):
+        assert "deactivate" not in _real_ui(admin, doc).actions
+        with pytest.raises(AppException) as exc:
+            require(admin, doc, "deactivate")
+        assert _code(exc) == "ILLEGAL_STATE_TRANSITION"
+    for doc in (replace(c, is_active=False), replace(c, publish_status="已发布")):
+        assert "urge" not in doc.allowed_actions()
+    assert "urge" in replace(c, publish_status="异常").allowed_actions()
+    require(PERSONAS["pr"], c, "urge")
+
+
+def test_quote_amount_follows_field_rules() -> None:
+    """服务费先过字段规则：撤销写 → 主管读；撤销读 → 分组不出现（运营默认就看不到）。"""
+    pm = PERSONAS["pr_manager"]
+    doc = P_DOCS["待推送仓库"]
+
+    def _with_revokes(*scopes: str) -> FlowActor:
+        return replace(pm, field_ctx=replace(pm.field_ctx, revokes=frozenset(scopes)))
+
+    assert _real_ui(pm, doc).fields["quote_amount"] == mx.UiField("edit")
+    revoked_write = _with_revokes("field.promotion.quote_amount:write")
+    assert _real_ui(revoked_write, doc).fields["quote_amount"] == mx.UiField("read")
+    assert "quote_amount" not in writable_fields(revoked_write, doc).allowed
+    revoked_read = _with_revokes("field.promotion.quote_amount:read")
+    assert "quote_amount" not in _real_ui(revoked_read, doc).fields
+    assert "quote_amount" not in _real_ui("operations", doc).fields
 
 
 def test_warehouse_ship_fill() -> None:
@@ -1154,6 +1274,10 @@ def test_new_capabilities() -> None:
     assert ShipIn(None).matches(P_DOCS["催发·历史单"])
     assert not ShipIn(None).matches(doc)
     assert ShipIn("已发货", "待打单").matches(doc)
+    assert ModeIn(None).matches(P_DOCS["催发·模式空"])
+    assert not ModeIn(None).matches(doc)
+    with pytest.raises(AttributeError):
+        ModeIn(None).matches(TOY_DOCS["待推送"])
     # ShipIn 用在没有 ship_status 的单据上是写错了
     with pytest.raises(AttributeError):
         ShipIn(None).matches(TOY_DOCS["待推送"])

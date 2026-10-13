@@ -1,5 +1,7 @@
 // U05 finance feature 类型定义。
 
+import type { UiState } from "@/features/flow/keys";
+
 export type SettlementStatus =
   | "待核查"
   | "待付款"
@@ -90,6 +92,8 @@ export interface SettlementPage {
   total: number;
   page: number;
   page_size: number;
+  /** 页级 ui.actions.import：能上传结款单（finance.settlement:pay，财务、管理员）才有（流程线 PR-5）。 */
+  ui: Pick<UiState, "actions">;
 }
 
 export interface SettlementListFilters {

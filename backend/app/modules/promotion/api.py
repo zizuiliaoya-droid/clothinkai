@@ -70,15 +70,17 @@ router = APIRouter(prefix="/api", tags=["promotion"])
     "/promotions/",
     response_model=PromotionResponse,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[require_permission("promotion", "write")],
+    dependencies=[require_permission("promotion_create", "write")],
 )
 async def create_promotion(
     payload: PromotionCreate,
     user: CurrentActiveUser,
     service: PromotionServiceDep,
 ) -> PromotionResponse:
-    """EP05-S02 PR 创建推广 + 自动 internal_code + 重复检测.
+    """EP05-S02 直接新建推广 + 自动 internal_code + 重复检测.
 
+    流程线 PR-5（4.4）：挂 ``promotion_create:write``（只授主管，管理员靠 ``*``），PR 不能直接建单，
+    推广单只从谈款生成（Q6）。
     ``need_shipping`` 默认 false：直接新建是补录历史用，``ship_status`` 保持 NULL、不进待推送队列；
     勾了才写「待发货」（流程线 S1，11-58）。
     """
@@ -262,14 +264,18 @@ async def remove_payment_qr(
 @router.delete(
     "/promotions/{promotion_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[require_permission("promotion", "delete")],
+    dependencies=[require_permission("promotion_create", "write")],
 )
 async def delete_promotion(
     promotion_id: UUID,
     user: CurrentActiveUser,
     service: PromotionServiceDep,
 ) -> Response:
-    """软停用（与状态机正交：is_active=false）."""
+    """软停用（与状态机正交：is_active=false）.
+
+    流程线 PR-5（4.4、11-15）：路由挂 ``promotion_create:write``，service 再按矩阵 ``deactivate`` 判
+    （结款单生成后只有管理员能停用）。
+    """
     await service.soft_delete_promotion(promotion_id, user)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 

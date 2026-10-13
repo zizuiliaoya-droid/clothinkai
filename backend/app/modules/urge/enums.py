@@ -22,11 +22,13 @@ class UrgeCloseReason(str, Enum):
 
     前两个由系统写：博主发文或单据取消时自动关闭（PRD「博主确认发布 → 任务自动关闭」）。
     ``MANUAL`` 留给主管手动收口，例如已经决定走召回流程、不再催了。
+    ``COMPLETED`` 是 PR「标记完成」（迁移 064）：必须带截图；之后被手动催发会重开任务。
     """
 
     PUBLISHED = "博主已发布"
     CANCELLED = "已取消"
     MANUAL = "手动关闭"
+    COMPLETED = "已完成"
 
 
 class UrgeTriggerType(str, Enum):

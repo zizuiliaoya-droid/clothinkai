@@ -18,7 +18,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.promotion.display_name import PROMOTION_DISPLAY_SHORT_NAME_SQL
-from app.modules.urge.enums import UrgeTaskStatus
+from app.modules.urge.enums import UrgeCloseReason, UrgeTaskStatus
 from app.modules.urge.models import UrgeConfig, UrgeRecord, UrgeTask
 
 # 列表与详情共用的投影，避免两处口径漂移。
@@ -92,9 +92,17 @@ class UrgeTaskRepository:
         return await self._session.get(UrgeTask, task_id)
 
     async def get_detail(self, task_id: UUID, *, today: date) -> Mapping[str, Any] | None:
+        """单个任务（raw SQL，读的是库里的现值，不走 ORM 身份映射）。
+
+        比列表多一列 ``close_screenshot_key``：「标记完成」截图的 R2 key（迁移 064），详情现签 URL。
+        """
         rows = (
             await self._session.execute(
-                text(f"SELECT {_SELECT_COLUMNS} {_JOINS} WHERE t.id = :tid"),
+                text(
+                    f"SELECT {_SELECT_COLUMNS}, ca.r2_key AS close_screenshot_key {_JOINS}"
+                    " LEFT JOIN attachment ca ON ca.id = t.close_attachment_id"
+                    " WHERE t.id = :tid"
+                ),
                 {"tid": task_id, "today": today},
             )
         ).mappings()
@@ -258,6 +266,71 @@ class UrgeTaskRepository:
                 },
             )
         ).scalar_one_or_none()
+
+    async def complete_task(
+        self,
+        *,
+        task_id: UUID,
+        tenant_id: UUID,
+        attachment_id: UUID | None,
+        now: datetime,
+    ) -> UUID | None:
+        """U1 标记完成：进行中 → 已关闭 / 已完成，挂上截图。不是进行中返回 None。
+
+        ``attachment_id`` 为空时库级 CHECK ``ck_urge_task_complete_screenshot`` 会拒 ——
+        service 先报友好的 422，这里不重复判。
+        """
+        return (
+            await self._session.execute(
+                text(
+                    """
+                    UPDATE urge_task
+                    SET status = :closed, closed_at = :now, close_reason = :completed,
+                        close_attachment_id = :attachment_id, updated_at = NOW()
+                    WHERE id = :task_id AND tenant_id = :tenant_id AND status = :open
+                    RETURNING id
+                    """
+                ),
+                {
+                    "task_id": task_id,
+                    "tenant_id": tenant_id,
+                    "closed": UrgeTaskStatus.CLOSED.value,
+                    "open": UrgeTaskStatus.OPEN.value,
+                    "completed": UrgeCloseReason.COMPLETED.value,
+                    "attachment_id": attachment_id,
+                    "now": now,
+                },
+            )
+        ).scalar_one_or_none()
+
+    async def reopen_completed(self, *, task_id: UUID, tenant_id: UUID) -> bool:
+        """U2：已关闭且原因 = 已完成 → 进行中，清空关闭三件套与截图外键。
+
+        其他原因关闭的不动（返回 False），调用方照旧按「已关闭」拒绝。截图本身留在附件表与
+        ``urge.completed`` 事件里，这里只断开引用。
+        """
+        row = (
+            await self._session.execute(
+                text(
+                    """
+                    UPDATE urge_task
+                    SET status = :open, closed_at = NULL, close_reason = NULL,
+                        close_attachment_id = NULL, updated_at = NOW()
+                    WHERE id = :task_id AND tenant_id = :tenant_id
+                      AND status = :closed AND close_reason = :completed
+                    RETURNING id
+                    """
+                ),
+                {
+                    "task_id": task_id,
+                    "tenant_id": tenant_id,
+                    "closed": UrgeTaskStatus.CLOSED.value,
+                    "open": UrgeTaskStatus.OPEN.value,
+                    "completed": UrgeCloseReason.COMPLETED.value,
+                },
+            )
+        ).first()
+        return row is not None
 
     async def close_by_promotion(
         self,

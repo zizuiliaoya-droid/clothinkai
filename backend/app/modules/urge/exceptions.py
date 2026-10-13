@@ -40,6 +40,15 @@ class UrgeScreenshotInvalidError(ValidationError):
     code = "URGE_SCREENSHOT_INVALID"
 
 
+class UrgeCompleteScreenshotRequiredError(ValidationError):
+    """「标记完成」没传截图（流程线 3.9 U1，Q8）。
+
+    service 先报这个友好的 422；库级 CHECK ``ck_urge_task_complete_screenshot`` 是兜底。
+    """
+
+    code = "URGE_COMPLETE_SCREENSHOT_REQUIRED"
+
+
 class UrgeConfigInvalidError(ValidationError):
     """阈值配置不合法。"""
 
@@ -58,6 +67,7 @@ class UrgeBatchEmptyError(ValidationError):
 
 __all__ = [
     "UrgeBatchEmptyError",
+    "UrgeCompleteScreenshotRequiredError",
     "UrgeConfigInvalidError",
     "UrgeNotApplicableError",
     "UrgeScreenshotInvalidError",

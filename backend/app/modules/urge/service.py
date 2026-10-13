@@ -34,6 +34,7 @@ from app.modules.promotion.urge_calculator import UrgeThresholds, get_today
 from app.modules.urge.enums import UrgeCloseReason, UrgeTaskStatus, UrgeTriggerType
 from app.modules.urge.exceptions import (
     UrgeBatchEmptyError,
+    UrgeCompleteScreenshotRequiredError,
     UrgeNotApplicableError,
     UrgeScreenshotInvalidError,
     UrgeTaskClosedError,
@@ -61,6 +62,8 @@ log = logging.getLogger(__name__)
 
 _SCREENSHOT_MAX_BYTES = 10 * 1024 * 1024
 _SCREENSHOT_PURPOSE = "urge_screenshot"
+# 「标记完成」的截图（迁移 064，``urge_task.close_attachment_id``）
+_COMPLETE_SCREENSHOT_PURPOSE = "urge_complete_screenshot"
 # 自动扫描写的主线事件：actor_id = NULL，payload.system 标出是谁写的（流程线 6.3）
 _SYSTEM_URGE_SCAN = "urge_scan"
 
@@ -204,8 +207,14 @@ class UrgeService:
             raise UrgeTaskNotFoundError(f"催发任务 {task_id} 不存在")
         base = self._row_to_task(row, max_urge_times=cfg["max_urge_times"])
         records = await self._records.list_by_task(tenant_id=user.tenant_id, task_id=task_id)
+        shot_key = row.get("close_screenshot_key")
         return UrgeTaskDetailResponse(
             **base.model_dump(),
+            close_screenshot_url=(
+                self._sign_private(shot_key)
+                if shot_key and row.get("close_reason") == UrgeCloseReason.COMPLETED.value
+                else None
+            ),
             records=[self._row_to_record(r) for r in records],
         )
 
@@ -254,13 +263,17 @@ class UrgeService:
             if screenshot is not None:
                 attachment_id, attachment_key = await self._store_screenshot(screenshot, user)
 
+            # U2（流程线 3.9）：「已完成」的被手动催 → 同事务重开再计次；其他原因关闭的不动，下面照旧拒绝
+            reopened = not created and await self._tasks.reopen_completed(
+                task_id=task_id, tenant_id=user.tenant_id
+            )
             bumped = await self._tasks.bump_urge_count(
                 task_id=task_id, tenant_id=user.tenant_id, now=_utcnow()
             )
             if bumped is None:
                 # 任务存在但已关闭。不静默成功 —— PR 得知道为什么催不出去。
                 raise UrgeTaskClosedError(
-                    "催发任务已关闭（博主已发布或单据已取消），无法继续催发",
+                    "催发任务已关闭（博主已发布、单据已取消或已手动关闭），无法继续催发",
                     details={"promotion_id": str(promotion_id), "task_id": str(task_id)},
                 )
 
@@ -288,6 +301,19 @@ class UrgeService:
                     task_id=task_id,
                     actor_id=user.id,
                 )
+            if reopened:
+                # 重开先记 reopened 再记这次 sent（6.3）；旧截图仍挂在之前的 urge.completed 上
+                await self._events.append(
+                    tenant_id=user.tenant_id,
+                    line_id=line_id,
+                    event_type=LineEventType.URGE_REOPENED,
+                    actor_id=user.id,
+                    promotion_id=promotion_id,
+                    payload={
+                        "urge_task_id": str(task_id),
+                        "trigger": UrgeTriggerType.MANUAL.value,
+                    },
+                )
             await self._append_sent(
                 tenant_id=user.tenant_id,
                 line_id=line_id,
@@ -307,6 +333,7 @@ class UrgeService:
                     "promotion_id": str(promotion_id),
                     "urge_count": bumped["urge_count"],
                     "has_screenshot": attachment_id is not None,
+                    "reopened": reopened,
                 },
                 user_id=user.id,
             )
@@ -454,6 +481,86 @@ class UrgeService:
             user_id=user.id,
         )
         await self._session.commit()
+        return await self.get_task_detail(task_id, user)
+
+    async def complete_task(
+        self,
+        task_id: UUID,
+        user: User,
+        *,
+        note: str | None = None,
+        screenshot: tuple[str | None, str | None, bytes] | None = None,
+    ) -> UrgeTaskDetailResponse:
+        """U1「标记完成」（流程线 3.9）：进行中 → 已关闭 / 已完成，截图必传（Q8）。
+
+        校验顺序：不存在 404 → 不是进行中 409 → 没图 422 → 伪图 422；之后代传截图、条件 UPDATE
+        （并发下被别人先关掉 → 409）、写 ``urge.completed``（附件 = 截图）、提交。失败补偿删 R2 对象。
+
+        不写 urge_record：看板「本周已催发」按 urge_record 计，完成不是一次催发。
+        之后被手动催发会重开（``urge_once``），截图留在附件表与这条事件里。
+        """
+        row = await self._tasks.get_detail(task_id, today=get_today())
+        if row is None:
+            raise UrgeTaskNotFoundError(f"催发任务 {task_id} 不存在")
+        if row["status"] != UrgeTaskStatus.OPEN.value:
+            raise UrgeTaskClosedError(
+                "催发任务已关闭，不能再标记完成",
+                details={"task_id": str(task_id), "close_reason": row.get("close_reason")},
+            )
+        if screenshot is None:
+            raise UrgeCompleteScreenshotRequiredError(
+                "标记完成要上传截图（博主已发布或已确认的截图）",
+                details={"task_id": str(task_id)},
+            )
+        promotion_id: UUID = row["promotion_id"]
+
+        attachment_id: UUID | None = None
+        attachment_key: str | None = None
+        try:
+            attachment_id, attachment_key = await self._store_screenshot(
+                screenshot, user, purpose=_COMPLETE_SCREENSHOT_PURPOSE
+            )
+            done = await self._tasks.complete_task(
+                task_id=task_id,
+                tenant_id=user.tenant_id,
+                attachment_id=attachment_id,
+                now=_utcnow(),
+            )
+            if done is None:
+                raise UrgeTaskClosedError(
+                    "催发任务已关闭，不能再标记完成", details={"task_id": str(task_id)}
+                )
+            await self._events.append(
+                tenant_id=user.tenant_id,
+                line_id=await self._tasks.promotion_line_id(
+                    tenant_id=user.tenant_id, promotion_id=promotion_id
+                ),
+                event_type=LineEventType.URGE_COMPLETED,
+                actor_id=user.id,
+                promotion_id=promotion_id,
+                note=note,
+                attachment_id=attachment_id,
+                payload={
+                    "urge_task_id": str(task_id),
+                    "close_reason": UrgeCloseReason.COMPLETED.value,
+                },
+            )
+            await self._audit.log(
+                action="urge.complete",
+                resource="urge_task",
+                resource_id=task_id,
+                after={
+                    "close_reason": UrgeCloseReason.COMPLETED.value,
+                    "close_attachment_id": str(attachment_id),
+                },
+                user_id=user.id,
+            )
+            await self._session.commit()
+        except Exception:
+            await self._session.rollback()
+            await self._compensate_screenshot(attachment_key, attachment_id)
+            raise
+
         return await self.get_task_detail(task_id, user)
 
     async def close_for_promotion(
@@ -690,7 +797,11 @@ class UrgeService:
         return dict(promo)
 
     async def _store_screenshot(
-        self, screenshot: tuple[str | None, str | None, bytes], user: User
+        self,
+        screenshot: tuple[str | None, str | None, bytes],
+        user: User,
+        *,
+        purpose: str = _SCREENSHOT_PURPOSE,
     ) -> tuple[UUID, str]:
         """校验 + 代传截图，返回 ``(attachment_id, r2_key)``。"""
         from fastapi.concurrency import run_in_threadpool
@@ -711,7 +822,7 @@ class UrgeService:
             tenant_id=user.tenant_id,
             created_by=user.id,
             bucket="private",
-            purpose=_SCREENSHOT_PURPOSE,
+            purpose=purpose,
             filename=filename,
             mime_type=str(mime_type),
             size_bytes=len(data),
@@ -776,20 +887,20 @@ class UrgeService:
             updated_at=row["updated_at"],
         )
 
+    def _sign_private(self, key: Any) -> str | None:
+        """私有桶对象现签 1 小时。R2 没配置或签名失败不该让整条时间线 / 详情打不开。"""
+        try:
+            return self._attachments.get_signed_url("private", str(key), expires_in=3600)
+        except Exception:
+            return None
+
     def _row_to_record(self, row: Mapping[str, Any]) -> UrgeRecordResponse:
-        url: str | None = None
         key = row.get("screenshot_key")
-        if key:
-            try:
-                url = self._attachments.get_signed_url("private", str(key), expires_in=3600)
-            except Exception:
-                # R2 没配置或签名失败不该让整条时间线打不开
-                url = None
         return UrgeRecordResponse(
             id=row["id"],
             trigger_type=row["trigger_type"],
             note=row.get("note"),
-            screenshot_url=url,
+            screenshot_url=self._sign_private(key) if key else None,
             wecom_message_id=row.get("wecom_message_id"),
             created_by=row.get("created_by"),
             created_by_name=row.get("created_by_name"),

@@ -9,6 +9,11 @@ service 里按来源调本模块判断。
   ``importer.*`` 与 W1 给的精确 ``product.style:read``，不命中——这就是从 PR / 主管收回的方式，
   不改他们的角色数据
 - 博主（``manual_blogger``、8b 的灰豚抖音 ``huitun_douyin``）的裁决看 ``blogger:write``，其余同默认
+- 站外推广（``manual_promotion``）的上传 / 重试 / 裁决只认 ``promotion_create:write``（流程线 PR-5，4.4）：
+  主管与管理员；PR 的 ``importer.batch:write`` 不再够，映射与查看照默认
+- 结款单（``manual_settlement``）的上传 / 重试 / 映射 / 查看 / 裁决只认 ``finance.settlement:pay``
+  （流程线 PR-5，4.4、7.6）：财务与管理员；PR / 主管的 ``importer.batch:write`` 不再够。财务没有任何
+  importer 授权，靠来源自己的 ``view`` 在导入记录里只看到结款单批次；持 ``importer.batch:read`` 的照旧看全部
 - 其他来源（含未注册的来源）走默认规则，与 8a 之前一致
 - 批次可见性 = 原有 ``importer.batch:read`` **或**来源自己的 ``view`` 权限
 
@@ -27,6 +32,8 @@ from app.modules.importer.duplicate_rules import is_configurable
 from app.modules.importer.registry import ImportAdapterRegistry
 
 SCOPE_PRODUCT_IMPORT = "product.import"
+SCOPE_PROMOTION_CREATE = "promotion_create"
+SCOPE_SETTLEMENT_PAY: tuple[str, str] = ("finance.settlement", "pay")
 
 
 @dataclass(frozen=True)
@@ -58,6 +65,19 @@ SOURCE_ACCESS: dict[str, SourceAccess] = {
     "manual_blogger": replace(_DEFAULT, resolve=("blogger", "write")),
     # 8b §6.7：灰豚抖音博主库与手工博主同一套
     "huitun_douyin": replace(_DEFAULT, resolve=("blogger", "write")),
+    # 流程线 PR-5（4.4、7.6 的 IMPORT_SOURCE_SCOPES）：导入站外推广 = 建单，只认 promotion_create:write
+    # （主管；管理员靠 *），PR 收回；映射与查看照默认
+    "manual_promotion": replace(
+        _DEFAULT, write=(SCOPE_PROMOTION_CREATE, "write"), resolve=(SCOPE_PROMOTION_CREATE, "write")
+    ),
+    # 流程线 PR-5（4.4、7.6 的 IMPORT_SOURCE_SCOPES）：导入结款单只认 finance.settlement:pay
+    # （财务；管理员靠 *），PR / 主管收回；view 让没有 importer.batch:read 的财务也能看本来源的批次与失败明细
+    "manual_settlement": SourceAccess(
+        write=SCOPE_SETTLEMENT_PAY,
+        mapping=SCOPE_SETTLEMENT_PAY,
+        view=SCOPE_SETTLEMENT_PAY,
+        resolve=SCOPE_SETTLEMENT_PAY,
+    ),
 }
 
 # 来源的中文名（导入记录页、权限说明用）；没列的来源显示来源编码本身
@@ -110,6 +130,11 @@ def _require(perms: EffectivePermissions, required: tuple[str, str], source: str
         )
 
 
+def can_write(perms: EffectivePermissions, source: str) -> bool:
+    """能否上传、重试该来源（``require_write`` 与页级 ``ui.actions.import`` 共用）。"""
+    return perms.has(*access_for(source).write)
+
+
 def require_write(perms: EffectivePermissions, source: str) -> None:
     """上传、重试该来源；不满足 → 403。"""
     _require(perms, access_for(source).write, source)
@@ -154,11 +179,14 @@ def describe_access(perms: EffectivePermissions) -> list[dict[str, Any]]:
 
 __all__ = [
     "SCOPE_PRODUCT_IMPORT",
+    "SCOPE_PROMOTION_CREATE",
+    "SCOPE_SETTLEMENT_PAY",
     "SOURCE_ACCESS",
     "SOURCE_LABELS",
     "SourceAccess",
     "access_for",
     "can_view",
+    "can_write",
     "describe_access",
     "require_mapping",
     "require_resolve",

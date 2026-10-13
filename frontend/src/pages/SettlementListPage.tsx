@@ -83,6 +83,8 @@ export function SettlementListPage() {
     queryKey: ["settlements", filters],
     queryFn: () => listSettlements(filters),
   });
+  // 「导入结款」只看页级 ui.actions.import（流程线 PR-5）：财务、管理员有，主管没有
+  const canImport = data?.ui?.actions?.import?.state === "enabled";
 
   const refresh = () => {
     void qc.invalidateQueries({ queryKey: ["settlements"] });
@@ -297,11 +299,14 @@ export function SettlementListPage() {
         </Typography.Title>
       }
       extra={
-        <ImportUploadButton
-          source="manual_settlement"
-          label="导入结款"
-          invalidateKeys={[["settlements"]]}
-        />
+        canImport ? (
+          <ImportUploadButton
+            source="manual_settlement"
+            label="导入结款"
+            invalidateKeys={[["settlements"]]}
+            successHint="结果在「系统管理 → 导入记录」里看"
+          />
+        ) : undefined
       }
     >
       <Space style={{ marginBottom: 16 }} wrap>
