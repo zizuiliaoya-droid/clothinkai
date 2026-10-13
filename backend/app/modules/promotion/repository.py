@@ -21,7 +21,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import bindparam, delete, exists, func, select, text, union_all, update
+from sqlalchemy import bindparam, case, delete, exists, func, select, text, union_all, update
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -35,7 +35,7 @@ from app.modules.promotion.display_name import (
     PROMOTION_DISPLAY_SHORT_NAME_SQL,
     display_short_name_sql,
 )
-from app.modules.promotion.enums import ShipStatus
+from app.modules.promotion.enums import RetroStatus, ShipStatus
 from app.modules.promotion.exceptions import SequenceOverflowError
 from app.modules.promotion.models import BloggerRetrospective, Promotion, PromotionItem
 from app.modules.promotion.stage_calculator import PROMOTION_STAGES, STAGE_COLUMN, stage_sql_expr
@@ -613,6 +613,56 @@ class PromotionRepository:
             return None
         # SQLAlchemy 2.0: returning(Model) 可能命中 session 身份映射中的旧实例
         # （状态字段未同步）；refresh 以反映 DB 最新状态。
+        promotion: Promotion = row[0]
+        await self._session.refresh(promotion)
+        return promotion
+
+    _METRICS_FIELDS = frozenset(
+        {"like_count", "collect_count", "comment_count", "metrics_attachment_id"}
+    )
+
+    async def record_metrics_once(
+        self,
+        *,
+        promotion_id: UUID,
+        tenant_id: UUID,
+        values: Mapping[str, Any],
+    ) -> Promotion | None:
+        """7 天数据只录一次（流程线 3.7）：``UPDATE … WHERE … AND metrics_recorded_at IS NULL RETURNING``。
+
+        写三个指标、截图与 ``metrics_recorded_at = now()``；``update_state`` 只认状态字段，表达不了「未录过」，
+        所以单开这一条，不扩它。过渡期（PR-7 前复盘仍是旧流程）复盘 未开始 → 待复盘 也在这条 UPDATE 里，
+        其余复盘状态不动。0 行（已录过 / 软删 / 跨租户）→ ``None``，service 抛 409。
+        """
+        unknown = set(values) - self._METRICS_FIELDS
+        if unknown:
+            raise ValueError(f"unsupported metrics field: {sorted(unknown)}")
+        stmt = (
+            update(Promotion)
+            .where(
+                Promotion.id == promotion_id,
+                Promotion.tenant_id == tenant_id,
+                Promotion.is_active.is_(True),
+                Promotion.metrics_recorded_at.is_(None),
+            )
+            .values(
+                **values,
+                metrics_recorded_at=func.now(),
+                retro_status=case(
+                    (
+                        Promotion.retro_status == RetroStatus.NOT_STARTED.value,
+                        RetroStatus.PENDING_RETRO.value,
+                    ),
+                    else_=Promotion.retro_status,
+                ),
+                updated_at=func.now(),
+            )
+            .returning(Promotion)
+            .execution_options(synchronize_session=False)
+        )
+        row = (await self._session.execute(stmt)).fetchone()
+        if row is None:
+            return None
         promotion: Promotion = row[0]
         await self._session.refresh(promotion)
         return promotion

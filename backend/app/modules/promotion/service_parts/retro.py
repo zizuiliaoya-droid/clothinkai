@@ -7,21 +7,23 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from app.core.attachment import check_image_payload
+from app.core.exceptions import IllegalStateTransitionError
 from app.core.metrics import (
     promotion_state_transitions_total,
 )
 from app.modules.auth.models import User
 from app.modules.flow.line_events import LineEventRepository, LineEventType
+from app.modules.flow.matrix import require
 from app.modules.promotion.enums import (
     RetroStatus,
     SettlementStatus,
 )
 from app.modules.promotion.exceptions import (
+    MetricsNotAvailableYetError,
     MetricsScreenshotRequiredError,
     PromotionNotFoundError,
     RetroContentMissingError,
     RetroSelfConfirmForbiddenError,
-    SettlementNotPaidError,
     StateTransitionConflictError,
 )
 from app.modules.promotion.models import (
@@ -40,9 +42,11 @@ from app.modules.promotion.service_parts.base import (
     _utcnow,
     log,
 )
+from app.modules.promotion.stage_calculator import metrics_available_from, seven_days_reached
 from app.modules.promotion.state_machines import (
     RetroStatusMachine,
 )
+from app.modules.promotion.urge_calculator import get_today
 
 
 class PromotionRetroMixin(PromotionServiceBase):
@@ -60,16 +64,15 @@ class PromotionRetroMixin(PromotionServiceBase):
         *,
         screenshot: tuple[str | None, str | None, bytes] | None = None,
     ) -> PromotionResponse:
-        """录发布满 7 天的数据，推进到「待复盘」。
+        """录 7 天数据（流程线 3.7，7d-11）：已结款且发文满 7 天，只录一次。
 
-        PRD 原文「已结款 → 发布满 7 天，PR 录入点赞/收藏/评论 + 截图 → 待复盘」。
-        三个指标 + 截图都必填，截图走后端代传（与收款码同一套骨架）。
+        校验顺序（3.7）：未录过（录过 → 422 ``ILLEGAL_STATE_TRANSITION``）→ 已结款（否则 422
+        ``METRICS_NOT_AVAILABLE_YET``，``blocked_by = settlement``）→ ``get_today() ≥ 发布日 + 7``（北京时间；
+        否则同码，``blocked_by = seven_days``，提示可录日期；没有发布日不拦）→ 矩阵 ``require``（阶段 + 权限）
+        → 三个指标 + 截图（截图后端代传）→ ``record_metrics_once`` 条件 UPDATE（``metrics_recorded_at IS NULL``，
+        0 行 → 409）。指标、截图与时间线同一事务，任何一步失败都回滚并删掉已传的对象。
 
-        跨状态机前置：``settlement_status = '已付款'``。结款没完成就复盘没有意义 ——
-        ROI 的分母都还没定。
-
-        指标与状态推进在**同一个事务**：不然会出现「数字录进去了但状态没动」，
-        之后谁也不知道该不该补一次。
+        过渡期（PR-7 前复盘仍是旧流程）：同一条 UPDATE 把复盘 未开始 → 待复盘。完结检查随 PR-7。
         """
         from fastapi.concurrency import run_in_threadpool
 
@@ -77,14 +80,37 @@ class PromotionRetroMixin(PromotionServiceBase):
         if promotion is None:
             raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
 
-        if promotion.settlement_status != SettlementStatus.PAID.value:
-            raise SettlementNotPaidError(
-                "只有已结款的推广单可以录 7 天数据",
+        if promotion.metrics_recorded_at is not None:
+            raise IllegalStateTransitionError(
+                "7 天数据已经录过，只能录一次",
+                details={"promotion_id": str(promotion_id), "action": "metrics"},
+            )
+        today = get_today()
+        available_from = metrics_available_from(promotion.actual_publish_date)
+        gate_details: dict[str, Any] = {
+            "promotion_id": str(promotion_id),
+            "available_from": available_from.isoformat() if available_from else None,
+        }
+        if promotion.settlement_status != SettlementStatus.SETTLED.value:
+            raise MetricsNotAvailableYetError(
+                "已结款后可录 7 天数据",
                 details={
-                    "promotion_id": str(promotion_id),
+                    **gate_details,
+                    "blocked_by": "settlement",
                     "settlement_status": promotion.settlement_status,
                 },
             )
+        if available_from is not None and not seven_days_reached(
+            promotion.actual_publish_date, today
+        ):
+            raise MetricsNotAvailableYetError(
+                f"{available_from.isoformat()} 起可以录 7 天数据",
+                details={**gate_details, "blocked_by": "seven_days"},
+            )
+        actor = await self._flow_actor(user)
+        stage = await self._compute_stage(promotion, today=today)
+        require(actor, await self._promotion_doc(promotion, stage=stage), "metrics")
+
         if screenshot is None:
             raise MetricsScreenshotRequiredError("录 7 天数据必须上传数据截图")
 
@@ -99,11 +125,7 @@ class PromotionRetroMixin(PromotionServiceBase):
         if problem is not None:
             raise MetricsScreenshotRequiredError(problem)
 
-        RetroStatusMachine.assert_can_transition(
-            from_state=promotion.retro_status,
-            to_state=RetroStatus.PENDING_RETRO.value,
-            action="record_metrics",
-        )
+        from_retro = promotion.retro_status
 
         attachment_id: UUID | None = None
         attachment_key: str | None = None
@@ -133,43 +155,40 @@ class PromotionRetroMixin(PromotionServiceBase):
                 tenant_id=user.tenant_id,
             )
 
-            now = _utcnow()
-            updated = await self._repo.update_state(
+            updated = await self._repo.record_metrics_once(
                 promotion_id=promotion_id,
                 tenant_id=user.tenant_id,
-                from_state_field="retro_status",
-                from_state_value=RetroStatus.NOT_STARTED.value,
-                to_state_value=RetroStatus.PENDING_RETRO.value,
-                extra_fields={
+                values={
                     "like_count": payload.like_count,
                     "collect_count": payload.collect_count,
                     "comment_count": payload.comment_count,
                     "metrics_attachment_id": attachment_id,
-                    "metrics_recorded_at": now,
                 },
             )
             if updated is None:
                 raise StateTransitionConflictError(
-                    "复盘状态已变更，请刷新后重试",
+                    "7 天数据已被录入，请刷新后重试",
                     details={"promotion_id": str(promotion_id)},
                 )
+            to_retro = updated.retro_status
 
-            promotion_state_transitions_total.labels(
-                from_state=RetroStatus.NOT_STARTED.value,
-                to_state=RetroStatus.PENDING_RETRO.value,
-                status_field="retro",
-            ).inc()
+            if to_retro != from_retro:
+                promotion_state_transitions_total.labels(
+                    from_state=from_retro,
+                    to_state=to_retro,
+                    status_field="retro",
+                ).inc()
 
             # 时间线（流程线 6.3）：promotion.metrics_recorded，附件 = 7 天数据截图；
             # 在 try 里：写失败整笔回滚、截图照删
             await LineEventRepository(self._session).append(
-                tenant_id=promotion.tenant_id,
-                line_id=promotion.line_id,
+                tenant_id=updated.tenant_id,
+                line_id=updated.line_id,
                 event_type=LineEventType.PROMOTION_METRICS_RECORDED,
                 actor_id=user.id,
                 promotion_id=promotion_id,
-                from_state=RetroStatus.NOT_STARTED.value,
-                to_state=RetroStatus.PENDING_RETRO.value,
+                from_state=from_retro,
+                to_state=to_retro,
                 attachment_id=attachment_id,
                 payload={
                     "like_count": payload.like_count,
@@ -186,7 +205,7 @@ class PromotionRetroMixin(PromotionServiceBase):
                     "like_count": payload.like_count,
                     "collect_count": payload.collect_count,
                     "comment_count": payload.comment_count,
-                    "retro_status": RetroStatus.PENDING_RETRO.value,
+                    "retro_status": to_retro,
                 },
                 user_id=user.id,
             )

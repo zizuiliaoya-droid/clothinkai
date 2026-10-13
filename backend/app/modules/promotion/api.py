@@ -537,7 +537,8 @@ async def promotion_amount_log(
 @router.post(
     "/promotions/{promotion_id}/metrics",
     response_model=PromotionResponse,
-    dependencies=[require_permission("promotion.retro", "write")],
+    # 流程线 3.7：从 promotion.retro:write 改名，PR / 主管的 promotion.*:* 照样命中，不入册、不授权
+    dependencies=[require_permission("promotion.metrics", "write")],
 )
 async def record_metrics(
     promotion_id: UUID,
@@ -548,9 +549,9 @@ async def record_metrics(
     comment_count: Annotated[int, Form(ge=0)],
     screenshot: Annotated[UploadFile, File(description="7 天数据截图")],
 ) -> PromotionResponse:
-    """录发布满 7 天的数据，推进到「待复盘」。
+    """录 7 天数据（已结款且发文满 7 天，只录一次；过渡期仍把复盘 未开始 推进到「待复盘」）。
 
-    PRD「已结款 → 发布满 7 天，PR 录入点赞/收藏/评论 + 截图 → 待复盘」。走 multipart
+    门槛不满足 → 422 ``METRICS_NOT_AVAILABLE_YET``（带 ``available_from``、``blocked_by``）。走 multipart
     是因为截图必传，三个指标和图得在同一个请求里 —— 分两步会出现「数字录了图没传」
     的中间态。
     """

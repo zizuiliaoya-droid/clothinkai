@@ -687,7 +687,7 @@ class TestRetro:
             blogger_factory,
             promotion_factory,
             publish_status="已发布",
-            settlement_status="已付款",
+            settlement_status="已结款",
         )
         line_id, pid = promo.line_id, promo.id
         svc = PromotionService(session)

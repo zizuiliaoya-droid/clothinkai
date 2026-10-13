@@ -195,14 +195,14 @@ class SettlementAlreadyExistsError(DuplicateResourceError):
 # ---------------------------------------------------------------------------
 
 
-class SettlementNotPaidError(ValidationError):
-    """录 7 天数据要求结款已完成。
+class MetricsNotAvailableYetError(ValidationError):
+    """7 天数据还不能录（流程线 3.7 门槛：已结款且 ``get_today() ≥ 发布日 + 7``，7.4 错误码表）。
 
-    复盘是结完款之后的事。钱还没结清就复盘没有意义 —— ROI 的分母都还没定。
+    ``details.blocked_by``：``settlement``（推广单还没到已结款）/ ``seven_days``（发文未满 7 天，北京时间）；
+    ``details.available_from``：可以录的第一天（发布日 + 7，ISO 日期；没有发布日为 ``None``，门槛不拦 7 天）。
     """
 
-    code = "SETTLEMENT_NOT_PAID"
-    status_code = 409
+    code = "METRICS_NOT_AVAILABLE_YET"
 
 
 class MetricsScreenshotRequiredError(ValidationError):
@@ -322,6 +322,7 @@ __all__ = [
     "PaymentQrLockedError",
     "InvalidSkuReferenceError",
     "InvalidStyleReferenceError",
+    "MetricsNotAvailableYetError",
     "MetricsScreenshotRequiredError",
     "PromotionInternalCodeConflictError",
     "PromotionNotFoundError",
@@ -334,7 +335,6 @@ __all__ = [
     "SequenceOverflowError",
     "SettlementAlreadyExistsError",
     "SettlementChatScreenshotRequiredError",
-    "SettlementNotPaidError",
     "ShippedAtInFutureError",
     "SourceExtraKeyRetiredError",
     "StateTransitionConflictError",

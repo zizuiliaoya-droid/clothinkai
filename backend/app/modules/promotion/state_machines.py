@@ -16,7 +16,7 @@ service 层并发安全通过 ``UPDATE WHERE old_state RETURNING`` 实施
 跨状态机校验（BR-U04-24）：
 - start_recall 前：publish_status ∈ {已发布, 已取消}
 - approve 前：publish_status="已发布"
-- record_metrics 前：settlement_status="已付款"（PRD 改动 4，结完款才复盘）
+- record_metrics 前：settlement_status="已结款" 且发文满 7 天（流程线 3.7）
 由 service 层显式实施，不在状态机内部耦合。
 """
 
@@ -210,8 +210,9 @@ class RetroStatusMachine:
     """retro_status 状态机（PRD V1.4 改动 4，第 4 个并行机器）。
 
     跨状态机前置（由 service 显式实施，不在这里耦合）：
-    - ``record_metrics`` 前：``settlement_status = '已付款'``。复盘是结完款之后的事，
-      钱还没结清就复盘没有意义（ROI 分母都还没定）。
+    - ``record_metrics`` 前：``settlement_status = '已结款'`` 且发文满 7 天，只录一次（流程线 3.7）。
+      过渡期（PR-7 前）录数在 ``record_metrics_once`` 的条件 UPDATE 里把 未开始 → 待复盘，
+      service 不再经这条转移判（未录过才是门槛，复盘状态不是）。
     - ``record_metrics`` 要求点赞/收藏/评论三个指标 + 数据截图，PRD 原文明确列了截图。
 
     ``reject_retro`` 不在 PRD 原文里。加它的理由：PRD 只写了「主管确认复盘内容」，
