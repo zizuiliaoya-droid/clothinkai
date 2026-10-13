@@ -73,7 +73,7 @@ class TestSettlementReject:
         _tenant_id, _promo1, promo2 = await _settlement_seed(Maker, suffix, batch_id)
         csv_bytes = (
             "推广编号,结算日期,金额,总金额,付款金额,结算状态\n"
-            f"{promo2},2026-06-01,500.00,500.00,,待核查\n"
+            f"{promo2},2026-06-01,500.00,500.00,,已付款\n"
         ).encode()
         import app.core.attachment as att_mod
 

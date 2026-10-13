@@ -195,14 +195,42 @@ def test_validate_invalid_payment_date():
 def test_validate_invalid_status():
     p = _valid()
     p["settlement_status"] = "未知状态"
-    assert any("结算状态必须为" in e for e in _adapter().validate(p))
+    assert any("结算状态只能为 已付款" in e for e in _adapter().validate(p))
 
 
-def test_validate_all_five_status_values():
-    for status in ["待核查", "待付款", "待财务付款", "已付款", "已驳回"]:
+def test_validate_only_paid_status():
+    """流程线 PR-6（设计 7.5 ③）：文件里的结算状态只收「已付款」，其余结款单状态整行报错。"""
+    p = _valid()
+    p["settlement_status"] = "已付款"
+    assert _adapter().validate(p) == []
+    for status in ["待核查", "待付款", "待财务付款", "已驳回"]:
         p = _valid()
         p["settlement_status"] = status
-        assert _adapter().validate(p) == []
+        errs = _adapter().validate(p)
+        assert len(errs) == 1 and "结算状态只能为 已付款" in errs[0], status
+
+
+def test_export_shaped_row_without_status_passes():
+    """从真实导出的样子走 adapter：中文表头、千分位、结算状态留空、多余列 → 通过，状态留给 upsert 记已付款。"""
+    row = {
+        "推广编号": " AB000001 ",
+        "博主昵称": "小美",  # 多余列：映射里没有，忽略
+        "结算日期": "2026-06-01",
+        "金额": "1,299.00",
+        "总金额": "1,299.00",
+        "付款金额": "1,299.00",
+        "付款日期": "2026-06-10",
+        "结算状态": "",
+        "笔记标题": "夏季新款",
+        "备注": "",
+    }
+    adapter = _adapter()
+    parsed = adapter.parse_row(row, None)
+    assert parsed["promotion_internal_code"] == "AB000001"
+    assert parsed["total_amount"] == Decimal("1299.00")
+    assert parsed["settlement_status"] is None
+    assert "博主昵称" not in parsed
+    assert adapter.validate(parsed) == []
 
 
 def test_validate_note_title_length():

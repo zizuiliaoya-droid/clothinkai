@@ -14,7 +14,11 @@
 - **不触发事件**：不调 event_bus.dispatch（导入是数据迁移，区别 U05 service 的 SettlementPaid）。
 - **不经 U05 Service**：避免 commit/audit/事件/状态机校验，直接用 Repository（FB-C）。
 - **不自行 commit**：复用 runner 传入 session（NF-1 per-row SET LOCAL）。
-- date（_to_date）+ Decimal（_to_decimal 禁 float）解析；status ∈ 5 枚举校验。
+- date（_to_date）+ Decimal（_to_decimal 禁 float）解析。
+- 行级规则（流程线 PR-6，设计 7.5 ②③、11-59）：只补录已经付过的历史结款——文件里的结算状态只收
+  「已付款」（空着按已付款记），推广单结款状态必须是「未核查」（还没进系统结款流程）。之后这张推广单
+  在系统里发布、审核，R2 ⑥ 把这张已付款单接上，不会被 SettlementRequested 监听按幂等静默跳过。
+  「未完结」那一条（completed_at IS NULL）随 PR-7。
 """
 
 from __future__ import annotations
@@ -36,6 +40,7 @@ from app.modules.finance.models import Settlement
 from app.modules.finance.repository import SettlementRepository
 from app.modules.importer.exceptions import RowValidationError
 from app.modules.importer.registry import ImportAdapterRegistry
+from app.modules.promotion.enums import SettlementStatus as PromotionSettlementStatus
 from app.modules.promotion.repository import PromotionRepository
 
 if TYPE_CHECKING:
@@ -43,8 +48,12 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-# settlement_status 5 枚举值（待核查/待付款/待财务付款/已付款/已驳回）
-_VALID_STATUS: frozenset[str] = frozenset(s.value for s in SettlementStatus)
+# 文件里的结算状态只收「已付款」，空着按已付款记（设计 7.5 ③：导入只补录已经付过的历史结款，
+# 别的状态在系统里没有出口）
+_IMPORT_STATUS: str = SettlementStatus.PAID.value
+
+# 推广单还没进系统结款流程（设计 7.5 ②）；别的结款状态整行报错
+_IMPORTABLE_PROMOTION_STATUS: str = PromotionSettlementStatus.NOT_REVIEWED.value
 
 # 内置默认映射（mapping=None 回退；中文表头 → 目标字段，9 列，domain-entities §4）
 _DEFAULT_COLUMNS: list[dict[str, Any]] = [
@@ -148,10 +157,10 @@ class SettlementImportAdapter:
         if pay_date is not None and not isinstance(pay_date, date):
             errs.append("付款日期格式错误（应为 YYYY-MM-DD）")
 
-        # settlement_status 可选，但若提供须 ∈ 5 枚举
+        # settlement_status 可选：空着按已付款记，填了只收「已付款」
         status = parsed.get("settlement_status")
-        if status and status not in _VALID_STATUS:
-            errs.append("结算状态必须为 待核查/待付款/待财务付款/已付款/已驳回 之一")
+        if status and status != _IMPORT_STATUS:
+            errs.append("结算状态只能为 已付款（导入只补录已经付过的历史结款，空着按已付款记）")
 
         note_title = parsed.get("note_title")
         if note_title and isinstance(note_title, str) and len(note_title) > 255:
@@ -181,6 +190,13 @@ class SettlementImportAdapter:
         promo = await promotions.get_by_internal_code(parsed["promotion_internal_code"])
         if promo is None:
             raise RowValidationError(f"推广编号 {parsed['promotion_internal_code']} 不存在")
+        # 行级规则（设计 7.5 ②）：推广单已进系统结款流程的整行报错，免得导入的单占住
+        # uq_settlement_promotion、让之后的 SettlementRequested 被监听按幂等跳过
+        if promo.settlement_status != _IMPORTABLE_PROMOTION_STATUS:
+            raise RowValidationError(
+                f"推广编号 {parsed['promotion_internal_code']} 的结款状态是"
+                f"「{promo.settlement_status}」：这张推广单在系统里走结款流程，不能导入结款单"
+            )
 
         # 2) settlement_no（tenant_code 缓存 + FB2 原子序列）+ 合成 event_id
         tenant_code = await self._get_tenant_code(session, tenant_id)
@@ -204,7 +220,7 @@ class SettlementImportAdapter:
             total_amount=parsed["total_amount"],
             payment_amount=parsed.get("payment_amount"),
             payment_date=parsed.get("payment_date"),
-            settlement_status=parsed.get("settlement_status") or "待核查",
+            settlement_status=parsed.get("settlement_status") or _IMPORT_STATUS,
             note_title=parsed.get("note_title"),
             remark=parsed.get("remark"),
             request_event_id=uuid4(),  # 合成（导入无真实事件）
