@@ -1,7 +1,7 @@
 """U05 端到端集成测试（J4 完整旅程，FB1 强一致 + 双向事件）。
 
-U04 review approve → SettlementRequested → U05 settlement 创建（待核查）
-→ PR 主管 review approve → fill_payment → 财务 mark_paid
+U04 review approve → SettlementRequested → U05 settlement 创建（待付款，F1）
+→ fill_payment → 财务 mark_paid
 → SettlementPaid → promotion.settlement_status='已付款'
 """
 
@@ -19,7 +19,6 @@ from app.modules.finance.models import Settlement
 from app.modules.finance.schemas import (
     SettlementPaymentAmountRequest,
     SettlementPaymentProofRequest,
-    SettlementReviewRequest,
 )
 from app.modules.finance.service import SettlementService
 from app.modules.promotion.enums import ReviewAction
@@ -76,24 +75,20 @@ class TestE2EReviewToPaid:
                     select(Settlement).where(Settlement.promotion_id == promotion.id)
                 )
             ).scalar_one()
-            assert settlement.settlement_status == "待核查"  # FB1 起点
+            # F1：直接建在待付款，不再经过核查（流程线 PR-6）
+            assert settlement.settlement_status == "待付款"
 
-            # 2. U05 PR 主管 review approve → 待付款
+            # 2. fill_payment → 待财务付款（实付 ≠ 应付要写调整说明，F3）
             settle_svc = SettlementService(session)
-            await settle_svc.review(
-                settlement.id,
-                SettlementReviewRequest(action=ReviewAction.APPROVE),
-                pr_manager,
-            )
-
-            # 3. fill_payment → 待财务付款
             await settle_svc.fill_payment_amount(
                 settlement.id,
-                SettlementPaymentAmountRequest(payment_amount=Decimal("480.00")),
+                SettlementPaymentAmountRequest(
+                    payment_amount=Decimal("480.00"), payment_adjust_note="扣 20 元"
+                ),
                 pr_manager,
             )
 
-            # 4. 财务 mark_paid → 已付款 + SettlementPaid 反向同步
+            # 3. 财务 mark_paid → 已付款 + SettlementPaid 反向同步
             att = await attachment_factory.attachment()
             resp = await settle_svc.upload_payment_proof(
                 settlement.id,
@@ -105,7 +100,7 @@ class TestE2EReviewToPaid:
             )
             assert resp.settlement_status == "已付款"
 
-            # 5. 反向同步验证：promotion.settlement_status='已付款'
+            # 4. 反向同步验证：promotion.settlement_status='已付款'
             await session.refresh(promotion)
             assert promotion.settlement_status == "已付款"
         finally:

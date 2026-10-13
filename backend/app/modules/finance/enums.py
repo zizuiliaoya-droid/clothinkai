@@ -6,13 +6,13 @@ from enum import Enum
 
 
 class SettlementStatus(str, Enum):
-    """settlement_status 状态机（5 状态，FB1）。
+    """settlement_status 状态机（5 状态，流程线 PR-6 起去掉核查，设计 3.4）。
 
-    - PENDING_REVIEW: 起点（SettlementRequested handler 创建时）
-    - PENDING_PAYMENT: PR 主管 approve 后
-    - PENDING_FINANCE: PR 主管 fill_payment 后
-    - PAID: 财务 mark_paid 后（终态）
-    - REJECTED: PR 主管 reject 后（可 resubmit 回到 PENDING_REVIEW）
+    - PENDING_REVIEW: 只剩上线前已建的旧单（F0 核查通过 → 待付款），新单不再进这里
+    - PENDING_PAYMENT: 起点（SettlementRequested handler 创建时，F1）；重提也回到这里（F6）
+    - PENDING_FINANCE: 填实付金额后（F3）
+    - PAID: 财务上传付款凭证后（F4，终态）
+    - REJECTED: 待付款 / 待财务付款被驳回（F5），推广单 R7 重提后回到 PENDING_PAYMENT
     """
 
     PENDING_REVIEW = "待核查"

@@ -44,6 +44,8 @@ class SettlementRequested:
     pr_id: UUID | None
     requested_by: UUID
     requested_at: datetime
+    line_id: UUID | None = None
+    """推广单的主线号：监听写 ``settlement.created`` 用（流程线 6.3）；没带时监听按推广单回查。"""
 
 
 @dataclass(frozen=True)

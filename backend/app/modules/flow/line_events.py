@@ -261,6 +261,14 @@ PAYLOAD_FIELD_RULES: dict[str, tuple[str, str] | PayloadContainer | None] = {
     # 推广审核
     "destination": None,
     "reject_category": None,
+    # 结款单（PR-6 F0 ~ F4）：金额与调整说明过结款单的金额规则
+    "settlement_id": None,
+    "item_type": None,
+    "item_amount": ("settlement", "total_amount"),
+    "total_amount": ("settlement", "total_amount"),
+    "payment_amount": ("settlement", "payment_amount"),
+    "payment_adjust_note": ("settlement", "payment_amount"),
+    "payment_date": None,
     # 复盘
     "retrospective_id": None,
     # 发货：推送明细、明细前后值、快递信息（收件 diff 走上面的收件规则）
@@ -278,6 +286,9 @@ PAYLOAD_FIELD_RULES: dict[str, tuple[str, str] | PayloadContainer | None] = {
 # 附件的字段规则（6.5 第 3 层「收款码类附件」）：事件类型（``.value``）→ (entity, field)。没列的类型附件只跟分组走
 ATTACHMENT_FIELD_RULES: dict[str, tuple[str, str]] = {
     LineEventType.PROMOTION_PAYMENT_QR_UPLOADED.value: ("promotion", "payment_qr"),
+    # 付款凭证、结款聊天截图（PR-6）：与收款码同一拨人可见（运营、仓库看不到）
+    LineEventType.SETTLEMENT_PAID.value: ("promotion", "payment_qr"),
+    LineEventType.PROMOTION_SETTLED.value: ("promotion", "payment_qr"),
 }
 
 

@@ -5,14 +5,14 @@
 
 守的不变量：
 - 成功路径与原来的 mark_paid 完全一致：FB4 附件校验、状态推进、SettlementPaid 事件
-- **上传之前**就挡掉：没有付款权限、结算单状态不对、付款日期在未来、图片格式 / 内容不对
+- **上传之前**就挡掉：没有付款权限、结算单状态不对、图片格式 / 内容不对
+  （付款日期不再由客户端传，取北京时间当天，见 test_settlement_flow）
   —— 这些情况桶里不能多出一个文件
 - 上传之后任何一步失败：结算单不动、附件行不留、已上传的对象被删掉
 """
 
 from __future__ import annotations
 
-from datetime import timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -26,10 +26,8 @@ from app.core.tenancy import tenant_id_ctx
 from app.modules.finance.exceptions import (
     FieldPermissionDenied,
     InvalidPaymentProofImageError,
-    PaymentFieldMissingError,
 )
 from app.modules.finance.service import SettlementService
-from app.modules.promotion.urge_calculator import get_today
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
@@ -132,7 +130,6 @@ class TestProofUploadHappyPath:
 
             resp = await SettlementService(session).upload_payment_proof_file(
                 s.id,
-                payment_date=get_today(),
                 filename="proof.png",
                 mime_type="image/png",
                 data=_PNG,
@@ -191,7 +188,6 @@ class TestRejectedBeforeUpload:
             with pytest.raises(IllegalStateTransitionError):
                 await SettlementService(session).upload_payment_proof_file(
                     s.id,
-                    payment_date=get_today(),
                     filename="proof.png",
                     mime_type="image/png",
                     data=_PNG,
@@ -220,39 +216,10 @@ class TestRejectedBeforeUpload:
             with pytest.raises(FieldPermissionDenied):
                 await SettlementService(session).upload_payment_proof_file(
                     s.id,
-                    payment_date=get_today(),
                     filename="proof.png",
                     mime_type="image/png",
                     data=_PNG,
                     user=pr,
-                )
-            assert r2.puts == []
-        finally:
-            tenant_id_ctx.reset(token)
-
-    async def test_future_payment_date_uploads_nothing(
-        self,
-        session: AsyncSession,
-        tenant_a: Any,
-        factory: Any,
-        finance_role: Any,
-        product_factory: Any,
-        blogger_factory: Any,
-        settlement_factory: Any,
-        r2: _RecordingS3,
-    ) -> None:
-        token = tenant_id_ctx.set(tenant_a.id)
-        try:
-            finance = await factory.user(tenant_a, roles=[finance_role])
-            s = await _pending_finance(settlement_factory, product_factory, blogger_factory)
-            with pytest.raises(PaymentFieldMissingError):
-                await SettlementService(session).upload_payment_proof_file(
-                    s.id,
-                    payment_date=get_today() + timedelta(days=1),
-                    filename="proof.png",
-                    mime_type="image/png",
-                    data=_PNG,
-                    user=finance,
                 )
             assert r2.puts == []
         finally:
@@ -288,7 +255,6 @@ class TestRejectedBeforeUpload:
             with pytest.raises(InvalidPaymentProofImageError):
                 await SettlementService(session).upload_payment_proof_file(
                     s.id,
-                    payment_date=get_today(),
                     filename="proof.png",
                     mime_type=mime_type,
                     data=data,
@@ -331,7 +297,6 @@ class TestFailureAfterUploadStarts:
             with pytest.raises(AttachmentError):
                 await SettlementService(session).upload_payment_proof_file(
                     settlement_id,
-                    payment_date=get_today(),
                     filename="proof.png",
                     mime_type="image/png",
                     data=_PNG,
@@ -369,7 +334,6 @@ class TestFailureAfterUploadStarts:
             with pytest.raises(RuntimeError):
                 await SettlementService(session).upload_payment_proof_file(
                     settlement_id,
-                    payment_date=get_today(),
                     filename="proof.png",
                     mime_type="image/png",
                     data=_PNG,

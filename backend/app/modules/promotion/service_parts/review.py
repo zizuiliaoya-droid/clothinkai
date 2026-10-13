@@ -204,6 +204,7 @@ class PromotionReviewMixin(PromotionServiceBase):
                 pr_id=updated.pr_id,
                 requested_by=user.id,
                 requested_at=now,
+                line_id=promotion.line_id,
             )
             try:
                 await event_bus.dispatch(event, session=self._session)

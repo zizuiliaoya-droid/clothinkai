@@ -219,14 +219,17 @@ async def upload_payment_proof_file(
     settlement_id: UUID,
     user: CurrentActiveUser,
     service: SettlementServiceDep,
-    payment_date: Annotated[date, Form()],
     file: Annotated[UploadFile, File(description="付款截图（JPG / PNG / WebP，≤10MB）")],
+    payment_date: Annotated[date | None, Form(description="已忽略，付款日期取北京时间当天")] = None,
 ) -> SettlementResponse:
     """财务上传付款截图 → 已付款，后端代传到私有桶，一个请求完成。
 
     不让浏览器直传 R2：直传要求 bucket 配 CORS，生产私有桶没配，前端只会报
     ``Failed to fetch``。与收款码、催发截图、7 天数据截图同一套做法。
+
+    ``payment_date`` 改可选并忽略（F4，Q11）：只为兼容旧前端的表单保留，服务端取 ``get_today()``。
     """
+    del payment_date  # 兼容旧前端：收下但不用
     try:
         # 多读 1 字节：超限的文件由 check_image_payload 报「不能超过 10MB」，不整个读进内存
         data = await file.read(PROOF_MAX_SIZE_BYTES + 1)
@@ -234,7 +237,6 @@ async def upload_payment_proof_file(
         await file.close()
     return await service.upload_payment_proof_file(
         settlement_id,
-        payment_date=payment_date,
         filename=file.filename,
         mime_type=file.content_type,
         data=data,

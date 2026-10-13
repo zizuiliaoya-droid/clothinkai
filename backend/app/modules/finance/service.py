@@ -21,7 +21,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
@@ -48,13 +48,12 @@ from app.modules.finance.attachment_validator import (
     MAX_SIZE_BYTES as PROOF_MAX_SIZE_BYTES,
 )
 from app.modules.finance.attachment_validator import ProofAttachmentValidator
-from app.modules.finance.enums import SettlementStatus
+from app.modules.finance.enums import ExtraItemType, SettlementStatus
 from app.modules.finance.events import SettlementPaid
 from app.modules.finance.exceptions import (
     ExtraItemNotAllowedError,
     FieldPermissionDenied,
     InvalidPaymentProofImageError,
-    PaymentFieldMissingError,
     ReviewReasonRequiredError,
     SelfReviewForbiddenError,
     SettlementNotFoundError,
@@ -84,6 +83,8 @@ from app.modules.finance.schemas import (
 )
 from app.modules.finance.state_machines import SettlementStatusMachine
 from app.modules.flow.actor import load_flow_actor
+from app.modules.flow.exceptions import FlowGateMissingError
+from app.modules.flow.line_events import LineEventRepository, LineEventType
 from app.modules.importer.access import can_write as can_import_write
 from app.modules.promotion.enums import ReviewAction
 from app.modules.promotion.urge_calculator import get_today
@@ -121,7 +122,7 @@ class SettlementService:
         payload: SettlementReviewRequest,
         user: User,
     ) -> SettlementResponse:
-        """EP06-S03 / S04：PR 主管核查 / 驳回."""
+        """核查（F0，只给上线前停在待核查的旧单；新单 → 422）/ 驳回（F5，待付款 / 待财务付款）."""
         settlement = await self._repo.get_by_id(settlement_id)
         if settlement is None:
             raise SettlementNotFoundError(f"结算单 {settlement_id} 不存在")
@@ -176,6 +177,16 @@ class SettlementService:
 
         settlement_state_transitions_total.labels(from_state=from_status, to_state=to_status).inc()
 
+        if payload.action == ReviewAction.APPROVE:
+            # F0 旧单核查通过（只可能从待核查来）；驳回的 settlement.rejected 由推广侧监听写（R6）
+            await self._append_line_event(
+                updated,
+                LineEventType.SETTLEMENT_LEGACY_APPROVED,
+                actor_id=user.id,
+                from_state=from_status,
+                to_state=to_status,
+            )
+
         await self._audit.log(
             action=audit_action,
             resource="settlement",
@@ -199,7 +210,12 @@ class SettlementService:
         payload: SettlementPaymentAmountRequest,
         user: User,
     ) -> SettlementResponse:
-        """EP06-S06：PR 主管填写付款金额 → 待财务付款."""
+        """F3：填实付金额 → 待财务付款.
+
+        顺序：字段写权限 → 状态机 → 实付 ≠ 应付（``total_amount``）时调整说明必填
+        （422 ``FLOW_GATE_MISSING``，key = ``payment_adjust_note``）→ 条件 UPDATE（409）→ 事件。
+        「不一致必须写说明」只对新录入强制：存量已付款单没有说明，库里不加 CHECK（计划 D2）。
+        """
         await self._check_payment_write_permission(user)
 
         settlement = await self._repo.get_by_id(settlement_id)
@@ -212,12 +228,16 @@ class SettlementService:
             action="fill_payment",
         )
 
+        note = payload.payment_adjust_note or None
+        if payload.payment_amount != settlement.total_amount and note is None:
+            raise FlowGateMissingError([("payment_adjust_note", "调整说明")])
+
         updated = await self._repo.update_state(
             settlement_id=settlement_id,
             tenant_id=user.tenant_id,
             from_state_value=SettlementStatus.PENDING_PAYMENT.value,
             to_state_value=SettlementStatus.PENDING_FINANCE.value,
-            extra_fields={"payment_amount": payload.payment_amount},
+            extra_fields={"payment_amount": payload.payment_amount, "payment_adjust_note": note},
         )
         if updated is None:
             raise StateTransitionConflictError(
@@ -229,6 +249,19 @@ class SettlementService:
             from_state=SettlementStatus.PENDING_PAYMENT.value,
             to_state=SettlementStatus.PENDING_FINANCE.value,
         ).inc()
+
+        # 金额存字符串（6.3），取落库后的值（两位小数）
+        filled_payload: dict[str, Any] = {"payment_amount": str(updated.payment_amount)}
+        if note is not None:
+            filled_payload["payment_adjust_note"] = note
+        await self._append_line_event(
+            updated,
+            LineEventType.SETTLEMENT_PAYMENT_FILLED,
+            actor_id=user.id,
+            from_state=SettlementStatus.PENDING_PAYMENT.value,
+            to_state=SettlementStatus.PENDING_FINANCE.value,
+            payload=filled_payload,
+        )
 
         await self._audit.log(
             action="settlement.fill_payment",
@@ -265,7 +298,6 @@ class SettlementService:
         self,
         settlement_id: UUID,
         *,
-        payment_date: date,
         filename: str | None,
         mime_type: str | None,
         data: bytes,
@@ -278,9 +310,9 @@ class SettlementService:
         ``Failed to fetch``，付款截图一张都传不上去。系统里其余图片（收款码、催发截图、
         7 天数据、品牌词）早就改成后端代传，这里同样处理。
 
-        顺序：权限 → 结算单状态 → 付款日期 → 图片校验 → 上传 → 复用 ``_mark_paid``（FB4
-        6 项校验 + 状态推进 + 事件）→ commit。前四步都在上传之前：状态不对的单、明天的
-        付款日期，都不该先往桶里放一个文件。上传之后任何一步失败，回滚并删掉已上传的对象。
+        顺序：权限 → 结算单状态 → 图片校验 → 上传 → 复用 ``_mark_paid``（FB4 6 项校验 +
+        状态推进 + 事件）→ commit。前三步都在上传之前：状态不对的单不该先往桶里放一个文件。
+        上传之后任何一步失败，回滚并删掉已上传的对象。付款日期取北京时间当天（F4）。
         """
         from fastapi.concurrency import run_in_threadpool
 
@@ -293,7 +325,6 @@ class SettlementService:
             to_state=SettlementStatus.PAID.value,
             action="mark_paid",
         )
-        self._check_payment_date(payment_date)
         problem = check_image_payload(
             data=data,
             mime_type=mime_type,
@@ -335,9 +366,7 @@ class SettlementService:
             )
             updated = await self._mark_paid(
                 settlement_id,
-                SettlementPaymentProofRequest(
-                    payment_date=payment_date, payment_proof_attachment_id=attachment_id
-                ),
+                SettlementPaymentProofRequest(payment_proof_attachment_id=attachment_id),
                 user,
             )
             # commit 在 try 里：提交失败也要删掉对象。响应组装放在外面 —— 已经提交的
@@ -359,15 +388,6 @@ class SettlementService:
 
         return await self._to_response(updated, user)
 
-    @staticmethod
-    def _check_payment_date(payment_date: date) -> None:
-        """payment_date ≤ today（Asia/Shanghai，FB8 复用 get_today）。"""
-        if payment_date > get_today():
-            raise PaymentFieldMissingError(
-                "payment_date 不能晚于今天",
-                details={"payment_date": payment_date.isoformat()},
-            )
-
     async def _mark_paid(
         self,
         settlement_id: UUID,
@@ -385,7 +405,9 @@ class SettlementService:
         if settlement is None:
             raise SettlementNotFoundError(f"结算单 {settlement_id} 不存在")
 
-        self._check_payment_date(payload.payment_date)
+        # F4（Q11、D5）：付款日期 = 北京时间的当天；请求里的 payment_date 忽略。
+        # 不能用 date.today()：容器是 UTC，北京 0 ~ 8 点之间会记成前一天
+        payment_date = get_today()
 
         # FB4：attachment 6 项强校验
         await self._validator.validate(
@@ -406,7 +428,7 @@ class SettlementService:
             from_state_value=SettlementStatus.PENDING_FINANCE.value,
             to_state_value=SettlementStatus.PAID.value,
             extra_fields={
-                "payment_date": payload.payment_date,
+                "payment_date": payment_date,
                 "payment_proof_attachment_id": payload.payment_proof_attachment_id,
                 "paid_by": user.id,
             },
@@ -422,12 +444,27 @@ class SettlementService:
             to_state=SettlementStatus.PAID.value,
         ).inc()
 
+        # 时间线（6.3）：settlement.paid，附件 = 付款凭证（读时过收款码规则，运营看不到）
+        paid_payload: dict[str, Any] = {}
+        if updated.payment_amount is not None:
+            paid_payload["payment_amount"] = str(updated.payment_amount)
+        paid_payload["payment_date"] = payment_date.isoformat()
+        await self._append_line_event(
+            updated,
+            LineEventType.SETTLEMENT_PAID,
+            actor_id=user.id,
+            from_state=SettlementStatus.PENDING_FINANCE.value,
+            to_state=SettlementStatus.PAID.value,
+            attachment_id=payload.payment_proof_attachment_id,
+            payload=paid_payload,
+        )
+
         await self._audit.log(
             action="settlement.mark_paid",
             resource="settlement",
             resource_id=settlement_id,
             after={
-                "payment_date": payload.payment_date.isoformat(),
+                "payment_date": payment_date.isoformat(),
                 "payment_amount_changed": True,
                 "attachment_id_changed": True,
                 "settlement_status": SettlementStatus.PAID.value,
@@ -443,7 +480,7 @@ class SettlementService:
             settlement_id=updated.id,
             promotion_id=updated.promotion_id,
             payment_amount=updated.payment_amount or Decimal("0"),
-            payment_date=payload.payment_date,
+            payment_date=payment_date,
             paid_by=user.id,
         )
         try:
@@ -467,14 +504,14 @@ class SettlementService:
     # ============================================================
 
     async def resubmit(self, settlement_id: UUID, user: User) -> SettlementResponse:
-        """已驳回 → 待核查（PR 修改后重新提交）。"""
+        """已驳回 → 待付款（F6；监听调用的新签名与清空实付随推广单 R7 一起做）。"""
         settlement = await self._repo.get_by_id(settlement_id)
         if settlement is None:
             raise SettlementNotFoundError(f"结算单 {settlement_id} 不存在")
 
         SettlementStatusMachine.assert_can_transition(
             from_state=settlement.settlement_status,
-            to_state=SettlementStatus.PENDING_REVIEW.value,
+            to_state=SettlementStatus.PENDING_PAYMENT.value,
             action="resubmit",
         )
 
@@ -482,7 +519,7 @@ class SettlementService:
             settlement_id=settlement_id,
             tenant_id=user.tenant_id,
             from_state_value=SettlementStatus.REJECTED.value,
-            to_state_value=SettlementStatus.PENDING_REVIEW.value,
+            to_state_value=SettlementStatus.PENDING_PAYMENT.value,
         )
         if updated is None:
             raise StateTransitionConflictError(
@@ -531,6 +568,12 @@ class SettlementService:
                 "仅'待付款'状态可增加结算项",
                 details={"settlement_status": settlement.settlement_status},
             )
+        # F2：类型「运费」停用（寄回运费走 R33，免得重复报；枚举值保留，存量行照常显示）
+        if payload.item_type == ExtraItemType.SHIPPING:
+            raise ExtraItemNotAllowedError(
+                "寄回运费不再走结算项，请走寄回运费付款单",
+                details={"item_type": payload.item_type.value},
+            )
 
         item = SettlementExtraItem(
             id=uuid4(),
@@ -557,6 +600,17 @@ class SettlementService:
                 "结款状态已变更，请刷新后重试",
                 details={"settlement_id": str(settlement_id)},
             )
+
+        await self._append_line_event(
+            updated,
+            LineEventType.SETTLEMENT_EXTRA_ITEM_ADDED,
+            actor_id=user.id,
+            payload={
+                "item_type": payload.item_type.value,
+                "item_amount": f"{item.amount:.2f}",
+                "total_amount": str(updated.total_amount),
+            },
+        )
 
         await self._audit.log(
             action="settlement.add_extra_item",
@@ -760,6 +814,34 @@ class SettlementService:
     # ============================================================
     # Private helpers
     # ============================================================
+
+    async def _append_line_event(
+        self,
+        settlement: Settlement,
+        event_type: LineEventType,
+        *,
+        actor_id: UUID,
+        from_state: str | None = None,
+        to_state: str | None = None,
+        attachment_id: UUID | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        """结款组事件（流程线 6.3）：挂在推广单这条线上，payload 总带 ``settlement_id``。
+
+        同事务、不吞异常（6.4）：写不进去整个动作失败。``from_state`` / ``to_state`` 记结款单状态。
+        """
+        line_id = await self._repo.promotion_line_id(settlement.promotion_id)
+        await LineEventRepository(self._session).append(
+            tenant_id=settlement.tenant_id,
+            line_id=line_id,
+            event_type=event_type,
+            actor_id=actor_id,
+            promotion_id=settlement.promotion_id,
+            from_state=from_state,
+            to_state=to_state,
+            attachment_id=attachment_id,
+            payload={"settlement_id": str(settlement.id), **(payload or {})},
+        )
 
     async def _check_payment_write_permission(self, user: User) -> None:
         """fill_payment 写权限（U09: settlement.payment_amount 写）。"""

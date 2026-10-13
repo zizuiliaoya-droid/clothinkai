@@ -90,6 +90,18 @@ class SettlementRepository:
         stmt = select(Settlement).where(Settlement.request_event_id == request_event_id)
         return (await self._session.execute(stmt)).scalar_one_or_none()
 
+    async def promotion_line_id(self, promotion_id: UUID) -> UUID:
+        """结款单所属推广单的主线号（写结款组时间线事件用，流程线 6.3）。
+
+        原生 SQL，不 import promotion 的 model；``settlement.promotion_id`` 有 FK，推广单必在。
+        """
+        result = await self._session.execute(
+            text("SELECT line_id FROM promotion WHERE id = CAST(:pid AS uuid)"),
+            {"pid": promotion_id},
+        )
+        line_id: UUID = result.scalar_one()
+        return line_id
+
     # ----------------------- write helper ----------------------- #
 
     def add(self, settlement: Settlement) -> None:

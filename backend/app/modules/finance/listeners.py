@@ -6,7 +6,7 @@
 - 同事务执行（与 U04 service.review approve 共享 session）
 - 三重幂等（DB UNIQUE × 2 + service SELECT，FB1+FB3）
 - handler 内 ``await session.flush()``（FB6：UNIQUE / FK 错误立即暴露）
-- settlement_status 起点 = "待核查"（FB1）
+- settlement_status 起点 = "待付款"（F1，流程线 PR-6；原为待核查），同事务写 ``settlement.created``
 
 注册位置：main.py register_event_listeners 第 1 步（强一致，缺失 fail fast）。
 """
@@ -27,6 +27,7 @@ from app.modules.finance.domain import format_settlement_no
 from app.modules.finance.enums import SettlementStatus
 from app.modules.finance.models import Settlement
 from app.modules.finance.repository import SettlementRepository
+from app.modules.flow.line_events import LineEventRepository, LineEventType
 from app.modules.promotion.events import SettlementRequested
 
 log = logging.getLogger(__name__)
@@ -74,7 +75,7 @@ async def on_settlement_requested(event: SettlementRequested, session: AsyncSess
         sequence=seq,
     )
 
-    # 4. 创建实体 — settlement_status 起点 = 待核查（FB1）
+    # 4. 创建实体 — settlement_status 起点 = 待付款（F1：流程线 PR-6 去掉核查，原为待核查）
     settlement = Settlement(
         id=uuid4(),
         tenant_id=event.tenant_id,
@@ -85,7 +86,7 @@ async def on_settlement_requested(event: SettlementRequested, session: AsyncSess
         settlement_no=settlement_no,
         amount=event.amount,
         total_amount=event.amount,  # 初始无 extra_item
-        settlement_status=SettlementStatus.PENDING_REVIEW.value,
+        settlement_status=SettlementStatus.PENDING_PAYMENT.value,
         request_event_id=event.event_id,
     )
     repo.add(settlement)
@@ -108,8 +109,20 @@ async def on_settlement_requested(event: SettlementRequested, session: AsyncSess
             "promotion_id": str(event.promotion_id),
             "amount_changed": True,
             "total_amount_changed": True,
-            "settlement_status": SettlementStatus.PENDING_REVIEW.value,
+            "settlement_status": SettlementStatus.PENDING_PAYMENT.value,
         },
+    )
+
+    # 7. 时间线（流程线 6.3）：settlement.created，同事务、不吞异常（6.4）；actor 取审核通过的人
+    line_id = event.line_id or await repo.promotion_line_id(event.promotion_id)
+    await LineEventRepository(session).append(
+        tenant_id=event.tenant_id,
+        line_id=line_id,
+        event_type=LineEventType.SETTLEMENT_CREATED,
+        actor_id=event.requested_by,
+        promotion_id=event.promotion_id,
+        to_state=SettlementStatus.PENDING_PAYMENT.value,
+        payload={"settlement_id": str(settlement.id)},
     )
 
     settlement_created_via_event_total.labels(result="created").inc()

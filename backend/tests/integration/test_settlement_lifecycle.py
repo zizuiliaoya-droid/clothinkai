@@ -4,7 +4,7 @@
 - review approve/reject + 自审禁止（EP06-S03/S04）
 - add_extra_item + total 重算 + 状态约束（EP06-S05）
 - fill_payment_amount（EP06-S06）
-- resubmit（已驳回 → 待核查）
+- resubmit（已驳回 → 待付款，F6）
 - FB3 immutable：DELETE 不提供（service 无软删接口）
 """
 
@@ -89,7 +89,7 @@ class TestReview:
                 style=style,
                 blogger=blogger,
                 pr=pr,
-                settlement_status="待核查",
+                settlement_status="待付款",  # F5：驳回只从待付款 / 待财务付款
             )
             svc = SettlementService(session)
             resp = await svc.review(
@@ -143,7 +143,7 @@ class TestExtraItem:
         blogger_factory: Any,
         settlement_factory: Any,
     ) -> None:
-        """EP06-S05：增加运费 → total_amount = amount + extra。"""
+        """EP06-S05：增加赞奖 → total_amount = amount + extra（运费停用，F2，见 test_settlement_flow）。"""
         token = tenant_id_ctx.set(tenant_a.id)
         try:
             user = await factory.user(tenant_a, roles=[pr_manager_role])
@@ -160,7 +160,7 @@ class TestExtraItem:
             resp = await svc.add_extra_item(
                 s.id,
                 SettlementExtraItemCreateRequest(
-                    item_type=ExtraItemType.SHIPPING, amount=Decimal("30.00")
+                    item_type=ExtraItemType.REWARD, amount=Decimal("30.00")
                 ),
                 user,
             )
@@ -260,7 +260,9 @@ class TestFillPaymentAndResubmit:
             svc = SettlementService(session)
             resp = await svc.fill_payment_amount(
                 s.id,
-                SettlementPaymentAmountRequest(payment_amount=Decimal("480.00")),
+                SettlementPaymentAmountRequest(
+                    payment_amount=Decimal("480.00"), payment_adjust_note="扣 20 元"
+                ),
                 user,
             )
             assert resp.settlement_status == "待财务付款"
@@ -292,7 +294,9 @@ class TestFillPaymentAndResubmit:
             svc = SettlementService(session)
             resp = await svc.fill_payment_amount(
                 s.id,
-                SettlementPaymentAmountRequest(payment_amount=Decimal("480.00")),
+                SettlementPaymentAmountRequest(
+                    payment_amount=Decimal("480.00"), payment_adjust_note="扣 20 元"
+                ),
                 user,
             )
             assert resp.settlement_status == "待财务付款"
@@ -322,7 +326,7 @@ class TestFillPaymentAndResubmit:
             )
             svc = SettlementService(session)
             resp = await svc.resubmit(s.id, user)
-            assert resp.settlement_status == "待核查"
+            assert resp.settlement_status == "待付款"
         finally:
             tenant_id_ctx.reset(token)
 
