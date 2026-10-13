@@ -1,7 +1,8 @@
 // 催发任务（PRD V1.4 改动 2）类型。
 
 export type UrgeTaskStatus = "进行中" | "已关闭";
-export type UrgeCloseReason = "博主已发布" | "已取消" | "手动关闭";
+/** 「已完成」= 在催发页标记完成（流程线 3.9 U1，带截图）；被手动催发会重开。 */
+export type UrgeCloseReason = "博主已发布" | "已取消" | "手动关闭" | "已完成";
 export type UrgeTriggerType = "手动" | "自动";
 
 export interface UrgeConfig {
@@ -62,6 +63,8 @@ export interface UrgeTask {
 export interface UrgeTaskDetail extends UrgeTask {
   /** 催发时间线，倒序。 */
   records: UrgeRecord[];
+  /** 标记完成的截图签名 URL：关闭原因 = 已完成时才有，1 小时有效，签名失败为 null。 */
+  close_screenshot_url?: string | null;
 }
 
 export interface UrgeTaskPage {
