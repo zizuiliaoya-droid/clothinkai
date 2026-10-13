@@ -1,6 +1,9 @@
 """U05 单元测试：SettlementPaid 事件（required_handler=False，FB5）。
 
-验证与 SettlementRequested（required_handler=True 强一致）的不对称语义。
+验证与 SettlementRequested（required_handler=True 强一致）的不对称语义；
+流程线 PR-6 起结款链另有两个强一致事件（SettlementRejected / SettlementResubmitted，R6 / R7），
+付款（R8）仍是通知类：监听只把推广单 待付款 → 已付款，覆盖不了结款驳回 / 已结款
+（端到端见 test_e2e_review_to_paid 末段的重放）。
 """
 
 from __future__ import annotations
@@ -12,8 +15,8 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.finance.events import SettlementPaid
-from app.modules.promotion.events import SettlementRequested
+from app.modules.finance.events import SettlementPaid, SettlementRejected
+from app.modules.promotion.events import SettlementRequested, SettlementResubmitted
 
 
 @pytest.mark.unit
@@ -52,6 +55,19 @@ class TestAsymmetryWithSettlementRequested:
         # 正向必须有 handler（U05 未部署 → U04 review approve 失败）
         # 反向可丢（U04 listener 缺失不阻塞 U05 mark_paid）
         assert SettlementRequested.required_handler != SettlementPaid.required_handler
+
+
+@pytest.mark.unit
+class TestAsymmetryWithSettlementFlowEvents:
+    """流程线 PR-6：驳回 / 重提必须有监听（两张表同事务，D7），付款仍可丢。"""
+
+    def test_reject_and_resubmit_are_required(self) -> None:
+        assert SettlementRejected.required_handler is True
+        assert SettlementResubmitted.required_handler is True
+
+    def test_paid_stays_notification(self) -> None:
+        # 付款回写缺监听不阻塞财务付款；驳回 / 重提缺监听必须报错
+        assert SettlementPaid.required_handler != SettlementRejected.required_handler
 
 
 def _make_paid_event() -> SettlementPaid:
