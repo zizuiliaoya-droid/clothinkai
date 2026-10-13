@@ -662,9 +662,9 @@ async def promotion_factory(session: AsyncSession, tenant_a: Any) -> Any:
                     "ship_pushed_by",
                     # 流程线 M2（063）主线号；不传由库发号
                     "line_id",
-                    # 复盘 / 7 天数据（阶段 #14 ~ #16 造数用）；retro_status 不传走库默认
+                    # 复盘（阶段 #14 ~ #16 造数用）；retro_status 不传走库默认。
+                    # 7 天数据 metrics_recorded_at 在上面（main 已加）
                     "retro_status",
-                    "metrics_recorded_at",
                     # [(style, sku), …]：按顺序插 promotion_item（不校验成员 / 归属，造数用）
                     "items",
                 }
@@ -756,7 +756,6 @@ async def promotion_factory(session: AsyncSession, tenant_a: Any) -> Any:
                     # 显式 None 会插 NULL（NOT NULL）：只在传了时给，否则走库默认
                     **({"line_id": kw["line_id"]} if "line_id" in kw else {}),
                     **({"retro_status": kw["retro_status"]} if "retro_status" in kw else {}),
-                    metrics_recorded_at=kw.get("metrics_recorded_at"),
                 )
                 session.add(p)
                 await session.flush()
