@@ -267,7 +267,7 @@ PAYLOAD_FIELD_RULES: dict[str, tuple[str, str] | PayloadContainer | None] = {
     "item_amount": ("settlement", "total_amount"),
     "total_amount": ("settlement", "total_amount"),
     "payment_amount": ("settlement", "payment_amount"),
-    "payment_adjust_note": ("settlement", "payment_amount"),
+    "payment_adjust_note": ("settlement", "payment_adjust_note"),
     "payment_date": None,
     # 复盘
     "retrospective_id": None,

@@ -18,6 +18,9 @@ PR-2 起每个 PR 把它碰到的行加进来（设计 10.1）。本表手写、
 谈款（PR-3，设计 5.2）：角色顺序是 PR（本人）/ 主管 / 管理员 / 财务 / 运营（5 个字）；别的 PR 与仓库整张单据「—」，
 展开时 pr2、warehouse 一律「隐」。另有「主管待审·主管自建」：谈款人是主管本人（11-24），那一格的第 1 个字是
 pr 这个 persona——此时他不是本人，所以全是「隐」。
+
+结款单（PR-6）：同谈款的 5 个字（PR / 主管 / 管理员 / 财务 / 运营），列 = 5 个结款状态；每个状态另展开「状态·主管提交」
+（结款单的 pr_id 是主管本人，核查 / 驳回不能审自己提交的）。
 """
 
 from __future__ import annotations
@@ -27,6 +30,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
+from app.modules.finance.flow_doc import SettlementDoc
 from app.modules.negotiation.flow_doc import NegotiationDoc
 from app.modules.promotion.flow_doc import PromotionDoc, WarehouseDoc
 
@@ -244,10 +248,33 @@ _NEGOTIATION_DOCS[SELF_BUILT] = _negotiation_doc(
     "主管待审", owner_id=MANAGER_ID, negotiator_id=MANAGER_ID
 )
 
+# 结款单 5 态（与 SettlementStatus 对照着抄，不 import）；PR-6 只有动作行（结款页按 ui.actions 渲染，8.6）
+SETTLEMENT_STATES: tuple[str, ...] = ("待核查", "待付款", "待财务付款", "已付款", "已驳回")
+MANAGER_SUBMITTED = "·主管提交"  # 结款单的 pr_id 是主管本人（驳回 / 核查不能审自己提交的）
+
+
+def _settlement_doc(state: str, **override: Any) -> SettlementDoc:
+    kw: dict[str, Any] = {
+        "stage": state,
+        "state": state,
+        "owner_id": PR_ID,
+        "negotiator_id": PR_ID,
+    }
+    kw.update(override)
+    return SettlementDoc(**kw)
+
+
+_SETTLEMENT_DOCS: dict[str, Any] = {s: _settlement_doc(s) for s in SETTLEMENT_STATES}
+for _state in SETTLEMENT_STATES:
+    _SETTLEMENT_DOCS[f"{_state}{MANAGER_SUBMITTED}"] = _settlement_doc(
+        _state, owner_id=MANAGER_ID, negotiator_id=MANAGER_ID
+    )
+
 DOCS: dict[str, dict[str, Any]] = {
     "promotion": _PROMOTION_DOCS,
     "warehouse": _WAREHOUSE_DOCS,
     "negotiation": _NEGOTIATION_DOCS,
+    "settlement": _SETTLEMENT_DOCS,
 }
 
 
@@ -497,8 +524,38 @@ def _expand_negotiation(
     return out
 
 
+# 结款单（PR-6，5.3「结款单：追加项、填实付、驳回、上传凭证」隐/改¹⁶/改/改★¹²/隐/隐 按状态展开）：
+# 5 个字 PR/主管/管理员/财务/运营；PR、运营没有 settlement scope（进不了结款页），别的 PR、仓库同样「—」。
+# 核查 / 驳回挂 settlement.review:approve（主管、财务、管理员），结款单是自己提交的（pr_id = 本人）→「读」；
+# 追加项 / 填实付挂 settlement:write + settlement.payment_amount 字段写（主管、财务、管理员）；
+# 上传凭证挂 settlement.pay:upload_proof + finance.settlement:pay（财务、管理员；主管不能，¹⁶）
+_SETTLE_EDIT = "隐改改改隐"
+_SETTLE_SELF = "隐读改改隐"
+_SETTLE_ROWS: dict[tuple[str, str], dict[str, str]] = {
+    ("action", "legacy_approve"): {
+        "待核查": _SETTLE_EDIT,
+        f"待核查{MANAGER_SUBMITTED}": _SETTLE_SELF,
+    },
+    ("action", "reject"): {
+        "待付款": _SETTLE_EDIT,
+        "待财务付款": _SETTLE_EDIT,
+        f"待付款{MANAGER_SUBMITTED}": _SETTLE_SELF,
+        f"待财务付款{MANAGER_SUBMITTED}": _SETTLE_SELF,
+    },
+    ("action", "extra_item"): {"待付款": _SETTLE_EDIT, f"待付款{MANAGER_SUBMITTED}": _SETTLE_EDIT},
+    ("action", "fill_payment"): {
+        "待付款": _SETTLE_EDIT,
+        f"待付款{MANAGER_SUBMITTED}": _SETTLE_EDIT,
+    },
+    ("action", "upload_proof"): {
+        "待财务付款": "隐隐改改隐",
+        f"待财务付款{MANAGER_SUBMITTED}": "隐隐改改隐",
+    },
+}
+
 EXPECTED: dict[str, dict[tuple[str, str, str, str], str]] = {
     "promotion": _expand(_PROMOTION_DOCS, _PROMOTION_ROWS),
     "warehouse": _expand(_WAREHOUSE_DOCS, _WAREHOUSE_ROWS),
     "negotiation": _expand_negotiation(_NEGOTIATION_DOCS, _NEG_ROWS),
+    "settlement": _expand_negotiation(_SETTLEMENT_DOCS, _SETTLE_ROWS),
 }

@@ -500,6 +500,29 @@ ReviewOutcome = Literal["settlement_created", "settled_directly", "imported_sett
 """审核通过的去向（3.4 R2 / R3 / R2 ⑥）。"""
 
 
+class PromotionSettlementExtraItem(BaseModel):
+    item_type: str
+    amount: Decimal | None = None
+    """跟 ``settlement.total_amount`` 的字段规则（读不到为 None）。"""
+    remark: str | None = None
+
+
+class PromotionSettlementBlock(BaseModel):
+    """推广详情的结款块（流程线 7.3）。金额与调整说明按 4.6：PR 可读不可写（11-17）；
+    ``amount``（= 服务费）跟 ``promotion.quote_amount``，追加项金额跟 ``settlement.total_amount``。"""
+
+    settlement_id: UUID
+    status: str
+    amount: Decimal | None = None
+    extra_items: list[PromotionSettlementExtraItem] = Field(default_factory=list)
+    total_amount: Decimal | None = None
+    payment_amount: Decimal | None = None
+    payment_adjust_note: str | None = None
+    payment_date: date | None = None
+    reject_reason: str | None = None
+    """结款单最近一次驳回的原因（F5）；没驳回过为 None。"""
+
+
 class PromotionResponse(BaseModel):
     """推广响应。
 
@@ -657,6 +680,9 @@ class PromotionResponse(BaseModel):
     settlement_payment_proof_signed_url: str | None = None
     settlement_chat_signed_url: str | None = None
     """结款聊天截图（R9，流程线 7.3）：只在详情与各动作的返回里签，列表为 None；可见性同收款码。"""
+    settlement: PromotionSettlementBlock | None = None
+    """结款块（流程线 7.3）：只在详情与各动作的返回里有，列表为 None；还没有结款单、或矩阵「结款单」一行
+    对当前用户是隐（运营）时为 None。"""
 
     # 重复警告（仅 create / detail 视图填入）
     duplicate_warnings: list[PromotionDuplicateWarning] = Field(default_factory=list)
@@ -786,6 +812,8 @@ __all__ = [
     "PromotionResponse",
     "PromotionResubmitRequest",
     "PromotionReviewRequest",
+    "PromotionSettlementBlock",
+    "PromotionSettlementExtraItem",
     "PromotionSettlementResubmitRequest",
     "PromotionShipPushRequest",
     "PromotionShipWithdrawRequest",

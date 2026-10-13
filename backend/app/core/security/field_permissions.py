@@ -95,11 +95,17 @@ FIELD_PERMISSION_REGISTRY: dict[str, dict[str, FieldRule]] = {
         "settlement": FieldRule(frozenset({"admin", "pr", "pr_manager", "finance", "operations"})),
         "retro": FieldRule(frozenset({"admin", "pr", "pr_manager", "operations"})),
     },
+    # 流程线 4.6 / 11-17：应付、实付、调整说明加 PR 只读（推广抽屉的结款块；PR 没有 settlement scope，
+    # 结款页仍进不去）。结款页自己的 amount 不变（列表「看不到金额就只看自己提交的」读的是它）
     "settlement": {
         "amount": FieldRule(frozenset({"admin", "pr_manager", "finance"})),
-        "total_amount": FieldRule(frozenset({"admin", "pr_manager", "finance"})),
+        "total_amount": FieldRule(frozenset({"admin", "pr_manager", "finance", "pr"})),
         "payment_amount": FieldRule(
+            frozenset({"admin", "pr_manager", "finance", "pr"}),
             frozenset({"admin", "pr_manager", "finance"}),
+        ),
+        "payment_adjust_note": FieldRule(
+            frozenset({"admin", "pr_manager", "finance", "pr"}),
             frozenset({"admin", "pr_manager", "finance"}),
         ),
     },

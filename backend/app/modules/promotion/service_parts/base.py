@@ -19,6 +19,7 @@ from app.core.audit import AuditService
 from app.core.db import AsyncSessionBypass
 from app.core.exceptions import ValidationError
 from app.core.security.field_permissions import (
+    FieldPermissionContext,
     build_field_perm_context,
     can_read_field,
     can_write_field,
@@ -48,6 +49,7 @@ from app.modules.promotion.enums import (
     AMOUNT_LOG_FIELDS,
     CooperationMode,
     RetroStatus,
+    ReviewAction,
 )
 from app.modules.promotion.exceptions import (
     FieldPermissionDenied,
@@ -88,6 +90,8 @@ from app.modules.promotion.schemas import (
     PromotionCreate,
     PromotionItemResponse,
     PromotionResponse,
+    PromotionSettlementBlock,
+    PromotionSettlementExtraItem,
     PromotionShipPushRequest,
     PromotionUpdate,
 )
@@ -921,6 +925,9 @@ class PromotionServiceBase:
             attachment_refs=attachment_refs,
         )
         ui = ui_for(actor, doc).to_dict(view=view)
+        settlement_block = (
+            await self._settlement_block(promotion, ctx, ui) if view != "list" else None
+        )
         badges = compute_badges(
             stage=stage,
             publish_status=promotion.publish_status,
@@ -1023,8 +1030,52 @@ class PromotionServiceBase:
             payment_qr_signed_url=payment_qr_url,
             settlement_payment_proof_signed_url=settlement_proof_url,
             settlement_chat_signed_url=settlement_chat_url,
+            settlement=settlement_block,
             duplicate_warnings=[],
             ui=ui,
+        )
+
+    async def _settlement_block(
+        self, promotion: Promotion, ctx: FieldPermissionContext, ui: Mapping[str, Any]
+    ) -> PromotionSettlementBlock | None:
+        """推广详情的结款块（7.3）。矩阵「结款单」一行对当前用户是读 / 改才给（运营是隐，7.1：
+        读不到的分组不出现）；块里的金额与调整说明再逐项过字段规则（4.6，PR 可读不可写，11-17）。"""
+        state = (ui.get("fields") or {}).get("settlement", {}).get("state")
+        if state not in ("read", "edit"):
+            return None
+        detail = await self._repo.settlement_detail(
+            tenant_id=promotion.tenant_id, promotion_id=promotion.id
+        )
+        if detail is None:
+            return None
+        can_see_total = can_read_field("settlement", "total_amount", ctx)
+        return PromotionSettlementBlock(
+            settlement_id=detail.settlement_id,
+            status=detail.settlement_status,
+            amount=detail.amount if can_read_field("promotion", "quote_amount", ctx) else None,
+            extra_items=[
+                PromotionSettlementExtraItem(
+                    item_type=item.item_type,
+                    amount=item.amount if can_see_total else None,
+                    remark=item.remark,
+                )
+                for item in detail.extra_items
+            ],
+            total_amount=detail.total_amount if can_see_total else None,
+            payment_amount=(
+                detail.payment_amount
+                if can_read_field("settlement", "payment_amount", ctx)
+                else None
+            ),
+            payment_adjust_note=(
+                detail.payment_adjust_note
+                if can_read_field("settlement", "payment_adjust_note", ctx)
+                else None
+            ),
+            payment_date=detail.payment_date,
+            reject_reason=(
+                detail.review_reason if detail.review_action == ReviewAction.REJECT.value else None
+            ),
         )
 
     async def _log_event_dispatch_failure(

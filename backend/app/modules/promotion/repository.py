@@ -171,6 +171,29 @@ class PromotionSettlementBrief:
     settlement_status: str
 
 
+@dataclass(frozen=True)
+class PromotionSettlementExtraItemRow:
+    item_type: str
+    amount: Decimal
+    remark: str | None
+
+
+@dataclass(frozen=True)
+class PromotionSettlementDetail:
+    """推广详情结款块的原始值（流程线 7.3）；字段规则由 service 过。"""
+
+    settlement_id: UUID
+    settlement_status: str
+    amount: Decimal
+    total_amount: Decimal
+    payment_amount: Decimal | None
+    payment_adjust_note: str | None
+    payment_date: date | None
+    review_action: str | None
+    review_reason: str | None
+    extra_items: tuple[PromotionSettlementExtraItemRow, ...]
+
+
 # ---------------------------------------------------------------------------
 # Repository
 # ---------------------------------------------------------------------------
@@ -287,6 +310,62 @@ class PromotionRepository:
             settlement_id=row["id"],
             settlement_no=row["settlement_no"],
             settlement_status=row["settlement_status"],
+        )
+
+    async def settlement_detail(
+        self, *, tenant_id: UUID, promotion_id: UUID
+    ) -> PromotionSettlementDetail | None:
+        """推广详情的结款块（7.3）：这张推广单的结款单与追加项（按建立时间）；没有结款单为 None。
+        原生 SQL，不 import finance（同 ``settlement_brief``）。"""
+        row = (
+            (
+                await self._session.execute(
+                    text(
+                        "SELECT id, settlement_status, amount, total_amount, payment_amount, "
+                        "payment_adjust_note, payment_date, review_action, review_reason "
+                        "FROM settlement "
+                        "WHERE tenant_id = CAST(:tenant_id AS uuid) "
+                        "AND promotion_id = CAST(:promotion_id AS uuid)"
+                    ),
+                    {"tenant_id": tenant_id, "promotion_id": promotion_id},
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if row is None:
+            return None
+        items = (
+            (
+                await self._session.execute(
+                    text(
+                        "SELECT item_type, amount, remark FROM settlement_extra_item "
+                        "WHERE tenant_id = CAST(:tenant_id AS uuid) "
+                        "AND settlement_id = CAST(:settlement_id AS uuid) "
+                        "ORDER BY created_at, id"
+                    ),
+                    {"tenant_id": tenant_id, "settlement_id": row["id"]},
+                )
+            )
+            .mappings()
+            .all()
+        )
+        return PromotionSettlementDetail(
+            settlement_id=row["id"],
+            settlement_status=row["settlement_status"],
+            amount=row["amount"],
+            total_amount=row["total_amount"],
+            payment_amount=row["payment_amount"],
+            payment_adjust_note=row["payment_adjust_note"],
+            payment_date=row["payment_date"],
+            review_action=row["review_action"],
+            review_reason=row["review_reason"],
+            extra_items=tuple(
+                PromotionSettlementExtraItemRow(
+                    item_type=i["item_type"], amount=i["amount"], remark=i["remark"]
+                )
+                for i in items
+            ),
         )
 
     async def negotiator_ids(self, promotion_ids: Sequence[UUID]) -> dict[UUID, UUID]:

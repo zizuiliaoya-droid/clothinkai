@@ -387,10 +387,12 @@ def test_expected_table_covers_registered_matrices() -> None:
 
 def test_real_matrices_registered() -> None:
     """PR-2：推广单与仓库行（import ``promotion.flow_doc`` 即登记）；PR-3：谈款（``negotiation.flow_doc``）。"""
-    assert set(MATRICES) == {"promotion", "warehouse", "negotiation"}
+    assert set(MATRICES) == {"promotion", "warehouse", "negotiation", "settlement"}
     for kind in ("promotion", "warehouse"):
         assert MATRICES[kind].stages == PROMOTION_STAGES, kind
     assert MATRICES["negotiation"].stages == NEGOTIATION_STAGES
+    # PR-6：结款单（import ``finance.flow_doc``），列 = 5 个结款状态
+    assert MATRICES["settlement"].stages == ("待核查", "待付款", "待财务付款", "已付款", "已驳回")
     assert NEGOTIATION_STAGES == (
         "草稿",
         "主管待审",
@@ -623,17 +625,18 @@ def test_actions_follow_constant_order(toy: Matrix) -> None:
 
 
 def test_unregistered_kind_raises() -> None:
+    # 结款单 PR-6 起已登记；R33 付款单随 PR-8
     @dataclass(frozen=True, kw_only=True)
-    class SettleDoc(FlowDocBase):
-        kind: ClassVar[str] = "settlement"
+    class FreightDoc(FlowDocBase):
+        kind: ClassVar[str] = "freight"
 
         def allowed_actions(self) -> frozenset[str]:
             return frozenset()
 
-    doc = SettleDoc(stage="待付款", state="待付款")
+    doc = FreightDoc(stage="待审核", state="待审核")
     for call in (
         lambda: ui_for(PERSONAS["pr"], doc),
-        lambda: require(PERSONAS["pr"], doc, "reject"),
+        lambda: require(PERSONAS["pr"], doc, "freight_review"),
         lambda: writable_fields(PERSONAS["pr"], doc),
     ):
         with pytest.raises(KeyError):
@@ -1791,3 +1794,80 @@ def test_negotiation_receiver_follows_field_rules() -> None:
         field_ctx=replace(pr.field_ctx, revokes=frozenset({"field.promotion.quote_amount:read"})),
     )
     assert "quote_amount" not in _real_ui(no_quote, N_DOCS["主管待审"]).fields
+
+
+# ---------------------------------------------------------------------------
+# 结款单（PR-6，计划 D10）：状态机由 SettlementStatusMachine 推导，矩阵只管谁能点
+# ---------------------------------------------------------------------------
+
+S_DOCS = DOCS["settlement"]
+
+
+def test_settlement_allowed_actions_follow_state_machine() -> None:
+    """``SettlementDoc.allowed_actions`` 与 service 用的状态机同一份：每个状态的转移（重提除外，
+    没有页面按钮）一一映射到动作键；追加项只在待付款（service 同判）。"""
+    from app.modules.finance.enums import SettlementStatus
+    from app.modules.finance.flow_doc import TRANSITION_ACTIONS, build_settlement_doc
+    from app.modules.finance.state_machines import SettlementStatusMachine
+
+    assert set(TRANSITION_ACTIONS.values()) <= set(ACTION_KEYS["settlement"])
+    machine_actions = {t.action for t in SettlementStatusMachine.transitions}
+    assert machine_actions == set(TRANSITION_ACTIONS) | {"resubmit"}
+    seen: set[str] = set()
+    for status in SettlementStatus:
+        doc = build_settlement_doc(status=status.value, pr_id=PR_ID)
+        expected = {
+            TRANSITION_ACTIONS[action]
+            for action, _to in SettlementStatusMachine.get_allowed_transitions(status.value)
+            if action in TRANSITION_ACTIONS
+        }
+        if status is SettlementStatus.PENDING_PAYMENT:
+            expected.add("extra_item")
+        assert doc.allowed_actions() == frozenset(expected), status
+        assert (doc.stage, doc.state, doc.column) == (status.value, status.value, None)
+        seen |= expected
+    # 场景有效性：五个动作键都有状态允许
+    assert seen == set(ACTION_KEYS["settlement"])
+    assert build_settlement_doc(status="已付款", pr_id=PR_ID).allowed_actions() == frozenset()
+
+
+def test_settlement_ui_by_role() -> None:
+    finance = _real_ui(PERSONAS["finance"], S_DOCS["待财务付款"]).to_dict(view="list")
+    assert finance == {
+        "actions": {"reject": {"state": "enabled"}, "upload_proof": {"state": "enabled"}},
+        "edits": [],
+    }
+    manager = _real_ui(PERSONAS["pr_manager"], S_DOCS["待付款"]).to_dict(view="detail")
+    assert manager == {
+        "actions": {
+            "reject": {"state": "enabled"},
+            "extra_item": {"state": "enabled"},
+            "fill_payment": {"state": "enabled"},
+        },
+        "fields": {},
+    }
+    # 主管不能上传凭证（¹⁶）：待财务付款只有驳回
+    assert set(_real_ui(PERSONAS["pr_manager"], S_DOCS["待财务付款"]).actions) == {"reject"}
+    # 自己提交的结款单：核查 / 驳回是「读」，原因与 service 的自审拒绝一致
+    own = _real_ui(PERSONAS["pr_manager"], S_DOCS["待付款·主管提交"]).actions["reject"]
+    assert own.to_dict() == {"state": "disabled", "reason": "不能审核自己提交的推广对应的结款单"}
+    old = _real_ui(PERSONAS["pr_manager"], S_DOCS["待核查"]).actions
+    assert set(old) == {"legacy_approve"}
+    # 已付款、已驳回：没有按钮（付款后对所有人只读；重提在推广单那边）
+    for state in ("已付款", "已驳回"):
+        for who in ("pr_manager", "admin", "finance"):
+            assert _real_ui(PERSONAS[who], S_DOCS[state]).actions == {}, (state, who)
+    # PR、运营、仓库：任何状态都没有按钮
+    for label, doc in S_DOCS.items():
+        for who in ("pr", "pr2", "operations", "warehouse"):
+            assert _real_ui(PERSONAS[who], doc).actions == {}, (label, who)
+
+
+def test_settlement_self_review_rule_registered() -> None:
+    from app.modules.finance.flow_matrix import NotSubmitter
+
+    assert NotSubmitter.rule in FLOW_RULES
+    # 结款单没有 pr_id（导入的旧单）：没有可比的人，放行
+    doc = replace(S_DOCS["待付款"], owner_id=None, negotiator_id=None)
+    assert "reject" in _real_ui(PERSONAS["pr_manager"], doc).actions
+    assert _real_ui(PERSONAS["pr_manager"], doc).actions["reject"].state == "enabled"

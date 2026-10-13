@@ -59,11 +59,12 @@ from app.modules.finance.exceptions import (
     SettlementNotFoundError,
     StateTransitionConflictError,
 )
+from app.modules.finance.flow_doc import build_settlement_doc
 from app.modules.finance.models import Settlement, SettlementExtraItem
 from app.modules.finance.repository import (
     SettlementListFilters as RepoSettlementListFilters,
 )
-from app.modules.finance.repository import SettlementRepository
+from app.modules.finance.repository import SettlementPromotionInfo, SettlementRepository
 from app.modules.finance.schemas import (
     AmountBucket,
     DailySummaryActivityBuckets,
@@ -85,6 +86,7 @@ from app.modules.finance.state_machines import SettlementStatusMachine
 from app.modules.flow.actor import load_flow_actor
 from app.modules.flow.exceptions import FlowGateMissingError
 from app.modules.flow.line_events import LineEventRepository, LineEventType
+from app.modules.flow.matrix import FlowActor, View, ui_for
 from app.modules.importer.access import can_write as can_import_write
 from app.modules.promotion.enums import ReviewAction
 from app.modules.promotion.urge_calculator import get_today
@@ -690,8 +692,9 @@ class SettlementService:
         PR 角色（非 PAYMENT_VISIBLE_ROLES）自动限自己提交的（is_my_only）。
         系统失败让异常自然冒泡（不 try/except DB 异常 → 5xx + Sentry）。
         """
-        ctx = await build_field_perm_context(user.id, self._roles, self._perms)
-        can_see_payment = can_read_field("settlement", "amount", ctx)
+        # 当前用户的矩阵视角整页共用一个（行级 ui、页级 import、字段规则）
+        actor = await load_flow_actor(user.id, self._roles, self._perms)
+        can_see_payment = can_read_field("settlement", "amount", actor.field_ctx)
 
         # PR 角色（不可见金额）→ 限自己提交的
         is_my_only = filters.is_my or not can_see_payment
@@ -726,13 +729,26 @@ class SettlementService:
             current_user_id=user.id,
         )
 
-        responses = [await self._to_response(s, user, include_extra_items=False) for s in items]
+        # 单据信息一页一条查询（7.5）
+        infos = await self._repo.promotion_doc_info(
+            tenant_id=user.tenant_id, promotion_ids=list({s.promotion_id for s in items})
+        )
+        responses = [
+            await self._to_response(
+                s,
+                user,
+                include_extra_items=False,
+                actor=actor,
+                promotion_info=infos.get(s.promotion_id),
+                view="list",
+            )
+            for s in items
+        ]
 
         # 反范式富化：批量取款式编码/名称 + 博主昵称（对齐 final.xlsx 结款表）
         await self._enrich_display_fields(items, responses)
 
         # 页级「导入结款」（流程线 PR-5，7.5）：与 manual_settlement 上传同一判定（finance.settlement:pay）
-        actor = await load_flow_actor(user.id, self._roles, self._perms)
         page_actions: dict[str, Any] = {}
         if can_import_write(actor.perms, "manual_settlement"):
             page_actions["import"] = {"state": "enabled"}
@@ -907,16 +923,27 @@ class SettlementService:
         user: User,
         *,
         include_extra_items: bool = True,
+        actor: FlowActor | None = None,
+        promotion_info: SettlementPromotionInfo | None = None,
+        view: View = "detail",
     ) -> SettlementResponse:
-        """组装响应：字段权限过滤 + attachment 签名 URL.
+        """组装响应：字段权限过滤 + attachment 签名 URL + 单据信息 + 矩阵 ``ui``.
 
         非 PAYMENT_VISIBLE_ROLES 角色 → amount / total_amount / payment_amount /
         payment_proof_signed_url 全部置 None。
+
+        Args:
+            actor: 当前用户的矩阵视角（列表整页共用一个）；None 时现查。字段权限上下文也取它的。
+            promotion_info: 列表整页一次查好的单据信息（7.5）；None 时单条现查。
+            view: ``ui`` 的形状，列表 ``list``，其余 ``detail``。
         """
-        ctx = await build_field_perm_context(user.id, self._roles, self._perms)
+        if actor is None:
+            actor = await load_flow_actor(user.id, self._roles, self._perms)
+        ctx = actor.field_ctx
         can_see_amount = can_read_field("settlement", "amount", ctx)
         can_see_total = can_read_field("settlement", "total_amount", ctx)
         can_see_payment_amount = can_read_field("settlement", "payment_amount", ctx)
+        can_see_adjust_note = can_read_field("settlement", "payment_adjust_note", ctx)
         # 签名 URL 可见性沿用金额可见口径（amount）
         can_see_payment = can_see_amount
 
@@ -939,6 +966,33 @@ class SettlementService:
         if include_extra_items:
             raw_items = await self._repo.list_extra_items(settlement_id=settlement.id)
             extra_items = [SettlementExtraItemResponse.model_validate(it) for it in raw_items]
+
+        # 单据信息（7.5 / 7d-3）：收款码签名跟字段规则 promotion.payment_qr（含财务，4.6）
+        info = promotion_info
+        if info is None:
+            info = (
+                await self._repo.promotion_doc_info(
+                    tenant_id=settlement.tenant_id, promotion_ids=[settlement.promotion_id]
+                )
+            ).get(settlement.promotion_id)
+        payment_qr_url: str | None = None
+        if (
+            info is not None
+            and can_read_field("promotion", "payment_qr", ctx)
+            and info.payment_qr_status == "ready"
+            and info.payment_qr_r2_key
+        ):
+            try:
+                payment_qr_url = self._attachment_service.get_signed_url(
+                    "private", info.payment_qr_r2_key, expires_in=900
+                )
+            except Exception:
+                log.warning("settlement_payment_qr_signed_url_failed")
+
+        ui = ui_for(
+            actor,
+            build_settlement_doc(status=settlement.settlement_status, pr_id=settlement.pr_id),
+        ).to_dict(view=view)
 
         return SettlementResponse(
             id=settlement.id,
@@ -963,7 +1017,18 @@ class SettlementService:
             paid_by=settlement.paid_by,
             created_at=settlement.created_at,
             updated_at=settlement.updated_at,
+            payment_adjust_note=settlement.payment_adjust_note if can_see_adjust_note else None,
+            promotion_internal_code=info.internal_code if info is not None else None,
+            cooperation_mode=info.cooperation_mode if info is not None else None,
+            publish_url=info.publish_url if info is not None else None,
+            promotion_remark=info.remark if info is not None else None,
+            promotion_review_reason=info.review_reason if info is not None else None,
+            promotion_resubmit_note=info.resubmit_note if info is not None else None,
+            payment_qr_signed_url=payment_qr_url,
+            display_short_name=info.display_short_name if info is not None else None,
+            line_id=info.line_id if info is not None else None,
             extra_items=extra_items,
+            ui=ui,
         )
 
     async def _log_event_dispatch_failure(

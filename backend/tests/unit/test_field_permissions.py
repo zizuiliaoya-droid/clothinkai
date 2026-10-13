@@ -172,3 +172,18 @@ class TestFieldFilter:
         data = {"cost_price": "100"}
         out = field_filter("sku", data, _ctx({"finance"}))
         assert out["cost_price"] == "100"
+
+
+@pytest.mark.unit
+def test_settlement_field_rules_add_pr_read_only() -> None:
+    """流程线 4.6 / 11-17：应付、实付、调整说明加 PR 只读；结款页自己的 settlement.amount 不变。"""
+    for field in ("total_amount", "payment_amount", "payment_adjust_note"):
+        for role in ("pr", "pr_manager", "finance", "admin"):
+            assert can_read_field("settlement", field, _ctx({role})) is True, (field, role)
+        assert can_read_field("settlement", field, _ctx({"operations"})) is False, field
+        assert can_write_field("settlement", field, _ctx({"pr"})) is False, field
+    for field in ("payment_amount", "payment_adjust_note"):
+        for role in ("pr_manager", "finance", "admin"):
+            assert can_write_field("settlement", field, _ctx({role})) is True, (field, role)
+    assert can_read_field("settlement", "amount", _ctx({"pr"})) is False
+    assert can_read_field("promotion", "payment_qr", _ctx({"finance"})) is True
