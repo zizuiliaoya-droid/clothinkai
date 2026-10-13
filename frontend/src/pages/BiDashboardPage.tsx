@@ -1,4 +1,6 @@
-import { Alert, Card, Select, Space, Switch, Tabs, Typography } from "antd";
+import { useRef } from "react";
+import { Alert, Button, Card, Select, Space, Switch, Tabs, Typography } from "antd";
+import { DownloadOutlined } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
 import {
   ReportCardTitle,
@@ -9,6 +11,7 @@ import {
   useReportTimeRange,
 } from "@/components/ReportTimeRangeFilter/ReportTimeRangeFilter";
 import { getBiDashboard } from "@/features/report/api";
+import { biImageFilename, useBiImageExport } from "@/features/report/bi/exportBiImage";
 import { GoodsAnalysisTab } from "@/features/report/bi/GoodsAnalysisTab";
 import { PersonalView } from "@/features/report/bi/PersonalView";
 import { StoreOverviewTab } from "@/features/report/bi/StoreOverviewTab";
@@ -105,6 +108,10 @@ export function BiDashboardPage() {
   });
 
   const periodText = data ? `${data.date_from} 至 ${data.date_to}` : "";
+  // 导出图片截当前 Tab 的内容（不含筛选栏与 Tab 标签）
+  const storeRef = useRef<HTMLDivElement>(null);
+  const goodsRef = useRef<HTMLDivElement>(null);
+  const { exporting, run: exportImage } = useBiImageExport();
 
   if (caps === undefined) {
     return capsError ? (
@@ -172,6 +179,20 @@ export function BiDashboardPage() {
           checked={excludeBrushing}
           onChange={(v) => setFilters({ exclude_brushing: v })}
         />
+        <Button
+          icon={<DownloadOutlined />}
+          loading={exporting}
+          disabled={!data}
+          onClick={() =>
+            data &&
+            exportImage(
+              (tab === "goods" ? goodsRef : storeRef).current,
+              biImageFilename(tab, data.date_from, data.date_to)
+            )
+          }
+        >
+          导出图片
+        </Button>
       </Space>
       <div style={{ marginBottom: 8 }}>
         <Typography.Text style={{ color: MUTED }}>
@@ -196,19 +217,25 @@ export function BiDashboardPage() {
           {
             key: "store",
             label: "店铺总览",
-            children: <StoreOverviewTab data={data} loading={isLoading} caps={caps} />,
+            children: (
+              <div ref={storeRef}>
+                <StoreOverviewTab data={data} loading={isLoading} caps={caps} />
+              </div>
+            ),
           },
           {
             key: "goods",
             label: "单品分析",
             children: (
-              <GoodsAnalysisTab
-                data={data}
-                loading={isLoading}
-                granularity={granularity}
-                goodsId={filters.goods_id}
-                onGoodsChange={(id) => setFilters({ goods_id: id })}
-              />
+              <div ref={goodsRef}>
+                <GoodsAnalysisTab
+                  data={data}
+                  loading={isLoading}
+                  granularity={granularity}
+                  goodsId={filters.goods_id}
+                  onGoodsChange={(id) => setFilters({ goods_id: id })}
+                />
+              </div>
             ),
           },
         ]}

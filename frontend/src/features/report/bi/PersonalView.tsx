@@ -1,9 +1,12 @@
 // BI PR 个人版（7e R6，设计 2.6 / Q16）：只有 `report.bi:read_own` 的人看到这一版。
 // 读 /bi/personal 的白名单（本人计数与进度），不含任何金额；页面上不出现「¥」。
-import { Alert, Card, Col, Row, Typography } from "antd";
+import { useRef } from "react";
+import { Alert, Button, Card, Col, Row, Space, Typography } from "antd";
+import { DownloadOutlined } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
 import { getBiPersonal } from "../api";
 import type { TimePreset } from "../types";
+import { biImageFilename, useBiImageExport } from "./exportBiImage";
 import { KpiCard, MUTED } from "./StoreOverviewTab";
 
 const percent = (value: string | null) =>
@@ -25,6 +28,8 @@ export function PersonalView({ preset, dateFrom, dateTo, enabled }: Props) {
     enabled,
     queryFn: () => getBiPersonal({ preset, date_from: dateFrom, date_to: dateTo }),
   });
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const { exporting, run: exportImage } = useBiImageExport();
 
   if (isError) {
     return (
@@ -64,22 +69,40 @@ export function PersonalView({ preset, dateFrom, dateTo, enabled }: Props) {
       title="我的推广进度"
       loading={isLoading}
       styles={{ body: { background: "#f8fafc" } }}
-      extra={data ? <Typography.Text style={{ color: MUTED }}>{data.pr_name}</Typography.Text> : null}
+      extra={
+        <Space size={12} wrap>
+          {data ? <Typography.Text style={{ color: MUTED }}>{data.pr_name}</Typography.Text> : null}
+          <Button
+            icon={<DownloadOutlined />}
+            loading={exporting}
+            disabled={!data}
+            onClick={() =>
+              data &&
+              exportImage(bodyRef.current, biImageFilename("personal", data.date_from, data.date_to))
+            }
+          >
+            导出图片
+          </Button>
+        </Space>
+      }
     >
-      {data ? (
-        <div style={{ marginBottom: 12 }}>
-          <Typography.Text style={{ color: MUTED }}>
-            {data.date_from} 至 {data.date_to} · 只统计本人的推广单
-          </Typography.Text>
-        </div>
-      ) : null}
-      <Row gutter={[12, 12]}>
-        {cards.map((c) => (
-          <Col key={c.title} xs={24} sm={12} lg={8}>
-            <KpiCard {...c} />
-          </Col>
-        ))}
-      </Row>
+      {/* 导出图片截这一块（本人计数，不含金额） */}
+      <div ref={bodyRef}>
+        {data ? (
+          <div style={{ marginBottom: 12 }}>
+            <Typography.Text style={{ color: MUTED }}>
+              {data.date_from} 至 {data.date_to} · 只统计本人的推广单
+            </Typography.Text>
+          </div>
+        ) : null}
+        <Row gutter={[12, 12]}>
+          {cards.map((c) => (
+            <Col key={c.title} xs={24} sm={12} lg={8}>
+              <KpiCard {...c} />
+            </Col>
+          ))}
+        </Row>
+      </div>
     </Card>
   );
 }

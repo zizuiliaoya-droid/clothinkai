@@ -40,6 +40,10 @@ vi.mock("@/features/preference/api", () => ({
   getFilterPreference: (...args: unknown[]) => getPrefMock(...args),
   saveFilterPreference: (...args: unknown[]) => savePrefMock(...args),
 }));
+const toPngMock = vi.fn();
+vi.mock("html-to-image", () => ({
+  toPng: (...args: unknown[]) => toPngMock(...args),
+}));
 
 import { useAuthStore } from "@/stores/authStore";
 import { BiDashboardPage } from "./BiDashboardPage";
@@ -231,6 +235,8 @@ beforeEach(() => {
   goodsNotesMock.mockResolvedValue(notes());
   personalMock.mockReset();
   personalMock.mockResolvedValue(personal());
+  toPngMock.mockReset();
+  toPngMock.mockResolvedValue("data:image/png;base64,AAAA");
   useAuthStore.setState({
     user: { id: "u1", username: "u1", display_name: null, email: null, status: "active", roles: [] },
     isAuthenticated: true,
@@ -262,7 +268,8 @@ function renderPage(url = "/bi") {
 
 /** 等店铺总览出了数据（单品表里有商品简称）。 */
 async function waitData() {
-  await screen.findAllByText("条纹上衣");
+  // 全量并行跑时首个完整版渲染偏慢，放宽到 3 秒
+  await screen.findAllByText("条纹上衣", undefined, { timeout: 3000 });
 }
 
 /** 打开所有图表的「查看数据」表格。 */
@@ -643,5 +650,99 @@ describe("BiDashboardPage 单品分析", () => {
     expect(pts[0].getAttribute("style") ?? "").toContain("cursor: default");
     expect(pts[0].querySelector("title")?.textContent).toContain("详情页随推广单时间线上线");
     expect(screen.queryByText("还没有录 7 天数据的笔记")).toBeNull();
+  });
+});
+
+// 7e R6 S10：导出图片（html-to-image 已 mock）。toPng 被调时节点里要有水印层，文字 =「登录名 姓名 时间」（偏差 5）；
+// 截完移除；文件名 bi-<tab>_<实际起>_<实际止>.png；toPng 失败只提示「导出失败，请重试」。
+describe("BiDashboardPage 导出图片", () => {
+  interface Shot {
+    text: string | null | undefined;
+    layerStyle: string;
+    cellStyle: string;
+    nodeText: string;
+  }
+  let shots: Shot[];
+  let downloads: string[];
+
+  beforeEach(() => {
+    shots = [];
+    downloads = [];
+    toPngMock.mockImplementation((node: HTMLElement) => {
+      const layer = node.querySelector<HTMLElement>("[data-bi-watermark]");
+      shots.push({
+        text: layer?.querySelector("span")?.textContent,
+        layerStyle: layer?.getAttribute("style") ?? "",
+        cellStyle: layer?.querySelector("span")?.getAttribute("style") ?? "",
+        nodeText: node.textContent ?? "",
+      });
+      return Promise.resolve("data:image/png;base64,AAAA");
+    });
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+      downloads.push(this.download);
+    });
+    useAuthStore.setState({
+      user: { id: "u1", username: "zhang", display_name: "张三", email: null, status: "active", roles: [] },
+      isAuthenticated: true,
+    });
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const exportButton = () => screen.getByRole("button", { name: /导出图片/ });
+
+  it("店铺总览：截当前 Tab，节点里有水印（登录名 姓名 时间、斜 30°、12%、不挡鼠标），截完移除，文件名带实际起止", async () => {
+    renderPage();
+    await waitData();
+    fireEvent.click(exportButton());
+    await waitFor(() => expect(downloads).toEqual(["bi-store_2026-09-13_2026-10-12.png"]));
+    expect(toPngMock).toHaveBeenCalledTimes(1);
+    expect(toPngMock.mock.calls[0][1]).toEqual({ pixelRatio: 2, backgroundColor: "#fff" });
+    const [shot] = shots;
+    expect(shot.text).toMatch(/^zhang 张三 \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+    expect(shot.layerStyle).toContain("opacity: 0.12");
+    expect(shot.layerStyle).toContain("pointer-events: none");
+    expect(shot.cellStyle).toContain("rotate(-30deg)");
+    // 截的是店铺总览的内容，不是整页筛选栏
+    expect(shot.nodeText).toContain("推广总额");
+    expect(shot.nodeText).not.toContain("剔除刷单：");
+    expect(document.querySelector("[data-bi-watermark]")).toBeNull();
+  });
+
+  it("单品分析：截 Tab2，文件名 bi-goods_…", async () => {
+    renderPage("/bi?tab=goods");
+    // BI 数据到了按钮才可点（没数据时不知道实际起止）
+    await waitFor(() => expect((exportButton() as HTMLButtonElement).disabled).toBe(false));
+    await waitFor(() => expect(goodsNotesMock).toHaveBeenCalled());
+    fireEvent.click(exportButton());
+    await waitFor(() => expect(downloads).toEqual(["bi-goods_2026-09-13_2026-10-12.png"]));
+    expect(shots[0].nodeText).toContain("还没有录 7 天数据的笔记");
+    expect(shots[0].nodeText).not.toContain("推广总额");
+  });
+
+  it("toPng 失败：提示「导出失败，请重试」，水印也移除，不下载", async () => {
+    toPngMock.mockRejectedValue(new Error("canvas tainted"));
+    renderPage();
+    await waitData();
+    fireEvent.click(exportButton());
+    expect(await screen.findByText("导出失败，请重试")).toBeTruthy();
+    expect(document.querySelector("[data-bi-watermark]")).toBeNull();
+    expect(downloads).toEqual([]);
+  });
+
+  it("个人版也能导出：没填姓名时水印用登录名，文件名 bi-personal_…", async () => {
+    capsMock.mockResolvedValue(caps({ bi: "personal", work_progress: "own" }));
+    useAuthStore.setState({
+      user: { id: "u1", username: "wang", display_name: null, email: null, status: "active", roles: ["pr"] },
+      isAuthenticated: true,
+    });
+    renderPage();
+    expect(await screen.findByText("6 篇")).toBeTruthy();
+    fireEvent.click(exportButton());
+    await waitFor(() => expect(downloads).toEqual(["bi-personal_2026-09-13_2026-10-12.png"]));
+    expect(shots[0].text).toMatch(/^wang wang \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+    expect(shots[0].nodeText).toContain("目标篇数");
+    expect(document.querySelector("[data-bi-watermark]")).toBeNull();
   });
 });
