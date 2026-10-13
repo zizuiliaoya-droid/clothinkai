@@ -34,6 +34,7 @@ _SETTLE_REJECTED = "结款驳回"
 _SETTLEMENT_REJECTED = "已驳回"
 _PAYERS = ("博主垫付", "到付")
 _FREIGHT_STATUSES = ("待审核", "待付款", "已付款", "已驳回")
+_APP_ROLE = "clothing_app"
 _PROMOTION_NEW_COLUMNS = (
     "settlement_chat_attachment_id",
     "settled_at",
@@ -186,7 +187,16 @@ def _create_return_freight_payment() -> None:
         ["tenant_id", "status", sa.text("submitted_at DESC")],
     )
     op.execute(enable_rls_sql("return_freight_payment"))
-    _log("return_freight_payment 空表已创建（RLS、uq_return_freight_promotion、idx_return_freight_status）")
+    # 显式授权（照 063 对 line_event）：测试库与 CI 以 postgres 跑迁移，025 的默认权限（FOR ROLE clothing_bypass）
+    # 不生效，表上没有任何授权，clothing_app 读写都被拒；生产属主是 clothing_bypass，默认权限会给到 arwd。
+    # 设计 3.5 T1 ~ T6 只要 SELECT / INSERT / UPDATE（驳回后改同一张重提，不删），两边都收成这三项。
+    # 主键是 uuid，没有序列要授。下行删表即可。
+    op.execute(f"GRANT SELECT, INSERT, UPDATE ON return_freight_payment TO {_APP_ROLE}")
+    op.execute(f"REVOKE DELETE ON return_freight_payment FROM {_APP_ROLE}")
+    _log(
+        "return_freight_payment 空表已创建（RLS、uq_return_freight_promotion、idx_return_freight_status；"
+        "clothing_app 只有 SELECT / INSERT / UPDATE）"
+    )
 def _migrate_statuses(bind: sa.Connection) -> None:
     settled = bind.execute(
         sa.text(
