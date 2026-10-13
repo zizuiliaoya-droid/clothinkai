@@ -34,6 +34,9 @@ from app.core.exceptions import (
 from app.core.tenancy import tenant_id_ctx
 from app.modules.finance.enums import ExtraItemType
 from app.modules.finance.exceptions import (
+    SettlementTotalChangedError,
+)
+from app.modules.finance.exceptions import (
     StateTransitionConflictError as SettlementStateConflictError,
 )
 from app.modules.finance.listeners import on_settlement_requested
@@ -439,6 +442,147 @@ class TestFillPayment:
                 expected["payment_adjust_note"] = note
             assert events[0].payload == expected
             assert_payload_registered(events[0].payload)
+        finally:
+            tenant_id_ctx.reset(token)
+
+    @staticmethod
+    def _hook_after_read(
+        monkeypatch: pytest.MonkeyPatch, svc: SettlementService, side_effect: Any
+    ) -> None:
+        """在 ``fill_payment_amount`` 读出结款单之后、条件 UPDATE 之前插一次别人的操作（只插一次）。"""
+        original = svc._repo.get_by_id
+        fired = False
+
+        async def read_then(settlement_id: UUID) -> Settlement | None:
+            nonlocal fired
+            row = await original(settlement_id)
+            if not fired:
+                fired = True
+                await side_effect(settlement_id)
+            return row
+
+        monkeypatch.setattr(svc._repo, "get_by_id", read_then)
+
+    @pytest.mark.parametrize(
+        ("amount", "note"),
+        [
+            (Decimal("500.00"), None),  # 按读到的应付 500 判「一致、说明可空」，实际应付已是 520
+            (Decimal("480.00"), "扣 20 元：发布晚了一天"),  # 说明是对着旧应付写的，同样作废
+        ],
+    )
+    async def test_total_changed_between_read_and_update_is_conflict(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        finance_role: Any,
+        pr_manager_role: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        settlement_factory: Any,
+        monkeypatch: pytest.MonkeyPatch,
+        amount: Decimal,
+        note: str | None,
+    ) -> None:
+        """L2：读完应付之后主管「增加结算项」→ 409 SETTLEMENT_TOTAL_CHANGED，实付和说明都不落。"""
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            finance = await factory.user(tenant_a, roles=[finance_role])
+            manager = await factory.user(tenant_a, roles=[pr_manager_role])
+            s = await _settlement(
+                settlement_factory, product_factory, blogger_factory, status="待付款"
+            )
+            settlement_id, promotion_id = s.id, s.promotion_id
+            assert s.total_amount == Decimal("500.00")
+
+            async def add_reward(sid: UUID) -> None:
+                # 另一个请求的 add_extra_item 落库效果：追加 20 元赞奖、应付重算为 520。
+                # 用原生 SQL 改应付，不经身份映射：fill 手里的对象仍是读到的 500。
+                session.add(
+                    SettlementExtraItem(
+                        id=uuid4(),
+                        tenant_id=tenant_a.id,
+                        settlement_id=sid,
+                        item_type=ExtraItemType.REWARD.value,
+                        amount=Decimal("20.00"),
+                        created_by=manager.id,
+                    )
+                )
+                await session.flush()
+                await session.execute(
+                    sa_text("UPDATE settlement SET total_amount = 520.00 WHERE id = :id"),
+                    {"id": sid},
+                )
+
+            svc = SettlementService(session)
+            self._hook_after_read(monkeypatch, svc, add_reward)
+            with pytest.raises(SettlementTotalChangedError) as exc_info:
+                await svc.fill_payment_amount(
+                    settlement_id,
+                    SettlementPaymentAmountRequest(payment_amount=amount, payment_adjust_note=note),
+                    finance,
+                )
+            assert exc_info.value.status_code == 409
+            assert exc_info.value.code == "SETTLEMENT_TOTAL_CHANGED"
+            assert exc_info.value.message == "应付金额刚有变动，请刷新后重新填写实付"
+            row = (
+                await session.execute(
+                    sa_text(
+                        "SELECT settlement_status, total_amount, payment_amount, "
+                        "payment_adjust_note FROM settlement WHERE id = :id"
+                    ),
+                    {"id": settlement_id},
+                )
+            ).one()
+            # 场景有效：应付确实被改成了 520
+            assert tuple(row) == ("待付款", Decimal("520.00"), None, None)
+            assert (
+                await _events(session, promotion_id, LineEventType.SETTLEMENT_PAYMENT_FILLED) == []
+            )
+        finally:
+            tenant_id_ctx.reset(token)
+
+    async def test_status_changed_between_read_and_update_keeps_state_conflict(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        finance_role: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        settlement_factory: Any,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """读完之后状态已不是待付款（别人先填了）：照旧 409 SETTLEMENT_STATE_CONFLICT，不报应付变动。"""
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            finance = await factory.user(tenant_a, roles=[finance_role])
+            s = await _settlement(
+                settlement_factory, product_factory, blogger_factory, status="待付款"
+            )
+            settlement_id = s.id
+
+            async def other_filled(sid: UUID) -> None:
+                await session.execute(
+                    sa_text(
+                        "UPDATE settlement SET settlement_status = '待财务付款', "
+                        "payment_amount = 500.00 WHERE id = :id"
+                    ),
+                    {"id": sid},
+                )
+
+            svc = SettlementService(session)
+            self._hook_after_read(monkeypatch, svc, other_filled)
+            with pytest.raises(SettlementStateConflictError) as exc_info:
+                await svc.fill_payment_amount(
+                    settlement_id,
+                    SettlementPaymentAmountRequest(payment_amount=Decimal("500.00")),
+                    finance,
+                )
+            assert not isinstance(exc_info.value, SettlementTotalChangedError)
+            assert exc_info.value.status_code == 409
+            assert exc_info.value.code == "SETTLEMENT_STATE_CONFLICT"
+            assert await _status(session, settlement_id) == "待财务付款"
         finally:
             tenant_id_ctx.reset(token)
 

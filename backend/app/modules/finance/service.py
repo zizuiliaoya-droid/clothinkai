@@ -57,6 +57,7 @@ from app.modules.finance.exceptions import (
     ReviewReasonRequiredError,
     SelfReviewForbiddenError,
     SettlementNotFoundError,
+    SettlementTotalChangedError,
     StateTransitionConflictError,
 )
 from app.modules.finance.flow_doc import build_settlement_doc
@@ -237,7 +238,8 @@ class SettlementService:
         """F3：填实付金额 → 待财务付款.
 
         顺序：字段写权限 → 状态机 → 实付 ≠ 应付（``total_amount``）时调整说明必填
-        （422 ``FLOW_GATE_MISSING``，key = ``payment_adjust_note``）→ 条件 UPDATE（409）→ 事件。
+        （422 ``FLOW_GATE_MISSING``，key = ``payment_adjust_note``）→ 条件 UPDATE（锁状态 + 读到的应付；
+        状态变了 409 ``SETTLEMENT_STATE_CONFLICT``，仍待付款但应付变了 409 ``SETTLEMENT_TOTAL_CHANGED``）→ 事件。
         「不一致必须写说明」只对新录入强制：存量已付款单没有说明，库里不加 CHECK（计划 D2）。
         """
         await self._check_payment_write_permission(user)
@@ -253,17 +255,27 @@ class SettlementService:
         )
 
         note = payload.payment_adjust_note or None
-        if payload.payment_amount != settlement.total_amount and note is None:
+        read_total = settlement.total_amount
+        if payload.payment_amount != read_total and note is None:
             raise FlowGateMissingError([("payment_adjust_note", "调整说明")])
 
+        # 说明必填是按读到的应付判的：条件 UPDATE 连应付一起锁，期间「增加结算项」改了应付 → 0 行
         updated = await self._repo.update_state(
             settlement_id=settlement_id,
             tenant_id=user.tenant_id,
             from_state_value=SettlementStatus.PENDING_PAYMENT.value,
             to_state_value=SettlementStatus.PENDING_FINANCE.value,
             extra_fields={"payment_amount": payload.payment_amount, "payment_adjust_note": note},
+            expected_total_amount=read_total,
         )
         if updated is None:
+            # 重读一次，分清是状态变了还是应付变了
+            await self._session.refresh(settlement)
+            if settlement.settlement_status == SettlementStatus.PENDING_PAYMENT.value:
+                raise SettlementTotalChangedError(
+                    "应付金额刚有变动，请刷新后重新填写实付",
+                    details={"settlement_id": str(settlement_id)},
+                )
             raise StateTransitionConflictError(
                 "结款状态已变更，请刷新后重试",
                 details={"settlement_id": str(settlement_id)},

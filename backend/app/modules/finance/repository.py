@@ -230,6 +230,7 @@ class SettlementRepository:
         from_state_value: str,
         to_state_value: str,
         extra_fields: dict[str, Any] | None = None,
+        expected_total_amount: Decimal | None = None,
     ) -> Settlement | None:
         """乐观并发 UPDATE WHERE old_state RETURNING（FB7 模式）.
 
@@ -237,6 +238,7 @@ class SettlementRepository:
         - ``id = :settlement_id``
         - ``tenant_id = :tenant_id``（多租户防护，与 RLS 双保险）
         - ``settlement_status = :from_state_value``（旧状态防护）
+        - 传了 ``expected_total_amount`` 时再加 ``total_amount = :expected``（填实付：应付读出后被改 → 0 行）
 
         **不含 ``is_active`` 字段**（FB3：财务记录无软删除字段）。
 
@@ -252,13 +254,17 @@ class SettlementRepository:
         values["settlement_status"] = to_state_value
         values["updated_at"] = func.now()
 
+        conditions = [
+            Settlement.id == settlement_id,
+            Settlement.tenant_id == tenant_id,
+            Settlement.settlement_status == from_state_value,
+        ]
+        if expected_total_amount is not None:
+            conditions.append(Settlement.total_amount == expected_total_amount)
+
         stmt = (
             update(Settlement)
-            .where(
-                Settlement.id == settlement_id,
-                Settlement.tenant_id == tenant_id,
-                Settlement.settlement_status == from_state_value,
-            )
+            .where(*conditions)
             .values(**values)
             .returning(Settlement)
             .execution_options(synchronize_session=False)

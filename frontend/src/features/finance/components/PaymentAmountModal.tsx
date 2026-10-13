@@ -1,11 +1,13 @@
 // 结款单「填付款金额」弹窗（流程线 8.6、F3）。
 // 实付默认 = 应付，实时显示「与应付相差 ¥200.00」；不相等时「调整说明」必填（例：延迟发文、限流，原价 400、实付 200）。
 // 应付看不到时前端不判，后端 422 FLOW_GATE_MISSING（key = payment_adjust_note）照样标回调整说明。
+// 409 SETTLEMENT_TOTAL_CHANGED（填写期间应付被改）只提示后端文案，不按「别人处理过」关窗刷新。
 import { useEffect } from "react";
 import { Form, Input, InputNumber, Modal, message, theme } from "antd";
 import { useMutation } from "@tanstack/react-query";
 import { flowErrorOutcome } from "@/features/flow/flowError";
 import { missingToFields } from "@/features/flow/missingToFields";
+import { extractErrorMessage } from "@/services/apiClient";
 import { fillPaymentAmount } from "../api";
 import { paymentDiffCents, paymentDiffText } from "../paymentAdjust";
 import type { Settlement } from "../types";
@@ -17,6 +19,11 @@ interface Values {
 
 const FIELD_MAP = { payment_adjust_note: "payment_adjust_note", payment_amount: "payment_amount" };
 const ADJUST_NOTE_REQUIRED_TEXT = "实付与应付不一致，请写调整说明";
+const TOTAL_CHANGED_CODE = "SETTLEMENT_TOTAL_CHANGED";
+
+interface ErrorShape {
+  response?: { data?: { code?: unknown } };
+}
 
 export interface PaymentAmountModalProps {
   target: Settlement | null;
@@ -51,6 +58,11 @@ export function PaymentAmountModal({ target, onClose, onChanged }: PaymentAmount
       onClose();
     },
     onError: (err) => {
+      // 409 应付刚被改（同时有人增加结算项）：照普通错误提示后端文案，弹窗不关、不自动刷新
+      if ((err as ErrorShape | null | undefined)?.response?.data?.code === TOTAL_CHANGED_CODE) {
+        message.error(extractErrorMessage(err));
+        return;
+      }
       const outcome = flowErrorOutcome(err);
       if (outcome.kind === "gate") {
         const { fields, rest } = missingToFields(outcome.missing, FIELD_MAP);

@@ -330,6 +330,22 @@ describe("SettlementListPage 填付款金额", () => {
     expect(await within(dialog).findByText("必填")).toBeTruthy();
     expect(screen.getByRole("dialog")).toBeTruthy();
   });
+
+  it("后端 409 SETTLEMENT_TOTAL_CHANGED（填写期间应付被改）：提示后端文案，弹窗不关、不自动刷新", async () => {
+    api.fillPaymentAmount.mockRejectedValue({
+      response: {
+        status: 409,
+        data: { code: "SETTLEMENT_TOTAL_CHANGED", message: "应付金额刚有变动，请刷新后重新填写实付" },
+      },
+    });
+    const dialog = await openAmount({ total_amount: "400.00" });
+    const listCalls = api.listSettlements.mock.calls.length;
+    fireEvent.click(within(dialog).getByRole("button", { name: /确\s*定|OK/ }));
+    expect(await screen.findByText("应付金额刚有变动，请刷新后重新填写实付")).toBeTruthy();
+    expect(screen.queryByText("这张单刚被别人处理过，已刷新")).toBeNull();
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(api.listSettlements.mock.calls.length).toBe(listCalls);
+  });
 });
 
 describe("SettlementListPage 上传付款凭证", () => {
