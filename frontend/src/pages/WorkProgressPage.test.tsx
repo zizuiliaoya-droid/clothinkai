@@ -538,3 +538,44 @@ describe("WorkProgressPage 周明细", () => {
     expect(weeksMock).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("WorkProgressPage BI 下钻落点（7e R6 S7）", () => {
+  const RANGE = "preset=custom&date_from=2026-10-01&date_to=2026-10-31";
+
+  it("URL 带 pr_id：数据与新鲜度到后开该 PR 的下钻一次；关掉不再弹、不写记忆", async () => {
+    workProgressMock.mockResolvedValue([
+      prRow({ pr_id: "22222222-2222-4222-8222-222222222222", pr_name: "小李" }),
+      prRow(),
+    ]);
+    renderPage(`/work-progress?${RANGE}&pr_id=${PR1}`);
+    expect(await screen.findByText("小王 的推广单")).toBeTruthy();
+    await waitFor(() => expect(drillMock).toHaveBeenCalled());
+    expect(drillMock.mock.calls[0][0]).toMatchObject({
+      date_from: "2026-10-01",
+      date_to: "2026-10-31",
+      pr_id: PR1,
+    });
+    const dialog = screen.getByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByText("小王 的推广单")).toBeNull());
+    await waitDebounce();
+    expect(screen.queryByText("小王 的推广单")).toBeNull();
+    expect(savePrefMock).not.toHaveBeenCalled();
+  });
+
+  it("pr_id=unassigned：开「未分配」行的下钻，传 unassigned", async () => {
+    workProgressMock.mockResolvedValue([prRow(), prRow({ pr_id: null, pr_name: "未分配" })]);
+    renderPage(`/work-progress?${RANGE}&pr_id=unassigned`);
+    expect(await screen.findByText("未分配 的推广单")).toBeTruthy();
+    await waitFor(() => expect(drillMock).toHaveBeenCalled());
+    expect(drillMock.mock.calls[0][0]).toMatchObject({ pr_id: "unassigned" });
+  });
+
+  it("pr_id 不在本区间的行里：不弹下钻", async () => {
+    renderPage(`/work-progress?${RANGE}&pr_id=33333333-3333-4333-8333-333333333333`);
+    await screen.findByText("小王");
+    await waitDebounce();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(drillMock).not.toHaveBeenCalled();
+  });
+});

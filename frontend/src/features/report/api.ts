@@ -178,6 +178,8 @@ export async function getBiDashboard(
     date_from?: string;
     date_to?: string;
     granularity?: TimeGranularity;
+    /** 单品块与单品趋势的 ROI 是否扣刷单（7e R6，后端默认 true）；店铺块是全店口径、不跟它。 */
+    exclude_brushing?: boolean;
   } = {}
 ): Promise<BiDashboard> {
   const resp = await apiClient.get<BiDashboard>("/api/reports/bi", { params });

@@ -14,13 +14,18 @@ import { extractErrorMessage, isApiError } from "@/services/apiClient";
 
 /**
  * 读汇总表的报表查询。手动刷新会重写全部汇总表，刷新完把这些查询一起作废，
- * 页面立刻按新数据重新取数。BI 看板这一期仍是全实时，不在其中。
+ * 页面立刻按新数据重新取数。店铺日 / 周 / 月三页共用 `store-daily` 键（7e R6 起 BI 也读汇总）。
  */
 const SUMMARY_BACKED_QUERY_KEYS = [
   "production",
   "production-trend",
   "store-daily",
   "work-progress",
+  "work-progress-goods",
+  "work-progress-weeks",
+  "bi-dashboard",
+  "bi-goods",
+  "bi-personal",
   "report-freshness",
 ] as const;
 
