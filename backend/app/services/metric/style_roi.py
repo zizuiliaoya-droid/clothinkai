@@ -1,16 +1,17 @@
 """U14 投产报表指标（style ROI）。
 
-5 核心公式均经 safe_div（分母 0/None→null）。
+比率一律经 safe_div（分母 ≤ 0 / None → null），可加列先求和、再在这里算比率（7e R3，设计 2.3）。
 exclude_brushing 是口径标识；刷单金额由上游聚合在计算 confirmed_amount 前剔除。
 """
 
 from __future__ import annotations
 
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from app.services.metric.common import safe_div
 
 _Q4 = Decimal("0.0001")
+_CENT = Decimal("0.01")
 
 
 def return_rate(
@@ -43,25 +44,53 @@ def net_roi(
     return safe_div(confirmed_amount, total_spend, quantize=_Q4)
 
 
-def unit_deal_cost(
-    add_cart_cost_value: Decimal | None,
-    add_cart_conversion_rate: Decimal | None,
-    return_rate_value: Decimal | None,
+def pre_return_roi(
+    pay_amount: Decimal | int | None, total_spend: Decimal | int | None
 ) -> Decimal | None:
-    """推广单件成交成本 = 加购成本 / 加购转化率 / (1 - 退货率)。
+    """退货前投产比 = 支付金额 / 总推广成本。"""
+    return safe_div(pay_amount, total_spend, quantize=_Q4)
 
-    链式 safe_div；任一分母缺失/0 → null（V1 基础口径缺加购转化率字段 → 多为 null）。
+
+def promo_cost_per_unit(
+    total_spend: Decimal | int | None, pay_orders: int | None
+) -> Decimal | None:
+    """推广单件成交成本 = 总推广成本 / 支付件数（默 11；支付件数不受刷单开关影响）。"""
+    return safe_div(total_spend, pay_orders, quantize=_Q4)
+
+
+def offsite_add_cart(paired_all_cart: int, paired_ad_cart: int, paired_days: int) -> int | None:
+    """站外加购 = max(Σ配对日总加购 − Σ配对日站内加购, 0)。
+
+    入参是区间**求和之后**的值（两天 +5 / −8 合计 −3 → 0，不是逐日取 0 的 5）。
+    没有一天是千牛与万相台都有数据的（``paired_days = 0``）→ null，页面显示「—」。
     """
-    step1 = safe_div(add_cart_cost_value, add_cart_conversion_rate)
-    if step1 is None:
+    if paired_days <= 0:
         return None
-    denom = None if return_rate_value is None else (Decimal("1") - return_rate_value)
-    return safe_div(step1, denom, quantize=_Q4)
+    return max(paired_all_cart - paired_ad_cart, 0)
+
+
+def gross_margin(
+    confirmed_amount: Decimal, pay_orders: int, unit_cost: Decimal | None
+) -> tuple[Decimal | None, Decimal | None, Decimal | None]:
+    """毛利三列 ``(销售货品总成本, 单品毛利, 单品利润率)``（默 12）。
+
+    销售货品总成本 = 支付件数 × 当前单品货品成本；单品毛利 = 实际销售金额 − 销售货品总成本；
+    单品利润率 = 单品毛利 / 实际销售金额（分母 ≤ 0 → None）。``unit_cost`` 为 None
+    （任一启用成员没有成本）→ 三列都是 None，不当 0。
+    """
+    if unit_cost is None:
+        return None, None, None
+    cost_total = (unit_cost * pay_orders).quantize(_CENT, rounding=ROUND_HALF_UP)
+    profit = (confirmed_amount - cost_total).quantize(_CENT, rounding=ROUND_HALF_UP)
+    return cost_total, profit, safe_div(profit, confirmed_amount, quantize=_Q4)
 
 
 __all__ = [
     "add_to_cart_cost",
+    "gross_margin",
     "net_roi",
+    "offsite_add_cart",
+    "pre_return_roi",
+    "promo_cost_per_unit",
     "return_rate",
-    "unit_deal_cost",
 ]

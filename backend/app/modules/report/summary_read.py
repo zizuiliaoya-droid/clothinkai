@@ -224,18 +224,26 @@ class SummaryReadRepository:
                      COALESCE(SUM(s.brushing_amount), 0) AS brushing_amount,
                      COALESCE(SUM(s.refund_amount), 0) AS refund_amount,
                      COALESCE(SUM(s.add_cart_count), 0) AS add_cart_count,
+                     COALESCE(SUM(s.pay_orders), 0) AS pay_orders,
                      COALESCE(SUM(s.promo_cost), 0) AS promo_cost,
-                     COALESCE(SUM(s.ad_spend), 0) AS ad_spend
+                     COALESCE(SUM(s.ad_spend), 0) AS ad_spend,
+                     COALESCE(SUM(s.ad_add_cart_count), 0) AS ad_add_cart_count,
+                     -- 配对加购汇总表已按天逐日判断过，粗桶直接求和（同实时 paired CTE）
+                     COALESCE(SUM(s.paired_all_cart), 0) AS paired_all_cart,
+                     COALESCE(SUM(s.paired_ad_cart), 0) AS paired_ad_cart,
+                     COALESCE(SUM(s.paired_days), 0) AS paired_days
               FROM product_roi_summary s
               WHERE s.tenant_id = :tenant_id
                 AND s.goods_main_id = :goods_id
                 AND s.stat_date BETWEEN :date_from AND :date_to
               GROUP BY 1
             )
+            -- 列与实时 daily_trend_by_goods 相同（实时多一列 net_roi，比率由 service 现算）
             SELECT d AS date, pay_amount, brushing_amount, refund_amount,
-                   add_cart_count,
+                   add_cart_count, pay_orders,
                    pay_amount - refund_amount AS confirmed_amount,
-                   promo_cost, ad_spend,
+                   promo_cost, ad_spend, ad_add_cart_count,
+                   paired_all_cart, paired_ad_cart, paired_days,
                    promo_cost + ad_spend AS total_spend
             FROM b
             ORDER BY d

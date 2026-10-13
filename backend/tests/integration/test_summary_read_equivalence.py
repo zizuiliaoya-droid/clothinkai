@@ -541,7 +541,8 @@ async def _seed_channels(
     }
 
 
-# 投产行的冻结键集合：R2 按渠道存汇总，但响应结构不变（r2-M1）
+# 投产行的冻结键集合：R3 起一行 = （商品, 渠道），多了 channel 与 link_count，
+# 以及 S2 的支付件数 / 站内加购 / 站内加购成本 / 站外加购 / 退货前投产比、S3 的近 7 天三列
 _PRODUCTION_ROW_KEYS = {
     "goods_id",
     "goods_code",
@@ -550,6 +551,8 @@ _PRODUCTION_ROW_KEYS = {
     "is_suit",
     "style_codes",
     "main_image_url",
+    "channel",
+    "link_count",
     "pay_amount",
     "refund_amount",
     "return_rate",
@@ -557,10 +560,21 @@ _PRODUCTION_ROW_KEYS = {
     "promo_cost",
     "ad_spend",
     "total_spend",
+    "pay_orders",
     "add_cart_count",
     "add_cart_cost",
+    "ad_add_cart_count",
+    "ad_add_cart_cost",
+    "offsite_add_cart",
+    "pre_return_roi",
     "net_roi",
     "unit_deal_cost",
+    "recent7_pay_amount",
+    "recent7_total_spend",
+    "recent7_net_roi",
+    "goods_cost_total",
+    "gross_profit",
+    "gross_margin_rate",
     "extra",
 }
 
@@ -589,11 +603,19 @@ def _money_tuple(row: Any) -> tuple[Any, ...]:
     )
 
 
+def _channel_tuple(row: Any) -> tuple[Any, ...]:
+    return (str(row.goods_id), row.channel, row.link_count, *_money_tuple(row)[1:])
+
+
+def _period_calls(recorder: _SourceRecorder) -> list[tuple[str, str]]:
+    return [c for c in recorder.calls if c[0] != "production_recent7"]
+
+
 class TestProductionChannels:
-    """r2-M1：汇总表按（商品, 渠道）存，投产接口两条路径都按商品把渠道求和回一行。"""
+    """7e R3：投产接口按（商品, 渠道）出行；内部调用方（BI / 企微 / AI）仍按商品合计。"""
 
     @pytest.mark.parametrize("exclude_brushing", [True, False])
-    async def test_service_one_row_per_goods_both_paths(
+    async def test_service_rows_by_channel_both_paths(
         self,
         session: AsyncSession,
         tenant_a: Any,
@@ -616,27 +638,38 @@ class TestProductionChannels:
             via_summary = await svc.get_report(
                 tenant_a.id, (M_LO, M_HI), exclude_brushing=exclude_brushing
             )
-            assert recorder.calls == [
+            # 近 7 天的数据源随今天而定，另由 TestProductionRecent7 钉，这里只看本期 / 上期
+            assert _period_calls(recorder) == [
                 ("production", "summary"),
                 ("production_previous", "summary"),
             ]
             via_live = await svc.get_report(
                 tenant_a.id, (M_LO, M_HI), exclude_brushing=exclude_brushing, use_summary=False
             )
-            assert recorder.calls[2:] == [("production", "live"), ("production_previous", "live")]
+            assert _period_calls(recorder)[2:] == [
+                ("production", "live"),
+                ("production_previous", "live"),
+            ]
             assert _dump(via_summary) == _dump(via_live)
 
             a_id, b_id = str(seeded["goods_a"].id), str(seeded["goods_b"].id)
-            # 每个商品一行，顺序 = 旧结构（支付额降序）
-            assert [str(r.goods_id) for r in via_summary.items] == [b_id, a_id]
+            # 一行 = （商品, 渠道）：同一商品两行相邻、普通在前；顺序先看商品级支付额
+            keys = [(str(r.goods_id), r.channel) for r in via_summary.items]
+            assert keys == [(b_id, "普通"), (a_id, "普通"), (a_id, "直播")]
+            assert len(set(keys)) == len(keys)
+            # N 条链接 = 该渠道启用的千牛链接数；停用的那条普通链接不算
+            assert [r.link_count for r in via_summary.items] == [1, 1, 1]
+            # 停用链接数（S5）：那条停用的普通链接 D1 有日报 → 1，两路同值（上面逐字比已含）
+            assert via_summary.inactive_link_count == 1
             assert via_summary.previous is not None
-            prev = [r for r in via_summary.previous if str(r.goods_id) == a_id]
-            assert len(prev) == 1
-            assert prev[0].pay_amount == Decimal("300.00")
+            prev = [
+                (r.channel, r.pay_amount) for r in via_summary.previous if str(r.goods_id) == a_id
+            ]
+            assert prev == [("普通", Decimal("200.00")), ("直播", Decimal("100.00"))]
         finally:
             tenant_id_ctx.reset(tok)
 
-    async def test_matches_old_structure_minus_inactive_link(
+    async def test_split_rows_and_goods_rows_keep_old_numbers(
         self,
         session: AsyncSession,
         tenant_a: Any,
@@ -645,7 +678,7 @@ class TestProductionChannels:
         promotion_factory: Any,
         recorder: _SourceRecorder,
     ) -> None:
-        """数字 = 改动前的按商品口径（只扣停用链接）；渠道翻转不改数；启用停用链接差额 = 它的数据。"""
+        """拆行后各渠道的数；``get_goods_rows`` 仍是 R2 的按商品口径（只扣停用链接）。"""
         tok = tenant_id_ctx.set(tenant_a.id)
         try:
             seeded = await _seed_channels(
@@ -654,41 +687,68 @@ class TestProductionChannels:
             await session.commit()
             await _refresh(session, tenant_a, M_LO, M_HI)
             a, b = seeded["goods_a"], seeded["goods_b"]
+            a_id, b_id = str(a.id), str(b.id)
             promo = seeded["promo_cost"]
+            zero = Decimal("0.00")
 
             svc = ProductionService(session)
             via_summary = await svc.get_report(tenant_a.id, (M_LO, M_HI))
             assert recorder.calls[0] == ("production", "summary")
             assert set(ProductionRow.model_fields) == _PRODUCTION_ROW_KEYS
             assert all(set(r.model_dump()) == _PRODUCTION_ROW_KEYS for r in via_summary.items)
-            expected = [
+            assert [_channel_tuple(r) for r in via_summary.items] == [
+                (b_id, "普通", 1, Decimal("2000.00"), Decimal("100.00"), 5, zero, zero),
+                # 1000 + 600 − 刷单 200；推广与刷单都记普通行
                 (
-                    str(b.id),
-                    Decimal("2000.00"),
-                    Decimal("100.00"),
-                    5,
-                    Decimal("0.00"),
-                    Decimal("0.00"),
+                    a_id,
+                    "普通",
+                    1,
+                    Decimal("1400.00"),
+                    Decimal("70.00"),
+                    11,
+                    promo,
+                    Decimal("80.00"),
                 ),
-                # 1000 + 600 − 刷单 200；退款含直播只有退款的那一天 25
-                (str(a.id), Decimal("1400.00"), Decimal("95.00"), 13, promo, Decimal("80.00")),
+                # 直播整段只有退款
+                (a_id, "直播", 1, zero, Decimal("25.00"), 2, zero, zero),
             ]
-            assert [_money_tuple(r) for r in via_summary.items] == expected
 
-            live_before = _dump(await svc.get_report(tenant_a.id, (M_LO, M_HI), use_summary=False))
-            assert live_before == _dump(via_summary)
+            # 内部调用方：按商品合计、不带渠道，数字 = R2 的旧结构
+            old = [
+                (b_id, Decimal("2000.00"), Decimal("100.00"), 5, zero, zero),
+                (a_id, Decimal("1400.00"), Decimal("95.00"), 13, promo, Decimal("80.00")),
+            ]
+            goods_summary = await svc.get_goods_rows(
+                tenant_a.id, (M_LO, M_HI), exclude_brushing=True, use_summary=True
+            )
+            assert recorder.calls[-1] == ("production", "summary")
+            goods_live = await svc.get_goods_rows(
+                tenant_a.id, (M_LO, M_HI), exclude_brushing=True, use_summary=False
+            )
+            assert recorder.calls[-1] == ("production", "live")
+            assert _dump(goods_summary) == _dump(goods_live)
+            assert [_money_tuple(r) for r in goods_summary] == old
+            assert {(r.channel, r.link_count) for r in goods_summary} == {(None, 0)}
 
-            # 直播链接改成普通：渠道合并后数字一分不变
+            # 直播链接改成普通：A 合成一行「2 条链接」，数字 = 原来按商品的合计
             await session.execute(
                 update(PlatformProduct)
                 .where(PlatformProduct.id == seeded["qn_live"].id)
                 .values(channel="普通")
             )
             await session.commit()
-            flipped = _dump(await svc.get_report(tenant_a.id, (M_LO, M_HI), use_summary=False))
-            assert flipped == live_before
+            flipped = await svc.get_report(tenant_a.id, (M_LO, M_HI), use_summary=False)
+            assert [_channel_tuple(r) for r in flipped.items] == [
+                (b_id, "普通", 1, *old[0][1:]),
+                (a_id, "普通", 2, *old[1][1:]),
+            ]
+            assert _dump(
+                await svc.get_goods_rows(
+                    tenant_a.id, (M_LO, M_HI), exclude_brushing=True, use_summary=False
+                )
+            ) == _dump(goods_live)
 
-            # 启用停用链接：A 多出它那一天的支付 300 / 退款 10 / 加购 3，其余不变
+            # 启用停用链接：A 多出它那一天的支付 300 / 退款 10 / 加购 3，链接数 3
             await session.execute(
                 update(PlatformProduct)
                 .where(PlatformProduct.id == seeded["qn_off"].id)
@@ -696,9 +756,20 @@ class TestProductionChannels:
             )
             await session.commit()
             enabled = await svc.get_report(tenant_a.id, (M_LO, M_HI), use_summary=False)
-            assert [_money_tuple(r) for r in enabled.items] == [
-                expected[0],
-                (str(a.id), Decimal("1700.00"), Decimal("105.00"), 16, promo, Decimal("80.00")),
+            assert via_summary.inactive_link_count == 1
+            assert enabled.inactive_link_count == 0
+            assert [_channel_tuple(r) for r in enabled.items] == [
+                (b_id, "普通", 1, *old[0][1:]),
+                (
+                    a_id,
+                    "普通",
+                    3,
+                    Decimal("1700.00"),
+                    Decimal("105.00"),
+                    16,
+                    promo,
+                    Decimal("80.00"),
+                ),
             ]
         finally:
             tenant_id_ctx.reset(tok)
@@ -753,6 +824,413 @@ class TestProductionChannels:
         finally:
             tenant_id_ctx.reset(tok)
 
+    async def test_streaming_ad_spend_with_normal_sales_split(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+        recorder: _SourceRecorder,
+    ) -> None:
+        """R2 评审 Not tested：直播万相台花费 + 普通千牛销售 → 两行各自的数，两路逐字相等。
+
+        商品只有普通千牛（D1 支付 500 / 退款 20 / 加购 4）和直播万相台（D1 花费 60、站内加购 6）。
+        """
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            style = await product_factory.style(style_code=f"XS{uuid4().hex[:6]}")
+            goods = await _goods(
+                session, tenant_a, style, code=f"G_XS_{uuid4().hex[:5]}", season="春夏"
+            )
+            qn = await _pp(session, tenant_a, style, goods)
+            ad = await _pp(session, tenant_a, style, goods, platform="万相台", channel="直播")
+            session.add_all(
+                [
+                    _qn(tenant_a, qn, D1, "500.00", refund="20.00", add_cart=4, pay_orders=3),
+                    AdDaily(
+                        tenant_id=tenant_a.id,
+                        platform_product_id=ad.id,
+                        platform_id_snapshot=ad.platform_id,
+                        date=D1,
+                        cost=Decimal("60.00"),
+                        add_cart_count=6,
+                        extra={},
+                    ),
+                ]
+            )
+            await session.commit()
+            await _refresh(session, tenant_a, M_LO, M_HI)
+
+            svc = ProductionService(session)
+            via_summary = await svc.get_report(tenant_a.id, (M_LO, M_HI))
+            assert recorder.calls[0] == ("production", "summary")
+            via_live = await svc.get_report(tenant_a.id, (M_LO, M_HI), use_summary=False)
+            assert ("production", "live") in recorder.calls
+            assert _dump(via_summary) == _dump(via_live)
+
+            gid, zero = str(goods.id), Decimal("0.00")
+            # 普通行只有销售，直播行只有站内花费（直播没有千牛链接 → 链接数 0）
+            assert [_channel_tuple(r) for r in via_summary.items] == [
+                (gid, "普通", 1, Decimal("500.00"), Decimal("20.00"), 4, zero, zero),
+                (gid, "直播", 0, zero, zero, 0, zero, Decimal("60.00")),
+            ]
+            assert [(r.pay_orders, r.ad_add_cart_count) for r in via_summary.items] == [
+                (3, 0),
+                (0, 6),
+            ]
+            # 两个渠道各自没有配对日 → 站外加购都是 null
+            assert [r.offsite_add_cart for r in via_summary.items] == [None, None]
+
+            # 内部调用方按商品合计：一行，销售与花费合在一起
+            goods_rows = await svc.get_goods_rows(
+                tenant_a.id, (M_LO, M_HI), exclude_brushing=True, use_summary=False
+            )
+            assert [_money_tuple(r) for r in goods_rows] == [
+                (gid, Decimal("500.00"), Decimal("20.00"), 4, zero, Decimal("60.00"))
+            ]
+        finally:
+            tenant_id_ctx.reset(tok)
+
+    @pytest.mark.parametrize("exclude_brushing", [True, False])
+    async def test_streaming_only_goods_with_brushing(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+        recorder: _SourceRecorder,
+        exclude_brushing: bool,
+    ) -> None:
+        """简报第 3 节：只有直播链接的商品有刷单 → 「普通（只有刷单）+ 直播」两行，两路逐字相等。
+
+        商品只有一条直播千牛链接（D1 支付 500 / 退款 20 / 加购 5 / 3 件），D1 刷单 200。
+        刷单记普通行（设计 2.3）：剔刷单时普通行支付 −200、不剔时 0；普通行没有千牛链接。
+        """
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            style = await product_factory.style(style_code=f"SO{uuid4().hex[:6]}")
+            goods = await _goods(
+                session, tenant_a, style, code=f"G_SO_{uuid4().hex[:5]}", season="春夏"
+            )
+            qn_live = await _pp(session, tenant_a, style, goods, channel="直播")
+            session.add_all(
+                [
+                    _qn(tenant_a, qn_live, D1, "500.00", refund="20.00", add_cart=5, pay_orders=3),
+                    OrderAdjustment(
+                        tenant_id=tenant_a.id,
+                        order_type="刷单",
+                        style_id=style.id,
+                        amount=Decimal("200.00"),
+                        order_date=D1,
+                        exclude_from_roi=True,
+                        status="待付款",
+                    ),
+                ]
+            )
+            await session.commit()
+            await _refresh(session, tenant_a, M_LO, M_HI)
+
+            svc = ProductionService(session)
+            via_summary = await svc.get_report(
+                tenant_a.id, (M_LO, M_HI), exclude_brushing=exclude_brushing
+            )
+            assert recorder.calls[0] == ("production", "summary")
+            via_live = await svc.get_report(
+                tenant_a.id, (M_LO, M_HI), exclude_brushing=exclude_brushing, use_summary=False
+            )
+            assert ("production", "live") in recorder.calls
+            assert _dump(via_summary) == _dump(via_live)
+
+            gid, zero = str(goods.id), Decimal("0.00")
+            normal_pay = Decimal("-200.00") if exclude_brushing else zero
+            # 场景有效性：两行、键唯一、普通在前；剔刷单时普通行支付为负，直播行有销售
+            keys = [(str(r.goods_id), r.channel) for r in via_summary.items]
+            assert keys == [(gid, "普通"), (gid, "直播")]
+            assert len(set(keys)) == len(keys)
+            assert [_channel_tuple(r) for r in via_summary.items] == [
+                (gid, "普通", 0, normal_pay, zero, 0, zero, zero),
+                (gid, "直播", 1, Decimal("500.00"), Decimal("20.00"), 5, zero, zero),
+            ]
+            assert [r.pay_orders for r in via_summary.items] == [0, 3]
+
+            # 内部调用方按商品合计：一行，支付 = 500 − 刷单
+            goods_rows = await svc.get_goods_rows(
+                tenant_a.id, (M_LO, M_HI), exclude_brushing=exclude_brushing, use_summary=False
+            )
+            assert [r.pay_amount for r in goods_rows] == [Decimal("500.00") + normal_pay]
+        finally:
+            tenant_id_ctx.reset(tok)
+
+
+async def _seed_add_cart(
+    session: AsyncSession, tenant: Any, product_factory: Any
+) -> dict[str, Any]:
+    """7e R3 S2：新公式与加购（千牛 / 万相台都挂普通 + 直播）。
+
+    商品 A（春夏）：
+    - 普通千牛 D1 支付 1000 / 退款 100 / 加购 7 / 4 件，D2 支付 600 / 加购 20 / 4 件；
+      普通万相台只有 D2（花费 90、站内加购 9）→ 只配上 D2，站外加购 = 20 − 9 = 11
+      （整段区间判配对会把 D1 的 7 也算进去，得 18）；D2 刷单 200（不扣件数）；
+    - 直播千牛 D1 支付 300 / 加购 15 / 2 件，D2 加购 2 / 0 件；直播万相台 D1、D2 各花费 30、
+      站内加购 10 → 两天配对差 +5 / −8，先求和 −3 再取 0 → 0（逐日取 0 会得 5）。
+    商品 B（秋冬）：只有普通千牛 D1 支付 500 / 加购 3 / 2 件 → 没有配对日，站外加购 null。
+    """
+    style_a = await product_factory.style(style_code=f"AC{uuid4().hex[:6]}")
+    goods_a = await _goods(session, tenant, style_a, code=f"G_AC_{uuid4().hex[:5]}", season="春夏")
+    qn_norm = await _pp(session, tenant, style_a, goods_a)
+    qn_live = await _pp(session, tenant, style_a, goods_a, channel="直播")
+    ad_norm = await _pp(session, tenant, style_a, goods_a, platform="万相台")
+    ad_live = await _pp(session, tenant, style_a, goods_a, platform="万相台", channel="直播")
+    style_b = await product_factory.style(style_code=f"BC{uuid4().hex[:6]}")
+    goods_b = await _goods(session, tenant, style_b, code=f"G_BC_{uuid4().hex[:5]}", season="秋冬")
+    qn_b = await _pp(session, tenant, style_b, goods_b)
+
+    def ad(pp: PlatformProduct, day: date, cost: str, cart: int) -> AdDaily:
+        return AdDaily(
+            tenant_id=tenant.id,
+            platform_product_id=pp.id,
+            platform_id_snapshot=pp.platform_id,
+            date=day,
+            cost=Decimal(cost),
+            add_cart_count=cart,
+            extra={},
+        )
+
+    session.add_all(
+        [
+            _qn(tenant, qn_norm, D1, "1000.00", refund="100.00", add_cart=7, pay_orders=4),
+            _qn(tenant, qn_norm, D2, "600.00", refund="0.00", add_cart=20, pay_orders=4),
+            ad(ad_norm, D2, "90.00", 9),
+            _qn(tenant, qn_live, D1, "300.00", refund="0.00", add_cart=15, pay_orders=2),
+            _qn(tenant, qn_live, D2, "0.00", refund="0.00", add_cart=2, pay_orders=0),
+            ad(ad_live, D1, "30.00", 10),
+            ad(ad_live, D2, "30.00", 10),
+            _qn(tenant, qn_b, D1, "500.00", refund="0.00", add_cart=3, pay_orders=2),
+            OrderAdjustment(
+                tenant_id=tenant.id,
+                order_type="刷单",
+                style_id=style_a.id,
+                amount=Decimal("200.00"),
+                order_date=D2,
+                exclude_from_roi=True,
+                status="待付款",
+            ),
+        ]
+    )
+    await session.flush()
+    return {"goods_a": goods_a, "goods_b": goods_b}
+
+
+def _add_cart_tuple(row: Any) -> tuple[Any, ...]:
+    return (
+        str(row.goods_id),
+        row.channel,
+        row.pay_orders,
+        row.ad_add_cart_count,
+        row.ad_add_cart_cost,
+        row.offsite_add_cart,
+        row.pre_return_roi,
+        row.unit_deal_cost,
+    )
+
+
+class TestProductionAddCart:
+    """7e R3 S2：退货前投产比、推广单件成交成本（÷ 支付件数）、站内 / 站外加购。"""
+
+    @pytest.mark.parametrize("exclude_brushing", [True, False])
+    async def test_new_metrics_both_paths(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+        recorder: _SourceRecorder,
+        exclude_brushing: bool,
+    ) -> None:
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            seeded = await _seed_add_cart(session, tenant_a, product_factory)
+            await session.commit()
+            await _refresh(session, tenant_a, M_LO, M_HI)
+
+            svc = ProductionService(session)
+            via_summary = await svc.get_report(
+                tenant_a.id, (M_LO, M_HI), exclude_brushing=exclude_brushing
+            )
+            assert recorder.calls[0] == ("production", "summary")
+            via_live = await svc.get_report(
+                tenant_a.id, (M_LO, M_HI), exclude_brushing=exclude_brushing, use_summary=False
+            )
+            assert ("production", "live") in recorder.calls
+            assert _dump(via_summary) == _dump(via_live)
+
+            a_id, b_id = str(seeded["goods_a"].id), str(seeded["goods_b"].id)
+            # 普通行支付 1600（剔刷单 1400）/ 总推广成本 90；件数不受刷单开关影响
+            normal_roi = Decimal("15.5556") if exclude_brushing else Decimal("17.7778")
+            assert [_add_cart_tuple(r) for r in via_summary.items] == [
+                (a_id, "普通", 8, 9, Decimal("10.0000"), 11, normal_roi, Decimal("11.2500")),
+                (a_id, "直播", 2, 20, Decimal("3.0000"), 0, Decimal("5.0000"), Decimal("30.0000")),
+                # 没有站内加购 / 推广成本 / 配对日：以它们为分母的比率与站外加购是 null，
+                # 不是 0；单件成交成本分母是件数（2），推广成本 0 → 0
+                (b_id, "普通", 2, 0, None, None, None, Decimal("0.0000")),
+            ]
+            # 场景有效性：每个新列都出现非零值
+            items = via_summary.items
+            for field in (
+                "pay_orders",
+                "ad_add_cart_count",
+                "ad_add_cart_cost",
+                "offsite_add_cart",
+                "pre_return_roi",
+                "unit_deal_cost",
+            ):
+                assert any(getattr(r, field) for r in items), field
+        finally:
+            tenant_id_ctx.reset(tok)
+
+
+# 7e R3 S3：近 7 天 = T-7 ~ T-1（今天不算），不随筛选区间变
+R7_LO, R7_HI = TODAY - timedelta(days=7), TODAY - timedelta(days=1)
+# 两个不同的筛选区间：都盖住两个商品，但结束日不同（近 7 天若按筛选结束日算就会变）
+R7_FILTER_1 = (TODAY - timedelta(days=14), TODAY - timedelta(days=1))
+R7_FILTER_2 = (TODAY - timedelta(days=20), TODAY - timedelta(days=3))
+
+
+async def _seed_recent7(session: AsyncSession, tenant: Any, product_factory: Any) -> dict[str, Any]:
+    """近 7 天场景（日期相对今天）。
+
+    商品 A（春夏）：
+    - 普通千牛 T-8 支付 50（区间前一天，不算）、T-7 支付 1000 / 退款 100、T-1 支付 200、
+      今天支付 999（不算）；普通万相台 T-1 花费 40；T-7 刷单 100；
+      → 近 7 天支付 1100（不剔刷单 1200）、总推广成本 40、净投产比 1000 / 40 = 25（1100 / 40 = 27.5）；
+    - 直播千牛 T-10 支付 10（两个筛选区间里都有这一行）、T-1 支付 30 → 近 7 天 30 / 0 / null。
+    商品 B（秋冬）：只有 T-12 支付 300 → 近 7 天没有数据：0.00 / 0.00 / null。
+    """
+    style_a = await product_factory.style(style_code=f"R7A{uuid4().hex[:5]}")
+    goods_a = await _goods(session, tenant, style_a, code=f"G_R7A_{uuid4().hex[:5]}", season="春夏")
+    qn_norm = await _pp(session, tenant, style_a, goods_a)
+    qn_live = await _pp(session, tenant, style_a, goods_a, channel="直播")
+    ad_norm = await _pp(session, tenant, style_a, goods_a, platform="万相台")
+    style_b = await product_factory.style(style_code=f"R7B{uuid4().hex[:5]}")
+    goods_b = await _goods(session, tenant, style_b, code=f"G_R7B_{uuid4().hex[:5]}", season="秋冬")
+    qn_b = await _pp(session, tenant, style_b, goods_b)
+
+    session.add_all(
+        [
+            _qn(tenant, qn_norm, R7_LO - timedelta(days=1), "50.00", refund="0.00"),
+            _qn(tenant, qn_norm, R7_LO, "1000.00", refund="100.00"),
+            _qn(tenant, qn_norm, R7_HI, "200.00", refund="0.00"),
+            _qn(tenant, qn_norm, TODAY, "999.00", refund="0.00"),
+            _qn(tenant, qn_live, TODAY - timedelta(days=10), "10.00", refund="0.00"),
+            _qn(tenant, qn_live, R7_HI, "30.00", refund="0.00"),
+            _qn(tenant, qn_b, TODAY - timedelta(days=12), "300.00", refund="0.00"),
+            AdDaily(
+                tenant_id=tenant.id,
+                platform_product_id=ad_norm.id,
+                platform_id_snapshot=ad_norm.platform_id,
+                date=R7_HI,
+                cost=Decimal("40.00"),
+                extra={},
+            ),
+            OrderAdjustment(
+                tenant_id=tenant.id,
+                order_type="刷单",
+                style_id=style_a.id,
+                amount=Decimal("100.00"),
+                order_date=R7_LO,
+                exclude_from_roi=True,
+                status="待付款",
+            ),
+        ]
+    )
+    await session.flush()
+    return {"goods_a": goods_a, "goods_b": goods_b}
+
+
+def _recent7_tuple(row: Any) -> tuple[Any, ...]:
+    return (
+        str(row.goods_id),
+        row.channel,
+        row.recent7_pay_amount,
+        row.recent7_total_spend,
+        row.recent7_net_roi,
+    )
+
+
+class TestProductionRecent7:
+    """7e R3 S3：近 7 天三列 + ``recent7_range``（默 10）。"""
+
+    @pytest.mark.parametrize("exclude_brushing", [True, False])
+    async def test_summary_equals_live_hand_computed(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+        recorder: _SourceRecorder,
+        exclude_brushing: bool,
+    ) -> None:
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            seeded = await _seed_recent7(session, tenant_a, product_factory)
+            await session.commit()
+            await _refresh(session, tenant_a, R7_FILTER_2[0], R7_HI)
+
+            svc = ProductionService(session)
+            via_summary = await svc.get_report(
+                tenant_a.id, R7_FILTER_1, exclude_brushing=exclude_brushing
+            )
+            assert ("production", "summary") in recorder.calls
+            assert ("production_recent7", "summary") in recorder.calls
+            via_live = await svc.get_report(
+                tenant_a.id, R7_FILTER_1, exclude_brushing=exclude_brushing, use_summary=False
+            )
+            assert ("production_recent7", "live") in recorder.calls
+            assert _dump(via_summary) == _dump(via_live)
+
+            assert _dump(via_summary)["recent7_range"] == {
+                "date_from": R7_LO.isoformat(),
+                "date_to": R7_HI.isoformat(),
+            }
+            a_id, b_id = str(seeded["goods_a"].id), str(seeded["goods_b"].id)
+            zero = Decimal("0.00")
+            if exclude_brushing:
+                normal = (Decimal("1100.00"), Decimal("40.00"), Decimal("25.0000"))
+            else:
+                normal = (Decimal("1200.00"), Decimal("40.00"), Decimal("27.5000"))
+            assert [_recent7_tuple(r) for r in via_summary.items] == [
+                (a_id, "普通", *normal),
+                # 没有推广成本：净投产比是 null，不是 0
+                (a_id, "直播", Decimal("30.00"), zero, None),
+                # 近 7 天没有数据：金额 0.00、比率 null
+                (b_id, "普通", zero, zero, None),
+            ]
+            # 上一期行不带近 7 天
+            assert via_summary.previous is not None
+            for prev_row in via_summary.previous:
+                assert _recent7_tuple(prev_row)[2:] == (None, None, None)
+        finally:
+            tenant_id_ctx.reset(tok)
+
+    async def test_range_does_not_follow_filter(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+    ) -> None:
+        """两个不同的筛选区间：``recent7_range`` 与三列都一样。"""
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            await _seed_recent7(session, tenant_a, product_factory)
+            await session.commit()
+
+            svc = ProductionService(session)
+            one = await svc.get_report(tenant_a.id, R7_FILTER_1, use_summary=False)
+            two = await svc.get_report(tenant_a.id, R7_FILTER_2, use_summary=False)
+            # 场景有效性：两个区间的本期数确实不同
+            assert [r.pay_amount for r in one.items] != [r.pay_amount for r in two.items]
+            assert _dump(one)["recent7_range"] == _dump(two)["recent7_range"]
+            assert [_recent7_tuple(r) for r in one.items] == [_recent7_tuple(r) for r in two.items]
+            assert one.items[0].recent7_pay_amount == Decimal("1100.00")
+        finally:
+            tenant_id_ctx.reset(tok)
+
 
 class TestProductionTrend:
     @pytest.mark.parametrize("granularity", ["day", "week", "month", "year"])
@@ -788,6 +1266,54 @@ class TestProductionTrend:
                 assert _dump(via_summary) == _dump(via_live), f"{key} {granularity}"
                 assert via_summary.points, f"{key} 没有趋势点"
             assert ("production_trend", "summary") in recorder.calls
+        finally:
+            tenant_id_ctx.reset(tok)
+
+    @pytest.mark.parametrize("granularity", ["day", "week"])
+    @pytest.mark.parametrize("exclude_brushing", [True, False])
+    async def test_repository_trend_rows_equal_with_062_columns(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+        granularity: str,
+        exclude_brushing: bool,
+    ) -> None:
+        """R2 遗留 L2：汇总趋势带上实时已有的 5 列，仓储层两路逐行相等（实时多一列 net_roi）。"""
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            seeded = await _seed_add_cart(session, tenant_a, product_factory)
+            await session.commit()
+            await _refresh(session, tenant_a, M_LO, M_HI)
+            kwargs = {
+                "tenant_id": tenant_a.id,
+                "goods_id": seeded["goods_a"].id,
+                "date_from": M_LO,
+                "date_to": M_HI,
+                "granularity": granularity,
+                "exclude_brushing": exclude_brushing,
+            }
+            live = await ProductionRepository(session).daily_trend_by_goods(**kwargs)
+            summary = await SummaryReadRepository(session).production_trend(**kwargs)
+            assert live, "没有趋势点，场景失效"
+            live_rows = [
+                _norm_repo_row({k: v for k, v in r.items() if k != "net_roi"}) for r in live
+            ]
+            summary_rows = [_norm_repo_row(r) for r in summary]
+            # 列集合与顺序都一致（漏一列这里就红）
+            assert [list(r) for r in summary_rows] == [list(r) for r in live_rows]
+            assert summary_rows == live_rows
+            # 场景有效性：5 列都出现非零值；普通 D2 配对 1 天 + 直播 D1、D2 配对 2 天
+            for col in (
+                "pay_orders",
+                "ad_add_cart_count",
+                "paired_all_cart",
+                "paired_ad_cart",
+                "paired_days",
+            ):
+                assert any(r[col] for r in summary_rows), col
+            assert sum(r["paired_days"] for r in summary_rows) == 3
+            assert sum(r["pay_orders"] for r in summary_rows) == 10
         finally:
             tenant_id_ctx.reset(tok)
 

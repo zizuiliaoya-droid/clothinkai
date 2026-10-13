@@ -128,7 +128,11 @@ class StoreDailyManualUpdate(BaseModel):
 
 
 class ProductionRow(BaseModel):
-    """投产报表一行 = 一个商品（PRD V1.4 第 3 章），套装合并成一行。"""
+    """投产报表一行 = 商品 × 渠道（7e R3，设计 2.3），套装合并成一行。
+
+    商品没有直播链接时只有「普通」一行；同渠道多条链接合在一行（``link_count``）。
+    站外推广成本与刷单都记在「普通」行。
+    """
 
     goods_id: UUID
     goods_code: str
@@ -138,6 +142,10 @@ class ProductionRow(BaseModel):
     # 商品含哪些款式货号；单品就是它自己那一个，套装是多个
     style_codes: list[str] = Field(default_factory=list)
     main_image_url: str | None = None
+    # None 只出现在 ProductionService.get_goods_rows 的按商品合计行（BI / 企微 / AI 用）
+    channel: Literal["普通", "直播"] | None = None
+    # 该商品该渠道启用的千牛链接数（当前状态，不看区间）；按商品合计行为 0
+    link_count: int = 0
     pay_amount: Decimal
     refund_amount: Decimal
     return_rate: Decimal | None = None
@@ -145,18 +153,51 @@ class ProductionRow(BaseModel):
     promo_cost: Decimal
     ad_spend: Decimal
     total_spend: Decimal
+    # 千牛「支付件数」，刷单开关不扣件数
+    pay_orders: int
     add_cart_count: int
     add_cart_cost: Decimal | None = None
+    # 站内加购 = 万相台「总购物车数」；站内加购成本 = 站内投放 / 站内加购
+    ad_add_cart_count: int
+    ad_add_cart_cost: Decimal | None = None
+    # 站外加购 = max(Σ配对日总加购 − Σ配对日站内加购, 0)；区间内没有配对日 → None
+    offsite_add_cart: int | None = None
+    # 退货前投产比 = 支付金额 / 总推广成本
+    pre_return_roi: Decimal | None = None
     net_roi: Decimal | None = None
+    # 推广单件成交成本 = 总推广成本 / 支付件数（7e R3 起，字段名沿用）
     unit_deal_cost: Decimal | None = None
+    # 近 7 天（T-7 ~ T-1，租户时区，不随筛选变；区间见 ProductionReport.recent7_range），
+    # 同刷单开关。只挂在本期行：近 7 天没有数据 → 0.00 / 0.00 / None；上期行三列都是 None
+    recent7_pay_amount: Decimal | None = None
+    recent7_total_spend: Decimal | None = None
+    recent7_net_roi: Decimal | None = None
+    # 毛利三列（默 12，只给管理员；其他角色 None）：销售货品总成本 = 支付件数 × 当前单品货品成本
+    # （启用成员 single_goods_cost 之和，读取时现算）；单品毛利 = 实际销售金额 − 总成本；
+    # 单品利润率 = 毛利 / 实际销售金额。任一启用成员没有成本 → 三列都 None
+    goods_cost_total: Decimal | None = None
+    gross_profit: Decimal | None = None
+    gross_margin_rate: Decimal | None = None
     # 千牛/站内导入数据按商品汇总的其余指标（对齐 final.xlsx 投产报表 70 列；
     # qianniu_daily.extra + ad_daily.extra 按 platform_product→商品归集，按 extra_metrics 规则聚合）
     extra: dict = Field(default_factory=dict)
 
 
+class Recent7Range(BaseModel):
+    """近 7 天三列的区间：T-7 ~ T-1（租户时区的今天往前 7 天，今天不算）。"""
+
+    date_from: date
+    date_to: date
+
+
 class ProductionReport(BaseModel):
     items: list[ProductionRow]
     previous: list[ProductionRow] | None = None
+    # get_report 恒给；AI 内部包一层按商品合计的行时不给
+    recent7_range: Recent7Range | None = None
+    # 本期区间内有日报行或花费行的停用链接数（7e-9，页面「N 条链接已停用、未计入单品」）；
+    # 两路共用同一条实时 SQL（不读汇总表），只算本期、不随刷单开关。AI 包装不给 → 0
+    inactive_link_count: int = 0
 
 
 class ProductionTrendPoint(BaseModel):
@@ -209,6 +250,8 @@ class ReportCapabilities(BaseModel):
     publish_progress: Literal["all", "own"] | None
     bi: Literal["full", "personal"] | None
     production: bool
+    production_margin: bool
+    """单品投产毛利三列给不给（= ``production`` 且字段规则 F1 可见，只管理员）；false 时页面不渲染这三列。"""
     store_read: bool
     store_write: bool
     export: list[str]

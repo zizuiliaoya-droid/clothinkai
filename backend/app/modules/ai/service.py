@@ -21,6 +21,7 @@ from app.modules.ai.exceptions import (
 from app.modules.ai.models import AiAdviceLog
 from app.modules.ai.repository import AiAdviceLogRepository, AiDataRepository
 from app.modules.ai.schemas import AiAdviceResponse, BloggerSuggestion
+from app.modules.report.advanced_schemas import ProductionReport
 from app.modules.report.production_service import ProductionService
 
 _MIN_HISTORY_MONTHS = 6
@@ -93,8 +94,11 @@ class AiAdvisoryService:
             raise AiDataInsufficientError(
                 f"历史数据不足（{months} 个月，需 ≥ {_MIN_HISTORY_MONTHS}），无法生成策略建议"
             )
-        report = await ProductionService(self._s).get_report(user.tenant_id, time_range)
-        summary = self._summarize_production(report)
+        # 按商品合计，不用投产页的（商品, 渠道）行
+        rows = await ProductionService(self._s).get_goods_rows(
+            user.tenant_id, time_range, exclude_brushing=True, use_summary=True
+        )
+        summary = self._summarize_production(ProductionReport(items=rows))
         messages = [
             {"role": "system", "content": "你是服装电商运营策略顾问，基于聚合数据给出可执行建议。"},
             {
