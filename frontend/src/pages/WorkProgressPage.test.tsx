@@ -1,13 +1,19 @@
 // @vitest-environment jsdom
 // 工作进度页（7e R5 S7）：季节锁定 = 筛选记忆（清空写 []）、URL 季节只本次生效；PR 表新列与「推广成本」改名；
 // 导出与下钻带季节；403 显示无权限提示；只看本人没有导出按钮。
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PrWorkProgress, ReportCapabilities } from "@/features/report/types";
+import type {
+  PrWorkProgress,
+  ReportCapabilities,
+  WorkProgressGoodsPage,
+  WorkProgressGoodsRow,
+} from "@/features/report/types";
 
 const workProgressMock = vi.fn();
+const goodsMock = vi.fn();
 const exportMock = vi.fn();
 const drillMock = vi.fn();
 const getPrefMock = vi.fn();
@@ -18,6 +24,7 @@ const caps = vi.hoisted(() => ({
 }));
 vi.mock("@/features/report/api", () => ({
   getWorkProgress: (...args: unknown[]) => workProgressMock(...args),
+  getWorkProgressGoods: (...args: unknown[]) => goodsMock(...args),
   exportReport: (...args: unknown[]) => exportMock(...args),
   getDrillPromotions: (...args: unknown[]) => drillMock(...args),
   getReportSeasonOptions: () => Promise.resolve(["2026秋", "2026冬"]),
@@ -114,10 +121,53 @@ function prRow(over: Partial<PrWorkProgress> = {}): PrWorkProgress {
   };
 }
 
+function goodsRow(n: number, over: Partial<WorkProgressGoodsRow> = {}): WorkProgressGoodsRow {
+  const { pr_id: _prId, pr_name: _prName, ...metrics } = prRow();
+  void _prId;
+  void _prName;
+  return {
+    ...metrics,
+    goods_id: `g-${String(n).padStart(2, "0")}`,
+    goods_title: `商品全称${n}`,
+    goods_short_name: `简称${n}`,
+    display_name: `简称${n}`,
+    quote_count: 100 - n,
+    // 接口不该给编码；假数据多塞一个，确认页面不会把它渲染出来
+    ...({ goods_code: `SKU-${n}` } as object),
+    ...over,
+  };
+}
+
+const UNASSIGNED_ROW = goodsRow(0, {
+  goods_id: null,
+  goods_title: null,
+  goods_short_name: null,
+  display_name: "未归属商品",
+});
+
+function goodsPage(
+  items: WorkProgressGoodsRow[],
+  unassigned: WorkProgressGoodsRow | null,
+  over: Partial<WorkProgressGoodsPage> = {}
+): WorkProgressGoodsPage {
+  return {
+    date_from: "2026-10-01",
+    date_to: "2026-10-31",
+    total: items.length,
+    limit: 12,
+    offset: 0,
+    items,
+    unassigned,
+    ...over,
+  };
+}
+
 // 块体写法：mockReset() 返回 mock 本身，简写箭头会被 vitest 当成清理函数
 beforeEach(() => {
   workProgressMock.mockReset();
   workProgressMock.mockResolvedValue([prRow()]);
+  goodsMock.mockReset();
+  goodsMock.mockResolvedValue(goodsPage([], null));
   exportMock.mockReset();
   exportMock.mockResolvedValue("work-progress.xlsx");
   drillMock.mockReset();
@@ -290,5 +340,106 @@ describe("WorkProgressPage 导出与权限", () => {
     expect(await screen.findByText("工作进度表（只看本人）")).toBeTruthy();
     await screen.findByText("小王");
     expect(screen.queryByRole("button", { name: /导出/ })).toBeNull();
+  });
+});
+
+/** 13 个以上的商品：卡片只取前 12、「查看全部」按 20 条翻页。 */
+const MANY_GOODS = Array.from({ length: 25 }, (_, i) => goodsRow(i + 1));
+
+/** 假单品接口：按 limit / offset 切片；unassigned 每页都在信封里（同后端），前端只在最后一页接上。 */
+function serveGoods(all: WorkProgressGoodsRow[], unassigned: WorkProgressGoodsRow | null) {
+  goodsMock.mockImplementation((params: { limit: number; offset: number }) =>
+    Promise.resolve(
+      goodsPage(all.slice(params.offset, params.offset + params.limit), unassigned, {
+        total: all.length,
+        limit: params.limit,
+        offset: params.offset,
+      })
+    )
+  );
+}
+
+const cardsRegion = () => screen.findByRole("region", { name: "单品汇总" });
+const DRILL_BUTTON = /^查看 .+ 的推广单$/;
+
+describe("WorkProgressPage 单品卡片", () => {
+  it("13 个商品只出 12 张卡、不出未归属；请求带 limit 12 与季节；无商品编码", async () => {
+    getPrefMock.mockResolvedValue({ season: ["2026秋"] });
+    serveGoods(MANY_GOODS.slice(0, 13), UNASSIGNED_ROW);
+    renderPage();
+    const region = await cardsRegion();
+    await within(region).findByRole("button", { name: "查看 简称1 的推广单" });
+    expect(within(region).getAllByRole("button", { name: DRILL_BUTTON })).toHaveLength(12);
+    expect(region.textContent).toContain("共 13 个商品");
+    expect(region.textContent).toContain("¥420.00");
+    expect(region.textContent).not.toContain("简称13");
+    expect(region.textContent).not.toContain("未归属商品");
+    expect(document.body.textContent).not.toContain("SKU-");
+    expect(goodsMock.mock.calls[0][0]).toMatchObject({
+      limit: 12,
+      offset: 0,
+      season: ["2026秋"],
+    });
+  });
+
+  it("点商品名下钻：带 goods_id、区间与季节，不带 pr_id", async () => {
+    getPrefMock.mockResolvedValue({ season: ["2026秋"] });
+    serveGoods(MANY_GOODS.slice(0, 3), null);
+    renderPage();
+    const region = await cardsRegion();
+    fireEvent.click(await within(region).findByRole("button", { name: "查看 简称2 的推广单" }));
+    await waitFor(() => expect(drillMock).toHaveBeenCalled());
+    expect(drillMock.mock.calls[0][0]).toEqual({
+      date_from: "2026-10-01",
+      date_to: "2026-10-31",
+      goods_id: "g-02",
+      season: ["2026秋"],
+      page: 1,
+      page_size: 20,
+    });
+    expect(await screen.findByText("简称2 的推广单")).toBeTruthy();
+  });
+
+  it("查看全部：第 1 页 offset 0 无未归属；第 2 页 offset 20，未归属排最后且不可点", async () => {
+    serveGoods(MANY_GOODS, UNASSIGNED_ROW);
+    renderPage();
+    const region = await cardsRegion();
+    fireEvent.click(await within(region).findByRole("button", { name: "查看全部" }));
+    const dialog = await screen.findByRole("dialog");
+    await within(dialog).findByRole("button", { name: "查看 简称1 的推广单" });
+    expect(goodsMock).toHaveBeenLastCalledWith(expect.objectContaining({ limit: 20, offset: 0 }));
+    expect(within(dialog).getAllByRole("button", { name: DRILL_BUTTON })).toHaveLength(20);
+    // 说明文字里有「未归属商品」字样，只看表体
+    expect(dialog.querySelector(".ant-table-tbody")?.textContent).not.toContain("未归属商品");
+    fireEvent.click(within(dialog).getByTitle("2"));
+    await within(dialog).findByRole("button", { name: "查看 简称21 的推广单" });
+    expect(goodsMock).toHaveBeenLastCalledWith(expect.objectContaining({ limit: 20, offset: 20 }));
+    const rows = dialog.querySelectorAll(".ant-table-tbody tr.ant-table-row");
+    expect(rows).toHaveLength(6);
+    expect(rows[rows.length - 1].textContent).toContain("未归属商品");
+    expect(within(dialog).queryByRole("button", { name: "查看 未归属商品 的推广单" })).toBeNull();
+    expect(dialog.textContent).not.toContain("SKU-");
+  });
+
+  it("没有归属商品（total 0）：卡片区空态，查看全部第一页就是未归属", async () => {
+    serveGoods([], UNASSIGNED_ROW);
+    renderPage();
+    const region = await cardsRegion();
+    expect(await within(region).findByText(/区间内的推广单都没有归属商品/)).toBeTruthy();
+    fireEvent.click(within(region).getByRole("button", { name: "查看全部" }));
+    const dialog = await screen.findByRole("dialog");
+    await waitFor(() =>
+      expect(dialog.querySelector(".ant-table-tbody")?.textContent).toContain("未归属商品")
+    );
+  });
+
+  it("单品接口 403：整页显示无权限提示", async () => {
+    goodsMock.mockRejectedValue(
+      Object.assign(new Error("403"), { response: { status: 403, data: { code: "PERMISSION_DENIED" } } })
+    );
+    const { container } = renderPage();
+    expect(await screen.findByText("没有权限查看工作进度表")).toBeTruthy();
+    expect(container.querySelector(".ant-table")).toBeNull();
+    expect(goodsMock).toHaveBeenCalledTimes(1);
   });
 });

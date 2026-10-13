@@ -12,7 +12,12 @@ import {
   ReportTimeRangeFilter,
   useReportTimeRange,
 } from "@/components/ReportTimeRangeFilter/ReportTimeRangeFilter";
-import { exportReport, getReportSeasonOptions, getWorkProgress } from "@/features/report/api";
+import {
+  exportReport,
+  getReportSeasonOptions,
+  getWorkProgress,
+  type WorkProgressParams,
+} from "@/features/report/api";
 import { DrillPromotionModal } from "@/features/report/components/DrillPromotionModal";
 import { ReportForbidden } from "@/features/report/components/ReportForbidden";
 import type { DrillPromotionTarget } from "@/features/report/drill";
@@ -32,6 +37,9 @@ import {
   WORK_PROGRESS_FILTER_SCHEMA,
   seasonParam,
 } from "@/features/report/workProgress/workProgressFilters";
+import { WorkProgressGoodsCards } from "@/features/report/workProgress/WorkProgressGoodsCards";
+import { useWorkProgressGoodsCards } from "@/features/report/workProgress/workProgressGoods";
+import { WorkProgressGoodsModal } from "@/features/report/workProgress/WorkProgressGoodsModal";
 import { isForbiddenError } from "@/features/warehouse/shipmentForm";
 import { extractErrorMessage } from "@/services/apiClient";
 import {
@@ -63,15 +71,23 @@ export function WorkProgressPage() {
   });
   const seasonOptions = (seasonOptionList ?? []).map((s) => ({ label: s, value: s }));
 
+  const queryParams: WorkProgressParams = {
+    preset,
+    date_from: dateFrom,
+    date_to: dateTo,
+    season: seasons,
+  };
   const { data, isLoading, error } = useQuery({
     queryKey: ["work-progress", preset, dateFrom, dateTo, season],
     // 等偏好回填完再查，避免先用默认区间查一次、回填后又查一次。
     enabled: enabled && ready,
     // 403 重试没有意义，直接显示无权限
     retry: (count, err) => !isForbiddenError(err) && count < 1,
-    queryFn: () =>
-      getWorkProgress({ preset, date_from: dateFrom, date_to: dateTo, season: seasons }),
+    queryFn: () => getWorkProgress(queryParams),
   });
+  // 单品卡片（前 12 个商品）与「查看全部」弹窗：同一套区间 + 季节
+  const goodsQuery = useWorkProgressGoodsCards(queryParams, enabled && ready);
+  const [goodsModalOpen, setGoodsModalOpen] = useState(false);
   // 导出、数据新鲜度、下钻都用这同一个区间。下钻要具体日期：用新鲜度接口里服务端解析的起止
   // （与 <ReportFreshness> 同一个查询，不多发请求；预设模式下前端手里没有日期）
   const { data: freshness } = useSummaryFreshness(preset, dateFrom, dateTo, enabled && ready);
@@ -131,7 +147,7 @@ export function WorkProgressPage() {
   ];
 
   // 菜单按 capabilities 已隐藏；直接输入 URL 进来、接口 403 时给明确提示，不显示空表
-  if (isForbiddenError(error)) {
+  if (isForbiddenError(error) || isForbiddenError(goodsQuery.error)) {
     return <ReportForbidden name="工作进度表" />;
   }
 
@@ -185,6 +201,16 @@ export function WorkProgressPage() {
           </Button>
         )}
       </Space>
+      <WorkProgressGoodsCards
+        data={goodsQuery.data}
+        loading={goodsQuery.isLoading}
+        season={seasons}
+        onDrill={setDrillTarget}
+        onShowAll={() => setGoodsModalOpen(true)}
+      />
+      <Typography.Title level={5} style={{ marginBottom: 12 }}>
+        PR 进度
+      </Typography.Title>
       <Table
         rowKey={(r) => r.pr_id ?? r.pr_name}
         size="small"
@@ -202,6 +228,12 @@ export function WorkProgressPage() {
               }
             : {}
         }
+      />
+      <WorkProgressGoodsModal
+        open={goodsModalOpen}
+        params={queryParams}
+        onClose={() => setGoodsModalOpen(false)}
+        onDrill={setDrillTarget}
       />
       <DrillPromotionModal target={drillTarget} onClose={() => setDrillTarget(null)} />
     </Card>

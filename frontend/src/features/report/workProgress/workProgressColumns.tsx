@@ -6,8 +6,10 @@ import type { ColumnsType } from "antd/es/table";
 import { HeaderHint } from "../components/HeaderHint";
 import type { WorkProgressMetrics } from "../types";
 
-const pct = (v: string | null) => (v == null ? "—" : `${(Number(v) * 100).toFixed(1)}%`);
-const money = (v: string | null) => (v == null ? "—" : `¥${v}`);
+/** 比率显示成百分比（一位小数）；null →「—」。 */
+export const pct = (v: string | null) => (v == null ? "—" : `${(Number(v) * 100).toFixed(1)}%`);
+/** 金额加 ¥；读不到（null）→「—」。 */
+export const money = (v: string | null) => (v == null ? "—" : `¥${v}`);
 
 export const LIKE_HINT = "折算点赞：抖音 / 快手按 ×0.1 计";
 export const TOTAL_AMOUNT_PUBLISH_RATE_HINT = "已发布服务费 ÷ 有效约稿服务费（扣取消与召回）";
