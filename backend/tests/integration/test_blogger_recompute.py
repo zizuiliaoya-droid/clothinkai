@@ -11,11 +11,19 @@ from decimal import Decimal
 from typing import Any
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.tenancy import tenant_id_ctx
+from app.modules.blogger import tag_service
+from app.modules.blogger.models import Blogger
 from app.modules.blogger.service import BloggerService
-from app.modules.blogger.tag_config import TAG_BESTSELLER, TAG_HIGH_VALUE
+from app.modules.blogger.tag_config import (
+    TAG_BESTSELLER,
+    TAG_HIGH_VALUE,
+    TYPE_GRADED_PLATFORMS,
+)
+from app.modules.blogger.tag_service import BloggerTagService
 from app.modules.metric_config.models import PromotionPlatformSetting
 from app.modules.metric_config.service import PlatformMetricSettingService
 from app.modules.metric_config.settings import PlatformMetricSettings
@@ -249,6 +257,120 @@ class TestRecomputeForTenant:
             await svc.recompute_tags_for_current_tenant(tenant_a.id)
             await session.refresh(blogger)
             assert blogger.is_suspected_fake is True
+        finally:
+            tenant_id_ctx.reset(token)
+
+
+async def _blogger_rows(session: AsyncSession, tenant_id: Any) -> dict[Any, dict[str, Any]]:
+    """该租户博主表逐行逐列（按 id），从库里现读。"""
+    cols = Blogger.__table__.columns
+    rows = (await session.execute(select(*cols).where(Blogger.tenant_id == tenant_id))).mappings()
+    return {r["id"]: dict(r) for r in rows}
+
+
+class TestRecomputeQualityOnly:
+    """7e R7：``recompute_quality_for_tenant`` 只写 ``quality_tags``。
+
+    博主故意造得与 ``recompute_for_tenant`` 的结论不同（类型与粉丝量不符、假号标记与
+    互动比不符、类目标签有值）：只重算质量标签时这些都不能动。
+    """
+
+    async def test_only_quality_tags_change(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            style = await product_factory.style()
+            # b1：20 万粉标成素人、互动比极低却没标假号；抖音 1500 赞 → 配抖音阈值 1000 后成「带货型」
+            b1 = await blogger_factory.blogger(
+                follower_count=200_000,
+                blogger_type="素人",
+                is_suspected_fake=False,
+                audience_profile={"note_stats": {"avg_likes": 5, "avg_reads": 10_000}},
+                category_tags=["连衣裙", "通勤"],
+            )
+            await promotion_factory.promotion(
+                style=style, blogger=b1, like_count=1500, platform="抖音"
+            )
+            # b2：100 粉标成 KOL、没有互动数据却标了假号；旧的质量标签已过时（没有推广单）
+            b2 = await blogger_factory.blogger(
+                follower_count=100,
+                blogger_type="KOL",
+                is_suspected_fake=True,
+                category_tags=["半裙"],
+                quality_tags=[TAG_HIGH_VALUE],
+            )
+            # b3：标签本来就对（空），不赋值
+            b3 = await blogger_factory.blogger(follower_count=5_000, blogger_type="KOC")
+            session.add(
+                PromotionPlatformSetting(
+                    tenant_id=tenant_a.id,
+                    platform="抖音",
+                    like_coefficient=Decimal("0.100"),
+                    hit_threshold=1000,
+                )
+            )
+            await session.flush()
+
+            # 场景有效性：全量重算会改掉 b1 / b2 的类型与假号标记（两人都是分级平台小红书）
+            svc = BloggerTagService(session)
+            assert {b1.platform, b2.platform} <= TYPE_GRADED_PLATFORMS
+            assert svc.compute_blogger_type(200_000) != "素人"
+            assert svc.compute_blogger_type(100) != "KOL"
+            assert svc.is_fake_account(svc.compute_read_like_ratio(b1.audience_profile)) is True
+            assert svc.is_fake_account(svc.compute_read_like_ratio(None)) is False
+
+            before = await _blogger_rows(session, tenant_a.id)
+            result = await svc.recompute_quality_for_tenant(tenant_a.id)
+            after = await _blogger_rows(session, tenant_a.id)
+
+            assert result == {"updated": 2, "unchanged": 1, "failed": 0}
+            assert set(after) == set(before) == {b1.id, b2.id, b3.id}
+            skip = {"quality_tags", "updated_at"}
+            for bid, row in before.items():
+                assert {k: v for k, v in after[bid].items() if k not in skip} == {
+                    k: v for k, v in row.items() if k not in skip
+                }, f"blogger {bid} 除质量标签外有列被改"
+            assert after[b1.id]["quality_tags"] == [TAG_BESTSELLER]
+            assert after[b2.id]["quality_tags"] == []
+            assert after[b3.id]["quality_tags"] == []
+            # 原值确认（防止 before 本身就是重算后的样子）
+            assert before[b1.id]["blogger_type"] == "素人"
+            assert before[b2.id]["is_suspected_fake"] is True
+            assert before[b1.id]["category_tags"] == ["连衣裙", "通勤"]
+        finally:
+            tenant_id_ctx.reset(token)
+
+    async def test_single_failure_counted_and_others_continue(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        blogger_factory: Any,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            bad = await blogger_factory.blogger(quality_tags=[TAG_HIGH_VALUE])
+            ok = await blogger_factory.blogger(quality_tags=[TAG_HIGH_VALUE])
+            real = tag_service.compute_quality_tags
+
+            async def _flaky(blogger_id: Any, *a: Any, **k: Any) -> list[str]:
+                if blogger_id == bad.id:
+                    raise RuntimeError("坏数据")
+                return await real(blogger_id, *a, **k)
+
+            monkeypatch.setattr(tag_service, "compute_quality_tags", _flaky)
+            result = await BloggerTagService(session).recompute_quality_for_tenant(tenant_a.id)
+            rows = await _blogger_rows(session, tenant_a.id)
+
+            assert result == {"updated": 1, "unchanged": 0, "failed": 1}
+            assert rows[bad.id]["quality_tags"] == [TAG_HIGH_VALUE]
+            assert rows[ok.id]["quality_tags"] == []
         finally:
             tenant_id_ctx.reset(token)
 

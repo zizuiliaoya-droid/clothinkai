@@ -6,6 +6,7 @@
 - is_fake_account：ratio≤阈值→True；None（无数据）→False（保守）。
 - recompute_for_tenant：批量重算单租户全部活跃博主，单 blogger 失败不中止；
   博主类型只对 ``TYPE_GRADED_PLATFORMS`` 里的平台重算（8b）。
+- recompute_quality_for_tenant：只重算质量标签，平台指标改了之后用（7e R7）。
 
 质量标签聚合委托 ``services/metric/blogger_quality.compute_quality_tags``。
 """
@@ -108,6 +109,34 @@ class BloggerTagService:
                 failed += 1
         await self._session.flush()
         return {"updated": updated, "failed": failed}
+
+    async def recompute_quality_for_tenant(self, tenant_id: UUID) -> dict[str, int]:
+        """只重算单租户活跃博主的质量标签（7e R7，平台指标改了之后用）。
+
+        只写 ``quality_tags``：博主类型、``is_suspected_fake``、类目标签一律不动（它们不依赖
+        平台指标；``recompute_for_tenant`` 会按粉丝量 / 互动比重写，有人手改过的会被冲掉）。
+        标签没变的行不赋值。单个博主失败（catch+log）不中止。
+        返回 updated（标签变了的行数）/ unchanged / failed。调用方负责 commit。
+        """
+        bloggers = await self._repo.list_active_bloggers(tenant_id)
+        settings = await PlatformMetricSettingService(self._session).get_settings(tenant_id)
+        updated = 0
+        unchanged = 0
+        failed = 0
+        for b in bloggers:
+            try:
+                tags = await compute_quality_tags(b.id, self._session, tenant_id, settings=settings)
+            except Exception:
+                log.warning("recompute_quality_failed blogger_id=%s", str(b.id))
+                failed += 1
+                continue
+            if list(b.quality_tags or []) == tags:
+                unchanged += 1
+                continue
+            b.quality_tags = tags
+            updated += 1
+        await self._session.flush()
+        return {"updated": updated, "unchanged": unchanged, "failed": failed}
 
 
 __all__ = ["BloggerTagService"]

@@ -253,3 +253,16 @@ class TestModelImportStandalone:
             [sys.executable, "-c", _PROBE], capture_output=True, text=True, timeout=180
         )
         assert "PERSIST_READY" in proc.stdout, f"stdout={proc.stdout}\nstderr={proc.stderr[-2000:]}"
+
+    def test_celery_task_chain(self) -> None:
+        """干净子进程只 import 博主任务模块（生产 worker 走的路径，S5 起会读本表）。"""
+        code = (
+            "import sys\n"
+            "from app.tasks import blogger_tasks  # noqa: F401\n"
+            # 任务链本身要走到本模型（重算读配置），不靠下面显式 import
+            "assert 'app.modules.metric_config.models' in sys.modules, 'CHAIN_MISSING_MODEL'\n"
+        ) + _PROBE.replace("import app.modules.metric_config.models  # noqa: F401\n", "")
+        proc = subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, text=True, timeout=180
+        )
+        assert "PERSIST_READY" in proc.stdout, f"stdout={proc.stdout}\nstderr={proc.stderr[-2000:]}"
