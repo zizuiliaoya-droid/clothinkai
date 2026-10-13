@@ -35,6 +35,8 @@ from app.modules.flow.line_events import (
     LineEventType,
 )
 from app.modules.flow.matrix import Level, cell_level, ensure_patch_allowed, require
+from app.modules.importer.access import SCOPE_PROMOTION_CREATE
+from app.modules.importer.access import can_write as can_import_write
 from app.modules.product.models import Sku
 from app.modules.promotion.domain import (
     build_promotion_audit_changes,
@@ -722,6 +724,11 @@ class PromotionService(
         page_actions: dict[str, Any] = {}
         if await self.amount_log_readable(user):
             page_actions["amount_log"] = {"state": "enabled"}
+        # 「新建推广」「导入站外推广」（流程线 PR-5，8.4）：与建单接口、manual_promotion 上传同一判定
+        if actor.perms.has(SCOPE_PROMOTION_CREATE, "write"):
+            page_actions["create"] = {"state": "enabled"}
+        if can_import_write(actor.perms, "manual_promotion"):
+            page_actions["import"] = {"state": "enabled"}
         return PromotionPage(
             items=items,
             total=total,
