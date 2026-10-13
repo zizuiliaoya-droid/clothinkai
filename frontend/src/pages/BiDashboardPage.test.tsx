@@ -14,6 +14,7 @@ import type {
   BiGoodsRow,
   BiPersonal,
   BiWorkloadRow,
+  ProductionTrendPoint,
   ReportCapabilities,
   ReportFreshness,
 } from "@/features/report/types";
@@ -654,6 +655,41 @@ describe("BiDashboardPage 单品分析", () => {
     expect(pts[0].getAttribute("style") ?? "").toContain("cursor: default");
     expect(pts[0].querySelector("title")?.textContent).toContain("详情页随推广单时间线上线");
     expect(screen.queryByText("还没有录 7 天数据的笔记")).toBeNull();
+  });
+
+  it("金额趋势 / 净投产趋势跟着卡片宽度画，不按固定 720 画（窄卡里不用横向滚动，第 2 轮浏览器复核）", async () => {
+    // jsdom 没有 ResizeObserver：桩成 observe 时报一次容器宽 480（1440 宽下这两张卡的正文约 503）
+    class FakeResizeObserver {
+      cb: ResizeObserverCallback;
+      constructor(cb: ResizeObserverCallback) {
+        this.cb = cb;
+      }
+      observe() {
+        this.cb([{ contentRect: { width: 480 } } as ResizeObserverEntry], this as unknown as ResizeObserver);
+      }
+      disconnect() {}
+      unobserve() {}
+    }
+    vi.stubGlobal("ResizeObserver", FakeResizeObserver);
+    try {
+      const point = (date: string): ProductionTrendPoint => ({
+        date,
+        pay_amount: "100.00",
+        refund_amount: "10.00",
+        confirmed_amount: "90.00",
+        promo_cost: "6.00",
+        ad_spend: "4.00",
+        total_spend: "10.00",
+        net_roi: "9.00",
+      });
+      goodsTrendMock.mockResolvedValue({ points: [point("2026-10-11"), point("2026-10-12")] });
+      renderPage("/bi?tab=goods");
+      const amount = await screen.findByRole("img", { name: "单品金额趋势折线图" });
+      expect(amount.getAttribute("width")).toBe("480");
+      expect(screen.getByRole("img", { name: "单品净投产趋势折线图" }).getAttribute("width")).toBe("480");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 

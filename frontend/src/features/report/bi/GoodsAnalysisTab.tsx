@@ -124,7 +124,9 @@ export function GoodsAnalysisTab({ data, loading, granularity, goodsId, onGoodsC
       <Row gutter={[16, 16]}>
         <Col xs={24} xl={12}>
           <Card title="金额趋势" loading={loading || trendQuery.isLoading} style={{ height: "100%" }}>
+            {/* 跟着卡片宽度画：1440 宽下半宽卡正文约 503，按固定 720 画会藏掉后段、末刻度截半（第 2 轮浏览器复核） */}
             <MiniLineChart
+              fluid
               ariaLabel="单品金额趋势折线图"
               labels={labels}
               series={[
@@ -139,6 +141,7 @@ export function GoodsAnalysisTab({ data, loading, granularity, goodsId, onGoodsC
         <Col xs={24} xl={12}>
           <Card title="净投产趋势" loading={loading || trendQuery.isLoading} style={{ height: "100%" }}>
             <MiniLineChart
+              fluid
               ariaLabel="单品净投产趋势折线图"
               labels={labels}
               formatValue={(v) => v.toFixed(2)}
