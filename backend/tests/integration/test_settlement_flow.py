@@ -900,6 +900,60 @@ class TestSettlementRejected:
         finally:
             tenant_id_ctx.reset(token)
 
+    async def test_inactive_promotion_reject_conflicts_with_own_code(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        factory: Any,
+        pr_role: Any,
+        finance_role: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        settlement_factory: Any,
+        cross_unit_event_bus: None,
+    ) -> None:
+        """收尾 L3 兜底：推广单已停用（停用门之前的历史数据）+ 结款单待财务付款 → 409 ``PROMOTION_INACTIVE``，
+        不再报「推广单不在待财务付款」；两边都不变。"""
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            pr = await factory.user(tenant_a, roles=[pr_role])
+            finance = await factory.user(tenant_a, roles=[finance_role])
+            style = await product_factory.style()
+            blogger = await blogger_factory.blogger()
+            promotion = await promotion_factory.promotion(
+                style=style,
+                blogger=blogger,
+                pr=pr,
+                publish_status="已发布",
+                settlement_status="待付款",
+                is_active=False,
+            )
+            s = await settlement_factory.settlement(
+                style=style,
+                blogger=blogger,
+                promotion=promotion,
+                settlement_status="待财务付款",
+                payment_amount=Decimal("500.00"),
+            )
+            sid, pid = s.id, promotion.id
+            await session.commit()
+            with pytest.raises(AppException) as exc_info:
+                await SettlementService(session).review(sid, _REJECT, finance)
+            assert exc_info.value.status_code == 409
+            assert exc_info.value.code == "PROMOTION_INACTIVE"
+            assert exc_info.value.message == "推广单已停用，不能驳回结款单"
+            assert exc_info.value.details == {
+                "promotion_id": str(pid),
+                "settlement_id": str(sid),
+            }
+            await session.rollback()
+            assert await _status(session, sid) == "待财务付款"
+            assert await _promotion_status(session, pid) == "待付款"
+            assert await _events(session, pid, LineEventType.SETTLEMENT_REJECTED) == []
+        finally:
+            tenant_id_ctx.reset(token)
+
     async def test_missing_listener_raises_and_settlement_unchanged(
         self,
         session: AsyncSession,

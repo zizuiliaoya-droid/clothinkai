@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.events import subscribe
@@ -26,7 +27,8 @@ from app.modules.finance.enums import SettlementStatus as SettlementDocStatus
 from app.modules.finance.events import SettlementPaid, SettlementRejected
 from app.modules.flow.line_events import LineEventRepository, LineEventType
 from app.modules.promotion.enums import SettlementStatus
-from app.modules.promotion.exceptions import StateTransitionConflictError
+from app.modules.promotion.exceptions import PromotionInactiveError, StateTransitionConflictError
+from app.modules.promotion.models import Promotion
 from app.modules.promotion.repository import PromotionRepository
 from app.modules.promotion.state_machines import SettlementStatusMachine
 
@@ -68,7 +70,8 @@ async def on_settlement_rejected(event: SettlementRejected, session: AsyncSessio
     """财务驳回结款单（F5）→ 推广单 待付款 → 结款驳回（R6，流程线 3.4、7.5）。
 
     强一致（与 ``on_settlement_paid`` 不同）：条件 UPDATE ``WHERE settlement_status = '待付款'``，
-    0 行（推广单不在待付款，例如导入来的结款单）→ 409 ``PROMOTION_STATE_CONFLICT`` 冒泡，结款单一起回滚。
+    0 行（推广单不在待付款，例如导入来的结款单）→ 409 ``PROMOTION_STATE_CONFLICT`` 冒泡，结款单一起回滚；
+    推广单已停用（停用门之前的历史数据，收尾 L3）→ 409 ``PROMOTION_INACTIVE``。
     同事务写 ``settlement.rejected``（驳回原因进 note，from / to 记结款单状态）；不 commit、不吞异常。
     """
     SettlementStatusMachine.assert_can_transition(
@@ -84,12 +87,24 @@ async def on_settlement_rejected(event: SettlementRejected, session: AsyncSessio
         to_state_value=SettlementStatus.SETTLEMENT_REJECTED.value,
     )
     if updated is None:
+        details = {
+            "promotion_id": str(event.promotion_id),
+            "settlement_id": str(event.settlement_id),
+        }
+        # 收尾 L3 兜底：0 行再读一次停用标记（直接查列，不走身份映射）；停用的单单独报
+        is_active = (
+            await session.execute(
+                select(Promotion.is_active).where(
+                    Promotion.id == event.promotion_id,
+                    Promotion.tenant_id == event.tenant_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if is_active is False:
+            raise PromotionInactiveError(details=details)
         raise StateTransitionConflictError(
             "推广单不在待财务付款，不能驳回这张结款单",
-            details={
-                "promotion_id": str(event.promotion_id),
-                "settlement_id": str(event.settlement_id),
-            },
+            details=details,
         )
     await LineEventRepository(session).append(
         tenant_id=event.tenant_id,

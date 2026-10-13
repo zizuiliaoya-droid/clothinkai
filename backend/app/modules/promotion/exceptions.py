@@ -292,6 +292,30 @@ class StateTransitionConflictError(IllegalStateTransitionError):
     status_code = 409
 
 
+class PromotionInactiveError(StateTransitionConflictError):
+    """财务驳回结款单时推广单已停用（流程线 PR-6 收尾 L3 兜底）。
+
+    停用门（``PromotionSettlementInProgressError``）之后正常到不了，只可能是之前停用的历史数据。
+    推广单的条件 UPDATE 带 ``is_active = true``，停用的单驳不掉；单独给个码，不再报「推广单不在待财务付款」。
+    """
+
+    code = "PROMOTION_INACTIVE"
+    status_code = 409
+    message = "推广单已停用，不能驳回结款单"
+
+
+class PromotionSettlementInProgressError(AppException):
+    """停用推广单时它的结款单还在进行中（待付款 / 待财务付款，流程线 PR-6 收尾 L3）。
+
+    停用后推广单的状态 UPDATE 都带 ``is_active = true``，结款单就只能付款、驳不掉；先让财务驳回再停。
+    ``details``：``{"settlement_no": 结算单号, "settlement_status": 结款单状态}``。
+    """
+
+    code = "PROMOTION_SETTLEMENT_IN_PROGRESS"
+    status_code = 409
+    message = "这张推广单有进行中的结款单，请先让财务驳回结款单再停用"
+
+
 # ---------------------------------------------------------------------------
 # 重复检测（warning，非阻塞）
 # ---------------------------------------------------------------------------
@@ -324,8 +348,10 @@ __all__ = [
     "InvalidStyleReferenceError",
     "MetricsNotAvailableYetError",
     "MetricsScreenshotRequiredError",
+    "PromotionInactiveError",
     "PromotionInternalCodeConflictError",
     "PromotionNotFoundError",
+    "PromotionSettlementInProgressError",
     "PublishDateInFutureError",
     "PublishUrlRequiredError",
     "RetroContentMissingError",
