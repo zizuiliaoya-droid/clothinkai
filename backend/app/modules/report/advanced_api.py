@@ -29,6 +29,7 @@ from app.modules.report.advanced_schemas import (
     StoreReport,
     TargetCreate,
     TargetWithActual,
+    WorkProgressGoodsPage,
 )
 from app.modules.report.deps import (
     ProductionServiceDep,
@@ -91,6 +92,41 @@ async def get_work_progress(
         seasons=season,
         scope=scope,
         field_ctx=await build_field_perm_context(user.id, session),
+    )
+
+
+@router.get(
+    "/work-progress/goods",
+    response_model=WorkProgressGoodsPage,
+    dependencies=[require_any_permission(_WP_READ, REPORT_WORK_PROGRESS_READ_OWN)],
+)
+async def get_work_progress_goods(
+    user: CurrentActiveUser,
+    perms: CurrentPerms,
+    session: SessionDep,
+    service: WorkProgressServiceDep,
+    preset: _PresetQ = "this_month",
+    date_from: _FromQ = None,
+    date_to: _ToQ = None,
+    season: Annotated[list[str] | None, Query(description="季节多选，≤ 20 个")] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 12,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> WorkProgressGoodsPage:
+    """工作进度单品卡片（7e R5）：区间 + 季节，按归属商品聚合、分页。
+
+    权限与只看本人同 PR 表（不收 ``pr_id``）；没归属商品的单在 ``unassigned``。
+    """
+    lo, hi = resolve_time_range(preset, date_from, date_to)
+    scope = resolve_pr_scope(perms, user.id, None, _WP_READ[0])
+    return await service.get_goods(
+        user.tenant_id,
+        lo,
+        hi,
+        seasons=season,
+        scope=scope,
+        field_ctx=await build_field_perm_context(user.id, session),
+        limit=limit,
+        offset=offset,
     )
 
 

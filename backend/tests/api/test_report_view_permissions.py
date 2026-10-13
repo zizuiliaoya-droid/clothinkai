@@ -224,6 +224,52 @@ class TestWorkProgress:
         ]
         assert other.json() == []
 
+    async def test_goods_route_defaults(self, session: AsyncSession, seeded: Any) -> None:
+        """单品卡片（7e R5）：默认 ``limit`` 12、``offset`` 0；seeded 的单都没归属商品 → 只有信封里的未归属。"""
+        resp = await _call(
+            session,
+            seeded.finance,
+            "GET",
+            f"{_WP}/goods?preset=custom&date_from={_M_LO}&date_to={_M_HI}",
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert (body["items"], body["total"], body["limit"], body["offset"]) == ([], 0, 12, 0)
+        assert (body["date_from"], body["date_to"]) == (str(_M_LO), str(_M_HI))
+        assert body["unassigned"]["display_name"] == "未归属商品"
+        assert body["unassigned"]["quote_count"] == 4
+        assert "goods_code" not in body["unassigned"]
+
+    @pytest.mark.parametrize("query", ["limit=101", "limit=0", "offset=-1"])
+    async def test_goods_paging_422(
+        self, session: AsyncSession, flow_users: Any, query: str
+    ) -> None:
+        resp = await _call(session, flow_users.pr_manager, "GET", f"{_WP}/goods?{query}")
+        assert resp.status_code == 422, resp.text
+
+    async def test_goods_limit_100_ok(self, session: AsyncSession, flow_users: Any) -> None:
+        resp = await _call(session, flow_users.pr_manager, "GET", f"{_WP}/goods?limit=100")
+        assert resp.status_code == 200, resp.text
+
+    async def test_goods_warehouse_forbidden(self, session: AsyncSession, flow_users: Any) -> None:
+        resp = await _call(session, flow_users.warehouse, "GET", f"{_WP}/goods")
+        assert (resp.status_code, resp.json()["code"]) == (403, "PERMISSION_DENIED")
+
+    async def test_goods_requires_login(self, session: AsyncSession) -> None:
+        from app.core.db import get_session
+        from app.main import app
+
+        async def _session_override() -> AsyncIterator[AsyncSession]:
+            yield session
+
+        app.dependency_overrides[get_session] = _session_override
+        try:
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+                resp = await c.get(f"{_WP}/goods")
+        finally:
+            app.dependency_overrides.pop(get_session, None)
+        assert resp.status_code == 401
+
     @pytest.mark.parametrize("role", ["pr", "finance", "pr_manager"])
     async def test_season_options_open_to_work_progress_readers(
         self, session: AsyncSession, flow_users: Any, role: str

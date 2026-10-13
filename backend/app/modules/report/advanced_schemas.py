@@ -72,6 +72,34 @@ class PrWorkProgress(WorkProgressMetrics):
     pr_name: str
 
 
+class WorkProgressGoodsRow(WorkProgressMetrics):
+    """单品卡片的一行（7e R5）。**不返回商品编码**：页面靠显示名认商品。
+
+    「未归属商品」行：``goods_id`` / ``goods_title`` / ``goods_short_name`` 都是 null。
+    """
+
+    goods_id: UUID | None = None
+    goods_title: str | None = None
+    goods_short_name: str | None = None
+    display_name: str
+    """显示名：有简称用简称，没填回落全称；未归属 =「未归属商品」。"""
+
+
+class WorkProgressGoodsPage(BaseModel):
+    """单品卡片 / 「查看全部」的一页。``items`` 与 ``total`` 只含有归属的商品；
+
+    没归属商品的单汇成 ``unassigned``（没选季节且有这类单时才有），前端放在最后一页末尾。
+    """
+
+    date_from: date
+    date_to: date
+    total: int
+    limit: int
+    offset: int
+    items: list[WorkProgressGoodsRow]
+    unassigned: WorkProgressGoodsRow | None = None
+
+
 # ----------------------------- 下钻单据 ----------------------------- #
 
 

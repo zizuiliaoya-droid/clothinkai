@@ -13,6 +13,7 @@ from collections.abc import Callable, Hashable, Iterable, Mapping
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, TypeVar
 
+from app.modules.report.advanced_schemas import WorkProgressGoodsRow
 from app.modules.report.summary_models import PR_PROGRESS_METRICS
 from app.services.metric.common import safe_div
 
@@ -119,4 +120,12 @@ def sum_progress_rows(
     return out
 
 
-__all__ = ["progress_metrics", "sum_progress_rows"]
+def goods_sort_key(row: WorkProgressGoodsRow) -> tuple[int, str, int]:
+    """单品卡片的排序（设计 2.5）：约稿量降序 → 显示名 → 商品 id 兜底。
+
+    id 按 UUID 数值比（与 PostgreSQL 的 uuid 比较同序）；两条路径的行序不同，都靠这一处排。
+    """
+    return (-row.quote_count, row.display_name, row.goods_id.int if row.goods_id else -1)
+
+
+__all__ = ["goods_sort_key", "progress_metrics", "sum_progress_rows"]
