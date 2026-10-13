@@ -649,6 +649,109 @@ class TestBi:
         assert resp.json()["exclude_brushing"] is True
 
 
+# ------------------------- BI 个人版（7e R6，Q16） ------------------------- #
+
+_BI_PERSONAL = f"{_BI}/personal?{_BI_RANGE}"
+# 手写白名单：只有计数与进度，不含任何金额（设计 2.6 / 第 8 节「个人版响应键集合 = 白名单」）
+_PERSONAL_KEYS = {
+    "date_from",
+    "date_to",
+    "pr_name",
+    "target_count",
+    "quote_count",
+    "quote_progress",
+    "publish_count",
+    "publish_progress",
+    "unpublished_count",
+    "cancel_count",
+    "overdue_count",
+}
+
+
+@pytest.fixture
+async def personal_seeded(
+    session: AsyncSession,
+    bi_seeded: Any,
+    product_factory: Any,
+    blogger_factory: Any,
+    promotion_factory: Any,
+) -> Any:
+    """在 ``bi_seeded``（pr 三单）之上：pr 的月目标 6 篇、pr2 一单已发布（不该算进 pr）。"""
+    from app.modules.report.work_progress_models import TargetPlanning
+
+    style = await product_factory.style(style_code=f"BP{uuid4().hex[:8]}")
+    session.add(
+        TargetPlanning(
+            tenant_id=bi_seeded.tenant.id,
+            pr_id=bi_seeded.pr.id,
+            style_id=style.id,
+            period_month=_MONTH,
+            min_target=6,
+        )
+    )
+    await promotion_factory.promotion(
+        style=style,
+        blogger=await blogger_factory.blogger(),
+        pr=bi_seeded.pr2,
+        internal_code=f"BP{uuid4().hex[:10].upper()}",
+        cooperation_date=_M_LO + timedelta(days=5),
+        quote_amount=Decimal("99.00"),
+        publish_status="已发布",
+    )
+    await session.flush()
+    return bi_seeded
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+class TestBiPersonal:
+    async def test_pr_whitelist_own_counts(
+        self, session: AsyncSession, personal_seeded: Any
+    ) -> None:
+        pr = personal_seeded.pr
+        resp = await _call(session, pr, "GET", _BI_PERSONAL)
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert set(body) == _PERSONAL_KEYS
+        # 计数 = 本人工作进度那一行（pr2 的单不算）；目标篇数读月目标
+        wp = await _call(
+            session, pr, "GET", f"{_WP}?preset=custom&date_from={_M_LO}&date_to={_M_HI}"
+        )
+        (own,) = wp.json()
+        assert own["pr_id"] == str(pr.id)
+        for key in (
+            "pr_name",
+            "quote_count",
+            "publish_count",
+            "unpublished_count",
+            "cancel_count",
+            "overdue_count",
+        ):
+            assert body[key] == own[key], key
+        assert (body["date_from"], body["date_to"]) == (str(_M_LO), str(_M_HI))
+        assert (body["target_count"], body["quote_count"], body["publish_count"]) == (6, 3, 1)
+        assert (body["unpublished_count"], body["cancel_count"]) == (1, 1)
+        assert (body["quote_progress"], body["publish_progress"]) == ("0.5000", "0.3333")
+
+    async def test_admin_without_promotions_zeros(
+        self, session: AsyncSession, personal_seeded: Any
+    ) -> None:
+        """管理员靠 ``*`` 能调；个人版恒为本人，本人一单都没有 → 计数全 0、进度 null。"""
+        admin = personal_seeded.admin
+        resp = await _call(session, admin, "GET", _BI_PERSONAL)
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert set(body) == _PERSONAL_KEYS
+        assert body["pr_name"] == (admin.display_name or admin.username)
+        assert [body[k] for k in sorted(_PERSONAL_KEYS) if k.endswith("_count")] == [0] * 6
+        assert (body["quote_progress"], body["publish_progress"]) == (None, None)
+
+    @pytest.mark.parametrize("role", ["pr_manager", "finance", "operations", "warehouse"])
+    async def test_forbidden(self, session: AsyncSession, flow_users: Any, role: str) -> None:
+        """``report.*:read`` / ``report.bi:read`` 都捞不到 ``read_own``：完整版的人不走个人版。"""
+        resp = await _call(session, getattr(flow_users, role), "GET", _BI_PERSONAL)
+        assert (resp.status_code, resp.json()["code"]) == (403, "PERMISSION_DENIED")
+
+
 # ------------------- BI 单品日趋势与笔记散点（7e R6，设计 2.6） ------------------- #
 
 _RECORDED = datetime(2026, 1, 1, tzinfo=UTC)

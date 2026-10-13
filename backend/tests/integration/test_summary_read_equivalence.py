@@ -3210,6 +3210,59 @@ class TestBiDashboard:
             tenant_id_ctx.reset(tok)
 
 
+class TestBiPersonal:
+    """PR 个人版（7e R6，Q16）：范围本人，两路逐字等。"""
+
+    async def test_summary_equals_live(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        factory: Any,
+        recorder: _SourceRecorder,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            seeded = await _seed_bi(
+                session, tenant_a, product_factory, blogger_factory, promotion_factory, factory
+            )
+            pr1 = seeded["pr1"]
+            svc = BiService(session)
+            kwargs: dict[str, Any] = {"pr_name": "兜底名", "field_ctx": _SUPER_CTX}
+            via_summary = await svc.get_personal(tenant_a.id, pr1.id, (M_LO, M_HI), **kwargs)
+            assert recorder.calls == [("bi_personal", "summary")]
+
+            monkeypatch.setattr(settings, "REPORT_SUMMARY_READS_ENABLED", False)
+            via_live = await svc.get_personal(tenant_a.id, pr1.id, (M_LO, M_HI), **kwargs)
+            assert recorder.calls[1:] == [("bi_personal", "live")]
+            assert _dump(via_summary) == _dump(via_live)
+
+            # 场景有效性：每个数值字段都非零；计数 = 本人那一行，名字取自数据而不是兜底
+            values: dict[str, list[Any]] = {}
+            _numeric_values(via_summary, "", values)
+            dead = sorted(p for p, vs in values.items() if not any(v not in (None, 0) for v in vs))
+            assert dead == [], f"这些字段全是 0 / None，场景失效：{dead}"
+            (own,) = await WorkProgressService(session).get_for_range(
+                tenant_a.id,
+                M_LO,
+                M_HI,
+                seasons=None,
+                scope=PrScope(PrScopeKind.PR, pr1.id),
+                field_ctx=_SUPER_CTX,
+            )
+            assert (via_summary.quote_count, via_summary.overdue_count) == (
+                own.quote_count,
+                own.overdue_count,
+            )
+            assert via_summary.target_count == 8
+            assert via_summary.pr_name == own.pr_name != "兜底名"
+        finally:
+            tenant_id_ctx.reset(tok)
+
+
 class TestFreshness:
     async def test_fully_covered_reads_summary_with_oldest_refresh_time(
         self, session: AsyncSession, tenant_a: Any

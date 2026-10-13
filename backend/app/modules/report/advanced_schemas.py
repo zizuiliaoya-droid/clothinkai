@@ -590,6 +590,27 @@ class BiGoodsNotes(BaseModel):
     points: list[BiNotePoint]
 
 
+class BiPersonal(BaseModel):
+    """``GET /api/reports/bi/personal``（7e R6，Q16）：PR 个人版，只有本人的计数与进度。
+    独立白名单，**不含任何金额**：不是在完整响应上置空（新加的金额列不会悄悄漏出来）。
+    「推广篇数」= 约稿 / 发布 / 未发布 / 取消四个计数，不另设字段。
+    """
+
+    date_from: date
+    date_to: date
+    pr_name: str
+    target_count: int
+    quote_count: int
+    quote_progress: Decimal | None = None
+    """约稿进度 = 约稿量 ÷ 目标篇数（目标为 0 → null）。"""
+    publish_count: int
+    publish_progress: Decimal | None = None
+    """发布进度 = 发布量 ÷ 约稿量。"""
+    unpublished_count: int
+    cancel_count: int
+    overdue_count: int
+
+
 __all__ = [
     "BiChartDatum",
     "BiDashboard",
@@ -597,6 +618,7 @@ __all__ = [
     "BiGoodsNotes",
     "BiGoodsRow",
     "BiNotePoint",
+    "BiPersonal",
     "BiPromotionSummary",
     "BiStoreBlock",
     "BiStoreSummary",

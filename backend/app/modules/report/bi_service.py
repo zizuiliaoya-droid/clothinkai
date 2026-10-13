@@ -26,6 +26,7 @@ from app.modules.report.advanced_schemas import (
     BiGoodsNotes,
     BiGoodsRow,
     BiNotePoint,
+    BiPersonal,
     BiPromotionSummary,
     BiStoreBlock,
     BiStoreSummary,
@@ -41,7 +42,7 @@ from app.modules.report.field_mask import (
     aggregate_promo_amounts_visible,
     promotion_amounts_visible,
 )
-from app.modules.report.pr_scope import PR_SCOPE_ALL
+from app.modules.report.pr_scope import PR_SCOPE_ALL, PrScope, PrScopeKind
 from app.modules.report.production_service import ProductionService
 from app.modules.report.store_buckets import bucket_store_rows, total_store_row
 from app.modules.report.store_daily_service import StoreDailyService
@@ -220,6 +221,51 @@ class BiService:
                 )
                 for r in reversed(rows)
             ],
+        )
+
+    async def get_personal(
+        self,
+        tenant_id: UUID,
+        user_id: UUID,
+        time_range: tuple[date, date],
+        *,
+        pr_name: str,
+        field_ctx: FieldPermissionContext,
+    ) -> BiPersonal:
+        """PR 个人版（Q16）：本人的工作进度计数 + 目标篇数，按 ``BiPersonal`` 白名单逐字段取。
+        范围恒为本人（``PrScope(PR, user_id)``，下推到 SQL）；读源由工作进度自己判。
+        区间里本人一单都没有时，计数全 0，``pr_name`` 用调用方给的（登录用户的显示名）。
+        ``field_ctx`` 只为满足工作进度入口的必填参数：个人版不拷任何金额列。
+        """
+        date_from, date_to = time_range
+        rows = await self._work.get_for_range(
+            tenant_id,
+            date_from,
+            date_to,
+            seasons=None,
+            scope=PrScope(PrScopeKind.PR, user_id),
+            field_ctx=field_ctx,
+            label="bi_personal",
+        )
+        targets = await self._targets.targets_by_pr(
+            tenant_id=tenant_id, date_from=date_from, date_to=date_to
+        )
+        target = targets.get(user_id, 0)
+        row = rows[0] if rows else None
+        quote = row.quote_count if row else 0
+        publish = row.publish_count if row else 0
+        return BiPersonal(
+            date_from=date_from,
+            date_to=date_to,
+            pr_name=row.pr_name if row else pr_name,
+            target_count=target,
+            quote_count=quote,
+            quote_progress=safe_div(quote, target, quantize=_Q4),
+            publish_count=publish,
+            publish_progress=safe_div(publish, quote, quantize=_Q4),
+            unpublished_count=row.unpublished_count if row else 0,
+            cancel_count=row.cancel_count if row else 0,
+            overdue_count=row.overdue_count if row else 0,
         )
 
     @staticmethod
