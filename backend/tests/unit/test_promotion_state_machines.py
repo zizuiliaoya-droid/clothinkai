@@ -97,6 +97,20 @@ class TestSettlementStatusMachine:
             (SettlementStatus.PENDING_REVIEW, SettlementStatus.REJECTED, "reject"),
             (SettlementStatus.REJECTED, SettlementStatus.PENDING_REVIEW, "resubmit"),
             (SettlementStatus.PENDING_PAYMENT, SettlementStatus.PAID, "mark_paid"),
+            # 流程线 3.4：R3 / R2 ⑥ / R6 / R7 / R9
+            (SettlementStatus.PENDING_REVIEW, SettlementStatus.SETTLED, "approve_no_payment"),
+            (SettlementStatus.PENDING_REVIEW, SettlementStatus.PAID, "approve_imported_paid"),
+            (
+                SettlementStatus.PENDING_PAYMENT,
+                SettlementStatus.SETTLEMENT_REJECTED,
+                "settlement_reject",
+            ),
+            (
+                SettlementStatus.SETTLEMENT_REJECTED,
+                SettlementStatus.PENDING_PAYMENT,
+                "settlement_resubmit",
+            ),
+            (SettlementStatus.PAID, SettlementStatus.SETTLED, "settle_chat"),
         ],
     )
     def test_legal_transitions(
@@ -107,9 +121,35 @@ class TestSettlementStatusMachine:
     ) -> None:
         SettlementStatusMachine.assert_can_transition(from_state, to_state, action)
 
-    def test_paid_is_terminal(self) -> None:
+    def test_seven_values(self) -> None:
+        assert [s.value for s in SettlementStatus] == [
+            "未核查",
+            "待核查",
+            "待付款",
+            "已付款",
+            "已驳回",
+            "结款驳回",
+            "已结款",
+        ]
+
+    def test_paid_only_goes_to_settled_by_chat(self) -> None:
         actions = SettlementStatusMachine.get_allowed_transitions(SettlementStatus.PAID)
-        assert actions == []
+        assert actions == [("settle_chat", "已结款")]
+
+    def test_settled_is_terminal(self) -> None:
+        assert SettlementStatusMachine.get_allowed_transitions(SettlementStatus.SETTLED) == []
+
+    def test_old_barter_action_retired(self) -> None:
+        # 置换不再到已付款：approve_barter 改名 approve_no_payment，目标改为已结款（R3）
+        with pytest.raises(IllegalStateTransitionError):
+            SettlementStatusMachine.assert_can_transition(
+                SettlementStatus.PENDING_REVIEW, SettlementStatus.PAID, "approve_barter"
+            )
+
+    def test_settlement_rejected_only_resubmits(self) -> None:
+        assert SettlementStatusMachine.get_allowed_transitions(
+            SettlementStatus.SETTLEMENT_REJECTED
+        ) == [("settlement_resubmit", "待付款")]
 
     def test_not_reviewed_cannot_directly_approve(self) -> None:
         with pytest.raises(IllegalStateTransitionError):

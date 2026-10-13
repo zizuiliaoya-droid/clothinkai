@@ -565,7 +565,7 @@ class TestReview:
         ops = {e.event_type: e for e in (await svc.read(line_id, flow_users.operations)).events}
         assert ops["review.approved"].payload == {"destination": "待付款"}
 
-    async def test_barter_approve_goes_paid(
+    async def test_barter_approve_goes_settled(
         self,
         session: AsyncSession,
         flow_users: Any,
@@ -589,8 +589,8 @@ class TestReview:
         )
         (approved,) = await events_of(session, line_id=line_id)
         assert approved.event_type == _T.REVIEW_APPROVED.value
-        assert approved.to_state == "已付款"
-        assert approved.payload == {"destination": "已付款", "payable": "0.00"}
+        assert approved.to_state == "已结款"
+        assert approved.payload == {"destination": "已结款", "payable": "0.00"}
 
     async def test_reject_then_resubmit(
         self,

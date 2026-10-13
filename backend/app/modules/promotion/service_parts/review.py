@@ -97,9 +97,9 @@ class PromotionReviewMixin(PromotionServiceBase):
                     },
                 )
             if is_barter:
-                # 置换没有博主服务费，审核通过即结清，跳过待付款与财务付款
-                to_state = SettlementStatus.PAID.value
-                action_name = "approve_barter"
+                # 置换没有博主服务费，审核通过即结清（R3 → 已结款），跳过待付款与财务付款
+                to_state = SettlementStatus.SETTLED.value
+                action_name = "approve_no_payment"
             else:
                 to_state = SettlementStatus.PENDING_PAYMENT.value
                 action_name = "approve"
@@ -190,7 +190,7 @@ class PromotionReviewMixin(PromotionServiceBase):
         )
 
         # 审核通过且需要付款时才发强一致事件（FB1）。
-        # 置换直接到已付款，不建结款单 —— 发了 finance 会多出一堆金额为 0 的单子。
+        # 置换直接到已结款，不建结款单 —— 发了 finance 会多出一堆金额为 0 的单子。
         if payload.action == ReviewAction.APPROVE and not is_barter:
             event = SettlementRequested(
                 event_id=uuid4(),

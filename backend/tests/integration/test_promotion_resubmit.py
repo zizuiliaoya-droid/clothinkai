@@ -461,7 +461,7 @@ class TestResubmit:
         ("cooperation_mode", "approve_reason", "expected_status"),
         [
             (None, None, "待付款"),
-            ("置换", None, "已付款"),
+            ("置换", None, "已结款"),
             # 接口允许通过时带说明（前端不传）：同样不覆盖上一轮的驳回说明
             (None, "通过备注", "待付款"),
         ],
@@ -518,7 +518,7 @@ class TestResubmit:
             settlement_events = [
                 e.promotion_id for e in event_capture if e.event_type == "SettlementRequested"
             ]
-            assert settlement_events == ([] if expected_status == "已付款" else [ctx.promotion.id])
+            assert settlement_events == ([] if expected_status == "已结款" else [ctx.promotion.id])
 
             row = await _reload(session, ctx.promotion.id)
             assert row.settlement_status == expected_status

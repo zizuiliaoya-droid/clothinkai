@@ -6,7 +6,7 @@
 4 个状态机：
 1. ``PublishStatusMachine`` — publish_status (5 状态)
 2. ``RecallStatusMachine`` — recall_status (4 状态)
-3. ``SettlementStatusMachine`` — settlement_status (5 状态)
+3. ``SettlementStatusMachine`` — settlement_status (7 状态，流程线 3.4 R1 ~ R9)
 4. ``RetroStatusMachine`` — retro_status (4 状态，PRD V1.4 改动 4)
 
 业务前置校验通过 ``assert_can_transition()`` classmethod 触发友好错误；
@@ -294,7 +294,7 @@ class SettlementStatusMachine:
             to_state=SettlementStatus.PENDING_REVIEW.value,
             actor_roles=(_ROLE_SYSTEM,),
         ),
-        # 待核查 → 待付款（寄拍 / 送拍：有博主服务费要付）
+        # R2 待核查 → 待付款（应付 > 0：结款单直接建在待付款）
         TransitionRule(
             from_state=SettlementStatus.PENDING_REVIEW.value,
             action="approve",
@@ -302,14 +302,20 @@ class SettlementStatusMachine:
             actor_roles=(_ROLE_PR_MANAGER, _ROLE_ADMIN),
             side_effects=("emit_settlement_requested",),
         ),
-        # 待核查 → 已付款（置换：以货换推广，没有钱要付）
+        # R3 待核查 → 已结款（应付 = 0：置换恒为 0，寄拍 / 送拍服务费为 0 的同样走这里）
         #
-        # PRD 模块二硬约束：置换审核通过直接到「已结款」，跳过待财务付款、财务付款、
-        # PR 通知博主整套流程。这里刻意不发 SettlementRequested —— 发了 finance 会建一张
-        # 金额为 0 的结款单，财务侧多出一堆不需要处理的单子。
+        # 刻意不发 SettlementRequested —— 发了 finance 会建一张金额为 0 的结款单，
+        # 财务侧多出一堆不需要处理的单子。
         TransitionRule(
             from_state=SettlementStatus.PENDING_REVIEW.value,
-            action="approve_barter",
+            action="approve_no_payment",
+            to_state=SettlementStatus.SETTLED.value,
+            actor_roles=(_ROLE_PR_MANAGER, _ROLE_ADMIN),
+        ),
+        # R2 ⑥ 待核查 → 已付款（这张单已有 Excel 导入的已付款结款单：不发事件，等 R9）
+        TransitionRule(
+            from_state=SettlementStatus.PENDING_REVIEW.value,
+            action="approve_imported_paid",
             to_state=SettlementStatus.PAID.value,
             actor_roles=(_ROLE_PR_MANAGER, _ROLE_ADMIN),
         ),
@@ -328,12 +334,35 @@ class SettlementStatusMachine:
             to_state=SettlementStatus.PENDING_REVIEW.value,
             actor_roles=(_ROLE_PR, _ROLE_SYSTEM),
         ),
-        # 待付款 → 已付款（U05 反向通知）
+        # R8 待付款 → 已付款（U05 反向通知）
         TransitionRule(
             from_state=SettlementStatus.PENDING_PAYMENT.value,
             action="mark_paid",
             to_state=SettlementStatus.PAID.value,
             actor_roles=(_ROLE_FINANCE, _ROLE_ADMIN, _ROLE_SYSTEM),
+        ),
+        # R6 待付款 → 结款驳回（SettlementRejected 的监听，与财务驳回同一事务）
+        TransitionRule(
+            from_state=SettlementStatus.PENDING_PAYMENT.value,
+            action="settlement_reject",
+            to_state=SettlementStatus.SETTLEMENT_REJECTED.value,
+            actor_roles=(_ROLE_SYSTEM,),
+        ),
+        # R7 结款驳回 → 待付款（PR 重提结款，同事务发 SettlementResubmitted）
+        TransitionRule(
+            from_state=SettlementStatus.SETTLEMENT_REJECTED.value,
+            action="settlement_resubmit",
+            to_state=SettlementStatus.PENDING_PAYMENT.value,
+            actor_roles=(_ROLE_PR, _ROLE_PR_MANAGER, _ROLE_ADMIN),
+            required_fields=("note",),
+        ),
+        # R9 已付款 → 已结款（PR 上传结款聊天截图）
+        TransitionRule(
+            from_state=SettlementStatus.PAID.value,
+            action="settle_chat",
+            to_state=SettlementStatus.SETTLED.value,
+            actor_roles=(_ROLE_PR, _ROLE_PR_MANAGER, _ROLE_ADMIN),
+            required_fields=("settlement_chat_attachment_id",),
         ),
     )
 

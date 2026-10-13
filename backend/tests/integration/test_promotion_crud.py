@@ -1293,7 +1293,7 @@ class TestThreeModeReviewFlow:
         finally:
             tenant_id_ctx.reset(token)
 
-    async def test_barter_jumps_to_paid_without_settlement(
+    async def test_barter_jumps_to_settled_without_settlement(
         self,
         session: AsyncSession,
         tenant_a: Any,
@@ -1303,7 +1303,7 @@ class TestThreeModeReviewFlow:
         blogger_factory: Any,
         cross_unit_event_bus: Any,
     ) -> None:
-        """置换审核通过直接到已付款，且**不建结款单**。
+        """置换审核通过直接到已结款（R3），且**不建结款单**。
 
         PRD：置换没有博主服务费，跳过待财务付款、财务付款、PR 通知博主整套流程。
         发 SettlementRequested 会让 finance 多出一张金额 0 的单子，所以这里连事件都不发。
@@ -1328,7 +1328,7 @@ class TestThreeModeReviewFlow:
                 PromotionReviewRequest(action=ReviewAction.APPROVE),
                 reviewer,
             )
-            assert reviewed.settlement_status == "已付款"
+            assert reviewed.settlement_status == "已结款"
             # 置换的服务费本来就是 0
             assert reviewed.quote_amount == Decimal("0.00")
 
