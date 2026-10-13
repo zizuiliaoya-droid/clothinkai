@@ -21,7 +21,7 @@ from app.modules.metric_config.models import PromotionPlatformSetting
 
 _TABLE = "promotion_platform_setting"
 _APP_ROLE = "clothing_app"
-# 设计 2.7 / 2.8 的默认值（系数 = 旧 PLATFORM_LIKE_COEFFICIENT，阈值 = 抖音 10000、其余 1000）
+# 设计 2.7 / 2.8 的默认值（系数 = 原来写死的折算常量，阈值 = 抖音 10000、其余 1000）
 _DEFAULTS = {
     "小红书": (Decimal("1.000"), 1000),
     "抖音": (Decimal("0.100"), 10000),

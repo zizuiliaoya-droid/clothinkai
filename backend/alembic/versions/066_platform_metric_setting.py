@@ -3,7 +3,7 @@
 - 新表 ``promotion_platform_setting``：每租户每平台一行，``like_coefficient``（点赞折算系数，numeric(6,3)，
   CHECK > 0 且 <= 10）、``hit_threshold``（爆文阈值，原始点赞，CHECK 1 ~ 10000000）、``updated_by``（→ user SET NULL）；
   唯一 ``(tenant_id, platform)``；RLS ENABLE + FORCE。
-- 每个现有租户插 5 行默认值：系数 = 旧常量 ``PLATFORM_LIKE_COEFFICIENT``（小红书 1、抖音 0.1、快手 0.1、B站 1、得物 1），
+- 每个现有租户插 5 行默认值：系数 = 原来写死在代码里的折算常量（小红书 1、抖音 0.1、快手 0.1、B站 1、得物 1），
   上线时折算点赞数字不变；阈值小红书 / 快手 / B站 / 得物 1000、抖音 10000。缺行时读取侧回落默认、不报错。
 - 权限：``metric_config:read``（pr_manager、operations）、``metric_config:write``（pr_manager），管理员靠 ``*``。
   独立一级域：挂在 ``promotion.`` 下会被 PR 的 ``promotion.*:*`` 命中，挂在 ``report.`` 下会被 ``report.*:read`` 捞走。
