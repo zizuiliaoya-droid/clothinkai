@@ -10,7 +10,9 @@ import {
 } from "@/components/ReportTimeRangeFilter/ReportTimeRangeFilter";
 import { getBiDashboard } from "@/features/report/api";
 import { GoodsAnalysisTab } from "@/features/report/bi/GoodsAnalysisTab";
+import { PersonalView } from "@/features/report/bi/PersonalView";
 import { StoreOverviewTab } from "@/features/report/bi/StoreOverviewTab";
+import { ReportForbidden } from "@/features/report/components/ReportForbidden";
 import { TIME_PRESETS, type ReportFilterSchema } from "@/features/report/reportFilters";
 import type { TimeGranularity, TimePreset } from "@/features/report/types";
 import { useReportCapabilities } from "@/features/report/useReportCapabilities";
@@ -83,12 +85,15 @@ export function BiDashboardPage() {
   const range = toDateRange(filters.date_from, filters.date_to);
 
   const { dateFrom, dateTo, enabled } = useReportTimeRange(preset, range);
-  const { data: caps } = useReportCapabilities();
+  const { data: caps, isError: capsError } = useReportCapabilities();
+  // 按 caps.bi 分版（7e R6）：full = 完整版；personal（只有 read_own）= 只渲染个人版、不请求 /bi；
+  // null = 无权限页。能力没回来前两个版本都不查，免得 PR 先打一次 /bi 拿 403。
+  const biCap = caps?.bi;
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ["bi-dashboard", preset, dateFrom, dateTo, granularity, excludeBrushing],
     // 等偏好回填完再查，避免先用默认值查一次、回填后又查一次。
-    enabled: enabled && ready,
+    enabled: enabled && ready && biCap === "full",
     queryFn: () =>
       getBiDashboard({
         preset,
@@ -101,30 +106,58 @@ export function BiDashboardPage() {
 
   const periodText = data ? `${data.date_from} 至 ${data.date_to}` : "";
 
-  return (
-    <Card
-      title={
-        <ReportCardTitle
-          title="BI 看板"
-          // 整页一次来源：区间每天都有汇总覆盖才读汇总表，否则显示「实时数据」
-          freshness={
-            <ReportFreshness
-              preset={preset}
-              dateFrom={dateFrom}
-              dateTo={dateTo}
-              enabled={enabled && ready}
-            />
-          }
+  if (caps === undefined) {
+    return capsError ? (
+      <Alert
+        type="error"
+        showIcon
+        message="BI 看板加载失败"
+        description="读取当前账号的报表权限失败，请刷新页面重试。"
+      />
+    ) : (
+      <Card title="BI 看板" loading />
+    );
+  }
+  if (biCap == null) return <ReportForbidden name="BI 看板" />;
+
+  const cardTitle = (
+    <ReportCardTitle
+      title="BI 看板"
+      // 整页一次来源：区间每天都有汇总覆盖才读汇总表，否则显示「实时数据」
+      freshness={
+        <ReportFreshness
+          preset={preset}
+          dateFrom={dateFrom}
+          dateTo={dateTo}
+          enabled={enabled && ready}
         />
       }
-    >
+    />
+  );
+  const rangeFilter = (
+    <ReportTimeRangeFilter
+      preset={preset}
+      onPresetChange={(v) => setFilters({ preset: v })}
+      range={range}
+      onRangeChange={(v) => setFilters(fromDateRange(v))}
+    />
+  );
+
+  if (biCap === "personal") {
+    return (
+      <Card title={cardTitle}>
+        <Space style={{ marginBottom: 16 }} wrap size={8}>
+          {rangeFilter}
+        </Space>
+        <PersonalView preset={preset} dateFrom={dateFrom} dateTo={dateTo} enabled={enabled && ready} />
+      </Card>
+    );
+  }
+
+  return (
+    <Card title={cardTitle}>
       <Space style={{ marginBottom: 8 }} wrap size={8}>
-        <ReportTimeRangeFilter
-          preset={preset}
-          onPresetChange={(v) => setFilters({ preset: v })}
-          range={range}
-          onRangeChange={(v) => setFilters(fromDateRange(v))}
-        />
+        {rangeFilter}
         <span>趋势粒度：</span>
         <Select<TimeGranularity>
           aria-label="BI 趋势粒度"

@@ -429,6 +429,26 @@ export interface BiGoodsNotes {
   points: BiNotePoint[];
 }
 
+/**
+ * GET /api/reports/bi/personal（7e R6，Q16）：PR 个人版，只有本人的计数与进度，不含任何金额。
+ * 「推广篇数」= 约稿 / 发布 / 未发布 / 取消四个计数，不另设字段。
+ */
+export interface BiPersonal {
+  date_from: string;
+  date_to: string;
+  pr_name: string;
+  target_count: number;
+  quote_count: number;
+  /** 约稿进度 = 约稿量 ÷ 目标篇数（目标为 0 → null）。 */
+  quote_progress: string | null;
+  publish_count: number;
+  /** 发布进度 = 发布量 ÷ 约稿量。 */
+  publish_progress: string | null;
+  unpublished_count: number;
+  cancel_count: number;
+  overdue_count: number;
+}
+
 /** GET /api/reports/bi（7e R6）：整页一次来源，店铺 / 单品两块。 */
 export interface BiDashboard {
   date_from: string;

@@ -4,6 +4,7 @@ import { apiClient } from "@/services/apiClient";
 import type {
   BiDashboard,
   BiGoodsNotes,
+  BiPersonal,
   DrillPromotionPage,
   DrillPromotionParams,
   ProductionReport,
@@ -217,6 +218,16 @@ export async function getBiGoodsNotes(
     `/api/reports/bi/goods/${encodeURIComponent(goodsId)}/notes`,
     { params }
   );
+  return resp.data;
+}
+
+/**
+ * BI PR 个人版（7e R6）：只要 `report.bi:read_own`，恒为本人、不含金额；查询键 ["bi-personal", …]。
+ */
+export async function getBiPersonal(
+  params: { preset?: string; date_from?: string; date_to?: string } = {}
+): Promise<BiPersonal> {
+  const resp = await apiClient.get<BiPersonal>("/api/reports/bi/personal", { params });
   return resp.data;
 }
 

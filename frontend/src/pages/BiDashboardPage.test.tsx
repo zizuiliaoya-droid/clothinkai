@@ -2,6 +2,7 @@
 // BI 看板（7e R1）：BI 改挂 report.bi:read 后，加载失败的提示要指向 BI 看板权限，不再是投产报表权限。
 // 7e R6 S7：Tab1 店铺总览（两张卡改名、无商品编码）、刷单开关、下钻按 capabilities（不能点有提示）、
 // 下钻链接带区间 / 刷单开关 / goods_id / pr_id（含 unassigned）、刷新后 BI 重新取数。
+// 7e R6 S9：只有 read_own（caps.bi = personal）只渲染个人版、不请求 /bi、无金额；caps.bi = null → 无权限页。
 // 7e R6 S8：Tab2 单品分析（URL / 记忆带入 tab 与 goods_id、无有效选择取第一项不写记忆、切 Tab / 选商品写记忆、散点空态与截断）。
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -11,6 +12,7 @@ import type {
   BiDashboard,
   BiGoodsNotes,
   BiGoodsRow,
+  BiPersonal,
   BiWorkloadRow,
   ReportCapabilities,
   ReportFreshness,
@@ -24,6 +26,7 @@ const getPrefMock = vi.fn();
 const savePrefMock = vi.fn();
 const goodsTrendMock = vi.fn();
 const goodsNotesMock = vi.fn();
+const personalMock = vi.fn();
 vi.mock("@/features/report/api", () => ({
   getBiDashboard: (...args: unknown[]) => biMock(...args),
   getReportCapabilities: (...args: unknown[]) => capsMock(...args),
@@ -31,6 +34,7 @@ vi.mock("@/features/report/api", () => ({
   refreshSummaries: (...args: unknown[]) => refreshMock(...args),
   getBiGoodsTrend: (...args: unknown[]) => goodsTrendMock(...args),
   getBiGoodsNotes: (...args: unknown[]) => goodsNotesMock(...args),
+  getBiPersonal: (...args: unknown[]) => personalMock(...args),
 }));
 vi.mock("@/features/preference/api", () => ({
   getFilterPreference: (...args: unknown[]) => getPrefMock(...args),
@@ -188,6 +192,23 @@ function freshness(over: Partial<ReportFreshness> = {}): ReportFreshness {
   };
 }
 
+function personal(over: Partial<BiPersonal> = {}): BiPersonal {
+  return {
+    date_from: "2026-09-13",
+    date_to: "2026-10-12",
+    pr_name: "小王",
+    target_count: 10,
+    quote_count: 6,
+    quote_progress: "0.6000",
+    publish_count: 3,
+    publish_progress: "0.5000",
+    unpublished_count: 2,
+    cancel_count: 1,
+    overdue_count: 4,
+    ...over,
+  };
+}
+
 beforeEach(() => {
   biMock.mockReset();
   // 回显请求里的刷单开关：下钻链接用响应上的值
@@ -208,6 +229,8 @@ beforeEach(() => {
   goodsTrendMock.mockResolvedValue({ points: [] });
   goodsNotesMock.mockReset();
   goodsNotesMock.mockResolvedValue(notes());
+  personalMock.mockReset();
+  personalMock.mockResolvedValue(personal());
   useAuthStore.setState({
     user: { id: "u1", username: "u1", display_name: null, email: null, status: "active", roles: [] },
     isAuthenticated: true,
@@ -252,6 +275,75 @@ function hrefParams(link: HTMLElement): [string, URLSearchParams] {
   const [path, query = ""] = href.split("?");
   return [path, new URLSearchParams(query)];
 }
+
+describe("BiDashboardPage 按 caps.bi 分版", () => {
+  it("personal：只渲染个人版，不请求 /bi；计数与进度来自 /bi/personal，页面没有「¥」", async () => {
+    capsMock.mockResolvedValue(
+      caps({ bi: "personal", work_progress: "own", publish_progress: "own", production: false, store_read: false })
+    );
+    const { container } = renderPage();
+    expect(await screen.findByText("目标篇数")).toBeTruthy();
+    await screen.findByText("小王");
+    expect(personalMock).toHaveBeenCalledWith({ preset: "last_30d", date_from: undefined, date_to: undefined });
+    // 六张计数卡：目标 10、约稿 6（60.0%）、发布 3（50.0%）、未发布 2、取消 1、超时 4
+    for (const [title, value] of [
+      ["目标篇数", "10 篇"],
+      ["约稿量", "6 篇"],
+      ["发布量", "3 篇"],
+      ["未发布", "2 篇"],
+      ["已取消", "1 篇"],
+      ["超时未发", "4 篇"],
+    ]) {
+      const card = screen.getByText(title).closest(".ant-card") as HTMLElement;
+      expect(within(card).getByText(value), title).toBeTruthy();
+    }
+    expect(screen.getByText(/约稿进度 60\.0%/)).toBeTruthy();
+    expect(screen.getByText(/发布进度 50\.0%/)).toBeTruthy();
+    expect(screen.getByText(/2026-09-13 至 2026-10-12/)).toBeTruthy();
+    // 完整版的东西都不在：没有 Tab、刷单开关、店铺卡；不请求 /bi 与单品接口
+    expect(screen.queryByRole("tab", { name: "店铺总览" })).toBeNull();
+    expect(screen.queryByRole("switch", { name: "剔除刷单" })).toBeNull();
+    expect(screen.queryByText("推广总额")).toBeNull();
+    expect(container.textContent).not.toContain("¥");
+    expect(biMock).not.toHaveBeenCalled();
+    expect(goodsTrendMock).not.toHaveBeenCalled();
+    expect(goodsNotesMock).not.toHaveBeenCalled();
+  });
+
+  it("personal：目标为 0 时约稿进度显示「未设目标」，发布进度为空显示「—」", async () => {
+    capsMock.mockResolvedValue(caps({ bi: "personal" }));
+    personalMock.mockResolvedValue(
+      personal({ target_count: 0, quote_count: 0, quote_progress: null, publish_count: 0, publish_progress: null })
+    );
+    renderPage();
+    expect(await screen.findByText(/未设目标/)).toBeTruthy();
+    expect(screen.getByText(/发布进度 —/)).toBeTruthy();
+  });
+
+  it("personal：URL 带的区间预设传给个人版", async () => {
+    capsMock.mockResolvedValue(caps({ bi: "personal" }));
+    renderPage("/bi?preset=last_7d");
+    await screen.findByText("小王");
+    expect(personalMock).toHaveBeenLastCalledWith(expect.objectContaining({ preset: "last_7d" }));
+    expect(biMock).not.toHaveBeenCalled();
+  });
+
+  it("null：显示无权限页，不请求任何 BI 接口", async () => {
+    capsMock.mockResolvedValue(caps({ bi: null }));
+    renderPage();
+    expect(await screen.findByText("没有权限查看BI 看板")).toBeTruthy();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(biMock).not.toHaveBeenCalled();
+    expect(personalMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole("tab", { name: "店铺总览" })).toBeNull();
+  });
+
+  it("full：不请求个人版", async () => {
+    renderPage();
+    await waitData();
+    expect(personalMock).not.toHaveBeenCalled();
+  });
+});
 
 describe("BiDashboardPage 加载失败", () => {
   it("提示检查 BI 看板权限，不再提投产报表权限", async () => {

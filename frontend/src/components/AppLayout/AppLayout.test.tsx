@@ -126,10 +126,11 @@ describe("AppLayout 报表菜单按 capabilities", () => {
       [...REPORT_ITEMS],
     ],
     [
-      "pr（只看本人、BI 个人版）",
+      "pr（只看本人、BI 个人版；7e R6 起个人版也进菜单）",
       { work_progress: "own", publish_progress: "own", bi: "personal" },
-      ["工作进度表", "发文进度表"],
+      ["工作进度表", "发文进度表", "BI看板"],
     ],
+    ["只有 BI 个人版", { bi: "personal" }, ["BI看板"]],
     ["只有 store_read", { store_read: true }, ["投产分析", "店铺日明细", "店铺周汇总", "店铺月度汇总"]],
     ["只有单品投产", { production: true }, ["投产分析", "单品投产"]],
     ["只有 BI 全量", { bi: "full" }, ["BI看板"]],
