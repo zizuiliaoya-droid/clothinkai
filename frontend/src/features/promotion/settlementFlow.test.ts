@@ -135,6 +135,10 @@ describe("paymentQrView（收款码能不能换、只读写什么）", () => {
   it.each(["已付款", "已结款"])("read + 推广单 %s → 已结款锁定", (s) => {
     expect(paymentQrView(detail({ state: "read" }, { settlement_status: s })).notice).toBe(QR_LOCKED_SETTLED);
   });
+  it("已结款锁定文案：过渡期不写 PR-8 才有的召回 / 寄回运费例外", () => {
+    expect(QR_LOCKED_SETTLED).toBe("已结款，收款码已锁定");
+    expect(QR_LOCKED_SETTLED).not.toContain("召回");
+  });
   it("read + 已停用 / 已取消 → 只读", () => {
     expect(paymentQrView(detail({ state: "read" }, { is_active: false })).notice).toBe(QR_READONLY_INACTIVE);
     expect(paymentQrView(detail({ state: "read" }, { publish_status: "已取消", settlement_status: "未核查" })).notice).toBe(
