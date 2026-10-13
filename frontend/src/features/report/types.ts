@@ -1,8 +1,10 @@
 // report feature 类型（对齐后端 report schemas）。
 
-export interface PrWorkProgress {
-  pr_id: string | null;
-  pr_name: string;
+/**
+ * 工作进度的指标段（7e R5，对齐后端 WorkProgressMetrics）：PR 表、单品卡片、周明细共用。
+ * 比率在求和后现算，分母 ≤ 0 为 null；金额列与金额派生的四列（单篇均价、两个金额发布率、CPL）读不到时为 null。
+ */
+export interface WorkProgressMetrics {
   quote_count: number;
   /** 有效约稿量 = 约稿量 − 召回 − 取消，是完成率/超时率的分母。 */
   effective_quote_count: number;
@@ -22,9 +24,69 @@ export interface PrWorkProgress {
   hit_count: number;
   hit_rate: string | null;
   like_count: number;
-  /** 聚合额按报表读权限（F3），R1 恒有值；类型留 null 与后端一致。 */
+  /** 样品成本之和（旧列，R5 起页面不再展示，接口保留）。 */
   cost: string | null;
+  /** CPL = 推广成本 ÷ 折算点赞（R5 起分子换成 promo_cost）。 */
   cpl: string | null;
+  quote_amount: string | null;
+  published_quote_amount: string | null;
+  /** 有效约稿服务费：扣取消与召回（同完成率分母）。 */
+  effective_quote_amount: string | null;
+  unpublished_quote_amount: string | null;
+  cancelled_quote_amount: string | null;
+  /** 推广成本（站外）：未删除推广单的应付之和，不看发布 / 召回状态。 */
+  promo_cost: string | null;
+  unpublished_count: number;
+  shipped_count: number;
+  shipped_published_count: number;
+  /** 发布单篇均价 = 已发布服务费 ÷ 发布量。 */
+  avg_published_quote: string | null;
+  /** 金额发布率 = 已发布服务费 ÷ 总约稿服务费。 */
+  amount_publish_rate: string | null;
+  /** 总金额发布率 = 已发布服务费 ÷ 有效约稿服务费。 */
+  total_amount_publish_rate: string | null;
+  /** 发货发布率 =（已发货且已发布）÷ 已发货。 */
+  ship_publish_rate: string | null;
+}
+
+export interface PrWorkProgress extends WorkProgressMetrics {
+  pr_id: string | null;
+  pr_name: string;
+}
+
+/** 单品卡片一行（7e R5）：不含商品编码；「未归属商品」行 goods_id / goods_title / goods_short_name 为 null。 */
+export interface WorkProgressGoodsRow extends WorkProgressMetrics {
+  goods_id: string | null;
+  goods_title: string | null;
+  goods_short_name: string | null;
+  /** 有简称用简称，没填回落全称；未归属 =「未归属商品」。 */
+  display_name: string;
+}
+
+/** GET /api/reports/work-progress/goods：items / total 只含有归属的商品，未归属的单汇成 unassigned。 */
+export interface WorkProgressGoodsPage {
+  date_from: string;
+  date_to: string;
+  total: number;
+  limit: number;
+  offset: number;
+  items: WorkProgressGoodsRow[];
+  unassigned: WorkProgressGoodsRow | null;
+}
+
+/** 周明细一行（7e R5）：date_from / date_to = 该 ISO 周 ∩ 筛选区间（首尾周被截断）。 */
+export interface WorkProgressWeekRow extends WorkProgressMetrics {
+  /** ISO 周一（桶键）；首周可能早于 date_from。 */
+  week_start: string;
+  date_from: string;
+  date_to: string;
+}
+
+/** GET /api/reports/work-progress/weeks：只出有单的周，升序。 */
+export interface WorkProgressWeeks {
+  date_from: string;
+  date_to: string;
+  items: WorkProgressWeekRow[];
 }
 
 export interface TargetWithActual {
@@ -380,11 +442,15 @@ export interface DrillPromotionPage {
   page_size: number;
 }
 
-/** 下钻参数：日期按合作日期、必填；pr_id 为 UUID 或 unassigned（未分配）。 */
+/** 下钻参数：日期按合作日期、必填；pr_id 为 UUID 或 unassigned（未分配），不传 = 不限 PR。 */
 export interface DrillPromotionParams {
   date_from: string;
   date_to: string;
   pr_id?: string;
+  /** 归属商品 id。 */
+  goods_id?: string;
+  /** 季节多选（重复键）。 */
+  season?: string[];
   page?: number;
   page_size?: number;
 }

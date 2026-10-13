@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-// 报表下钻弹窗（7e R1）：请求参数（未分配传 unassigned）、金额 null 显示「—」、不渲染链接、翻页。
+// 报表下钻弹窗（7e R1；R5 泛化）：请求参数（未分配传 unassigned、不给 prId 不带 pr_id、商品 / 季节）、
+// 金额 null 显示「—」、不渲染链接、翻页。
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
@@ -38,6 +39,7 @@ beforeAll(() => {
 afterEach(cleanup);
 
 const PR1 = "11111111-1111-4111-8111-111111111111";
+const GOODS = "22222222-2222-4222-8222-222222222222";
 
 function row(over: Partial<DrillPromotionRow>): DrillPromotionRow {
   return {
@@ -75,7 +77,7 @@ function renderModal(target: DrillPromotionTarget | null) {
 
 const TARGET: DrillPromotionTarget = {
   prId: PR1,
-  prName: "小王",
+  title: "小王",
   dateFrom: "2026-10-01",
   dateTo: "2026-10-11",
 };
@@ -95,6 +97,25 @@ describe("drillPromotionParams", () => {
       page_size: 20,
     });
     expect(drillPromotionParams({ ...TARGET, prId: null }, 3).pr_id).toBe("unassigned");
+  });
+
+  it("不给 prId 就不带 pr_id（不限 PR）；给了商品 / 季节才带 goods_id / season（7e R5）", () => {
+    const base = { title: "条纹上衣", dateFrom: "2026-10-01", dateTo: "2026-10-11" };
+    expect(drillPromotionParams(base, 1)).toEqual({
+      date_from: "2026-10-01",
+      date_to: "2026-10-11",
+      page: 1,
+      page_size: 20,
+    });
+    expect(drillPromotionParams({ ...base, season: [] }, 1)).not.toHaveProperty("season");
+    expect(drillPromotionParams({ ...base, goodsId: GOODS, season: ["2026秋"] }, 2)).toEqual({
+      date_from: "2026-10-01",
+      date_to: "2026-10-11",
+      goods_id: GOODS,
+      season: ["2026秋"],
+      page: 2,
+      page_size: 20,
+    });
   });
 });
 
@@ -119,10 +140,25 @@ describe("DrillPromotionModal", () => {
   });
 
   it("未分配行请求 pr_id=unassigned", async () => {
-    renderModal({ ...TARGET, prId: null, prName: "未分配" });
+    renderModal({ ...TARGET, prId: null, title: "未分配" });
     await screen.findByText("TG-001");
     expect(vi.mocked(getDrillPromotions).mock.calls[0][0].pr_id).toBe("unassigned");
     expect(screen.getByText("未分配 的推广单")).toBeTruthy();
+  });
+
+  it("按商品 + 季节打开：请求带 goods_id / season、不带 pr_id，标题用 title", async () => {
+    renderModal({
+      title: "条纹上衣",
+      dateFrom: "2026-10-01",
+      dateTo: "2026-10-11",
+      goodsId: GOODS,
+      season: ["2026秋"],
+    });
+    await screen.findByText("TG-001");
+    const params = vi.mocked(getDrillPromotions).mock.calls[0][0];
+    expect(params).toMatchObject({ goods_id: GOODS, season: ["2026秋"] });
+    expect(params).not.toHaveProperty("pr_id");
+    expect(screen.getByText("条纹上衣 的推广单")).toBeTruthy();
   });
 
   it("金额读不到（null）显示「—」，读得到显示金额；未录点赞也是「—」", async () => {

@@ -1,8 +1,9 @@
 import { useState } from "react";
-import { Button, Card, Space, Table, message } from "antd";
+import { Button, Card, Select, Space, Table, Typography, message } from "antd";
 import { DownloadOutlined } from "@ant-design/icons";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import type { ColumnsType } from "antd/es/table";
+import { useSearchParams } from "react-router-dom";
 import {
   ReportCardTitle,
   ReportFreshness,
@@ -11,53 +12,65 @@ import {
   ReportTimeRangeFilter,
   useReportTimeRange,
 } from "@/components/ReportTimeRangeFilter/ReportTimeRangeFilter";
-import { exportReport, getWorkProgress } from "@/features/report/api";
+import { exportReport, getReportSeasonOptions, getWorkProgress } from "@/features/report/api";
 import { DrillPromotionModal } from "@/features/report/components/DrillPromotionModal";
+import { ReportForbidden } from "@/features/report/components/ReportForbidden";
 import type { DrillPromotionTarget } from "@/features/report/drill";
-import { TIME_PRESETS, type ReportFilterSchema } from "@/features/report/reportFilters";
-import type { PrWorkProgress, TimePreset } from "@/features/report/types";
+import type { PrWorkProgress } from "@/features/report/types";
 import {
   fromDateRange,
   toDateRange,
   useReportFilters,
 } from "@/features/report/useReportFilters";
 import { useSummaryFreshness } from "@/features/report/useSummaryFreshness";
+import {
+  columnsWidth,
+  workProgressMetricColumns,
+} from "@/features/report/workProgress/workProgressColumns";
+import {
+  WORK_PROGRESS_FILTER_DEFAULTS,
+  WORK_PROGRESS_FILTER_SCHEMA,
+  seasonParam,
+} from "@/features/report/workProgress/workProgressFilters";
+import { isForbiddenError } from "@/features/warehouse/shipmentForm";
 import { extractErrorMessage } from "@/services/apiClient";
 import {
   canExportReport,
   useReportCapabilities,
 } from "@/features/report/useReportCapabilities";
-const pct = (v: string | null) =>
-  v == null ? "—" : `${(Number(v) * 100).toFixed(1)}%`;
-/**
- * 筛选状态（7e R1）：区间 = preset + 起止日期，记忆里连日期一起记；
- * 旧记忆 `{month}` 不再认，回落默认本月。
- */
-interface WorkProgressFilters {
-  preset: TimePreset;
-  date_from?: string;
-  date_to?: string;
-}
-const WORK_PROGRESS_FILTER_SCHEMA: ReportFilterSchema<WorkProgressFilters> = {
-  preset: { kind: "enum", values: TIME_PRESETS, url: true, memory: true },
-  date_from: { kind: "date", url: true, memory: true },
-  date_to: { kind: "date", url: true, memory: true },
-};
-const WORK_PROGRESS_FILTER_DEFAULTS: WorkProgressFilters = { preset: "this_month" };
+
+/** 次要文字：slate-600，白底约 7.6:1。 */
+const MUTED = "#475569";
+
 export function WorkProgressPage() {
   const { filters, ready, setFilters } = useReportFilters(
     "pr_work_progress",
     WORK_PROGRESS_FILTER_SCHEMA,
     WORK_PROGRESS_FILTER_DEFAULTS
   );
-  const { preset } = filters;
+  const { preset, season } = filters;
+  const seasons = seasonParam(season);
   const range = toDateRange(filters.date_from, filters.date_to);
   const { dateFrom, dateTo, enabled } = useReportTimeRange(preset, range);
-  const { data, isLoading } = useQuery({
-    queryKey: ["work-progress", preset, dateFrom, dateTo],
+  // 季节写进记忆才算锁定：URL 带来的季节只本次生效（手动改任一筛选后 URL 键清掉、连同季节写进记忆）
+  const [searchParams] = useSearchParams();
+  const seasonLocked = season.length > 0 && !searchParams.has("season");
+
+  // 季节选项：投产或工作进度（含只看本人）读权限即可（7e R5 放宽）
+  const { data: seasonOptionList } = useQuery({
+    queryKey: ["reports", "season-options"],
+    queryFn: getReportSeasonOptions,
+  });
+  const seasonOptions = (seasonOptionList ?? []).map((s) => ({ label: s, value: s }));
+
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["work-progress", preset, dateFrom, dateTo, season],
     // 等偏好回填完再查，避免先用默认区间查一次、回填后又查一次。
     enabled: enabled && ready,
-    queryFn: () => getWorkProgress({ preset, date_from: dateFrom, date_to: dateTo }),
+    // 403 重试没有意义，直接显示无权限
+    retry: (count, err) => !isForbiddenError(err) && count < 1,
+    queryFn: () =>
+      getWorkProgress({ preset, date_from: dateFrom, date_to: dateTo, season: seasons }),
   });
   // 导出、数据新鲜度、下钻都用这同一个区间。下钻要具体日期：用新鲜度接口里服务端解析的起止
   // （与 <ReportFreshness> 同一个查询，不多发请求；预设模式下前端手里没有日期）
@@ -66,10 +79,11 @@ export function WorkProgressPage() {
   const openDrill = (row: PrWorkProgress) => {
     if (!freshness) return;
     setDrillTarget({
+      title: row.pr_name,
       prId: row.pr_id,
-      prName: row.pr_name,
       dateFrom: freshness.date_from,
       dateTo: freshness.date_to,
+      season: seasons,
     });
   };
   // 导出按钮按 capabilities 出现（持 report.export:read 且能读这张表）；能力没回来前不显示
@@ -82,11 +96,12 @@ export function WorkProgressPage() {
         preset,
         date_from: dateFrom,
         date_to: dateTo,
+        season: seasons,
       }),
     onSuccess: (filename) => message.success(`已导出 ${filename}`),
-    onError: (error) => message.error(extractErrorMessage(error, "导出失败")),
+    onError: (err) => message.error(extractErrorMessage(err, "导出失败")),
   });
-  // 列对齐 final.xlsx「工作进度表」(20列)
+
   const columns: ColumnsType<PrWorkProgress> = [
     {
       title: "负责PR",
@@ -112,40 +127,14 @@ export function WorkProgressPage() {
           name
         ),
     },
-    { title: "约篇件数", dataIndex: "quote_count", width: 90 },
-    { title: "档期内", dataIndex: "in_schedule_count", width: 80 },
-    { title: "催发", dataIndex: "urge_count", width: 70 },
-    { title: "重要催发", dataIndex: "important_urge_count", width: 90 },
-    { title: "超时", dataIndex: "overdue_count", width: 70 },
-    { title: "已发布", dataIndex: "publish_count", width: 80 },
-    {
-      title: "已填写点赞量数量",
-      dataIndex: "info_complete_count",
-      width: 140,
-    },
-    { title: "信息完整度", dataIndex: "info_complete_rate", width: 100, render: pct },
-    { title: "已取消", dataIndex: "cancel_count", width: 80 },
-    { title: "应召回", dataIndex: "recall_due_count", width: 80 },
-    { title: "召回成功", dataIndex: "recall_success_count", width: 90 },
-    { title: "召回完成率", dataIndex: "recall_complete_rate", width: 100, render: pct },
-    { title: "超时率", dataIndex: "overdue_rate", width: 90, render: pct },
-    { title: "月度完成率", dataIndex: "month_complete_rate", width: 100, render: pct },
-    { title: "爆文数", dataIndex: "hit_count", width: 80 },
-    { title: "爆文率", dataIndex: "hit_rate", width: 90, render: pct },
-    { title: "点赞数", dataIndex: "like_count", width: 90 },
-    {
-      title: "成本(含衣服)",
-      dataIndex: "cost",
-      width: 110,
-      render: (v: string | null) => (v == null ? "—" : `¥${v}`),
-    },
-    {
-      title: "CPL(元/赞)",
-      dataIndex: "cpl",
-      width: 100,
-      render: (v: string | null) => (v == null ? "—" : `¥${v}`),
-    },
+    ...workProgressMetricColumns<PrWorkProgress>(),
   ];
+
+  // 菜单按 capabilities 已隐藏；直接输入 URL 进来、接口 403 时给明确提示，不显示空表
+  if (isForbiddenError(error)) {
+    return <ReportForbidden name="工作进度表" />;
+  }
+
   return (
     <Card
       title={
@@ -170,6 +159,21 @@ export function WorkProgressPage() {
           range={range}
           onRangeChange={(v) => setFilters(fromDateRange(v))}
         />
+        <span style={{ marginLeft: 12 }}>季节/系列：</span>
+        <Select
+          aria-label="季节或系列"
+          mode="multiple"
+          value={season}
+          style={{ minWidth: 180, maxWidth: 320 }}
+          placeholder="全部"
+          allowClear
+          maxTagCount="responsive"
+          options={seasonOptions}
+          onChange={(v: string[]) => setFilters({ season: v })}
+        />
+        {seasonLocked && (
+          <Typography.Text style={{ color: MUTED }}>季节已锁定，下次打开保持</Typography.Text>
+        )}
         {canExport && (
           <Button
             icon={<DownloadOutlined />}
@@ -187,7 +191,7 @@ export function WorkProgressPage() {
         loading={isLoading}
         columns={columns}
         dataSource={data ?? []}
-        scroll={{ x: 1840 }}
+        scroll={{ x: columnsWidth(columns) }}
         pagination={false}
         // 整行可点（鼠标）；键盘走第一列的按钮（Tab 到 PR 名，Enter / 空格打开）
         onRow={(row) =>
