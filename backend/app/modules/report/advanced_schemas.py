@@ -100,6 +100,26 @@ class WorkProgressGoodsPage(BaseModel):
     unassigned: WorkProgressGoodsRow | None = None
 
 
+class WorkProgressWeekRow(WorkProgressMetrics):
+    """周明细的一行（7e R5，Q15）：按合作日期 ISO 周分桶。
+
+    ``date_from`` / ``date_to`` 是该周 ∩ 筛选区间的实际起止（首尾周被截断），下钻按它们取单。
+    """
+
+    week_start: date
+    """ISO 周一（桶键）；首周可能早于 ``date_from``。"""
+    date_from: date
+    date_to: date
+
+
+class WorkProgressWeeks(BaseModel):
+    """周明细：只出有单的周，按 ``week_start`` 升序；各周之和 = PR 表合计（K5）。"""
+
+    date_from: date
+    date_to: date
+    items: list[WorkProgressWeekRow]
+
+
 # ----------------------------- 下钻单据 ----------------------------- #
 
 

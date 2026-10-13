@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Hashable, Iterable, Mapping
+from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, TypeVar
 
@@ -128,4 +129,18 @@ def goods_sort_key(row: WorkProgressGoodsRow) -> tuple[int, str, int]:
     return (-row.quote_count, row.display_name, row.goods_id.int if row.goods_id else -1)
 
 
-__all__ = ["goods_sort_key", "progress_metrics", "sum_progress_rows"]
+def week_bounds(date_from: date, date_to: date) -> list[tuple[date, date, date]]:
+    """区间覆盖到的每个 ISO 周（周一开始，升序）：``(周一, 实际起, 实际止)``。
+
+    实际起止 = 该周 ∩ ``[date_from, date_to]``：首周从 ``date_from`` 起、末周到 ``date_to`` 止
+    （设计 2.5 / Q15）。汇总路径按周一对上实际起止，实时路径按实际起止逐周查。
+    """
+    out: list[tuple[date, date, date]] = []
+    start = date_from - timedelta(days=date_from.weekday())
+    while start <= date_to:
+        out.append((start, max(start, date_from), min(start + timedelta(days=6), date_to)))
+        start += timedelta(days=7)
+    return out
+
+
+__all__ = ["goods_sort_key", "progress_metrics", "sum_progress_rows", "week_bounds"]

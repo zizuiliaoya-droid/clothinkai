@@ -240,6 +240,26 @@ class TestWorkProgress:
         assert body["unassigned"]["quote_count"] == 4
         assert "goods_code" not in body["unassigned"]
 
+    async def test_weeks_route(self, session: AsyncSession, seeded: Any) -> None:
+        """周明细（7e R5）：区间原样回传；各周约稿量之和 = PR 表合计；行起止都在区间内。"""
+        query = f"preset=custom&date_from={_M_LO}&date_to={_M_HI}"
+        resp = await _call(session, seeded.finance, "GET", f"{_WP}/weeks?{query}")
+        table = await _call(session, seeded.finance, "GET", f"{_WP}?{query}")
+        assert resp.status_code == table.status_code == 200, resp.text
+        body = resp.json()
+        assert (body["date_from"], body["date_to"]) == (str(_M_LO), str(_M_HI))
+        assert body["items"]
+        assert sum(r["quote_count"] for r in body["items"]) == sum(
+            r["quote_count"] for r in table.json()
+        )
+        for r in body["items"]:
+            assert str(_M_LO) <= r["date_from"] <= r["date_to"] <= str(_M_HI)
+            assert r["week_start"] <= r["date_from"]
+
+    async def test_weeks_warehouse_forbidden(self, session: AsyncSession, flow_users: Any) -> None:
+        resp = await _call(session, flow_users.warehouse, "GET", f"{_WP}/weeks")
+        assert (resp.status_code, resp.json()["code"]) == (403, "PERMISSION_DENIED")
+
     @pytest.mark.parametrize("query", ["limit=101", "limit=0", "offset=-1"])
     async def test_goods_paging_422(
         self, session: AsyncSession, flow_users: Any, query: str

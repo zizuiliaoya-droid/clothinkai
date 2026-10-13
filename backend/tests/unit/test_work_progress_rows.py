@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 from typing import Any
 
@@ -9,7 +10,7 @@ import pytest
 
 from app.modules.report.advanced_schemas import PrWorkProgress, WorkProgressMetrics
 from app.modules.report.summary_models import PR_PROGRESS_METRICS
-from app.modules.report.work_progress_rows import progress_metrics, sum_progress_rows
+from app.modules.report.work_progress_rows import progress_metrics, sum_progress_rows, week_bounds
 
 
 def _row(**over: Any) -> dict[str, Any]:
@@ -145,3 +146,46 @@ def test_sum_progress_rows_sums_then_rates() -> None:
 def test_sum_progress_rows_treats_none_as_zero() -> None:
     summed = sum_progress_rows([_row(cost=None)], key=lambda _r: None)
     assert summed[None]["cost"] == 0
+
+
+@pytest.mark.parametrize(
+    ("lo", "hi", "expected"),
+    [
+        # 周三起、周五止：首周从周三、末周到周五，中间整周
+        (
+            date(2026, 10, 7),
+            date(2026, 10, 23),
+            [
+                (date(2026, 10, 5), date(2026, 10, 7), date(2026, 10, 11)),
+                (date(2026, 10, 12), date(2026, 10, 12), date(2026, 10, 18)),
+                (date(2026, 10, 19), date(2026, 10, 19), date(2026, 10, 23)),
+            ],
+        ),
+        # 整周：周一 ~ 周日
+        (
+            date(2026, 10, 12),
+            date(2026, 10, 18),
+            [(date(2026, 10, 12), date(2026, 10, 12), date(2026, 10, 18))],
+        ),
+        # 单日（周三）
+        (
+            date(2026, 10, 14),
+            date(2026, 10, 14),
+            [(date(2026, 10, 12), date(2026, 10, 14), date(2026, 10, 14))],
+        ),
+        # 跨年：ISO 周一在上一年，桶不按年切
+        (
+            date(2025, 12, 31),
+            date(2026, 1, 9),
+            [
+                (date(2025, 12, 29), date(2025, 12, 31), date(2026, 1, 4)),
+                (date(2026, 1, 5), date(2026, 1, 5), date(2026, 1, 9)),
+            ],
+        ),
+    ],
+    ids=["wed_to_fri", "whole_week", "single_day", "cross_year"],
+)
+def test_week_bounds(lo: date, hi: date, expected: list[tuple[date, date, date]]) -> None:
+    got = week_bounds(lo, hi)
+    assert got == expected
+    assert all(start.weekday() == 0 for start, _, _ in got)

@@ -19,6 +19,8 @@ from app.modules.report.advanced_schemas import (
     PrWorkProgress,
     WorkProgressGoodsPage,
     WorkProgressGoodsRow,
+    WorkProgressWeekRow,
+    WorkProgressWeeks,
 )
 from app.modules.report.drill_service import validate_seasons
 from app.modules.report.exceptions import ReportInvalidTimeRangeError
@@ -29,6 +31,7 @@ from app.modules.report.work_progress_rows import (
     goods_sort_key,
     progress_metrics,
     sum_progress_rows,
+    week_bounds,
 )
 from app.modules.urge.service import UrgeService
 
@@ -180,6 +183,70 @@ class WorkProgressService:
             items=items[offset : offset + limit],
             unassigned=unassigned,
         )
+
+    async def get_weeks(
+        self,
+        tenant_id: UUID,
+        date_from: date,
+        date_to: date,
+        *,
+        seasons: Sequence[str] | None,
+        scope: PrScope,
+        field_ctx: FieldPermissionContext,
+    ) -> WorkProgressWeeks:
+        """周明细（7e R5，Q15）：按合作日期 ISO 周分桶，首尾周截到区间，整段汇总 / 实时二选一。
+
+        - 汇总 = ``work_progress_by_week``；实时 = 逐周（周 ∩ 区间，见 ``week_bounds``）调
+          ``aggregate_by_pr(by_goods=False)`` 再跨 PR 相加（≤ 54 次小查询，不给聚合 SQL 加粒度）
+        - 比率在相加之后才算；只出有单的周，升序；各周之和 = PR 表合计（K5）
+        - ``scope``、``seasons`` 同 ``get_for_range``
+        """
+        validate_seasons(seasons)
+        fresh = await self._summary.freshness(tenant_id, date_from, date_to)
+        pr_id = scope.as_param()
+        weeks = week_bounds(date_from, date_to)
+        with report_query_duration_seconds.labels("work_progress_weeks").time():
+            if fresh.source == "summary":
+                record_source("work_progress_weeks", "summary")
+                summary_rows = await self._summary.work_progress_by_week(
+                    tenant_id=tenant_id,
+                    date_from=date_from,
+                    date_to=date_to,
+                    seasons=seasons,
+                    pr_id=pr_id,
+                )
+                merged: dict[date, Mapping[str, Any]] = {r["week_start"]: r for r in summary_rows}
+            else:
+                record_source("work_progress_weeks", "live")
+                today = get_today()
+                thresholds = await self._urge.get_urge_thresholds(tenant_id)
+                merged = {}
+                for week_start, lo, hi in weeks:
+                    week_rows = await self._repo.aggregate_by_pr(
+                        tenant_id=tenant_id,
+                        date_from=lo,
+                        date_to=hi,
+                        today=today,
+                        thresholds=thresholds,
+                        by_goods=False,
+                        seasons=seasons,
+                        pr_id=pr_id,
+                    )
+                    # 跨 PR 相加用精确值（点赞不逐行取整），比率留给 progress_metrics
+                    if week_rows:
+                        merged[week_start] = sum_progress_rows(week_rows, key=lambda _r: 0)[0]
+        amounts = aggregate_promo_amounts_visible("work_progress", field_ctx)
+        items = [
+            WorkProgressWeekRow(
+                week_start=week_start,
+                date_from=lo,
+                date_to=hi,
+                **progress_metrics(merged[week_start], amounts=amounts),
+            )
+            for week_start, lo, hi in weeks
+            if week_start in merged
+        ]
+        return WorkProgressWeeks(date_from=date_from, date_to=date_to, items=items)
 
     @staticmethod
     def _to_row(r: Mapping[str, Any], *, amounts: bool) -> PrWorkProgress:

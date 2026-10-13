@@ -30,6 +30,7 @@ from app.modules.report.advanced_schemas import (
     TargetCreate,
     TargetWithActual,
     WorkProgressGoodsPage,
+    WorkProgressWeeks,
 )
 from app.modules.report.deps import (
     ProductionServiceDep,
@@ -127,6 +128,37 @@ async def get_work_progress_goods(
         field_ctx=await build_field_perm_context(user.id, session),
         limit=limit,
         offset=offset,
+    )
+
+
+@router.get(
+    "/work-progress/weeks",
+    response_model=WorkProgressWeeks,
+    dependencies=[require_any_permission(_WP_READ, REPORT_WORK_PROGRESS_READ_OWN)],
+)
+async def get_work_progress_weeks(
+    user: CurrentActiveUser,
+    perms: CurrentPerms,
+    session: SessionDep,
+    service: WorkProgressServiceDep,
+    preset: _PresetQ = "this_month",
+    date_from: _FromQ = None,
+    date_to: _ToQ = None,
+    season: Annotated[list[str] | None, Query(description="季节多选，≤ 20 个")] = None,
+) -> WorkProgressWeeks:
+    """工作进度周明细（7e R5）：区间 + 季节，按合作日期 ISO 周分桶，首尾周标实际起止。
+
+    权限与只看本人同 PR 表（不收 ``pr_id``）；各周之和 = PR 表合计。
+    """
+    lo, hi = resolve_time_range(preset, date_from, date_to)
+    scope = resolve_pr_scope(perms, user.id, None, _WP_READ[0])
+    return await service.get_weeks(
+        user.tenant_id,
+        lo,
+        hi,
+        seasons=season,
+        scope=scope,
+        field_ctx=await build_field_perm_context(user.id, session),
     )
 
 
