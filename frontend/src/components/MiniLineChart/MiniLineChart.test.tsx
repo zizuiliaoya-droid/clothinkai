@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { MiniLineChart } from "./MiniLineChart";
 
 afterEach(cleanup);
@@ -59,6 +59,38 @@ describe("MiniLineChart 空值", () => {
       <MiniLineChart labels={["1", "2"]} series={[{ name: "a", color: "#000", data: [0, 4] }]} />
     );
     expect(Number(circles(again.container)[0].getAttribute("cy"))).toBe(ZERO_Y);
+  });
+
+  it("fluid：跟着容器宽度画（不超过 width），横轴标签按宽度抽稀；不给 fluid 照旧（评审 r1 L2）", () => {
+    // jsdom 没有 ResizeObserver：桩成 observe 时报一次容器宽 320
+    class FakeResizeObserver {
+      cb: ResizeObserverCallback;
+      constructor(cb: ResizeObserverCallback) {
+        this.cb = cb;
+      }
+      observe() {
+        this.cb([{ contentRect: { width: 320 } } as ResizeObserverEntry], this as unknown as ResizeObserver);
+      }
+      disconnect() {}
+      unobserve() {}
+    }
+    vi.stubGlobal("ResizeObserver", FakeResizeObserver);
+    try {
+      const labels = Array.from({ length: 30 }, (_, i) => `2026-09-${String(i + 1).padStart(2, "0")}`);
+      const series = [{ name: "a", color: "#000", data: labels.map((_, i) => i) }];
+      const { container } = render(<MiniLineChart fluid width={920} labels={labels} series={series} />);
+      const svg = container.querySelector("svg")!;
+      expect(svg.getAttribute("width")).toBe("320");
+      const xLabels = Array.from(svg.querySelectorAll("text")).filter((t) => t.textContent?.startsWith("2026-"));
+      // 内宽 320 - 64 = 256，每个日期标签至少 64px → 最多 4 个
+      expect(xLabels.length).toBeLessThanOrEqual(4);
+      expect(xLabels.length).toBeGreaterThanOrEqual(2);
+      cleanup();
+      const fixed = render(<MiniLineChart width={920} labels={labels} series={series} />);
+      expect(fixed.container.querySelector("svg")!.getAttribute("width")).toBe("920");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("aria-label 与刻度格式化可传入", () => {

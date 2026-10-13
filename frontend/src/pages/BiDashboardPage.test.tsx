@@ -307,6 +307,10 @@ describe("BiDashboardPage 按 caps.bi 分版", () => {
     expect(screen.getByText(/约稿进度 60\.0%/)).toBeTruthy();
     expect(screen.getByText(/发布进度 50\.0%/)).toBeTruthy();
     expect(screen.getByText(/2026-09-13 至 2026-10-12/)).toBeTruthy();
+    // 评审 r1 L2：标题栏只有标题和导出按钮，姓名在正文（375 宽时标题不被挤掉）
+    const head = screen.getByText("我的推广进度").closest(".ant-card-head") as HTMLElement;
+    expect(head.textContent).not.toContain("小王");
+    expect(within(head).getByRole("button", { name: /导出图片/ })).toBeTruthy();
     // 完整版的东西都不在：没有 Tab、刷单开关、店铺卡；不请求 /bi 与单品接口
     expect(screen.queryByRole("tab", { name: "店铺总览" })).toBeNull();
     expect(screen.queryByRole("switch", { name: "剔除刷单" })).toBeNull();

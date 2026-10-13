@@ -235,6 +235,20 @@ describe("ScatterChart", () => {
     expectKeyboardToggle();
   });
 
+  it("横轴最后一个刻度右对齐，不超出右边（评审 r1 L2）；只有一个刻度时居中", () => {
+    const { container } = render(
+      <ScatterChart title="笔记散点" xLabel="发布日期" yLabel="点赞" data={POINTS} />
+    );
+    const anchors = (root: HTMLElement) =>
+      Array.from(root.querySelectorAll('[data-testid="x-tick"]')).map((t) => t.getAttribute("text-anchor"));
+    expect(anchors(container)).toEqual(["middle", "middle", "end"]);
+    cleanup();
+    const single = render(
+      <ScatterChart title="笔记散点" xLabel="发布日期" yLabel="点赞" data={POINTS.slice(0, 1)} />
+    );
+    expect(anchors(single.container)).toEqual(["middle"]);
+  });
+
   it("全被滤掉时出 emptyText", () => {
     render(
       <ScatterChart

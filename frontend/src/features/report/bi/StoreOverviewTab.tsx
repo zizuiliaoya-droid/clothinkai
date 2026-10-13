@@ -298,7 +298,9 @@ export function StoreOverviewTab({ data, loading, caps }: Props) {
       </Card>
 
       <Card title="经营趋势" loading={loading}>
+        {/* 跟着卡片宽度画：375 宽不用横向滚动（评审 r1 L2） */}
         <MiniLineChart
+          fluid
           width={920}
           ariaLabel="经营趋势折线图"
           labels={trend.map((p) => trendLabel(p.date_from, p.date_to, granularity))}

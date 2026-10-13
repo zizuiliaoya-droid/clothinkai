@@ -120,7 +120,16 @@ export function ScatterChart({
           </g>
         ))}
         {xTicks.map((v, i) => (
-          <text key={`x${i}`} x={sx(v)} y={height - PAD_B + 16} textAnchor="middle" fontSize="10" fill={AXIS_TEXT}>
+          <text
+            key={`x${i}`}
+            data-testid="x-tick"
+            x={sx(v)}
+            y={height - PAD_B + 16}
+            // 最后一个刻度在右边缘：右对齐，日期不被 viewBox 截掉（评审 r1 L2）
+            textAnchor={xTicks.length > 1 && i === xTicks.length - 1 ? "end" : "middle"}
+            fontSize="10"
+            fill={AXIS_TEXT}
+          >
             {formatX(v)}
           </text>
         ))}

@@ -70,30 +70,29 @@ export function PersonalView({ preset, dateFrom, dateTo, enabled }: Props) {
       loading={isLoading}
       styles={{ body: { background: "#f8fafc" } }}
       extra={
-        <Space size={12} wrap>
-          {data ? <Typography.Text style={{ color: MUTED }}>{data.pr_name}</Typography.Text> : null}
-          <Button
-            icon={<DownloadOutlined />}
-            loading={exporting}
-            disabled={!data}
-            onClick={() =>
-              data &&
-              exportImage(bodyRef.current, biImageFilename("personal", data.date_from, data.date_to))
-            }
-          >
-            导出图片
-          </Button>
-        </Space>
+        <Button
+          icon={<DownloadOutlined />}
+          loading={exporting}
+          disabled={!data}
+          onClick={() =>
+            data &&
+            exportImage(bodyRef.current, biImageFilename("personal", data.date_from, data.date_to))
+          }
+        >
+          导出图片
+        </Button>
       }
     >
       {/* 导出图片截这一块（本人计数，不含金额） */}
       <div ref={bodyRef}>
+        {/* 姓名放正文、不放标题栏：375 宽时标题不被挤成「我的…」（评审 r1 L2） */}
         {data ? (
-          <div style={{ marginBottom: 12 }}>
+          <Space wrap size={[12, 4]} style={{ marginBottom: 12 }}>
+            <Typography.Text strong>{data.pr_name}</Typography.Text>
             <Typography.Text style={{ color: MUTED }}>
               {data.date_from} 至 {data.date_to} · 只统计本人的推广单
             </Typography.Text>
-          </div>
+          </Space>
         ) : null}
         <Row gutter={[12, 12]}>
           {cards.map((c) => (

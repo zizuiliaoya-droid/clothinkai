@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import { Empty } from "antd";
 import { isFiniteNumber } from "@/components/Charts/chartUtils";
 
@@ -16,7 +17,14 @@ interface Props {
   ariaLabel?: string;
   /** Y 轴刻度的格式化，默认取整加千分位。 */
   formatValue?: (v: number) => string;
+  /** 跟着容器宽度画（不超过 width），窄屏不用横向滚动；量不到宽度时（如测试环境）用 width。 */
+  fluid?: boolean;
 }
+
+/** fluid 时的最小宽度：再窄就横向滚动。 */
+const FLUID_MIN_WIDTH = 240;
+/** 横轴一个标签至少占的宽度（「YYYY-MM-DD」10 号字约 50px）。 */
+const X_LABEL_MIN_SPACE = 64;
 
 /**
  * 轻量 SVG 折线图（无第三方依赖）：多序列折线 + 网格 + 图例 + 端点。
@@ -29,15 +37,29 @@ export function MiniLineChart({
   width = 720,
   ariaLabel = "投产趋势折线图",
   formatValue = (v) => Math.round(v).toLocaleString(),
+  fluid = false,
 }: Props) {
-  if (!labels.length || !series.length) {
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [measured, setMeasured] = useState<number | null>(null);
+  // 空数据时渲染 Empty、没有容器：有数据后再量
+  const hasData = labels.length > 0 && series.length > 0;
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!fluid || !el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(([entry]) => setMeasured(Math.floor(entry.contentRect.width)));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [fluid, hasData]);
+
+  if (!hasData) {
     return <Empty description="暂无趋势数据" />;
   }
+  const chartWidth = fluid && measured ? Math.max(FLUID_MIN_WIDTH, Math.min(width, measured)) : width;
   const padL = 48;
   const padR = 16;
   const padT = 16;
   const padB = 40;
-  const innerW = width - padL - padR;
+  const innerW = chartWidth - padL - padR;
   const innerH = height - padT - padB;
 
   // 每条序列先把空值统一成 null，后面断线、算最大值都只看有限数字
@@ -59,16 +81,17 @@ export function MiniLineChart({
     y: padT + innerH - innerH * f,
   }));
 
-  // X 轴标签抽稀（最多 ~8 个）
-  const step = Math.max(1, Math.ceil(n / 8));
+  // X 轴标签抽稀（最多 ~8 个，窄图按宽度再少）
+  const maxXLabels = Math.max(2, Math.min(8, Math.floor(innerW / X_LABEL_MIN_SPACE)));
+  const step = Math.max(1, Math.ceil(n / maxXLabels));
 
   return (
-    <div style={{ overflowX: "auto" }}>
-      <svg width={width} height={height} role="img" aria-label={ariaLabel}>
+    <div ref={wrapRef} style={{ overflowX: "auto" }}>
+      <svg width={chartWidth} height={height} role="img" aria-label={ariaLabel}>
         {/* 网格 + Y 轴刻度 */}
         {yTicks.map((t, i) => (
           <g key={i}>
-            <line x1={padL} y1={t.y} x2={width - padR} y2={t.y} stroke="#f0f0f0" />
+            <line x1={padL} y1={t.y} x2={chartWidth - padR} y2={t.y} stroke="#f0f0f0" />
             <text x={padL - 6} y={t.y + 4} textAnchor="end" fontSize="10" fill="#999">
               {formatValue(t.v)}
             </text>
@@ -126,7 +149,7 @@ export function MiniLineChart({
         })}
       </svg>
       {/* 图例 */}
-      <div style={{ display: "flex", gap: 16, marginTop: 8 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", columnGap: 16, rowGap: 4, marginTop: 8 }}>
         {series.map((s) => (
           <span key={s.name} style={{ fontSize: 12, color: "#475569" }}>
             <span
