@@ -584,7 +584,7 @@ class TestBi:
         admin = await _call(session, bi_seeded.admin, "GET", f"{_BI}?{_BI_RANGE}")
         assert ops.status_code == admin.status_code == 200
         assert ops.json() == admin.json()
-        summary = ops.json()["promotion_summary"]
+        summary = ops.json()["store"]["promotion"]
         # 场景有效性：4 个金额都非零
         assert (
             summary["commission_amount"],
@@ -592,6 +592,61 @@ class TestBi:
             summary["unpublished_spend"],
             summary["cancelled_amount"],
         ) == ("530.00", "300.00", "150.00", "80.00")
+        assert (
+            summary["commission_count"],
+            summary["published_count"],
+            summary["unpublished_count"],
+            summary["cancelled_count"],
+        ) == (3, 1, 1, 1)
+
+    async def test_response_shape(self, session: AsyncSession, bi_seeded: Any) -> None:
+        """7e R6：响应只有 store / goods 两块，遗留的 cards / charts 与旧顶层字段都没了。"""
+        resp = await _call(
+            session, bi_seeded.admin, "GET", f"{_BI}?{_BI_RANGE}&exclude_brushing=false"
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert set(body) == {
+            "date_from",
+            "date_to",
+            "granularity",
+            "exclude_brushing",
+            "store",
+            "goods",
+        }
+        assert body["exclude_brushing"] is False
+        assert set(body["store"]) == {"summary", "trend", "promotion", "workload"}
+        assert set(body["goods"]) == {"items", "roi_top", "pay_share"}
+        assert set(body["store"]["summary"]) == {
+            "pay_amount",
+            "refund_amount",
+            "return_rate",
+            "brushing_amount",
+            "actual_sales",
+            "internal_spend",
+            "external_spend",
+            "total_spend",
+            "total_spend_ratio",
+            "internal_spend_ratio",
+            "external_spend_ratio",
+            "net_roi",
+            "roi_ex_brushing",
+        }
+        # 店铺站外 = 已发布单的推广成本（只有 300 那单），工作量按 PR 一行
+        assert body["store"]["summary"]["external_spend"] != "0.00"
+        (work,) = body["store"]["workload"]
+        assert (work["pr_id"], work["quote_count"], work["pending_count"]) == (
+            str(bi_seeded.pr.id),
+            3,
+            1,
+        )
+        for legacy in ("cards", "charts", "store_summary", "promotion_summary", "trend"):
+            assert legacy not in body
+
+    async def test_default_excludes_brushing(self, session: AsyncSession, flow_users: Any) -> None:
+        resp = await _call(session, flow_users.finance, "GET", f"{_BI}?{_BI_RANGE}")
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["exclude_brushing"] is True
 
 
 def _export(kind: str) -> str:

@@ -60,6 +60,16 @@ class TestReportExportApiContract:
         assert "/api/reports/bi" in paths
         assert "/api/reports/bi/layout" in paths
         assert "/api/reports/{report_type}/export" in paths
+        # 7e R6：BI 响应只有 store / goods 两块，遗留的 cards / charts 删了
+        bi = resp.json()["components"]["schemas"]["BiDashboard"]["properties"]
+        assert set(bi) == {
+            "date_from",
+            "date_to",
+            "granularity",
+            "exclude_brushing",
+            "store",
+            "goods",
+        }
 
     async def test_export_rows_are_complete_and_numeric(
         self, monkeypatch: pytest.MonkeyPatch

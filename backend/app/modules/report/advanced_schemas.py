@@ -435,18 +435,39 @@ class ReportCapabilities(BaseModel):
 
 
 class BiStoreSummary(BaseModel):
-    sales_amount: Decimal
+    """BI 店铺 KPI（7e R6，设计 2.6）：整个区间合成一行，公式同店铺日 / 周 / 月（2.4）。
+
+    来自 ``store_buckets.total_store_row``；全店口径（停用链接、未映射的日报都算）。
+    """
+
+    pay_amount: Decimal
     refund_amount: Decimal
     return_rate: Decimal | None = None
+    """退货率 = 退款 ÷ 支付。"""
+    brushing_amount: Decimal
+    actual_sales: Decimal
+    """实际销售额 = 支付 − 退款 − 刷单本金。"""
     internal_spend: Decimal
+    """站内推广费：逐天套默 13。"""
     external_spend: Decimal
+    """站外推广成本（全店已发布推广单）。"""
     total_spend: Decimal
+    """推广总额 = 站内 + 站外。"""
+    total_spend_ratio: Decimal | None = None
+    """推广总占比 = 推广总额 ÷ 支付总额。"""
     internal_spend_ratio: Decimal | None = None
+    """站内占比 = 站内 ÷ 实际销售额。"""
     external_spend_ratio: Decimal | None = None
-    roi: Decimal | None = None
+    """站外占比 = 站外 ÷ 实际销售额。"""
+    net_roi: Decimal | None = None
+    """净投产 = 实际销售额 ÷ 推广总额。"""
+    roi_ex_brushing: Decimal | None = None
+    """投产（扣除刷单）=（支付总额 − 刷单本金）÷ 推广总额。"""
 
 
 class BiPromotionSummary(BaseModel):
+    """推广费用 4 卡 = 工作进度按 PR 行求和（服务费口径，不是推广成本）。"""
+
     # 4 个金额过 F3（field_mask.aggregate_promo_amounts_visible）：R1 恒有值，收紧时为 null
     commission_amount: Decimal | None
     commission_count: int
@@ -472,56 +493,85 @@ class BiWorkloadRow(BaseModel):
     overdue_count: int
 
 
-class BiStylePerformance(BaseModel):
-    """BI 看板的商品表现行；沿用类名但主体已是商品（套装合并）。"""
+class BiTrendPoint(BaseModel):
+    """经营趋势一点 = 店铺日行按粒度分桶（``bucket_store_rows``），行上是实际起止。"""
+
+    date_from: date
+    date_to: date
+    pay_amount: Decimal
+    refund_amount: Decimal
+    actual_sales: Decimal
+    internal_spend: Decimal
+    external_spend: Decimal
+    total_spend: Decimal
+    net_roi: Decimal | None = None
+
+
+class BiStoreBlock(BaseModel):
+    summary: BiStoreSummary
+    trend: list[BiTrendPoint]
+    promotion: BiPromotionSummary
+    workload: list[BiWorkloadRow]
+
+
+class BiGoodsRow(BaseModel):
+    """BI 单品表一行 = 按商品合计的投产行（``ProductionService.get_goods_rows``，不拆渠道）。
+
+    不带商品编码（补充 2）；站外 = 投产的 ``promo_cost``，ROI = 投产的 ``net_roi``（跟刷单开关）。
+    """
 
     goods_id: UUID
-    goods_code: str
     goods_title: str
     goods_short_name: str | None = None
     is_suit: bool = False
     style_codes: list[str] = Field(default_factory=list)
-    """成员款号（来自 ``ProductionRow.style_codes``）；图表标签同名时用它区分（补充 2，§11.1）。"""
+    """成员款号；图表标签同名时用它区分（补充 2，§11.1）。"""
     main_image_url: str | None = None
-    sales_amount: Decimal
+    pay_amount: Decimal
     refund_amount: Decimal
     return_rate: Decimal | None = None
     confirmed_amount: Decimal
     internal_spend: Decimal
     external_spend: Decimal
     total_spend: Decimal
-    roi: Decimal | None = None
+    net_roi: Decimal | None = None
 
 
-class BiTrendPoint(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+class BiChartDatum(BaseModel):
+    """柱 / 饼的一项：``goods_id`` 为空 = 不可下钻（饼图的「其他」）。"""
 
-    date: date
-    sales_amount: Decimal = Decimal("0")
-    refund_amount: Decimal = Decimal("0")
-    internal_spend: Decimal = Decimal("0")
-    external_spend: Decimal = Decimal("0")
+    goods_id: UUID | None = None
+    label: str
+    value: Decimal
+
+
+class BiGoodsBlock(BaseModel):
+    items: list[BiGoodsRow]
+    roi_top: list[BiChartDatum]
+    """净投产 Top10（空 ROI 不进）。"""
+    pay_share: list[BiChartDatum]
+    """支付 Top10 + 「其他」（其余商品支付之和 > 0 才有）。"""
 
 
 class BiDashboard(BaseModel):
+    """``GET /api/reports/bi``（7e R6）：整页一次 ``freshness``，两块同一来源。"""
+
     date_from: date
     date_to: date
     granularity: str
-    store_summary: BiStoreSummary
-    promotion_summary: BiPromotionSummary
-    workload: list[BiWorkloadRow]
-    style_performance: list[BiStylePerformance]
-    trend: list[BiTrendPoint]
-    # 兼容 U17 旧客户端；新前端只消费上面的结构化字段。
-    cards: list[dict] = Field(default_factory=list)
-    charts: list[dict] = Field(default_factory=list)
+    exclude_brushing: bool
+    store: BiStoreBlock
+    goods: BiGoodsBlock
 
 
 __all__ = [
+    "BiChartDatum",
     "BiDashboard",
+    "BiGoodsBlock",
+    "BiGoodsRow",
     "BiPromotionSummary",
+    "BiStoreBlock",
     "BiStoreSummary",
-    "BiStylePerformance",
     "BiTrendPoint",
     "BiWorkloadRow",
     "DrillPromotionPage",

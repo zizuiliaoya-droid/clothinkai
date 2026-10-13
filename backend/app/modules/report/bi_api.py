@@ -43,12 +43,16 @@ async def get_bi_dashboard(
         str,
         Query(pattern=r"^(day|week|month|year)$", description="趋势粒度"),
     ] = "day",
+    exclude_brushing: Annotated[
+        bool, Query(description="单品块与单品趋势的 ROI 是否扣刷单（7e R6）")
+    ] = True,
 ) -> BiDashboard:
     tr = resolve_time_range(preset, date_from, date_to)
     return await service.get_dashboard(
         user.tenant_id,
         tr,
         granularity=granularity,
+        exclude_brushing=exclude_brushing,
         field_ctx=await build_field_perm_context(user.id, session),
     )
 

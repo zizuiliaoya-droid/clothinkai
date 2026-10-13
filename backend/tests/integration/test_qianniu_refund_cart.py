@@ -191,11 +191,11 @@ class TestRefundAndAddCartFromRealExport:
             await _import(session, tenant_a, [_export_row(pid, D1), _second_day(pid)])
 
             dash = await BiService(session).get_dashboard(
-                tenant_a.id, (D1, D2), field_ctx=_SUPER_CTX
+                tenant_a.id, (D1, D2), exclude_brushing=True, field_ctx=_SUPER_CTX
             )
-            assert dash.store_summary.sales_amount == Decimal("15290.00")
-            assert dash.store_summary.refund_amount == Decimal("5652.00")
-            by_day = {p.date: p for p in dash.trend}
+            assert dash.store.summary.pay_amount == Decimal("15290.00")
+            assert dash.store.summary.refund_amount == Decimal("5652.00")
+            by_day = {p.date_from: p for p in dash.store.trend}
             assert by_day[D1].refund_amount == Decimal("5652.00")
             assert by_day[D2].refund_amount == Decimal("0")
         finally:

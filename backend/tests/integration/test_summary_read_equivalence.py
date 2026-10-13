@@ -37,7 +37,6 @@ from app.modules.product.platform_product_models import PlatformProduct
 from app.modules.promotion.urge_calculator import get_today
 from app.modules.report.advanced_repository import (
     PRODUCTION_COUNT_COLUMNS,
-    BiRepository,
     ProductionRepository,
     StoreDailyRepository,
     WorkProgressRepository,
@@ -51,6 +50,7 @@ from app.modules.report.advanced_schemas import (
     WorkProgressWeekRow,
     WorkProgressWeeks,
 )
+from app.modules.report.bi_service import BiService
 from app.modules.report.domain import bucket_start
 from app.modules.report.drill_service import DrillService
 from app.modules.report.pr_scope import PR_SCOPE_ALL, UNASSIGNED, PrScope, PrScopeKind
@@ -2713,16 +2713,22 @@ class TestStoreDaily:
                 got = rows[wed + timedelta(days=n)]
                 assert tuple(got[c] for c in cols) == values, f"第 {n} 天"
 
-            # 6 列的区间和 = BI 店铺汇总的退款 / 站内 / 站外（R6 起 BI 改读这里）
-            bi = await BiRepository(session).aggregate_store_summary(**kwargs)
+            # 区间和 = BI 店铺 KPI（R6 起 BI 读这里）；站内逐天套默 13：第 0 天手填直通车 40、
+            # 第 2 天万相台 80、第 9 天刷新后才录的全站推 12（不是万相台合计 80）
+            dash = await BiService(session).get_dashboard(
+                tenant_a.id, (wed, hi), exclude_brushing=True, field_ctx=_SUPER_CTX
+            )
+            kpi = dash.store.summary
 
             def total(col: str) -> Decimal:
                 return sum((Decimal(str(r[col])) for r in live), Decimal("0"))
 
-            assert total("pay_amount") == bi["sales_amount"]
-            assert total("refund_amount") == bi["refund_amount"]
-            assert total("ad_spend") == bi["internal_spend"]
-            assert total("promo_cost") == bi["external_spend"]
+            assert kpi.pay_amount == total("pay_amount") == Decimal("1600.00")
+            assert kpi.refund_amount == total("refund_amount") == Decimal("90.00")
+            assert kpi.brushing_amount == total("brushing_amount") == Decimal("150.00")
+            assert kpi.external_spend == total("promo_cost") > 0
+            assert kpi.internal_spend == Decimal("132.00")
+            assert kpi.actual_sales == Decimal("1360.00")
         finally:
             tenant_id_ctx.reset(tok)
 
