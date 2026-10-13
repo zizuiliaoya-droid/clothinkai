@@ -22,15 +22,16 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.security.field_permissions import FieldPermissionContext
 from app.core.tenancy import tenant_id_ctx
 from app.modules.collect.models import AdDaily, QianniuDaily
 from app.modules.product.goods_models import GoodsMain, GoodsStyleItem
 from app.modules.product.platform_product_models import PlatformProduct
 from app.modules.report.advanced_repository import (
-    BiRepository,
     ProductionRepository,
     StoreDailyRepository,
 )
+from app.modules.report.bi_service import BiService
 from app.modules.report.summary_models import ProductRoiSummary
 from app.modules.report.summary_refresh_service import SummaryRefreshService
 
@@ -39,6 +40,14 @@ pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 # 远离其他用例的日期，店铺 / BI 的全租户合计只含本用例的数据
 D1 = date(2026, 5, 11)
 D2 = date(2026, 5, 12)
+_SUPER_CTX = FieldPermissionContext(frozenset(), frozenset(), frozenset(), is_superuser=True)
+
+
+async def _bi_store(session: AsyncSession, tenant: Any) -> Any:
+    dash = await BiService(session).get_dashboard(
+        tenant.id, (D1, D2), exclude_brushing=True, field_ctx=_SUPER_CTX
+    )
+    return dash.store.summary
 
 
 async def _goods(session: AsyncSession, tenant: Any, style: Any, *, code: str) -> GoodsMain:
@@ -259,11 +268,9 @@ class TestInactiveLink:
             }
             assert store[D1]["pay_amount"] == Decimal("1500.00")
             assert store[D2]["pay_amount"] == Decimal("300.00")
-            bi = await BiRepository(session).aggregate_store_summary(
-                tenant_id=tenant_a.id, date_from=D1, date_to=D2
-            )
-            assert bi["sales_amount"] == Decimal("1800.00")
-            assert bi["refund_amount"] == Decimal("35.00")
+            bi = await _bi_store(session, tenant_a)
+            assert bi.pay_amount == Decimal("1800.00")
+            assert bi.refund_amount == Decimal("35.00")
         finally:
             tenant_id_ctx.reset(token)
 
@@ -354,10 +361,8 @@ class TestInactiveLink:
             assert v["extra"] == [("ad", "ad_on"), ("qianniu", "qn")]
             assert _sum_attr(v["stored"], "ad_spend") == Decimal("50.00")
 
-            bi = await BiRepository(session).aggregate_store_summary(
-                tenant_id=tenant_a.id, date_from=D1, date_to=D2
-            )
-            assert bi["internal_spend"] == Decimal("150.00")
+            bi = await _bi_store(session, tenant_a)
+            assert bi.internal_spend == Decimal("150.00")
         finally:
             tenant_id_ctx.reset(token)
 

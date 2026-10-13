@@ -43,12 +43,12 @@ export function AppLayout() {
   // PR / 主管 / 财务 / 运营点进去是 403，菜单里就不放。只管显示，后端 403 才是闸门
   const canViewWarehouse = isSystemAdmin || roles.includes("warehouse");
   // 报表菜单按 capabilities（/me 只给角色，算不了 scope）：能力没回来前不显示，免得先出现再收回。
-  // 「BI看板」只给看全部的人；个人版随 R6。7e R4 起发文进度表、单品投产、店铺日 / 周 / 月也按能力显隐
-  // （财务没有这几张表的读权限，菜单里就不出现）。只管显示，后端 403 才是闸门
+  // 「BI看板」看全部（full）与只看本人（personal，7e R6 起 PR 进去是个人版）都显示。7e R4 起发文进度表、
+  // 单品投产、店铺日 / 周 / 月也按能力显隐（财务没有这几张表的读权限，菜单里就不出现）。只管显示，后端 403 才是闸门
   const { data: reportCaps } = useReportCapabilities();
   const canViewWorkProgress = reportCaps?.work_progress != null;
   const canViewPublishProgress = reportCaps?.publish_progress != null;
-  const canViewBi = reportCaps?.bi === "full";
+  const canViewBi = reportCaps?.bi != null;
   const canViewProduction = reportCaps?.production ?? false;
   const canViewStore = reportCaps?.store_read ?? false;
   // 「投产分析」分组（7e R4，设计 2.4）：单品投产 + 店铺日 / 周 / 月；空组不出

@@ -635,6 +635,7 @@ async def promotion_factory(session: AsyncSession, tenant_a: Any) -> Any:
                     "settlement_status",
                     "is_active",
                     "like_count",
+                    "metrics_recorded_at",
                     "source_extra",
                     "cooperation_mode",
                     "return_shipping_fee",
@@ -721,6 +722,7 @@ async def promotion_factory(session: AsyncSession, tenant_a: Any) -> Any:
                     ),
                     is_active=kw.get("is_active", True),
                     like_count=kw.get("like_count"),
+                    metrics_recorded_at=kw.get("metrics_recorded_at"),
                     # 列 NOT NULL + server_default '{}'，显式传 None 会违反约束
                     source_extra=kw.get("source_extra") or {},
                     # PRD V1.4 模块二 / 改动 4 的字段。工厂的 kwarg 清单是手写的，

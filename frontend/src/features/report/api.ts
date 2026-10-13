@@ -3,6 +3,8 @@
 import { apiClient } from "@/services/apiClient";
 import type {
   BiDashboard,
+  BiGoodsNotes,
+  BiPersonal,
   DrillPromotionPage,
   DrillPromotionParams,
   ProductionReport,
@@ -178,9 +180,54 @@ export async function getBiDashboard(
     date_from?: string;
     date_to?: string;
     granularity?: TimeGranularity;
+    /** 单品块与单品趋势的 ROI 是否扣刷单（7e R6，后端默认 true）；店铺块是全店口径、不跟它。 */
+    exclude_brushing?: boolean;
   } = {}
 ): Promise<BiDashboard> {
   const resp = await apiClient.get<BiDashboard>("/api/reports/bi", { params });
+  return resp.data;
+}
+
+/**
+ * BI Tab2 单品趋势（7e R6）：参数与响应同 `/production/trend`，判权挂 `report.bi:read`（财务也能调）。
+ * 查询键 ["bi-goods", "trend", …]（刷新汇总后随 `bi-goods` 一起作废）。
+ */
+export async function getBiGoodsTrend(
+  goodsId: string,
+  params: {
+    preset?: string;
+    date_from?: string;
+    date_to?: string;
+    granularity?: TimeGranularity;
+    exclude_brushing?: boolean;
+  } = {}
+): Promise<ProductionTrend> {
+  const resp = await apiClient.get<ProductionTrend>(
+    `/api/reports/bi/goods/${encodeURIComponent(goodsId)}/trend`,
+    { params }
+  );
+  return resp.data;
+}
+
+/** BI Tab2 笔记散点（7e R6）：起止必填、跨度 ≤ 366 天；查询键 ["bi-goods", "notes", …]。 */
+export async function getBiGoodsNotes(
+  goodsId: string,
+  params: { date_from: string; date_to: string }
+): Promise<BiGoodsNotes> {
+  const resp = await apiClient.get<BiGoodsNotes>(
+    `/api/reports/bi/goods/${encodeURIComponent(goodsId)}/notes`,
+    { params }
+  );
+  return resp.data;
+}
+
+/**
+ * BI PR 个人版（7e R6）：只要 `report.bi:read_own`，恒为本人、不含金额；查询键 ["bi-personal", …]。
+ */
+export async function getBiPersonal(
+  params: { preset?: string; date_from?: string; date_to?: string } = {}
+): Promise<BiPersonal> {
+  const resp = await apiClient.get<BiPersonal>("/api/reports/bi/personal", { params });
   return resp.data;
 }
 
@@ -228,7 +275,8 @@ export async function getDrillPromotions(
   return resp.data;
 }
 
-export type ReportExportType = "work-progress" | "store-daily" | "production";
+/** store = 店铺日 / 周 / 月三页（列跟页面走，7e R6）；store-daily 是旧的 7 列导出，保留不变。 */
+export type ReportExportType = "work-progress" | "store-daily" | "store" | "production";
 
 export interface ReportExportParams {
   preset?: string;

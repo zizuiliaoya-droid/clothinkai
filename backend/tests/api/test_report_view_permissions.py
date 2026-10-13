@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import io
 from collections.abc import AsyncIterator
-from datetime import timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 from uuid import uuid4
@@ -584,7 +584,7 @@ class TestBi:
         admin = await _call(session, bi_seeded.admin, "GET", f"{_BI}?{_BI_RANGE}")
         assert ops.status_code == admin.status_code == 200
         assert ops.json() == admin.json()
-        summary = ops.json()["promotion_summary"]
+        summary = ops.json()["store"]["promotion"]
         # 场景有效性：4 个金额都非零
         assert (
             summary["commission_amount"],
@@ -592,6 +592,428 @@ class TestBi:
             summary["unpublished_spend"],
             summary["cancelled_amount"],
         ) == ("530.00", "300.00", "150.00", "80.00")
+        assert (
+            summary["commission_count"],
+            summary["published_count"],
+            summary["unpublished_count"],
+            summary["cancelled_count"],
+        ) == (3, 1, 1, 1)
+
+    async def test_response_shape(self, session: AsyncSession, bi_seeded: Any) -> None:
+        """7e R6：响应只有 store / goods 两块，遗留的 cards / charts 与旧顶层字段都没了。"""
+        resp = await _call(
+            session, bi_seeded.admin, "GET", f"{_BI}?{_BI_RANGE}&exclude_brushing=false"
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert set(body) == {
+            "date_from",
+            "date_to",
+            "granularity",
+            "exclude_brushing",
+            "store",
+            "goods",
+        }
+        assert body["exclude_brushing"] is False
+        assert set(body["store"]) == {"summary", "trend", "promotion", "workload"}
+        assert set(body["goods"]) == {"items", "roi_top", "pay_share"}
+        assert set(body["store"]["summary"]) == {
+            "pay_amount",
+            "refund_amount",
+            "return_rate",
+            "brushing_amount",
+            "actual_sales",
+            "internal_spend",
+            "external_spend",
+            "total_spend",
+            "total_spend_ratio",
+            "internal_spend_ratio",
+            "external_spend_ratio",
+            "net_roi",
+            "roi_ex_brushing",
+        }
+        # 店铺站外 = 已发布单的推广成本（只有 300 那单），工作量按 PR 一行
+        assert body["store"]["summary"]["external_spend"] != "0.00"
+        (work,) = body["store"]["workload"]
+        assert (work["pr_id"], work["quote_count"], work["pending_count"]) == (
+            str(bi_seeded.pr.id),
+            3,
+            1,
+        )
+        for legacy in ("cards", "charts", "store_summary", "promotion_summary", "trend"):
+            assert legacy not in body
+
+    async def test_default_excludes_brushing(self, session: AsyncSession, flow_users: Any) -> None:
+        resp = await _call(session, flow_users.finance, "GET", f"{_BI}?{_BI_RANGE}")
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["exclude_brushing"] is True
+
+
+# ------------------------- BI 个人版（7e R6，Q16） ------------------------- #
+
+_BI_PERSONAL = f"{_BI}/personal?{_BI_RANGE}"
+# 手写白名单：只有计数与进度，不含任何金额（设计 2.6 / 第 8 节「个人版响应键集合 = 白名单」）
+_PERSONAL_KEYS = {
+    "date_from",
+    "date_to",
+    "pr_name",
+    "target_count",
+    "quote_count",
+    "quote_progress",
+    "publish_count",
+    "publish_progress",
+    "unpublished_count",
+    "cancel_count",
+    "overdue_count",
+}
+
+
+@pytest.fixture
+async def personal_seeded(
+    session: AsyncSession,
+    bi_seeded: Any,
+    product_factory: Any,
+    blogger_factory: Any,
+    promotion_factory: Any,
+) -> Any:
+    """在 ``bi_seeded``（pr 三单）之上：pr 的月目标 6 篇、pr2 一单已发布（不该算进 pr）。"""
+    from app.modules.report.work_progress_models import TargetPlanning
+
+    style = await product_factory.style(style_code=f"BP{uuid4().hex[:8]}")
+    session.add(
+        TargetPlanning(
+            tenant_id=bi_seeded.tenant.id,
+            pr_id=bi_seeded.pr.id,
+            style_id=style.id,
+            period_month=_MONTH,
+            min_target=6,
+        )
+    )
+    await promotion_factory.promotion(
+        style=style,
+        blogger=await blogger_factory.blogger(),
+        pr=bi_seeded.pr2,
+        internal_code=f"BP{uuid4().hex[:10].upper()}",
+        cooperation_date=_M_LO + timedelta(days=5),
+        quote_amount=Decimal("99.00"),
+        publish_status="已发布",
+    )
+    await session.flush()
+    return bi_seeded
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+class TestBiPersonal:
+    async def test_pr_whitelist_own_counts(
+        self, session: AsyncSession, personal_seeded: Any
+    ) -> None:
+        pr = personal_seeded.pr
+        resp = await _call(session, pr, "GET", _BI_PERSONAL)
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert set(body) == _PERSONAL_KEYS
+        # 计数 = 本人工作进度那一行（pr2 的单不算）；目标篇数读月目标
+        wp = await _call(
+            session, pr, "GET", f"{_WP}?preset=custom&date_from={_M_LO}&date_to={_M_HI}"
+        )
+        (own,) = wp.json()
+        assert own["pr_id"] == str(pr.id)
+        for key in (
+            "pr_name",
+            "quote_count",
+            "publish_count",
+            "unpublished_count",
+            "cancel_count",
+            "overdue_count",
+        ):
+            assert body[key] == own[key], key
+        assert (body["date_from"], body["date_to"]) == (str(_M_LO), str(_M_HI))
+        assert (body["target_count"], body["quote_count"], body["publish_count"]) == (6, 3, 1)
+        assert (body["unpublished_count"], body["cancel_count"]) == (1, 1)
+        assert (body["quote_progress"], body["publish_progress"]) == ("0.5000", "0.3333")
+
+    async def test_admin_without_promotions_zeros(
+        self, session: AsyncSession, personal_seeded: Any
+    ) -> None:
+        """管理员靠 ``*`` 能调；个人版恒为本人，本人一单都没有 → 计数全 0、进度 null。"""
+        admin = personal_seeded.admin
+        resp = await _call(session, admin, "GET", _BI_PERSONAL)
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert set(body) == _PERSONAL_KEYS
+        assert body["pr_name"] == (admin.display_name or admin.username)
+        assert [body[k] for k in sorted(_PERSONAL_KEYS) if k.endswith("_count")] == [0] * 6
+        assert (body["quote_progress"], body["publish_progress"]) == (None, None)
+
+    @pytest.mark.parametrize("role", ["pr_manager", "finance", "operations", "warehouse"])
+    async def test_forbidden(self, session: AsyncSession, flow_users: Any, role: str) -> None:
+        """``report.*:read`` / ``report.bi:read`` 都捞不到 ``read_own``：完整版的人不走个人版。"""
+        resp = await _call(session, getattr(flow_users, role), "GET", _BI_PERSONAL)
+        assert (resp.status_code, resp.json()["code"]) == (403, "PERMISSION_DENIED")
+
+
+# ------------------- BI 单品日趋势与笔记散点（7e R6，设计 2.6） ------------------- #
+
+_RECORDED = datetime(2026, 1, 1, tzinfo=UTC)
+
+
+def _bi_goods(goods_id: Any, tail: str) -> str:
+    return f"{_BI}/goods/{goods_id}/{tail}"
+
+
+def _notes(goods_id: Any, lo: Any = _M_LO, hi: Any = _M_HI) -> str:
+    return f"{_bi_goods(goods_id, 'notes')}?date_from={lo}&date_to={hi}"
+
+
+@pytest.fixture
+async def bi_goods_seeded(
+    session: AsyncSession,
+    flow_users: Any,
+    tenant_b: Any,
+    product_factory: Any,
+    blogger_factory: Any,
+    promotion_factory: Any,
+) -> Any:
+    """商品 A：千牛两天销售（趋势）+ 两张进散点的单 + 各差一个条件的 6 张；商品 B 一张；
+    别租户的商品 X 一张（条件都满足）。"""
+    from types import SimpleNamespace
+
+    from app.modules.collect.models import QianniuDaily
+    from app.modules.product.goods_models import GoodsMain
+    from app.modules.product.platform_product_models import PlatformProduct
+
+    tenant = flow_users.tenant
+    style = await product_factory.style(style_code=f"BG{uuid4().hex[:8]}")
+    blogger = await blogger_factory.blogger()
+
+    async def goods(t: Any) -> Any:
+        tok = tenant_id_ctx.set(t.id)
+        try:
+            g = GoodsMain(tenant_id=t.id, goods_code=f"BG{uuid4().hex[:8]}", goods_title="散点")
+            session.add(g)
+            await session.flush()
+        finally:
+            tenant_id_ctx.reset(tok)
+        return g
+
+    a, b, x = await goods(tenant), await goods(tenant), await goods(tenant_b)
+    pp = PlatformProduct(
+        tenant_id=tenant.id,
+        platform="千牛",
+        platform_id=f"P{uuid4().hex[:10]}",
+        style_id=style.id,
+        goods_main_id=a.id,
+        channel="普通",
+        is_active=True,
+    )
+    session.add(pp)
+    await session.flush()
+    for offset, pay in ((2, "800.00"), (6, "300.00")):
+        session.add(
+            QianniuDaily(
+                tenant_id=tenant.id,
+                platform_product_id=pp.id,
+                platform_id_snapshot=pp.platform_id,
+                date=_M_LO + timedelta(days=offset),
+                visitors=50,
+                pay_amount=Decimal(pay),
+                pay_orders=2,
+                refund_amount=Decimal("0.00"),
+            )
+        )
+
+    async def promo(goods_main: Any, **kw: Any) -> Any:
+        base: dict[str, Any] = {
+            "pr": flow_users.pr,
+            "goods_main_id": goods_main.id,
+            "cooperation_date": _M_LO + timedelta(days=1),
+            "actual_publish_date": _M_LO + timedelta(days=5),
+            "publish_status": "已发布",
+            "metrics_recorded_at": _RECORDED,
+            "like_count": 120,
+            "quote_amount": Decimal("300.00"),
+            "cost_snapshot": Decimal("20.00"),
+        }
+        base.update(kw)
+        return await promotion_factory.promotion(
+            style=style, blogger=blogger, internal_code=f"BG{uuid4().hex[:10].upper()}", **base
+        )
+
+    late = await promo(a)
+    # 发布更早、点赞原始值 0：响应按发布日期升序排在前面
+    early = await promo(a, actual_publish_date=_M_LO + timedelta(days=3), like_count=0)
+    # 以下各差一个条件，都不进散点
+    await promo(a, metrics_recorded_at=None, like_count=50)
+    await promo(a, publish_status="未发布", actual_publish_date=None)
+    await promo(a, publish_status="已取消")
+    await promo(a, is_active=False)
+    await promo(a, cooperation_date=_M_LO - timedelta(days=1))
+    await promo(a, actual_publish_date=None)
+    await promo(b)
+    await promo(x, tenant=tenant_b)
+    await session.flush()
+    return SimpleNamespace(users=flow_users, a=a, b=b, x=x, late=late, early=early, blogger=blogger)
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+class TestBiGoods:
+    async def test_finance_trend_but_not_production_trend(
+        self, session: AsyncSession, bi_goods_seeded: Any
+    ) -> None:
+        s = bi_goods_seeded
+        fin = s.users.finance
+        bi = await _call(session, fin, "GET", f"{_bi_goods(s.a.id, 'trend')}?{_BI_RANGE}")
+        assert bi.status_code == 200, bi.text
+        prod = await _call(
+            session, fin, "GET", f"/api/reports/production/trend?goods_id={s.a.id}&{_BI_RANGE}"
+        )
+        assert (prod.status_code, prod.json()["code"]) == (403, "PERMISSION_DENIED")
+        notes = await _call(session, fin, "GET", _notes(s.a.id))
+        assert notes.status_code == 200, notes.text
+
+    @pytest.mark.parametrize("role", ["pr", "warehouse"])
+    async def test_forbidden(self, session: AsyncSession, flow_users: Any, role: str) -> None:
+        gid = uuid4()
+        for path in (f"{_bi_goods(gid, 'trend')}?{_BI_RANGE}", _notes(gid)):
+            resp = await _call(session, getattr(flow_users, role), "GET", path)
+            assert (resp.status_code, resp.json()["code"]) == (403, "PERMISSION_DENIED"), path
+
+    @pytest.mark.parametrize(
+        ("granularity", "exclude_brushing"), [("day", "false"), ("week", "true")]
+    )
+    async def test_trend_equals_production_trend(
+        self,
+        session: AsyncSession,
+        bi_goods_seeded: Any,
+        granularity: str,
+        exclude_brushing: str,
+    ) -> None:
+        s = bi_goods_seeded
+        params = f"{_BI_RANGE}&granularity={granularity}&exclude_brushing={exclude_brushing}"
+        bi = await _call(session, s.users.admin, "GET", f"{_bi_goods(s.a.id, 'trend')}?{params}")
+        prod = await _call(
+            session,
+            s.users.admin,
+            "GET",
+            f"/api/reports/production/trend?goods_id={s.a.id}&{params}",
+        )
+        assert bi.status_code == prod.status_code == 200, (bi.text, prod.text)
+        assert bi.json() == prod.json()
+        # 场景有效性：有销售点、有站外花费
+        points = bi.json()["points"]
+        assert any(p["pay_amount"] != "0.00" for p in points)
+        assert any(p["promo_cost"] != "0.00" for p in points)
+
+    async def test_notes_filters_and_order(
+        self, session: AsyncSession, bi_goods_seeded: Any
+    ) -> None:
+        """只回本商品、本租户、已发布、录过 7 天数据、合作日期在区间、有发布日期的单，按发布日期升序。"""
+        s = bi_goods_seeded
+        resp = await _call(session, s.users.admin, "GET", _notes(s.a.id))
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert (body["goods_id"], body["date_from"], body["date_to"], body["truncated"]) == (
+            str(s.a.id),
+            str(_M_LO),
+            str(_M_HI),
+            False,
+        )
+        assert body["points"] == [
+            {
+                "promotion_id": str(p.id),
+                "publish_date": str(p.actual_publish_date),
+                "like_count": like,
+                "promo_cost": "320.00",
+                "blogger_nickname": s.blogger.nickname,
+                "platform": "小红书",
+                "detail_url": None,
+            }
+            for p, like in ((s.early, 0), (s.late, 120))
+        ]
+        # 商品 B 只有自己那一张
+        b_points = (await _call(session, s.users.admin, "GET", _notes(s.b.id))).json()["points"]
+        assert len(b_points) == 1
+
+    async def test_notes_operations_cost_null(
+        self, session: AsyncSession, bi_goods_seeded: Any
+    ) -> None:
+        """F2：运营读不到逐单 ``quote_amount`` → 点大小（站外推广成本）null，其余与管理员相同。"""
+        s = bi_goods_seeded
+        ops = (await _call(session, s.users.operations, "GET", _notes(s.a.id))).json()
+        admin = (await _call(session, s.users.admin, "GET", _notes(s.a.id))).json()
+        assert [p["promo_cost"] for p in admin["points"]] == ["320.00", "320.00"]
+        assert [p["promo_cost"] for p in ops["points"]] == [None, None]
+        for p in admin["points"]:
+            p["promo_cost"] = None
+        assert ops == admin
+
+    async def test_notes_other_tenant_or_missing_empty(
+        self, session: AsyncSession, bi_goods_seeded: Any
+    ) -> None:
+        s = bi_goods_seeded
+        for gid in (s.x.id, uuid4()):
+            resp = await _call(session, s.users.admin, "GET", _notes(gid))
+            assert resp.status_code == 200, resp.text
+            assert (resp.json()["points"], resp.json()["truncated"]) == ([], False)
+
+    async def test_notes_truncated_over_500(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        """500 张 → 不截；第 501 张（发布最早）→ 取最近 500、``truncated`` 为真。"""
+        from app.modules.product.goods_models import GoodsMain
+
+        g = GoodsMain(
+            tenant_id=flow_users.tenant.id, goods_code=f"BT{uuid4().hex[:8]}", goods_title="多"
+        )
+        session.add(g)
+        await session.flush()
+        style = await product_factory.style(style_code=f"BT{uuid4().hex[:8]}")
+        blogger = await blogger_factory.blogger()
+
+        async def promo(publish_offset: int) -> Any:
+            return await promotion_factory.promotion(
+                style=style,
+                blogger=blogger,
+                goods_main_id=g.id,
+                internal_code=f"BT{uuid4().hex[:12].upper()}",
+                cooperation_date=_M_LO,
+                actual_publish_date=_M_LO + timedelta(days=publish_offset),
+                publish_status="已发布",
+                metrics_recorded_at=_RECORDED,
+                like_count=1,
+            )
+
+        for i in range(500):
+            await promo(2 + i % 20)
+        full = (await _call(session, flow_users.admin, "GET", _notes(g.id))).json()
+        assert (len(full["points"]), full["truncated"]) == (500, False)
+
+        oldest = await promo(1)
+        resp = (await _call(session, flow_users.admin, "GET", _notes(g.id))).json()
+        assert (len(resp["points"]), resp["truncated"]) == (500, True)
+        assert str(oldest.id) not in {p["promotion_id"] for p in resp["points"]}
+        dates = [p["publish_date"] for p in resp["points"]]
+        assert dates == sorted(dates)
+
+    async def test_notes_invalid_422(self, session: AsyncSession, flow_users: Any) -> None:
+        admin = flow_users.admin
+        bad_uuid = await _call(session, admin, "GET", _notes("not-a-uuid"))
+        assert bad_uuid.status_code == 422, bad_uuid.text
+        too_long = await _call(
+            session, admin, "GET", _notes(uuid4(), _M_LO, _M_LO + timedelta(days=367))
+        )
+        assert too_long.status_code == 422, too_long.text
+        reversed_range = await _call(session, admin, "GET", _notes(uuid4(), _M_HI, _M_LO))
+        assert reversed_range.status_code == 422, reversed_range.text
+        ok = await _call(session, admin, "GET", _notes(uuid4(), _M_LO, _M_LO + timedelta(days=366)))
+        assert ok.status_code == 200, ok.text
+        bad_trend = await _call(session, admin, "GET", f"{_bi_goods('x', 'trend')}?{_BI_RANGE}")
+        assert bad_trend.status_code == 422, bad_trend.text
 
 
 def _export(kind: str) -> str:
@@ -602,7 +1024,7 @@ def _export(kind: str) -> str:
 class TestExport:
     @pytest.mark.parametrize(
         ("kind", "status"),
-        [("work-progress", 200), ("production", 403), ("store-daily", 403)],
+        [("work-progress", 200), ("production", 403), ("store-daily", 403), ("store", 403)],
     )
     async def test_finance_by_report_type(
         self, session: AsyncSession, flow_users: Any, kind: str, status: int
@@ -626,13 +1048,16 @@ class TestExport:
         blogger_factory: Any,
         promotion_factory: Any,
     ) -> None:
-        """工作进度导出（7e R5）：三个 sheet；带季节只剩命中的单；单品末行未归属、不导商品编码。"""
+        """工作进度导出（7e R5）：三个 sheet；带季节只剩命中的单；单品末行未归属、不导商品编码。
+        单品第 2 列商品全称（7e R6 S12），未归属留空。
+        """
         from app.modules.product.goods_models import GoodsMain
 
         goods = GoodsMain(
             tenant_id=seeded.tenant.id,
             goods_code=f"XS{uuid4().hex[:8]}",
             goods_title="季节导出商品",
+            short_name="季节短名",
             season="2026秋",
         )
         session.add(goods)
@@ -662,17 +1087,24 @@ class TestExport:
         quote_col = header.index("约篇量")
         # 场景有效性：不带季节时 pr / pr2 / 未分配三行共 5 单；单品 = 季节商品 + 末行未归属
         assert sum(r[quote_col] for r in bare["PR 进度"][1:]) == 5
-        assert [r[0] for r in bare["单品汇总"][1:]] == ["季节导出商品", "未归属商品"]
+        assert bare["单品汇总"][0][:2] == ("商品", "商品全称")
+        assert [r[:2] for r in bare["单品汇总"][1:]] == [
+            ("季节短名", "季节导出商品"),
+            ("未归属商品", None),
+        ]
         assert sum(r[quote_col + 2] for r in bare["周明细"][1:]) == 5
         # 带季节：三个 sheet 都只剩命中的那一单，没有未归属行
         amount_col = header.index("约稿服务费")
         assert [(r[quote_col], r[amount_col]) for r in autumn["PR 进度"][1:]] == [(1, 66.0)]
-        assert [(r[0], r[quote_col]) for r in autumn["单品汇总"][1:]] == [("季节导出商品", 1)]
+        goods_quote_col = autumn["单品汇总"][0].index("约篇量")
+        assert [(r[0], r[1], r[goods_quote_col]) for r in autumn["单品汇总"][1:]] == [
+            ("季节短名", "季节导出商品", 1)
+        ]
         assert sum(r[quote_col + 2] for r in autumn["周明细"][1:]) == 1
         cells = {c for s in bare.values() for r in s for c in r}
         assert goods.goods_code not in cells
 
-    @pytest.mark.parametrize("kind", ["work-progress", "production", "store-daily"])
+    @pytest.mark.parametrize("kind", ["work-progress", "production", "store-daily", "store"])
     async def test_operations_all_types(
         self, session: AsyncSession, flow_users: Any, kind: str
     ) -> None:
@@ -687,8 +1119,9 @@ class TestExport:
         assert before.json()["details"]["required_scope"] == "report.production"
         await _override(session, fin, "report.production:read", "grant")
         assert (await _call(session, fin, "GET", _export("production"))).status_code == 200
-        store = await _call(session, fin, "GET", _export("store-daily"))
-        assert store.json()["details"]["required_scope"] == "report.store_daily"
+        for kind in ("store-daily", "store"):
+            store = await _call(session, fin, "GET", _export(kind))
+            assert store.json()["details"]["required_scope"] == "report.store_daily", kind
 
     async def test_invalid_type_still_400(self, session: AsyncSession, flow_users: Any) -> None:
         """类型先校验：不认识的类型照旧 400，不因为没有对应读权限变成 403。"""
@@ -722,7 +1155,7 @@ class TestExport:
 
 
 _CAPS = "/api/reports/capabilities"
-_ALL_EXPORTS = ["work-progress", "production", "store-daily"]
+_ALL_EXPORTS = ["work-progress", "production", "store-daily", "store"]
 
 # 6 个真实角色逐字段期望（报表视图设计第 4 节「能力端点」）
 _CAPS_EXPECTED: dict[str, dict[str, Any]] = {
@@ -1244,6 +1677,39 @@ class TestStoreDailyPut:
             session, flow_users.operations, "PUT", f"{_PUT_STORE}/{day or _M_LO}", body
         )
         assert (resp.status_code, resp.json()["code"]) == (422, code), resp.text
+
+    @pytest.mark.parametrize("blank", ["", "   ", "\t \n"])
+    async def test_blank_remark_is_null(
+        self, session: AsyncSession, flow_users: Any, blank: str
+    ) -> None:
+        """空串 / 纯空白备注归成 null（R4 评审 r2 L1）：没有行时不插空行，有行时清空备注。"""
+        ops = flow_users.operations
+        day = date(2021, 3, 3)
+        count_sql = text(
+            "SELECT count(*) FROM store_daily "
+            "WHERE tenant_id = CAST(:t AS uuid) AND date = CAST(:d AS date)"
+        )
+        params = {"t": str(flow_users.tenant.id), "d": day}
+        assert (await session.execute(count_sql, params)).scalar_one() == 0
+        missing = await _call(session, ops, "PUT", f"{_PUT_STORE}/{day}", {"remark": blank})
+        assert missing.status_code == 200, missing.text
+        assert missing.json() == {"ok": True, "date": str(day), **_MANUAL_NONE}
+        # 没有行、只传了空备注：不插金额全空的行（这天不进日期并集）
+        assert (await session.execute(count_sql, params)).scalar_one() == 0
+
+        first = await _call(session, ops, "PUT", f"{_PUT_STORE}/{day}", {"remark": "首录"})
+        assert first.json()["remark"] == "首录"
+        cleared = await _call(session, ops, "PUT", f"{_PUT_STORE}/{day}", {"remark": blank})
+        assert cleared.status_code == 200, cleared.text
+        assert cleared.json()["remark"] is None
+        stored = await session.execute(
+            text(
+                "SELECT remark FROM store_daily "
+                "WHERE tenant_id = CAST(:t AS uuid) AND date = CAST(:d AS date)"
+            ),
+            params,
+        )
+        assert stored.scalar_one() is None
 
     async def test_pr_manager_forbidden(self, session: AsyncSession, flow_users: Any) -> None:
         """主管只读：PUT 403。"""

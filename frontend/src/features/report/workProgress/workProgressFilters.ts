@@ -13,6 +13,8 @@ export interface WorkProgressFilters {
   date_from?: string;
   date_to?: string;
   season: string[];
+  /** BI 下钻落点（7e R6）：UUID 或 unassigned，只从 URL 带入、不记；数据与新鲜度到后开该行下钻一次。带它进来时不套记忆里的季节。 */
+  pr_id?: string;
 }
 
 export const WORK_PROGRESS_FILTER_SCHEMA: ReportFilterSchema<WorkProgressFilters> = {
@@ -20,6 +22,7 @@ export const WORK_PROGRESS_FILTER_SCHEMA: ReportFilterSchema<WorkProgressFilters
   date_from: { kind: "date", url: true, memory: true },
   date_to: { kind: "date", url: true, memory: true },
   season: { kind: "string_list", url: true, memory: true },
+  pr_id: { kind: "pr_id", url: true, memory: false, landing: true },
 };
 
 export const WORK_PROGRESS_FILTER_DEFAULTS: WorkProgressFilters = {

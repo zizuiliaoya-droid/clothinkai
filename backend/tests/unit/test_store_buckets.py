@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from app.modules.report.store_buckets import bucket_store_rows
+from app.modules.report.store_buckets import bucket_store_rows, total_store_row
 
 # 2026-09-09 是周三，所在 ISO 周 = 09-07（一）~ 09-13（日）
 WED = date(2026, 9, 9)
@@ -203,4 +203,89 @@ def test_rows_sorted_and_empty() -> None:
 
 def test_unsupported_granularity() -> None:
     with pytest.raises(ValueError):
-        bucket_store_rows([], "year", WED, FRI)
+        bucket_store_rows([], "quarter", WED, FRI)
+
+
+def test_year_bucket_clipped_to_range() -> None:
+    """year（BI 趋势用）：自然年 ∩ 区间，跨年分两桶。"""
+    date_from, date_to = date(2025, 12, 30), date(2026, 1, 2)
+    rows = bucket_store_rows(
+        [
+            _day(date(2025, 12, 30), pay_amount="10"),
+            _day(date(2025, 12, 31), pay_amount="5"),
+            _day(date(2026, 1, 2), pay_amount="20"),
+        ],
+        "year",
+        date_from,
+        date_to,
+    )
+    assert [(r.date_from, r.date_to, r.pay_amount, r.day_count) for r in rows] == [
+        (date(2025, 12, 30), date(2025, 12, 31), Decimal("15.00"), 2),
+        (date(2026, 1, 1), date(2026, 1, 2), Decimal("20.00"), 1),
+    ]
+
+
+def test_total_row_equals_sum_of_day_buckets() -> None:
+    """单桶 = 全区间：可加列 = 各日桶之和，比率在求和之后现算，行上是请求起止。"""
+    day_rows = [
+        _day(
+            WED,
+            visitors=10,
+            pay_amount="1000",
+            pay_orders=4,
+            refund_amount="100",
+            brushing_amount="50",
+            ad_spend="60",
+            promo_cost="40",
+            live_pay_amount="30",
+            live_ad_spend="3",
+        ),
+        _day(
+            FRI,
+            visitors=5,
+            pay_amount="500.005",
+            pay_orders=2,
+            refund_amount="0.005",
+            ad_spend="90",
+            zhitongche_spend="20",
+            promo_cost="10",
+            refund_only_amount="25",
+        ),
+    ]
+    date_from, date_to = WED - timedelta(days=40), FRI + timedelta(days=40)
+    total = total_store_row(day_rows, date_from, date_to)
+    days = bucket_store_rows(day_rows, "day", date_from, date_to)
+    assert (total.date_from, total.date_to, total.day_count) == (date_from, date_to, 2)
+    for key in ("visitors", "pay_orders", "refund_only_days"):
+        assert getattr(total, key) == sum(getattr(d, key) for d in days), key
+    for key in (
+        "refund_amount",
+        "brushing_amount",
+        "ad_spend",
+        "internal_spend",
+        "promo_cost",
+        "total_spend",
+        "live_pay_amount",
+        "live_ad_spend",
+    ):
+        assert getattr(total, key) == sum(getattr(d, key) for d in days), key
+    # 周五手填直通车 20 → 当天站内 = 20（不是万相台 90）；周三无手填 → 60
+    assert total.internal_spend == Decimal("80.00")
+    assert total.zhitongche_spend == Decimal("20.00")
+    assert total.ad_spend_total is None
+    # 求和之后才取整：1000 + 500.005 = 1500.005 → 1500.01（逐天先取整会是 1500.00 + 0.01）
+    assert total.pay_amount == Decimal("1500.01")
+    assert total.actual_sales == Decimal("1350.00")  # 1500.005 − 100.005 − 50
+    assert total.total_spend == Decimal("130.00")
+    assert total.net_roi == Decimal("10.3846")  # 1350 / 130
+    assert total.roi_ex_brushing == Decimal("11.1539")  # 1450.005 / 130
+    assert total.refund_only_amount == Decimal("25.00")
+    assert total.refund_only_rate == Decimal("0.0500")  # 25 / 500.005，只取已录那天
+
+
+def test_total_row_on_empty_input() -> None:
+    """没有日行也给一行（KPI 卡要有东西画）：金额 0、比率 None。"""
+    total = total_store_row([], WED, FRI)
+    assert (total.date_from, total.date_to, total.day_count) == (WED, FRI, 0)
+    assert total.pay_amount == Decimal("0.00")
+    assert total.net_roi is None and total.refund_only_amount is None

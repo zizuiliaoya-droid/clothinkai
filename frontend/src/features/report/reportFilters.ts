@@ -40,6 +40,8 @@ export type FilterFieldSpec = {
   url: boolean;
   /** 是否写进筛选记忆。 */
   memory: boolean;
+  /** 落点键（如 BI 下钻的 goods_id / pr_id）：URL 带了它，就不用记忆去补别的 URL 键，见 splitLandingMemory。 */
+  landing?: boolean;
 } & (
   | { kind: "enum"; values: readonly string[] }
   | { kind: "date" }
@@ -166,6 +168,32 @@ export function restoreMemoryFilters<T>(
   }
   if (hasTimeFields(schema)) normalizeTimeRange(out, false);
   return out as Partial<T>;
+}
+
+/**
+ * 落点链接（URL 带了 schema 里标 `landing` 的键）带的是来源页的完整筛选：能从 URL 读的键 URL 没带，
+ * 就回落页面默认、不用记忆。例：BI 没有季节筛选（= 全季节），下钻到投产 / 工作进度时不能套记忆里的季节，
+ * 否则数字对不上、目标商品 / PR 还可能被筛掉（7e R6 评审 M1）。不能从 URL 读的键（如粒度）照旧用记忆。
+ *
+ * 返回 `used`（初始化用的记忆）与 `kept`（被跳过的记忆）：落点只决定这一次看到什么，
+ * 用户之后改别的筛选时，`kept` 里没改的键按原值写回，不被落点的默认值覆盖。
+ */
+export function splitLandingMemory<T>(
+  url: Partial<T>,
+  memory: Partial<T>,
+  schema: ReportFilterSchema<T>
+): { used: Partial<T>; kept: Partial<T> } {
+  const keys = Object.keys(schema) as Array<keyof T & string>;
+  const isLanding = keys.some((k) => schema[k].landing && url[k] !== undefined);
+  if (!isLanding) return { used: memory, kept: {} };
+  const urlKeys = schemaUrlKeys(schema);
+  const used: Partial<T> = {};
+  const kept: Partial<T> = {};
+  for (const key of Object.keys(memory) as Array<keyof T & string>) {
+    if (!urlKeys.includes(key)) used[key] = memory[key];
+    else if (url[key] === undefined) kept[key] = memory[key];
+  }
+  return { used, kept };
 }
 
 /** 初始化顺序：URL → 记忆 → 页面默认，逐键覆盖。 */

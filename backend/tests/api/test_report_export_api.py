@@ -18,10 +18,13 @@ from app.modules.report.advanced_schemas import (
     ProductionReport,
     ProductionRow,
     Recent7Range,
+    StoreReport,
+    StoreReportRow,
     WorkProgressMetrics,
 )
 from app.modules.report.pr_scope import PR_SCOPE_ALL
 from app.modules.report.production_columns import PRODUCTION_COLUMNS
+from app.modules.report.store_columns import STORE_COLUMNS
 from app.modules.report.work_progress_columns import (
     GOODS_HEADERS,
     PR_HEADERS,
@@ -60,6 +63,16 @@ class TestReportExportApiContract:
         assert "/api/reports/bi" in paths
         assert "/api/reports/bi/layout" in paths
         assert "/api/reports/{report_type}/export" in paths
+        # 7e R6：BI 响应只有 store / goods 两块，遗留的 cards / charts 删了
+        bi = resp.json()["components"]["schemas"]["BiDashboard"]["properties"]
+        assert set(bi) == {
+            "date_from",
+            "date_to",
+            "granularity",
+            "exclude_brushing",
+            "store",
+            "goods",
+        }
 
     async def test_export_rows_are_complete_and_numeric(
         self, monkeypatch: pytest.MonkeyPatch
@@ -340,6 +353,114 @@ class TestReportExportApiContract:
         assert store_sheet.cell(2, 8).value in (None, "")
         assert store_sheet.cell(3, 8).value == 0.63
 
+    @pytest.mark.parametrize("granularity", ["day", "week", "month"])
+    async def test_store_follows_page_columns(
+        self, monkeypatch: pytest.MonkeyPatch, granularity: str
+    ) -> None:
+        """导出类型 ``store``（7e R6 S11，R4 评审 L5）：表头 = 周期列 + 页面列定义 + extra；
+        周 / 月写行上实际起止（区间从周三起，首行写周三不写周一）；文件名带粒度。"""
+        from app.modules.report import export_service as module
+
+        def store_row(date_from: date, date_to: date, **over: object) -> StoreReportRow:
+            # 每个指标列给不同的值，逐列能对上
+            values: dict[str, object] = {
+                c.key: (i + 1 if c.kind == "count" else Decimal(f"{i + 1}.25"))
+                for i, c in enumerate(STORE_COLUMNS)
+            }
+            values.update(over)
+            return StoreReportRow(
+                date_from=date_from,
+                date_to=date_to,
+                refund_only_days=1,
+                day_count=5,
+                **values,  # type: ignore[arg-type]
+            )
+
+        wed, sun = date(2026, 9, 2), date(2026, 9, 6)
+        items = [
+            store_row(wed, sun, extra={"成交人数": "2", "下单转化率": None}),
+            store_row(
+                date(2026, 9, 7),
+                date(2026, 9, 9),
+                ad_spend_total=None,
+                net_roi=None,
+                extra={"成交人数": "1"},
+            ),
+        ]
+        calls: list[tuple[object, ...]] = []
+
+        class FakeStoreDailyService:
+            def __init__(self, _session: object) -> None:
+                pass
+
+            async def get_store_report(self, *args: object) -> StoreReport:
+                calls.append(args[1:])
+                return StoreReport(
+                    granularity=args[2],  # type: ignore[arg-type]
+                    date_from=wed,
+                    date_to=date(2026, 9, 9),
+                    items=items,
+                    recorded_days=2,
+                    total_days=10,
+                )
+
+        monkeypatch.setattr(module, "StoreDailyService", FakeStoreDailyService)
+        period = (wed, date(2026, 9, 9))
+        response = await module.ReportExportService(None).export(  # type: ignore[arg-type]
+            uuid4(),
+            "store",
+            period,
+            granularity=granularity,
+            field_ctx=_SUPER_CTX,
+            perms=_ALL_PERMS,
+        )
+        assert calls == [(period, granularity)]
+        assert response.headers["content-disposition"] == (
+            f'attachment; filename="store-{granularity}_2026-09-02_2026-09-09.xlsx"'
+        )
+        body = b"".join([chunk async for chunk in response.body_iterator])
+        wb = load_workbook(io.BytesIO(body), data_only=False)
+        assert wb.sheetnames == [f"store-{granularity}"]
+        sheet = list(wb.active.iter_rows(values_only=True))
+        period_headers = ("日期",) if granularity == "day" else ("实际起", "实际止")
+        metric_headers = tuple(c.header for c in STORE_COLUMNS)
+        assert sheet[0] == (*period_headers, *metric_headers, "下单转化率", "成交人数")
+        assert "商品访客数合计" in sheet[0] and "访客数" not in sheet[0]
+        assert len(sheet) == 3
+        n = len(period_headers)
+        first, second = sheet[1], sheet[2]
+        assert first[0].date() == wed
+        if n == 2:
+            assert (first[1].date(), second[0].date(), second[1].date()) == (
+                sun,
+                date(2026, 9, 7),
+                date(2026, 9, 9),
+            )
+        expected = tuple(
+            float(v) if isinstance(v, Decimal) else v
+            for v in (getattr(items[0], c.key) for c in STORE_COLUMNS)
+        )
+        assert first[n : n + len(STORE_COLUMNS)] == expected
+        cells = dict(zip(sheet[0], second, strict=True))
+        # None → 空单元格；extra 十进制字符串 → Excel 数值
+        assert cells["全站推消耗"] is None and cells["净投产"] is None
+        assert cells["成交人数"] == 1 and cells["下单转化率"] is None
+        assert dict(zip(sheet[0], first, strict=True))["成交人数"] == 2
+
+    async def test_store_rejects_year(self) -> None:
+        """``store`` 只有日 / 周 / 月三页：年粒度 400（旧 ``store-daily`` 仍收 year）。"""
+        from app.modules.report import export_service as module
+
+        with pytest.raises(module.ReportExportTypeInvalidError):
+            await module.ReportExportService(None).export(  # type: ignore[arg-type]
+                uuid4(),
+                "store",
+                (date(2026, 9, 1), date(2026, 9, 2)),
+                granularity="year",
+                field_ctx=_SUPER_CTX,
+                perms=_ALL_PERMS,
+            )
+
     async def test_work_progress_three_sheets(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """工作进度导出三个 sheet（7e R5）：PR 进度 / 单品汇总（末行未归属）/ 周明细（实际起止）。
 
@@ -355,10 +476,16 @@ class TestReportExportApiContract:
         old_cost = Decimal("987.65")
         pr_row = SimpleNamespace(pr_name="PR甲", cost=old_cost, **metrics)
         goods_rows = [
-            SimpleNamespace(display_name=name, cost=old_cost, **metrics)
-            for name in ("短裙", "外套", "=1+1")
+            SimpleNamespace(display_name=name, goods_title=title, cost=old_cost, **metrics)
+            for name, title in (
+                ("短裙", "2026秋 A 字半身短裙"),
+                ("外套", "2026秋 羊毛双面呢外套"),
+                ("=1+1", "=1+1"),
+            )
         ]
-        unassigned = SimpleNamespace(display_name="未归属商品", cost=old_cost, **metrics)
+        unassigned = SimpleNamespace(
+            display_name="未归属商品", goods_title=None, cost=old_cost, **metrics
+        )
         week_rows = [
             SimpleNamespace(
                 week_start=date(2026, 7, 27),
@@ -420,16 +547,23 @@ class TestReportExportApiContract:
         assert sheets["单品汇总"][0] == GOODS_HEADERS
         assert sheets["周明细"][0] == WEEK_HEADERS
         assert "推广成本" in PR_HEADERS and "成本" not in PR_HEADERS
-        assert PR_HEADERS[1:] == GOODS_HEADERS[1:] == WEEK_HEADERS[3:]
+        assert GOODS_HEADERS[:2] == ("商品", "商品全称")
+        assert PR_HEADERS[1:] == GOODS_HEADERS[2:] == WEEK_HEADERS[3:]
         expected_metrics = tuple(
             float(v) if isinstance(v, Decimal) else v for v in metrics.values()
         )
         assert sheets["PR 进度"][1:] == [("PR甲", *expected_metrics)]
         assert 987.65 not in sheets["PR 进度"][1]
 
-        # 单品：全部商品（不止一页）+ 末行未归属；危险文本照样转义；不导商品编码
-        assert [r[0] for r in sheets["单品汇总"][1:]] == ["短裙", "外套", "'=1+1", "未归属商品"]
-        assert all(r[1:] == expected_metrics for r in sheets["单品汇总"][1:])
+        # 单品：全部商品（不止一页）+ 末行未归属；第 2 列商品全称（未归属留空）；危险文本照样转义；
+        # 不导商品编码
+        assert [r[:2] for r in sheets["单品汇总"][1:]] == [
+            ("短裙", "2026秋 A 字半身短裙"),
+            ("外套", "2026秋 羊毛双面呢外套"),
+            ("'=1+1", "'=1+1"),
+            ("未归属商品", None),
+        ]
+        assert all(r[2:] == expected_metrics for r in sheets["单品汇总"][1:])
 
         # 周：所在周的周一 + 实际起止（首周起 = 区间起，不是周一）
         week_dates = [tuple(c.date() for c in r[:3]) for r in sheets["周明细"][1:]]
@@ -454,7 +588,7 @@ class TestReportExportApiContract:
         from app.modules.report import export_service as module
 
         metrics = {c.key: 1 for c in WORK_PROGRESS_METRIC_COLUMNS}
-        goods = SimpleNamespace(display_name="短裙", **metrics)
+        goods = SimpleNamespace(display_name="短裙", goods_title="A 字半身短裙", **metrics)
 
         class FakeWorkProgressService:
             def __init__(self, _session: object) -> None:

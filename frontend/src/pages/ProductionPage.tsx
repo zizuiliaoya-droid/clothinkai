@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Button,
   Card,
@@ -123,6 +123,16 @@ export function ProductionPage() {
         season: season.length ? season : undefined,
       }),
   });
+  // BI 下钻落点（7e R6）：URL 带 goods_id 时，第一次数据到后对该商品首行开一次趋势；
+  // 不在本区间的数据里就不开。goods_id 不写记忆，关掉弹窗或改筛选后不再弹。
+  const landingGoodsId = filters.goods_id;
+  const landingDoneRef = useRef(false);
+  useEffect(() => {
+    if (landingDoneRef.current || !landingGoodsId || !data) return;
+    landingDoneRef.current = true;
+    const hit = data.items.find((r) => r.goods_id === landingGoodsId);
+    if (hit) setTrendGoods(hit);
+  }, [data, landingGoodsId]);
   // 导出按钮按 capabilities 出现（持 report.export:read 且能读这张表）；能力没回来前不显示
   const { data: reportCaps } = useReportCapabilities();
   const canExport = canExportReport(reportCaps, "production");

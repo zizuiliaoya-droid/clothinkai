@@ -447,6 +447,22 @@ describe("WorkProgressPage 单品卡片", () => {
     expect(container.querySelector(".ant-table")).toBeNull();
     expect(goodsMock).toHaveBeenCalledTimes(1);
   });
+  it("单品接口 500：卡片区出错误提示（后端 message），PR 表与周明细照常", async () => {
+    goodsMock.mockRejectedValue(
+      Object.assign(new Error("500"), {
+        response: { status: 500, data: { code: "INTERNAL_ERROR", message: "单品服务暂不可用" } },
+      })
+    );
+    serveWeeks(WEEK_ROWS);
+    renderPage();
+    const region = await screen.findByRole("region", { name: "单品汇总" });
+    // 非 403 重试一次后才落到错误，放宽等待
+    const alert = await within(region).findByRole("alert", {}, { timeout: 4000 });
+    expect(alert.textContent).toContain("单品服务暂不可用");
+    expect(screen.queryByText("没有权限查看工作进度表")).toBeNull();
+    expect(await screen.findByText("小王")).toBeTruthy();
+    expect(within(await weeksRegion()).queryByRole("alert")).toBeNull();
+  });
 });function weekRow(week_start: string, date_from: string, date_to: string): WorkProgressWeekRow {
   const { pr_id: _prId, pr_name: _prName, ...metrics } = prRow();
   void _prId;
@@ -536,5 +552,69 @@ describe("WorkProgressPage 周明细", () => {
     expect(await screen.findByText("没有权限查看工作进度表")).toBeTruthy();
     expect(container.querySelector(".ant-table")).toBeNull();
     expect(weeksMock).toHaveBeenCalledTimes(1);
+  });
+  it("周明细接口 500：周明细区出错误提示（无 message 用兜底文字），不出无权限页", async () => {
+    weeksMock.mockRejectedValue(
+      Object.assign(new Error(""), { response: { status: 500, data: { code: "INTERNAL_ERROR" } } })
+    );
+    renderPage();
+    const region = await weeksRegion();
+    const alert = await within(region).findByRole("alert", {}, { timeout: 4000 });
+    expect(alert.textContent).toContain("周明细加载失败");
+    expect(screen.queryByText("没有权限查看工作进度表")).toBeNull();
+    expect(within(await screen.findByRole("region", { name: "单品汇总" })).queryByRole("alert")).toBeNull();
+  });
+});
+
+describe("WorkProgressPage BI 下钻落点（7e R6 S7）", () => {
+  const RANGE = "preset=custom&date_from=2026-10-01&date_to=2026-10-31";
+
+  it("URL 带 pr_id：数据与新鲜度到后开该 PR 的下钻一次；关掉不再弹、不写记忆", async () => {
+    workProgressMock.mockResolvedValue([
+      prRow({ pr_id: "22222222-2222-4222-8222-222222222222", pr_name: "小李" }),
+      prRow(),
+    ]);
+    renderPage(`/work-progress?${RANGE}&pr_id=${PR1}`);
+    expect(await screen.findByText("小王 的推广单")).toBeTruthy();
+    await waitFor(() => expect(drillMock).toHaveBeenCalled());
+    expect(drillMock.mock.calls[0][0]).toMatchObject({
+      date_from: "2026-10-01",
+      date_to: "2026-10-31",
+      pr_id: PR1,
+    });
+    const dialog = screen.getByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByText("小王 的推广单")).toBeNull());
+    await waitDebounce();
+    expect(screen.queryByText("小王 的推广单")).toBeNull();
+    expect(savePrefMock).not.toHaveBeenCalled();
+  });
+
+  it("记忆里有季节（评审 r1 M1）：PR 表与落点下钻都不带季节、不显示锁定，照常开下钻", async () => {
+    getPrefMock.mockResolvedValue({ preset: "this_month", season: ["2026秋"] });
+    renderPage(`/work-progress?${RANGE}&pr_id=${PR1}`);
+    expect(await screen.findByText("小王 的推广单")).toBeTruthy();
+    expect(workProgressMock.mock.calls[0][0]).toMatchObject({ date_from: "2026-10-01" });
+    expect(workProgressMock.mock.calls[0][0].season).toBeUndefined();
+    await waitFor(() => expect(drillMock).toHaveBeenCalled());
+    expect(drillMock.mock.calls[0][0]).toMatchObject({ pr_id: PR1 });
+    expect(drillMock.mock.calls[0][0].season).toBeUndefined();
+    expect(screen.queryByText(LOCK_HINT)).toBeNull();
+  });
+
+  it("pr_id=unassigned：开「未分配」行的下钻，传 unassigned", async () => {
+    workProgressMock.mockResolvedValue([prRow(), prRow({ pr_id: null, pr_name: "未分配" })]);
+    renderPage(`/work-progress?${RANGE}&pr_id=unassigned`);
+    expect(await screen.findByText("未分配 的推广单")).toBeTruthy();
+    await waitFor(() => expect(drillMock).toHaveBeenCalled());
+    expect(drillMock.mock.calls[0][0]).toMatchObject({ pr_id: "unassigned" });
+  });
+
+  it("pr_id 不在本区间的行里：不弹下钻", async () => {
+    renderPage(`/work-progress?${RANGE}&pr_id=33333333-3333-4333-8333-333333333333`);
+    await screen.findByText("小王");
+    await waitDebounce();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(drillMock).not.toHaveBeenCalled();
   });
 });

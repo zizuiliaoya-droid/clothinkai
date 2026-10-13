@@ -1,8 +1,9 @@
 // 工作进度周明细（7e R5，报表视图设计 2.5）：按合作日期的 ISO 周分桶，首尾周截到筛选区间，只出有单的周（升序）。
 // 指标列与 PR 表共用；周行展开 = 该周实际起止 + 当前季节的推广单（不限 PR / 商品）。
 import { DownOutlined, RightOutlined } from "@ant-design/icons";
-import { Button, Table, Typography } from "antd";
+import { Alert, Button, Table, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
+import { extractErrorMessage } from "@/services/apiClient";
 import { DrillPromotionTable } from "../components/DrillPromotionModal";
 import { drillTargetKey } from "../drill";
 import type { WorkProgressWeekRow, WorkProgressWeeks } from "../types";
@@ -13,10 +14,12 @@ const EXPAND_COLUMN_WIDTH = 48;
 interface Props {
   data: WorkProgressWeeks | undefined;
   loading: boolean;
+  /** 取数失败（非 403；403 由页面整页提示）：出错误提示，照「查看全部」弹窗的写法。 */
+  error?: unknown;
   /** 当前季节（没选为 undefined），展开下钻带上。 */
   season: string[] | undefined;
 }
-export function WorkProgressWeeksTable({ data, loading, season }: Props) {
+export function WorkProgressWeeksTable({ data, loading, error, season }: Props) {
   const columns: ColumnsType<WorkProgressWeekRow> = [
     {
       title: "所在周",
@@ -32,6 +35,14 @@ export function WorkProgressWeeksTable({ data, loading, season }: Props) {
       <Typography.Title level={5} style={{ marginBottom: 12 }}>
         周明细
       </Typography.Title>
+      {error ? (
+        <Alert
+          type="error"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message={extractErrorMessage(error, "周明细加载失败")}
+        />
+      ) : null}
       <Table<WorkProgressWeekRow>
         rowKey="week_start"
         size="small"

@@ -95,10 +95,10 @@ export function StoreReportView({ granularity }: { granularity: StoreGranularity
   });
   // 导出按钮按 capabilities 出现（持 report.export:read 且能读这张表）；能力没回来前不显示
   const { data: reportCaps } = useReportCapabilities();
-  const canExport = canExportReport(reportCaps, "store-daily");
+  // 导出类型 store：列 = 页面列（后端 store_columns.py），周 / 月写行上实际起止（7e R6 S11）
+  const canExport = canExportReport(reportCaps, "store");
   const exportMutation = useMutation({
-    mutationFn: () =>
-      exportReport("store-daily", { preset, date_from: df, date_to: dt, granularity }),
+    mutationFn: () => exportReport("store", { preset, date_from: df, date_to: dt, granularity }),
     onSuccess: (filename) => message.success(`已导出 ${filename}`),
     onError: (error) => message.error(extractErrorMessage(error, "导出失败")),
   });

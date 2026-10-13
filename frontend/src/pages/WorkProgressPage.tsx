@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button, Card, Select, Space, Table, Typography, message } from "antd";
 import { DownloadOutlined } from "@ant-design/icons";
 import { useMutation, useQuery } from "@tanstack/react-query";
@@ -21,6 +21,7 @@ import {
 import { DrillPromotionModal } from "@/features/report/components/DrillPromotionModal";
 import { ReportForbidden } from "@/features/report/components/ReportForbidden";
 import type { DrillPromotionTarget } from "@/features/report/drill";
+import { UNASSIGNED_PR } from "@/features/report/reportFilters";
 import type { PrWorkProgress } from "@/features/report/types";
 import {
   fromDateRange,
@@ -106,6 +107,26 @@ export function WorkProgressPage() {
       season: seasons,
     });
   };
+  // BI 下钻落点（7e R6）：URL 带 pr_id（UUID 或 unassigned）时，PR 表与新鲜度第一次都到后开该行下钻一次；
+  // 不在本区间的行里就不开。pr_id 不写记忆，关掉弹窗或改筛选后不再弹。
+  const landingPrId = filters.pr_id;
+  const landingDoneRef = useRef(false);
+  useEffect(() => {
+    if (landingDoneRef.current || !landingPrId || !data || !freshness) return;
+    landingDoneRef.current = true;
+    const hit = data.find((r) =>
+      landingPrId === UNASSIGNED_PR ? r.pr_id === null : r.pr_id === landingPrId
+    );
+    if (hit) {
+      setDrillTarget({
+        title: hit.pr_name,
+        prId: hit.pr_id,
+        dateFrom: freshness.date_from,
+        dateTo: freshness.date_to,
+        season: seasons,
+      });
+    }
+  }, [data, freshness, landingPrId, seasons]);
   // 导出按钮按 capabilities 出现（持 report.export:read 且能读这张表）；能力没回来前不显示
   const { data: reportCaps } = useReportCapabilities();
   const canExport = canExportReport(reportCaps, "work-progress");
@@ -212,6 +233,7 @@ export function WorkProgressPage() {
       <WorkProgressGoodsCards
         data={goodsQuery.data}
         loading={goodsQuery.isLoading}
+        error={goodsQuery.error}
         season={seasons}
         onDrill={setDrillTarget}
         onShowAll={() => setGoodsModalOpen(true)}
@@ -240,6 +262,7 @@ export function WorkProgressPage() {
       <WorkProgressWeeksTable
         data={weeksQuery.data}
         loading={weeksQuery.isLoading}
+        error={weeksQuery.error}
         season={seasons}
       />
       <WorkProgressGoodsModal

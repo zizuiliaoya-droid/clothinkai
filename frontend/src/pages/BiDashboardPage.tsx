@@ -1,39 +1,29 @@
-import {
-  Alert,
-  Card,
-  Col,
-  Progress,
-  Row,
-  Select,
-  Space,
-  Statistic,
-  Table,
-  Tag,
-  Typography,
-} from "antd";
+import { useRef } from "react";
+import { Alert, Button, Card, Select, Space, Switch, Tabs, Typography } from "antd";
+import { DownloadOutlined } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
-import type { ColumnsType } from "antd/es/table";
-import { GoodsNameCell } from "@/components/GoodsNameCell/GoodsNameCell";
-import { MiniLineChart } from "@/components/MiniLineChart/MiniLineChart";
-import { goodsDisplayName } from "@/features/product/api";
+import {
+  ReportCardTitle,
+  ReportFreshness,
+} from "@/components/ReportFreshness/ReportFreshness";
 import {
   ReportTimeRangeFilter,
   useReportTimeRange,
 } from "@/components/ReportTimeRangeFilter/ReportTimeRangeFilter";
-import { StyleImageThumbnail } from "@/components/StyleImageThumbnail/StyleImageThumbnail";
 import { getBiDashboard } from "@/features/report/api";
+import { biImageFilename, useBiImageExport } from "@/features/report/bi/exportBiImage";
+import { GoodsAnalysisTab } from "@/features/report/bi/GoodsAnalysisTab";
+import { PersonalView } from "@/features/report/bi/PersonalView";
+import { StoreOverviewTab } from "@/features/report/bi/StoreOverviewTab";
+import { ReportForbidden } from "@/features/report/components/ReportForbidden";
 import { TIME_PRESETS, type ReportFilterSchema } from "@/features/report/reportFilters";
+import type { TimeGranularity, TimePreset } from "@/features/report/types";
+import { useReportCapabilities } from "@/features/report/useReportCapabilities";
 import {
   fromDateRange,
   toDateRange,
   useReportFilters,
 } from "@/features/report/useReportFilters";
-import type {
-  BiStylePerformance,
-  BiWorkloadRow,
-  TimeGranularity,
-  TimePreset,
-} from "@/features/report/types";
 
 const GRANULARITY_OPTIONS: Array<{
   label: string;
@@ -45,68 +35,25 @@ const GRANULARITY_OPTIONS: Array<{
   { label: "按年", value: "year" },
 ];
 
-const money = (value: string | null | undefined) =>
-  value == null
-    ? "—"
-    : `¥${Number(value).toLocaleString("zh-CN", {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      })}`;
+type BiTab = "store" | "goods";
+const BI_TABS: readonly BiTab[] = ["store", "goods"];
 
-const percent = (value: string | null | undefined) =>
-  value == null ? "—" : `${(Number(value) * 100).toFixed(1)}%`;
+/** 次要文字：slate-600，白底约 7.6:1。 */
+const MUTED = "#475569";
 
-const roi = (value: string | null | undefined) =>
-  value == null ? "—" : Number(value).toFixed(2);
-
-function trendLabel(value: string, granularity: TimeGranularity): string {
-  if (granularity === "year") return value.slice(0, 4);
-  if (granularity === "month") return value.slice(0, 7);
-  return value;
-}
-
-interface MoneyMetricProps {
-  title: string;
-  amount?: string;
-  count?: number;
-  description?: string;
-}
-
-function MoneyMetric({ title, amount, count, description }: MoneyMetricProps) {
-  return (
-    <Card size="small" style={{ height: "100%" }}>
-      <Statistic
-        title={title}
-        value={Number(amount ?? 0)}
-        precision={2}
-        prefix="¥"
-        valueStyle={{ color: "#0f172a", fontSize: 22 }}
-      />
-      <Typography.Text type="secondary">
-        {count == null ? description : `${count} 篇${description ? ` · ${description}` : ""}`}
-      </Typography.Text>
-    </Card>
-  );
-}
-
-function ProgressCell({ value, emptyText }: { value: string | null; emptyText: string }) {
-  if (value == null) return <Typography.Text type="secondary">{emptyText}</Typography.Text>;
-  const valuePercent = Number(value) * 100;
-  return (
-    <Progress
-      percent={Math.min(100, Number(valuePercent.toFixed(1)))}
-      size="small"
-      format={() => `${valuePercent.toFixed(1)}%`}
-    />
-  );
-}
-
-/** 筛选状态：preset / granularity 记忆；日期区间只从 URL 带入、不记；granularity 不在 URL 白名单里，只走记忆。 */
+/**
+ * 筛选状态：preset / granularity / 刷单开关记忆；日期区间只从 URL 带入、不记；
+ * granularity 不在 URL 白名单里，只走记忆。刷单开关管单品块（与单品趋势），店铺块是全店口径、不跟它。
+ * 当前 Tab 与 Tab2 选中的商品（7e R6）url + 记忆；URL 带来的不写记忆，用户切 Tab / 选商品才写。
+ */
 interface BiFilters {
   preset: TimePreset;
   date_from?: string;
   date_to?: string;
   granularity: TimeGranularity;
+  exclude_brushing: boolean;
+  tab: BiTab;
+  goods_id?: string;
 }
 
 const BI_FILTER_SCHEMA: ReportFilterSchema<BiFilters> = {
@@ -119,9 +66,17 @@ const BI_FILTER_SCHEMA: ReportFilterSchema<BiFilters> = {
     url: false,
     memory: true,
   },
+  exclude_brushing: { kind: "boolean", url: true, memory: true },
+  tab: { kind: "enum", values: BI_TABS, url: true, memory: true },
+  goods_id: { kind: "uuid", url: true, memory: true },
 };
 
-const BI_FILTER_DEFAULTS: BiFilters = { preset: "last_30d", granularity: "day" };
+const BI_FILTER_DEFAULTS: BiFilters = {
+  preset: "last_30d",
+  granularity: "day",
+  exclude_brushing: true,
+  tab: "store",
+};
 
 export function BiDashboardPage() {
   const { filters, ready, setFilters } = useReportFilters(
@@ -129,256 +84,162 @@ export function BiDashboardPage() {
     BI_FILTER_SCHEMA,
     BI_FILTER_DEFAULTS
   );
-  const { preset, granularity } = filters;
+  const { preset, granularity, exclude_brushing: excludeBrushing, tab } = filters;
   const range = toDateRange(filters.date_from, filters.date_to);
 
   const { dateFrom, dateTo, enabled } = useReportTimeRange(preset, range);
+  const { data: caps, isError: capsError } = useReportCapabilities();
+  // 按 caps.bi 分版（7e R6）：full = 完整版；personal（只有 read_own）= 只渲染个人版、不请求 /bi；
+  // null = 无权限页。能力没回来前两个版本都不查，免得 PR 先打一次 /bi 拿 403。
+  const biCap = caps?.bi;
 
   const { data, isLoading, isError } = useQuery({
-    queryKey: ["bi-dashboard", preset, dateFrom, dateTo, granularity],
+    queryKey: ["bi-dashboard", preset, dateFrom, dateTo, granularity, excludeBrushing],
     // 等偏好回填完再查，避免先用默认值查一次、回填后又查一次。
-    enabled: enabled && ready,
+    enabled: enabled && ready && biCap === "full",
     queryFn: () =>
       getBiDashboard({
         preset,
         date_from: dateFrom,
         date_to: dateTo,
         granularity,
+        exclude_brushing: excludeBrushing,
       }),
   });
 
-  const workloadColumns: ColumnsType<BiWorkloadRow> = [
-    { title: "负责 PR", dataIndex: "pr_name", width: 140, fixed: "left" },
-    { title: "目标篇数", dataIndex: "target_count", width: 100 },
-    { title: "约篇量", dataIndex: "quote_count", width: 90 },
-    {
-      title: "约篇进度",
-      dataIndex: "quote_progress",
-      width: 170,
-      render: (value: string | null) => (
-        <ProgressCell value={value} emptyText="未设置目标" />
-      ),
-    },
-    { title: "发布量", dataIndex: "publish_count", width: 90 },
-    {
-      title: "发布进度",
-      dataIndex: "publish_progress",
-      width: 170,
-      render: (value: string | null) => (
-        <ProgressCell value={value} emptyText="暂无约篇" />
-      ),
-    },
-    { title: "未发布", dataIndex: "pending_count", width: 90 },
-    { title: "已取消", dataIndex: "cancel_count", width: 90 },
-    { title: "超时", dataIndex: "overdue_count", width: 80 },
-  ];
-
-  const styleColumns: ColumnsType<BiStylePerformance> = [
-    {
-      title: "主图",
-      dataIndex: "main_image_url",
-      width: 68,
-      fixed: "left",
-      render: (src: string | null, row) => (
-        <StyleImageThumbnail
-          src={src}
-          alt={`${goodsDisplayName(row.goods_title, row.goods_short_name)} 商品主图`}
-        />
-      ),
-    },
-    {
-      // 不显示商品编码（补充 2）；图表标签由后端给显示名
-      title: "商品",
-      dataIndex: "goods_short_name",
-      width: 220,
-      fixed: "left",
-      ellipsis: { showTitle: false },
-      render: (_: string | null, row: BiStylePerformance) => (
-        <>
-          {row.is_suit && (
-            <Tag color="purple" style={{ marginInlineEnd: 4 }}>
-              套装
-            </Tag>
-          )}
-          <GoodsNameCell goodsTitle={row.goods_title} shortName={row.goods_short_name} />
-        </>
-      ),
-    },
-    {
-      title: "销售额",
-      dataIndex: "sales_amount",
-      width: 120,
-      sorter: (a, b) => Number(a.sales_amount) - Number(b.sales_amount),
-      render: money,
-    },
-    { title: "退款金额", dataIndex: "refund_amount", width: 120, render: money },
-    { title: "退货率", dataIndex: "return_rate", width: 100, render: percent },
-    { title: "站内花费", dataIndex: "internal_spend", width: 120, render: money },
-    { title: "站外花费", dataIndex: "external_spend", width: 120, render: money },
-    { title: "总花费", dataIndex: "total_spend", width: 120, render: money },
-    {
-      title: "ROI 投产",
-      dataIndex: "roi",
-      width: 110,
-      sorter: (a, b) => Number(a.roi ?? -1) - Number(b.roi ?? -1),
-      render: roi,
-    },
-  ];
-
-  const store = data?.store_summary;
-  const promotion = data?.promotion_summary;
   const periodText = data ? `${data.date_from} 至 ${data.date_to}` : "";
+  // 导出图片截当前 Tab 的内容（不含筛选栏与 Tab 标签）
+  const storeRef = useRef<HTMLDivElement>(null);
+  const goodsRef = useRef<HTMLDivElement>(null);
+  const { exporting, run: exportImage } = useBiImageExport();
+
+  if (caps === undefined) {
+    return capsError ? (
+      <Alert
+        type="error"
+        showIcon
+        message="BI 看板加载失败"
+        description="读取当前账号的报表权限失败，请刷新页面重试。"
+      />
+    ) : (
+      <Card title="BI 看板" loading />
+    );
+  }
+  if (biCap == null) return <ReportForbidden name="BI 看板" />;
+
+  const cardTitle = (
+    <ReportCardTitle
+      title="BI 看板"
+      // 整页一次来源：区间每天都有汇总覆盖才读汇总表，否则显示「实时数据」
+      freshness={
+        <ReportFreshness
+          preset={preset}
+          dateFrom={dateFrom}
+          dateTo={dateTo}
+          enabled={enabled && ready}
+        />
+      }
+    />
+  );
+  const rangeFilter = (
+    <ReportTimeRangeFilter
+      preset={preset}
+      onPresetChange={(v) => setFilters({ preset: v })}
+      range={range}
+      onRangeChange={(v) => setFilters(fromDateRange(v))}
+    />
+  );
+
+  if (biCap === "personal") {
+    return (
+      <Card title={cardTitle}>
+        <Space style={{ marginBottom: 16 }} wrap size={8}>
+          {rangeFilter}
+        </Space>
+        <PersonalView preset={preset} dateFrom={dateFrom} dateTo={dateTo} enabled={enabled && ready} />
+      </Card>
+    );
+  }
 
   return (
-    <Space direction="vertical" size={16} style={{ width: "100%" }}>
-      <Card>
-        <Row gutter={[16, 12]} align="middle" justify="space-between">
-          <Col>
-            <Typography.Title level={4} style={{ margin: 0 }}>
-              BI 看板
-            </Typography.Title>
-            <Typography.Text type="secondary">
-              当前单店/租户汇总{periodText ? ` · ${periodText}` : ""}
-            </Typography.Text>
-          </Col>
-          <Col>
-            <Space wrap size={8}>
-              <ReportTimeRangeFilter
-                preset={preset}
-                onPresetChange={(v) => setFilters({ preset: v })}
-                range={range}
-                onRangeChange={(v) => setFilters(fromDateRange(v))}
-              />
-              <span>趋势粒度：</span>
-              <Select<TimeGranularity>
-                aria-label="BI 趋势粒度"
-                value={granularity}
-                style={{ width: 110 }}
-                options={GRANULARITY_OPTIONS}
-                onChange={(v) => setFilters({ granularity: v })}
-              />
-            </Space>
-          </Col>
-        </Row>
-      </Card>
+    <Card title={cardTitle}>
+      <Space style={{ marginBottom: 8 }} wrap size={8}>
+        {rangeFilter}
+        <span>趋势粒度：</span>
+        <Select<TimeGranularity>
+          aria-label="BI 趋势粒度"
+          value={granularity}
+          style={{ width: 110 }}
+          options={GRANULARITY_OPTIONS}
+          onChange={(v) => setFilters({ granularity: v })}
+        />
+        <span style={{ marginLeft: 12 }}>剔除刷单：</span>
+        <Switch
+          aria-label="剔除刷单"
+          checked={excludeBrushing}
+          onChange={(v) => setFilters({ exclude_brushing: v })}
+        />
+        <Button
+          icon={<DownloadOutlined />}
+          loading={exporting}
+          disabled={!data}
+          onClick={() =>
+            data &&
+            exportImage(
+              (tab === "goods" ? goodsRef : storeRef).current,
+              biImageFilename(tab, data.date_from, data.date_to)
+            )
+          }
+        >
+          导出图片
+        </Button>
+      </Space>
+      <div style={{ marginBottom: 8 }}>
+        <Typography.Text style={{ color: MUTED }}>
+          当前单店/租户汇总{periodText ? ` · ${periodText}` : ""} · 剔除刷单只影响单品 ROI，店铺经营按全店口径
+        </Typography.Text>
+      </div>
 
       {isError ? (
         <Alert
           type="error"
           showIcon
+          style={{ marginBottom: 16 }}
           message="BI 数据加载失败"
           description="请稍后重试，或检查当前账号的 BI 看板权限。"
         />
       ) : null}
 
-      <Card
-        title="店铺经营与推广汇总"
-        loading={isLoading}
-        styles={{ body: { background: "#f8fafc" } }}
-      >
-        <Typography.Title level={5}>店铺经营</Typography.Title>
-        <Row gutter={[12, 12]}>
-          <Col xs={24} sm={12} lg={8} xl={6}>
-            <MoneyMetric title="总销售额" amount={store?.sales_amount} description="千牛支付金额" />
-          </Col>
-          <Col xs={24} sm={12} lg={8} xl={6}>
-            <MoneyMetric title="退货金额" amount={store?.refund_amount} description={`退货率 ${percent(store?.return_rate)}`} />
-          </Col>
-          <Col xs={24} sm={12} lg={8} xl={6}>
-            <MoneyMetric title="站内推广" amount={store?.internal_spend} description={`花费占比 ${percent(store?.internal_spend_ratio)}`} />
-          </Col>
-          <Col xs={24} sm={12} lg={8} xl={6}>
-            <MoneyMetric title="站外推广" amount={store?.external_spend} description={`花费占比 ${percent(store?.external_spend_ratio)}`} />
-          </Col>
-          <Col xs={24} sm={12} lg={8} xl={6}>
-            <MoneyMetric title="推广总花费" amount={store?.total_spend} description="站内 + 已发布站外" />
-          </Col>
-          <Col xs={24} sm={12} lg={8} xl={6}>
-            <Card size="small" style={{ height: "100%" }}>
-              <Statistic
-                title="ROI 投产"
-                value={store?.roi == null ? "—" : Number(store.roi)}
-                precision={store?.roi == null ? undefined : 2}
-                valueStyle={{ color: "#4f46e5", fontSize: 22 }}
-              />
-              <Typography.Text type="secondary">（销售额 - 退款）/ 总花费</Typography.Text>
-            </Card>
-          </Col>
-        </Row>
-
-        <Typography.Title level={5} style={{ marginTop: 24 }}>
-          推广费用
-        </Typography.Title>
-        <Row gutter={[12, 12]}>
-          <Col xs={24} sm={12} lg={6}>
-            <MoneyMetric title="推广总佣金" amount={promotion?.commission_amount} count={promotion?.commission_count} />
-          </Col>
-          <Col xs={24} sm={12} lg={6}>
-            <MoneyMetric title="推广总花费" amount={promotion?.published_spend} count={promotion?.published_count} description={`发布率 ${percent(promotion?.publish_rate)}`} />
-          </Col>
-          <Col xs={24} sm={12} lg={6}>
-            <MoneyMetric title="未发文推广费" amount={promotion?.unpublished_spend} count={promotion?.unpublished_count} />
-          </Col>
-          <Col xs={24} sm={12} lg={6}>
-            <MoneyMetric title="取消金额" amount={promotion?.cancelled_amount} count={promotion?.cancelled_count} />
-          </Col>
-        </Row>
-      </Card>
-
-      <Card title="经营趋势" loading={isLoading}>
-        <MiniLineChart
-          width={920}
-          labels={(data?.trend ?? []).map((point) =>
-            trendLabel(point.date, granularity)
-          )}
-          series={[
-            {
-              name: "销售额",
-              color: "#4f46e5",
-              data: (data?.trend ?? []).map((point) => Number(point.sales_amount)),
-            },
-            {
-              name: "退款金额",
-              color: "#ef4444",
-              data: (data?.trend ?? []).map((point) => Number(point.refund_amount)),
-            },
-            {
-              name: "站内花费",
-              color: "#0ea5e9",
-              data: (data?.trend ?? []).map((point) => Number(point.internal_spend)),
-            },
-            {
-              name: "站外花费",
-              color: "#f97316",
-              data: (data?.trend ?? []).map((point) => Number(point.external_spend)),
-            },
-          ]}
-        />
-      </Card>
-
-      <Card title="员工工作量与进度">
-        <Table<BiWorkloadRow>
-          rowKey={(row) => row.pr_id ?? "unassigned"}
-          size="small"
-          loading={isLoading}
-          columns={workloadColumns}
-          dataSource={data?.workload ?? []}
-          scroll={{ x: 1120 }}
-          pagination={false}
-        />
-      </Card>
-
-      <Card title="单品表现">
-        <Table<BiStylePerformance>
-          rowKey="goods_id"
-          size="small"
-          loading={isLoading}
-          columns={styleColumns}
-          dataSource={data?.style_performance ?? []}
-          scroll={{ x: 1230 }}
-          pagination={{ pageSize: 10, showSizeChanger: true }}
-        />
-      </Card>
-    </Space>
+      <Tabs
+        activeKey={tab}
+        onChange={(key) => setFilters({ tab: key as BiTab })}
+        items={[
+          {
+            key: "store",
+            label: "店铺总览",
+            children: (
+              <div ref={storeRef}>
+                <StoreOverviewTab data={data} loading={isLoading} caps={caps} />
+              </div>
+            ),
+          },
+          {
+            key: "goods",
+            label: "单品分析",
+            children: (
+              <div ref={goodsRef}>
+                <GoodsAnalysisTab
+                  data={data}
+                  loading={isLoading}
+                  granularity={granularity}
+                  goodsId={filters.goods_id}
+                  onGoodsChange={(id) => setFilters({ goods_id: id })}
+                />
+              </div>
+            ),
+          },
+        ]}
+      />
+    </Card>
   );
 }

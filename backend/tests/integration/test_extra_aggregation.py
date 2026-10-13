@@ -32,6 +32,7 @@ from app.modules.report.domain import bucket_start
 from app.modules.report.export_service import ReportExportService
 from app.modules.report.production_columns import PRODUCTION_COLUMNS
 from app.modules.report.production_service import ProductionService
+from app.modules.report.store_columns import STORE_COLUMNS, STORE_PERIOD_HEADERS
 from app.modules.report.store_daily_service import StoreDailyService
 from tests.unit.test_extra_metrics import qianniu_row, wanxiangtai_row
 
@@ -336,6 +337,66 @@ class TestExportEqualsPage:
                 assert cells["下单转化率"] == Decimal("0.75")
                 assert cells["支付金额"] == Decimal("36393.00")
                 assert cells["月累计支付金额"] is None
+        finally:
+            tenant_id_ctx.reset(tok)
+
+    @pytest.mark.parametrize(
+        ("granularity", "time_range"),
+        [
+            ("day", (D1, D2)),
+            ("week", (D1, D2)),
+            ("month", (D1, D2)),
+            # 区间从周二起：周 / 月行的实际起 = 周二，不是周一 / 1 号（R4 评审 L5）
+            ("week", (D2, D2)),
+            ("month", (D2, D2)),
+        ],
+    )
+    async def test_store(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+        granularity: str,
+        time_range: tuple[date, date],
+    ) -> None:
+        """导出类型 ``store``（7e R6 S11）：列 = 页面列定义，单元格 = 页面那份 ``get_store_report``。"""
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            await _seed(session, tenant_a, product_factory)
+            page = await StoreDailyService(session).get_store_report(
+                tenant_a.id,
+                time_range,
+                granularity,  # type: ignore[arg-type]
+            )
+            headers, rows = await ReportExportService(session)._fetch_rows(
+                tenant_a.id,
+                "store",
+                time_range,
+                exclude_brushing=True,
+                seasons=None,
+                granularity=granularity,
+                field_ctx=_SUPER_CTX,
+            )
+            period = list(STORE_PERIOD_HEADERS[granularity])  # type: ignore[index]
+            fixed = len(period) + len(STORE_COLUMNS)
+            assert headers[:fixed] == [*period, *(c.header for c in STORE_COLUMNS)]
+            extra_keys = headers[fixed:]
+            assert len(rows) == len(page.items) > 0
+            for exported, shown in zip(rows, page.items, strict=True):
+                spans = (
+                    [shown.date_from] if granularity == "day" else [shown.date_from, shown.date_to]
+                )
+                assert exported[: len(period)] == spans
+                assert exported[len(period) : fixed] == [
+                    getattr(shown, c.key) for c in STORE_COLUMNS
+                ]
+                assert exported[fixed:] == [_as_cell(shown.extra.get(key)) for key in extra_keys]
+            # 场景有效性：有支付、有万相台花费，extra 也有列
+            assert any(r[len(period) + 1] for r in rows)
+            assert extra_keys
+            if time_range[0] == D2:
+                assert rows[0][:2] == [D2, D2]
+                assert bucket_start(D2, granularity) != D2
         finally:
             tenant_id_ctx.reset(tok)
 

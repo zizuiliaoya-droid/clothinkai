@@ -295,26 +295,43 @@ export interface ProductionTrend {
   points: ProductionTrendPoint[];
 }
 
+/**
+ * BI 店铺 KPI（7e R6，对齐后端 BiStoreSummary）：整个区间合成一行，公式同店铺日 / 周 / 月（设计 2.4）。
+ * 比率分母 ≤ 0 为 null。
+ */
 export interface BiStoreSummary {
-  sales_amount: string;
+  pay_amount: string;
   refund_amount: string;
+  /** 退货率 = 退款 ÷ 支付。 */
   return_rate: string | null;
+  brushing_amount: string;
+  /** 实际销售额 = 支付 − 退款 − 刷单本金。 */
+  actual_sales: string;
   internal_spend: string;
   external_spend: string;
+  /** 推广总额 = 站内 + 站外。 */
   total_spend: string;
+  /** 推广总占比 = 推广总额 ÷ 支付总额。 */
+  total_spend_ratio: string | null;
+  /** 站内占比 = 站内 ÷ 实际销售额。 */
   internal_spend_ratio: string | null;
+  /** 站外占比 = 站外 ÷ 实际销售额。 */
   external_spend_ratio: string | null;
-  roi: string | null;
+  /** 净投产 = 实际销售额 ÷ 推广总额。 */
+  net_roi: string | null;
+  /** 投产（扣除刷单）=（支付总额 − 刷单本金）÷ 推广总额。 */
+  roi_ex_brushing: string | null;
 }
 
+/** 推广费用 4 卡 = 工作进度按 PR 行求和（服务费口径）；金额过 F3，收紧时为 null。 */
 export interface BiPromotionSummary {
-  commission_amount: string;
+  commission_amount: string | null;
   commission_count: number;
-  published_spend: string;
+  published_spend: string | null;
   published_count: number;
-  unpublished_spend: string;
+  unpublished_spend: string | null;
   unpublished_count: number;
-  cancelled_amount: string;
+  cancelled_amount: string | null;
   cancelled_count: number;
   publish_rate: string | null;
 }
@@ -332,44 +349,114 @@ export interface BiWorkloadRow {
   overdue_count: number;
 }
 
-export interface BiStylePerformance {
+/** 经营趋势一点 = 店铺日行按粒度分桶，行上是实际起止（桶 ∩ 区间）。 */
+export interface BiTrendPoint {
+  date_from: string;
+  date_to: string;
+  pay_amount: string;
+  refund_amount: string;
+  actual_sales: string;
+  internal_spend: string;
+  external_spend: string;
+  total_spend: string;
+  net_roi: string | null;
+}
+
+export interface BiStoreBlock {
+  summary: BiStoreSummary;
+  trend: BiTrendPoint[];
+  promotion: BiPromotionSummary;
+  workload: BiWorkloadRow[];
+}
+
+/**
+ * BI 单品表一行 = 按商品合计的投产行（不拆渠道）。不带商品编码（补充 2）；
+ * 站外 = 投产的推广成本，ROI = 投产的净投产（跟刷单开关）。
+ */
+export interface BiGoodsRow {
   goods_id: string;
-  goods_code: string;
   goods_title: string;
   goods_short_name: string | null;
   is_suit: boolean;
-  /** 成员款号（补充 2 起返回）；后端图表标签同名时用它区分。 */
+  /** 成员款号；后端图表标签同名时用它区分。 */
   style_codes: string[];
   main_image_url: string | null;
-  sales_amount: string;
+  pay_amount: string;
   refund_amount: string;
   return_rate: string | null;
   confirmed_amount: string;
   internal_spend: string;
   external_spend: string;
   total_spend: string;
-  roi: string | null;
+  net_roi: string | null;
 }
 
-export interface BiTrendPoint {
-  date: string;
-  sales_amount: string;
-  refund_amount: string;
-  internal_spend: string;
-  external_spend: string;
+/** 柱 / 饼的一项：`goods_id` 为 null = 不可下钻（饼图的「其他」）。 */
+export interface BiChartDatum {
+  goods_id: string | null;
+  label: string;
+  value: string;
 }
 
+export interface BiGoodsBlock {
+  items: BiGoodsRow[];
+  /** 净投产 Top10（空 ROI 不进）。 */
+  roi_top: BiChartDatum[];
+  /** 支付 Top10 +「其他」（余额 > 0 才有）。 */
+  pay_share: BiChartDatum[];
+}
+
+/**
+ * 笔记散点一点（7e R6）= 一张已发布、录过 7 天数据的推广单：x = 发布日期，y = 7 天点赞（原始值），
+ * 点大小 = 站外推广成本（F2：读不到为 null，前端用固定大小）。`detail_url` R8 之前恒 null。
+ */
+export interface BiNotePoint {
+  promotion_id: string;
+  publish_date: string;
+  like_count: number | null;
+  promo_cost: string | null;
+  blogger_nickname: string;
+  platform: string;
+  detail_url: string | null;
+}
+
+/** GET /api/reports/bi/goods/{goods_id}/notes：≤ 500 点、按发布日期升序；超出取最近 500，`truncated` 为真。 */
+export interface BiGoodsNotes {
+  goods_id: string;
+  date_from: string;
+  date_to: string;
+  truncated: boolean;
+  points: BiNotePoint[];
+}
+
+/**
+ * GET /api/reports/bi/personal（7e R6，Q16）：PR 个人版，只有本人的计数与进度，不含任何金额。
+ * 「推广篇数」= 约稿 / 发布 / 未发布 / 取消四个计数，不另设字段。
+ */
+export interface BiPersonal {
+  date_from: string;
+  date_to: string;
+  pr_name: string;
+  target_count: number;
+  quote_count: number;
+  /** 约稿进度 = 约稿量 ÷ 目标篇数（目标为 0 → null）。 */
+  quote_progress: string | null;
+  publish_count: number;
+  /** 发布进度 = 发布量 ÷ 约稿量。 */
+  publish_progress: string | null;
+  unpublished_count: number;
+  cancel_count: number;
+  overdue_count: number;
+}
+
+/** GET /api/reports/bi（7e R6）：整页一次来源，店铺 / 单品两块。 */
 export interface BiDashboard {
   date_from: string;
   date_to: string;
   granularity: TimeGranularity;
-  store_summary: BiStoreSummary;
-  promotion_summary: BiPromotionSummary;
-  workload: BiWorkloadRow[];
-  style_performance: BiStylePerformance[];
-  trend: BiTrendPoint[];
-  cards: Array<Record<string, unknown>>;
-  charts: Array<Record<string, unknown>>;
+  exclude_brushing: boolean;
+  store: BiStoreBlock;
+  goods: BiGoodsBlock;
 }
 
 /**

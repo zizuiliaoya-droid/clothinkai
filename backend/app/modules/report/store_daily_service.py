@@ -27,7 +27,7 @@ from app.modules.report.domain import bucket_start
 from app.modules.report.exceptions import StoreDailyDateTooEarlyError, StoreDailyFutureDateError
 from app.modules.report.extra_metrics import aggregate_extra
 from app.modules.report.store_buckets import bucket_store_rows
-from app.modules.report.summary_read import SummaryReadRepository, record_source
+from app.modules.report.summary_read import Source, SummaryReadRepository, record_source
 from app.modules.report.work_progress_models import StoreDaily
 
 # 手填写入按 (租户, 日期) 加的事务级锁（随 commit / rollback 释放）。阻塞版：同一天的两次录入很短，排队即可。
@@ -119,7 +119,7 @@ class StoreDailyService:
         """
         label = _REPORT_LABELS[granularity]
         date_from, date_to = time_range
-        rows = await self._read_day_rows(tenant_id, date_from, date_to, label)
+        rows = await self.read_day_rows(tenant_id, date_from, date_to, label)
         items = bucket_store_rows(rows, granularity, date_from, date_to)
         extra_by_bucket = await self._aggregate_extra(tenant_id, date_from, date_to, granularity)
         for item in items:
@@ -133,13 +133,23 @@ class StoreDailyService:
             total_days=sum(i.day_count for i in items),
         )
 
-    async def _read_day_rows(
-        self, tenant_id: UUID, date_from: date, date_to: date, label: str
+    async def read_day_rows(
+        self,
+        tenant_id: UUID,
+        date_from: date,
+        date_to: date,
+        label: str,
+        *,
+        source: Source | None = None,
     ) -> list[Mapping[str, Any]]:
-        """``[date_from, date_to]`` 的店铺日行：区间被汇总表完整覆盖就读汇总，否则实时。"""
-        fresh = await self._summary.freshness(tenant_id, date_from, date_to)
+        """``[date_from, date_to]`` 的店铺日行：区间被汇总表完整覆盖就读汇总，否则实时。
+
+        ``source`` 给了就照它读、不再判（BI 整页只判一次，7e R6）；None = 自己判。
+        """
+        if source is None:
+            source = (await self._summary.freshness(tenant_id, date_from, date_to)).source
         with report_query_duration_seconds.labels(label).time():
-            if fresh.source == "summary":
+            if source == "summary":
                 record_source(label, "summary")
                 return await self._summary.store_daily(
                     tenant_id=tenant_id, date_from=date_from, date_to=date_to

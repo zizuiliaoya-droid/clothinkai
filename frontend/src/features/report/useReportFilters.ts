@@ -15,6 +15,7 @@ import {
   pickMemoryFilters,
   restoreMemoryFilters,
   schemaUrlKeys,
+  splitLandingMemory,
   type ReportFilterSchema,
 } from "./reportFilters";
 
@@ -50,12 +51,20 @@ export function useReportFilters<T extends object>(
   const filtersRef = useRef(state.filters);
   filtersRef.current = state.filters;
   const initRef = useRef(false);
+  // 落点链接跳过的记忆（splitLandingMemory）：用户没改的键按原值写回
+  const keptMemoryRef = useRef<Partial<T>>({});
 
   useEffect(() => {
     if (!memory.ready || initRef.current) return;
     initRef.current = true;
+    const { used, kept } = splitLandingMemory(
+      urlFilters,
+      restoreMemoryFilters(memory.restored, schema),
+      schema
+    );
+    keptMemoryRef.current = kept;
     setState({
-      filters: initialFilters(urlFilters, restoreMemoryFilters(memory.restored, schema), defaults),
+      filters: initialFilters(urlFilters, used, defaults),
       ready: true,
     });
     // schema / defaults 是模块常量，urlFilters 只算一次。
@@ -69,7 +78,9 @@ export function useReportFilters<T extends object>(
       const next = { ...filtersRef.current, ...patch };
       filtersRef.current = next;
       setState({ filters: next, ready: true });
-      memoryRef.current.persist(pickMemoryFilters(next, schema) as T);
+      const kept = keptMemoryRef.current;
+      for (const k of Object.keys(patch)) delete kept[k as keyof T];
+      memoryRef.current.persist({ ...pickMemoryFilters(next, schema), ...kept } as T);
       const keys = schemaUrlKeys(schema);
       if (!keys.some((k) => searchParamsRef.current.has(k))) return;
       setSearchParams(

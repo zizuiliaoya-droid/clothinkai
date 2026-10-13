@@ -14,7 +14,8 @@ import type {
 
 const storeMock = vi.fn();
 const updateMock = vi.fn();
-const caps = vi.hoisted(() => ({ storeWrite: false }));
+const exportMock = vi.fn();
+const caps = vi.hoisted(() => ({ storeWrite: false, export: [] as string[] }));
 vi.mock("@/features/report/api", () => ({
   getStoreReport: (...args: unknown[]) => storeMock(...args),
   updateStoreDaily: (...args: unknown[]) => updateMock(...args),
@@ -27,7 +28,7 @@ vi.mock("@/features/report/api", () => ({
       production_margin: false,
       store_read: true,
       store_write: caps.storeWrite,
-      export: [],
+      export: caps.export,
       refresh: false,
     } satisfies ReportCapabilities),
   getSummaryFreshness: () =>
@@ -39,7 +40,7 @@ vi.mock("@/features/report/api", () => ({
       can_refresh: false,
     }),
   refreshSummaries: () => Promise.resolve(undefined),
-  exportReport: () => Promise.resolve("x.xlsx"),
+  exportReport: (...args: unknown[]) => exportMock(...args),
 }));
 vi.mock("@/features/preference/api", () => ({
   getFilterPreference: () => Promise.resolve({}),
@@ -74,7 +75,10 @@ beforeAll(() => {
 beforeEach(() => {
   storeMock.mockReset();
   updateMock.mockReset();
+  exportMock.mockReset();
+  exportMock.mockResolvedValue("x.xlsx");
   caps.storeWrite = false;
+  caps.export = [];
   // 能力查询要登录才发
   useAuthStore.setState({
     user: { id: "u1", username: "u1", display_name: null, email: null, status: "active", roles: [] },
@@ -481,4 +485,21 @@ describe("StoreReportView 行内编辑（7e R4 S8）", () => {
       window.matchMedia = original;
     }
   });
+});
+
+describe("StoreReportView 导出（7e R6 S11）", () => {
+  it.each(["day", "week", "month"] as const)(
+    "%s：导出类型 store（跟页面列），带当前区间与粒度",
+    async (granularity) => {
+      caps.export = ["store"];
+      storeMock.mockResolvedValue(report(granularity, [row({})]));
+      renderView(granularity);
+      const button = await screen.findByRole("button", { name: /导出/ });
+      await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false));
+      fireEvent.click(button);
+      await waitFor(() => expect(exportMock).toHaveBeenCalledTimes(1));
+      expect(exportMock.mock.calls[0][0]).toBe("store");
+      expect(exportMock.mock.calls[0][1]).toMatchObject({ preset: "last_30d", granularity });
+    }
+  );
 });

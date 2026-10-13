@@ -16,7 +16,7 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.db import as_mapping, as_mappings
+from app.core.db import as_mappings
 from app.modules.promotion.display_name import display_short_name_sql
 from app.modules.promotion.urge_calculator import URGE_STATUS_SQL_EXPR, UrgeThresholds
 from app.modules.report.pr_scope import PrParam, PrScope, pr_scope_from_param
@@ -457,6 +457,30 @@ class TargetPlanningRepository:
         return as_mappings(
             (await self._s.execute(sql, {"tenant_id": tenant_id, "month": month})).mappings().all()
         )
+
+    async def targets_by_pr(
+        self, *, tenant_id: UUID, date_from: date, date_to: date
+    ) -> dict[UUID, int]:
+        """区间碰到的每个自然月的目标篇数整月相加，按 PR（BI 推广工作量 / 个人版，7e R6）。
+
+        口径同旧 BI 工作量 SQL（7e R6 删除）的 targets CTE：月目标不按天折算。
+        没有目标的 PR 不出现在结果里（调用方按 0 处理）。
+        """
+        sql = text(
+            """
+            SELECT t.pr_id, COALESCE(SUM(t.min_target), 0) AS target_count
+            FROM target_planning t
+            WHERE t.tenant_id = :tenant_id
+              AND t.period_month BETWEEN
+                  to_char(CAST(:date_from AS date), 'YYYY-MM') AND
+                  to_char(CAST(:date_to AS date), 'YYYY-MM')
+            GROUP BY t.pr_id
+            """
+        )
+        rows = await self._s.execute(
+            sql, {"tenant_id": tenant_id, "date_from": date_from, "date_to": date_to}
+        )
+        return {r.pr_id: int(r.target_count) for r in rows}
 
 
 class StoreDailyRepository:
@@ -1212,236 +1236,6 @@ class ProductionRepository:
         )
 
 
-class BiRepository:
-    """TASK 15 BI 看板专用聚合，统一合作日期、状态与租户口径。"""
-
-    def __init__(self, session: AsyncSession) -> None:
-        self._s = session
-
-    async def aggregate_store_summary(
-        self, *, tenant_id: UUID, date_from: date, date_to: date
-    ) -> Mapping[str, Any]:
-        sql = text(
-            f"""
-            WITH sales AS (
-              SELECT COALESCE(SUM(q.pay_amount), 0) AS sales_amount,
-                     {_REFUND_SUM} AS refund_amount
-              FROM qianniu_daily q
-              WHERE q.tenant_id = :tenant_id
-                AND q.date BETWEEN :date_from AND :date_to
-            ), ads AS (
-              SELECT COALESCE(SUM(a.cost), 0) AS internal_spend
-              FROM ad_daily a
-              WHERE a.tenant_id = :tenant_id
-                AND a.date BETWEEN :date_from AND :date_to
-            ), promos AS (
-              -- 站外推广成本口径（PRD V1.4 §9），不是约稿金额
-              SELECT COALESCE(SUM(p.total_promo_cost), 0) AS external_spend
-              FROM promotion p
-              WHERE p.tenant_id = :tenant_id AND p.is_active = true
-                AND p.publish_status = '已发布'
-                AND p.cooperation_date BETWEEN :date_from AND :date_to
-            )
-            SELECT sales.sales_amount, sales.refund_amount,
-                   ads.internal_spend, promos.external_spend
-            FROM sales CROSS JOIN ads CROSS JOIN promos
-            """
-        )
-        return as_mapping(
-            (
-                await self._s.execute(
-                    sql,
-                    {"tenant_id": tenant_id, "date_from": date_from, "date_to": date_to},
-                )
-            )
-            .mappings()
-            .one()
-        )
-
-    async def aggregate_promotion_summary(
-        self, *, tenant_id: UUID, date_from: date, date_to: date
-    ) -> Mapping[str, Any]:
-        """约稿金额汇总。
-
-        这里刻意用 ``quote_amount`` 而不是 ``total_promo_cost``：PRD V1.4 §9 定义
-        「小红书约篇金额 = 博主服务费合计」，是给博主的钱，不含样品成本与寄回运费。
-        站外推广成本是另一个口径（见 ``aggregate_by_goods`` 的 promo 子查询），
-        两者不要混。
-        """
-        sql = text(
-            """
-            SELECT
-              COALESCE(SUM(p.quote_amount), 0) AS commission_amount,
-              COUNT(*) AS commission_count,
-              COALESCE(SUM(p.quote_amount)
-                FILTER (WHERE p.publish_status = '已发布'), 0) AS published_spend,
-              COUNT(*) FILTER (WHERE p.publish_status = '已发布') AS published_count,
-              COALESCE(SUM(p.quote_amount)
-                FILTER (WHERE p.publish_status = '未发布'), 0) AS unpublished_spend,
-              COUNT(*) FILTER (WHERE p.publish_status = '未发布') AS unpublished_count,
-              COALESCE(SUM(p.quote_amount)
-                FILTER (WHERE p.publish_status = '已取消'), 0) AS cancelled_amount,
-              COUNT(*) FILTER (WHERE p.publish_status = '已取消') AS cancelled_count
-            FROM promotion p
-            WHERE p.tenant_id = :tenant_id AND p.is_active = true
-              AND p.cooperation_date BETWEEN :date_from AND :date_to
-            """
-        )
-        return as_mapping(
-            (
-                await self._s.execute(
-                    sql,
-                    {"tenant_id": tenant_id, "date_from": date_from, "date_to": date_to},
-                )
-            )
-            .mappings()
-            .one()
-        )
-
-    async def aggregate_workload(
-        self,
-        *,
-        tenant_id: UUID,
-        date_from: date,
-        date_to: date,
-        today: date,
-        thresholds: UrgeThresholds,
-    ) -> list[Mapping[str, Any]]:
-        # 这里只数「超时」，与两个阈值无关；传租户配置只是为了不再留一份写死的 10 / 3
-        sql = text(
-            f"""
-            WITH work AS (
-              SELECT p.pr_id,
-                     COALESCE(u.display_name, u.username, '未分配') AS pr_name,
-                     COUNT(*) AS quote_count,
-                     COUNT(*) FILTER (WHERE p.publish_status = '已发布') AS publish_count,
-                     COUNT(*) FILTER (WHERE p.publish_status = '未发布') AS pending_count,
-                     COUNT(*) FILTER (WHERE p.publish_status = '已取消') AS cancel_count,
-                     COUNT(*) FILTER (WHERE ({_URGE}) = '超时') AS overdue_count
-              FROM promotion p
-              LEFT JOIN "user" u ON u.id = p.pr_id
-              WHERE p.tenant_id = :tenant_id AND p.is_active = true
-                AND p.cooperation_date BETWEEN :date_from AND :date_to
-              GROUP BY p.pr_id, u.display_name, u.username
-            ), targets AS (
-              SELECT t.pr_id, COALESCE(SUM(t.min_target), 0) AS target_count
-              FROM target_planning t
-              WHERE t.tenant_id = :tenant_id
-                AND t.period_month BETWEEN
-                    to_char(CAST(:date_from AS date), 'YYYY-MM') AND
-                    to_char(CAST(:date_to AS date), 'YYYY-MM')
-              GROUP BY t.pr_id
-            )
-            SELECT work.*, COALESCE(targets.target_count, 0) AS target_count
-            FROM work
-            LEFT JOIN targets ON targets.pr_id = work.pr_id
-            ORDER BY work.quote_count DESC, work.pr_name
-            """
-        )
-        params = {
-            "tenant_id": tenant_id,
-            "date_from": date_from,
-            "date_to": date_to,
-            "today": today,
-            **thresholds.sql_params(),
-        }
-        return as_mappings((await self._s.execute(sql, params)).mappings().all())
-
-    async def aggregate_trend(
-        self,
-        *,
-        tenant_id: UUID,
-        date_from: date,
-        date_to: date,
-        granularity: str,
-    ) -> list[Mapping[str, Any]]:
-        q_bucket = bucket_expr(granularity, "q.date")
-        a_bucket = bucket_expr(granularity, "a.date")
-        p_bucket = bucket_expr(granularity, "p.cooperation_date")
-        sql = text(
-            f"""
-            SELECT d AS date,
-                   COALESCE(SUM(sales_amount), 0) AS sales_amount,
-                   COALESCE(SUM(refund_amount), 0) AS refund_amount,
-                   COALESCE(SUM(internal_spend), 0) AS internal_spend,
-                   COALESCE(SUM(external_spend), 0) AS external_spend
-            FROM (
-              SELECT {q_bucket} AS d,
-                     COALESCE(SUM(q.pay_amount), 0) AS sales_amount,
-                     {_REFUND_SUM} AS refund_amount,
-                     0::numeric AS internal_spend, 0::numeric AS external_spend
-              FROM qianniu_daily q
-              WHERE q.tenant_id = :tenant_id
-                AND q.date BETWEEN :date_from AND :date_to
-              GROUP BY {q_bucket}
-              UNION ALL
-              SELECT {a_bucket} AS d, 0, 0,
-                     COALESCE(SUM(a.cost), 0), 0
-              FROM ad_daily a
-              WHERE a.tenant_id = :tenant_id
-                AND a.date BETWEEN :date_from AND :date_to
-              GROUP BY {a_bucket}
-              UNION ALL
-              SELECT {p_bucket} AS d, 0, 0, 0,
-                     -- 站外推广成本口径（PRD V1.4 §9）
-                     COALESCE(SUM(p.total_promo_cost), 0)
-              FROM promotion p
-              WHERE p.tenant_id = :tenant_id AND p.is_active = true
-                AND p.publish_status = '已发布'
-                AND p.cooperation_date BETWEEN :date_from AND :date_to
-              GROUP BY {p_bucket}
-            ) source
-            GROUP BY d
-            ORDER BY d
-            """
-        )
-        return as_mappings(
-            (
-                await self._s.execute(
-                    sql,
-                    {"tenant_id": tenant_id, "date_from": date_from, "date_to": date_to},
-                )
-            )
-            .mappings()
-            .all()
-        )
-
-    async def published_spend_by_goods(
-        self, *, tenant_id: UUID, date_from: date, date_to: date
-    ) -> list[Mapping[str, Any]]:
-        """已发布推广费按商品归集，与 aggregate_by_goods 的 promo 子查询同口径。"""
-        sql = text(
-            """
-            SELECT COALESCE(p.goods_main_id, owner.goods_main_id) AS goods_id,
-                   -- 站外推广成本口径（PRD V1.4 §9）
-                   COALESCE(SUM(p.total_promo_cost), 0) AS external_spend
-            FROM promotion p
-            LEFT JOIN LATERAL (
-              SELECT gi.goods_main_id
-              FROM goods_style_item gi
-              JOIN goods_main gg ON gg.id = gi.goods_main_id
-              WHERE gi.style_id = p.style_id AND gi.is_active = true
-              ORDER BY gg.is_suit, gg.goods_code
-              LIMIT 1
-            ) owner ON p.goods_main_id IS NULL
-            WHERE p.tenant_id = :tenant_id AND p.is_active = true
-              AND p.publish_status = '已发布'
-              AND p.cooperation_date BETWEEN :date_from AND :date_to
-            GROUP BY COALESCE(p.goods_main_id, owner.goods_main_id)
-            """
-        )
-        return as_mappings(
-            (
-                await self._s.execute(
-                    sql,
-                    {"tenant_id": tenant_id, "date_from": date_from, "date_to": date_to},
-                )
-            )
-            .mappings()
-            .all()
-        )
-
-
 @dataclass(frozen=True)
 class DrillFilters:
     """下钻的筛选条件（已校验）。``pr_scope`` 由 ``resolve_pr_scope`` 定，下推到 SQL。"""
@@ -1534,6 +1328,55 @@ class DrillRepository:
         return as_mappings((await self._s.execute(sql, params)).mappings().all())
 
 
+class BiNotesRepository:
+    """BI 笔记散点的推广单（7e R6，设计 2.6）。
+
+    区间按合作日期；商品归属与投产 / 下钻同一口径（``_PROMO_GOODS_LATERAL``）；只取未删除、
+    已发布、录过 7 天数据（``metrics_recorded_at``）且有实际发布日期（横轴）的单。
+    按发布日期倒序取 ``limit`` 条（调用方多取一条判断是否截断）。投影是白名单。
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    async def notes(
+        self,
+        *,
+        tenant_id: UUID,
+        goods_id: UUID,
+        date_from: date,
+        date_to: date,
+        limit: int,
+    ) -> list[Mapping[str, Any]]:
+        sql = text(
+            f"""
+            SELECT
+              p.id AS promotion_id, p.actual_publish_date AS publish_date,
+              p.like_count AS like_count, p.total_promo_cost AS promo_cost,
+              b.nickname AS blogger_nickname, p.platform AS platform
+            FROM promotion p
+            {_PROMO_GOODS_LATERAL}
+            JOIN blogger b ON b.id = p.blogger_id
+            WHERE p.tenant_id = CAST(:tenant_id AS uuid) AND p.is_active = true
+              AND p.cooperation_date BETWEEN CAST(:date_from AS date) AND CAST(:date_to AS date)
+              AND p.publish_status = '已发布'
+              AND p.metrics_recorded_at IS NOT NULL
+              AND p.actual_publish_date IS NOT NULL
+              AND {_PROMO_GOODS_ID} = CAST(:goods_id AS uuid)
+            ORDER BY p.actual_publish_date DESC, p.id DESC
+            LIMIT CAST(:limit AS int)
+            """
+        )
+        params = {
+            "tenant_id": tenant_id,
+            "goods_id": goods_id,
+            "date_from": date_from,
+            "date_to": date_to,
+            "limit": limit,
+        }
+        return as_mappings((await self._s.execute(sql, params)).mappings().all())
+
+
 async def style_exists(session: AsyncSession, tenant_id: UUID, style_id: UUID) -> bool:
     sql = text("SELECT 1 FROM style WHERE id = :sid AND tenant_id = :tid LIMIT 1")
     return (
@@ -1546,7 +1389,7 @@ __all__ = [
     "PRODUCTION_ADDITIVE_COLUMNS",
     "PRODUCTION_COUNT_COLUMNS",
     "PRODUCTION_MONEY_COLUMNS",
-    "BiRepository",
+    "BiNotesRepository",
     "DrillFilters",
     "DrillRepository",
     "ProductionRepository",
