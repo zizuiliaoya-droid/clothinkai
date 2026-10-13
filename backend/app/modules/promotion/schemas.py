@@ -282,6 +282,14 @@ class PromotionResubmitRequest(BaseModel):
         return None if v is None else _check_publish_url(v)
 
 
+class PromotionSettlementResubmitRequest(BaseModel):
+    """结款重提入参（流程线 R7）：结款驳回 → 待付款。说明必填（全空白 = 没填），只进事件。"""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    note: str = Field(min_length=1, max_length=2000)
+
+
 class PromotionCancelRequest(BaseModel):
     """cancel 入参（BR-U04-20）。"""
 
@@ -776,6 +784,7 @@ __all__ = [
     "PromotionResponse",
     "PromotionResubmitRequest",
     "PromotionReviewRequest",
+    "PromotionSettlementResubmitRequest",
     "PromotionShipPushRequest",
     "PromotionShipWithdrawRequest",
     "PromotionUpdate",

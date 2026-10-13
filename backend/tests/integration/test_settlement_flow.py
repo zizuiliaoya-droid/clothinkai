@@ -7,6 +7,8 @@
 - F4：付款日期一律取北京时间的当天，客户端传的日期忽略（D5：容器是 UTC）
 - 每一步各写一条结款组事件（6.3），付款事件的附件 = 付款凭证
 - F5 → R6 / R7 → F6：``SettlementRejected`` / ``SettlementResubmitted`` 必须有监听，两张表同事务（D7、D12）
+- R7 结款重提（``POST /promotions/{id}/settlement/resubmit``）：推广单与结款单一起回到待付款、实付与说明清空（D6）；
+  没码 422；结款单不在已驳回 → 409、推广单不变
 """
 
 from __future__ import annotations
@@ -24,7 +26,11 @@ from sqlalchemy import text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.events import dispatch, subscribe
-from app.core.exceptions import IllegalStateTransitionError, MissingRequiredHandlerError
+from app.core.exceptions import (
+    AppException,
+    IllegalStateTransitionError,
+    MissingRequiredHandlerError,
+)
 from app.core.tenancy import tenant_id_ctx
 from app.modules.finance.enums import ExtraItemType
 from app.modules.finance.exceptions import ExtraItemNotAllowedError
@@ -48,9 +54,12 @@ from app.modules.promotion.events import SettlementRequested, SettlementResubmit
 from app.modules.promotion.exceptions import (
     StateTransitionConflictError as PromotionStateConflictError,
 )
+from app.modules.promotion.schemas import PromotionSettlementResubmitRequest
+from app.modules.promotion.service import PromotionService
 from app.modules.promotion.urge_calculator import get_today
 from tests.flow_event_helpers import assert_payload_registered
 from tests.integration.test_settlement_proof_upload import _PNG, _RecordingS3
+from tests.integration.test_settlement_routing import _call
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
@@ -885,3 +894,310 @@ class TestSettlementResubmitted:
             assert (await _settlement_row(session, s.id))[0] == "已驳回"
         finally:
             tenant_id_ctx.reset(token)
+
+
+_RESUBMIT = PromotionSettlementResubmitRequest(note="收款码换好了，请重新付款")
+
+
+@pytest.fixture
+def tenant_ctx(tenant_a: Any) -> Any:
+    token = tenant_id_ctx.set(tenant_a.id)
+    yield
+    tenant_id_ctx.reset(token)
+
+
+async def _rejected_pair(
+    flow_users: Any,
+    product_factory: Any,
+    blogger_factory: Any,
+    promotion_factory: Any,
+    settlement_factory: Any,
+    *,
+    payment_qr: bool = True,
+    promotion_status: str = "结款驳回",
+    settlement_status: str = "已驳回",
+) -> tuple[UUID, UUID, UUID]:
+    """财务驳回后的一对：推广单结款驳回（有码）、结款单已驳回且填过实付与说明。返回 (推广单, 结款单, 线)。"""
+    style = await product_factory.style()
+    blogger = await blogger_factory.blogger()
+    promo = await promotion_factory.promotion(
+        style=style,
+        blogger=blogger,
+        pr=flow_users.pr,
+        publish_status="已发布",
+        settlement_status=promotion_status,
+        quote_amount=Decimal("500.00"),
+        payment_qr=payment_qr,
+        actual_publish_date=get_today() - timedelta(days=10),
+    )
+    s = await settlement_factory.settlement(
+        style=style,
+        blogger=blogger,
+        promotion=promo,
+        settlement_status=settlement_status,
+        payment_amount=Decimal("480.00"),
+        payment_adjust_note="扣 20 元",
+    )
+    return promo.id, s.id, promo.line_id
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+class TestSettlementResubmitR7:
+    """R7 → F6：推广单 结款驳回 → 待付款，结款单 已驳回 → 待付款，同一事务（D6、D7、D12）。"""
+
+    @pytest.mark.usefixtures("cross_unit_event_bus")
+    @pytest.mark.parametrize("who", ["pr", "pr_manager", "admin"])
+    async def test_resubmit_moves_both_and_clears_payment(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        settlement_factory: Any,
+        who: str,
+    ) -> None:
+        pid, sid, line_id = await _rejected_pair(
+            flow_users, product_factory, blogger_factory, promotion_factory, settlement_factory
+        )
+        assert await _settlement_row(session, sid) == (
+            "已驳回",
+            Decimal("480.00"),
+            "扣 20 元",
+        ), "场景有效性：重提前实付与说明都有值"
+        user = getattr(flow_users, who)
+        resp = await PromotionService(session).resubmit_settlement(pid, _RESUBMIT, user)
+        assert resp.settlement_status == "待付款"
+        assert await _promotion_status(session, pid) == "待付款"
+        assert await _settlement_row(session, sid) == ("待付款", None, None)
+        events = await _events(session, pid, LineEventType.SETTLEMENT_RESUBMITTED)
+        assert len(events) == 1
+        ev = events[0]
+        assert ev.line_id == line_id
+        assert (ev.from_state, ev.to_state) == ("已驳回", "待付款")
+        assert ev.note == "收款码换好了，请重新付款"
+        assert ev.actor_id == user.id
+        assert ev.payload == {"settlement_id": str(sid)}
+        assert_payload_registered(ev.payload)
+
+    @pytest.mark.usefixtures("cross_unit_event_bus")
+    async def test_no_payment_qr_422_both_unchanged(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        settlement_factory: Any,
+    ) -> None:
+        pid, sid, _ = await _rejected_pair(
+            flow_users,
+            product_factory,
+            blogger_factory,
+            promotion_factory,
+            settlement_factory,
+            payment_qr=False,
+        )
+        with pytest.raises(FlowGateMissingError) as exc_info:
+            await PromotionService(session).resubmit_settlement(pid, _RESUBMIT, flow_users.pr)
+        assert exc_info.value.status_code == 422
+        assert [m["key"] for m in exc_info.value.details["missing"]] == ["payment_qr"]
+        assert await _promotion_status(session, pid) == "结款驳回"
+        assert await _settlement_row(session, sid) == ("已驳回", Decimal("480.00"), "扣 20 元")
+        assert await _events(session, pid, LineEventType.SETTLEMENT_RESUBMITTED) == []
+
+    @pytest.mark.usefixtures("cross_unit_event_bus")
+    @pytest.mark.parametrize("settlement_status", ["待付款", "待财务付款", "已付款"])
+    async def test_settlement_not_rejected_conflicts_promotion_unchanged(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        settlement_factory: Any,
+        settlement_status: str,
+    ) -> None:
+        """推广单在结款驳回、结款单却不在已驳回 → finance 监听 409，推广单跟着回滚。"""
+        pid, sid, _ = await _rejected_pair(
+            flow_users,
+            product_factory,
+            blogger_factory,
+            promotion_factory,
+            settlement_factory,
+            settlement_status=settlement_status,
+        )
+        await session.commit()
+        with pytest.raises(SettlementStateConflictError) as exc_info:
+            await PromotionService(session).resubmit_settlement(pid, _RESUBMIT, flow_users.pr)
+        assert exc_info.value.status_code == 409
+        assert exc_info.value.details["settlement_status"] == settlement_status
+        await session.rollback()
+        assert await _promotion_status(session, pid) == "结款驳回"
+        assert await _settlement_row(session, sid) == (
+            settlement_status,
+            Decimal("480.00"),
+            "扣 20 元",
+        )
+        assert await _events(session, pid, LineEventType.SETTLEMENT_RESUBMITTED) == []
+
+    @pytest.mark.usefixtures("cross_unit_event_bus")
+    async def test_listener_failure_rolls_back_both(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        settlement_factory: Any,
+    ) -> None:
+        """监听里中途抛错 → 推广单、结款单、事件都不变（推广 service 不能先 commit 再 dispatch）。"""
+        pid, sid, _ = await _rejected_pair(
+            flow_users, product_factory, blogger_factory, promotion_factory, settlement_factory
+        )
+        await session.commit()
+        seen: list[tuple[str, tuple[Any, ...]]] = []
+
+        async def _boom(ev: Any, sess: AsyncSession) -> None:
+            seen.append(
+                (
+                    await _promotion_status(sess, ev.promotion_id),
+                    await _settlement_row(sess, ev.settlement_id),
+                )
+            )
+            raise RuntimeError("listener boom")
+
+        subscribe("SettlementResubmitted", _boom)  # 排在真实监听之后
+        with pytest.raises(RuntimeError, match="listener boom"):
+            await PromotionService(session).resubmit_settlement(pid, _RESUBMIT, flow_users.pr)
+        assert seen == [
+            ("待付款", ("待付款", None, None))
+        ], "场景有效性：推广单与真实监听都已在同一事务里改过"
+        await session.rollback()
+        assert await _promotion_status(session, pid) == "结款驳回"
+        assert await _settlement_row(session, sid) == ("已驳回", Decimal("480.00"), "扣 20 元")
+        assert await _events(session, pid, LineEventType.SETTLEMENT_RESUBMITTED) == []
+
+    async def test_missing_listener_raises_promotion_unchanged(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        settlement_factory: Any,
+    ) -> None:
+        pid, sid, _ = await _rejected_pair(
+            flow_users, product_factory, blogger_factory, promotion_factory, settlement_factory
+        )
+        await session.commit()
+        with pytest.raises(MissingRequiredHandlerError):
+            await PromotionService(session).resubmit_settlement(pid, _RESUBMIT, flow_users.pr)
+        await session.rollback()
+        assert await _promotion_status(session, pid) == "结款驳回"
+        assert (await _settlement_row(session, sid))[0] == "已驳回"
+
+    @pytest.mark.usefixtures("cross_unit_event_bus")
+    @pytest.mark.parametrize("promotion_status", ["待付款", "已付款", "已驳回"])
+    async def test_promotion_not_settlement_rejected_422(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        settlement_factory: Any,
+        promotion_status: str,
+    ) -> None:
+        pid, sid, _ = await _rejected_pair(
+            flow_users,
+            product_factory,
+            blogger_factory,
+            promotion_factory,
+            settlement_factory,
+            promotion_status=promotion_status,
+        )
+        with pytest.raises(AppException) as exc_info:
+            await PromotionService(session).resubmit_settlement(pid, _RESUBMIT, flow_users.pr)
+        assert exc_info.value.code == "ILLEGAL_STATE_TRANSITION"
+        assert exc_info.value.status_code == 422
+        assert await _promotion_status(session, pid) == promotion_status
+        assert (await _settlement_row(session, sid))[0] == "已驳回"
+
+
+@pytest.mark.usefixtures("tenant_ctx", "cross_unit_event_bus")
+class TestSettlementResubmitApi:
+    """路由：``promotion:write``；说明必填（全空白 = 没填）。"""
+
+    async def test_pr_resubmits_via_route(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        settlement_factory: Any,
+    ) -> None:
+        pid, sid, _ = await _rejected_pair(
+            flow_users, product_factory, blogger_factory, promotion_factory, settlement_factory
+        )
+        resp = await _call(
+            session,
+            flow_users.pr,
+            "POST",
+            f"/api/promotions/{pid}/settlement/resubmit",
+            json={"note": "收款码换好了"},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["settlement_status"] == "待付款"
+        assert await _settlement_row(session, sid) == ("待付款", None, None)
+
+    @pytest.mark.parametrize("note", ["   ", "", "x" * 2001], ids=["空白", "空", "超长"])
+    async def test_note_required(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        settlement_factory: Any,
+        note: str,
+    ) -> None:
+        pid, sid, _ = await _rejected_pair(
+            flow_users, product_factory, blogger_factory, promotion_factory, settlement_factory
+        )
+        resp = await _call(
+            session,
+            flow_users.pr,
+            "POST",
+            f"/api/promotions/{pid}/settlement/resubmit",
+            json={"note": note},
+        )
+        assert resp.status_code == 422, resp.text
+        assert await _promotion_status(session, pid) == "结款驳回"
+        assert (await _settlement_row(session, sid))[0] == "已驳回"
+
+    @pytest.mark.parametrize("who", ["finance", "operations", "warehouse"])
+    async def test_roles_without_promotion_write_403(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        settlement_factory: Any,
+        who: str,
+    ) -> None:
+        pid, sid, _ = await _rejected_pair(
+            flow_users, product_factory, blogger_factory, promotion_factory, settlement_factory
+        )
+        resp = await _call(
+            session,
+            getattr(flow_users, who),
+            "POST",
+            f"/api/promotions/{pid}/settlement/resubmit",
+            json={"note": "收款码换好了"},
+        )
+        assert resp.status_code == 403, resp.text
+        assert await _promotion_status(session, pid) == "结款驳回"
+        assert (await _settlement_row(session, sid))[0] == "已驳回"

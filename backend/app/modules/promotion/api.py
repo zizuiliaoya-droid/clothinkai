@@ -51,6 +51,7 @@ from app.modules.promotion.schemas import (
     PromotionResubmitRequest,
     PromotionReturnWaybillRequest,
     PromotionReviewRequest,
+    PromotionSettlementResubmitRequest,
     PromotionUpdate,
     RetrospectiveConfirmRequest,
     RetrospectiveResponse,
@@ -408,6 +409,27 @@ async def resubmit_promotion(
     - 上一轮驳回原因保留，不清
     """
     return await service.resubmit(promotion_id, payload, user)
+
+
+@router.post(
+    "/promotions/{promotion_id}/settlement/resubmit",
+    response_model=PromotionResponse,
+    dependencies=[require_permission("promotion", "write")],
+)
+async def resubmit_settlement(
+    promotion_id: UUID,
+    payload: PromotionSettlementResubmitRequest,
+    user: CurrentActiveUser,
+    service: PromotionServiceDep,
+) -> PromotionResponse:
+    """流程线 R7 结款重提：财务驳回结款单后，推广单 结款驳回 → 待付款，结款单 已驳回 → 待付款.
+
+    - 只在推广单 = 结款驳回（其余 422 ILLEGAL_STATE_TRANSITION）；要有收款码（缺 → 422 FLOW_GATE_MISSING）
+    - 说明 note 必填（≤ 2000 字），进时间线
+    - 同事务发 ``SettlementResubmitted``：结款单清空实付与调整说明，由财务重新填；结款单不在已驳回 → 409，整笔回滚
+    - 与 7a 的 ``/resubmit`` 分开：那个是推广被主管驳回
+    """
+    return await service.resubmit_settlement(promotion_id, payload, user)
 
 
 @router.post(

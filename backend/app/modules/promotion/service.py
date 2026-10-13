@@ -92,6 +92,7 @@ from app.modules.promotion.service_parts.publish import PromotionPublishMixin
 from app.modules.promotion.service_parts.recall import PromotionRecallMixin
 from app.modules.promotion.service_parts.retro import PromotionRetroMixin
 from app.modules.promotion.service_parts.review import PromotionReviewMixin
+from app.modules.promotion.service_parts.settlement_link import PromotionSettlementLinkMixin
 from app.modules.promotion.service_parts.shipping import PromotionShippingMixin
 from app.modules.promotion.urge_calculator import (
     get_today,
@@ -105,6 +106,7 @@ class PromotionService(
     PromotionRecallMixin,
     PromotionReviewMixin,
     PromotionRetroMixin,
+    PromotionSettlementLinkMixin,
     PromotionShippingMixin,
 ):
     """推广合作业务服务。"""
