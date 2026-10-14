@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // 系统设置 ·「平台指标」（7e R7）：can_edit 才可编辑；保存先确认，确认才 PUT、取消不发；409 提示稍后再试；
 // 422 按 loc 行号标到单元格；无改动保存是灰的；清空的格子先标「必填」；页面文字里没有商品编码。
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Modal } from "antd";
 import type { ReactNode } from "react";
@@ -10,6 +10,7 @@ import type { PromotionPlatformSettings } from "@/features/settings/api";
 
 const getMock = vi.fn();
 const updateMock = vi.fn();
+const scrollMock = vi.fn();
 vi.mock("@/features/settings/api", () => ({
   getPromotionPlatformSettings: (...args: unknown[]) => getMock(...args),
   updatePromotionPlatformSettings: (...args: unknown[]) => updateMock(...args),
@@ -23,6 +24,10 @@ import {
 } from "./PromotionPlatformSettingTab";
 
 beforeAll(() => {
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+    configurable: true,
+    value: scrollMock,
+  });
   const getStyle = window.getComputedStyle.bind(window);
   window.getComputedStyle = (elt: Element) => getStyle(elt);
   if (!window.matchMedia) {
@@ -81,6 +86,7 @@ async function openConfirm() {
 beforeEach(() => {
   getMock.mockReset();
   updateMock.mockReset();
+  scrollMock.mockClear();
   getMock.mockResolvedValue(settings());
 });
 
@@ -130,6 +136,9 @@ describe("PromotionPlatformSettingTab", () => {
     expect(await screen.findByText("已保存，博主标签将在几分钟内更新")).toBeTruthy();
     // 保存后以服务端为准，又回到无改动
     await waitFor(() => expect(saveButton().disabled).toBe(true));
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole("heading", { name: "平台指标" }))
+    );
   });
 
   it("只读（can_edit 假）：没有输入框和保存按钮，显示值与提示", async () => {
@@ -168,7 +177,10 @@ describe("PromotionPlatformSettingTab", () => {
           code: "VALIDATION_ERROR",
           message: "请求数据校验失败",
           details: {
-            errors: [{ loc: ["body", 2, "like_coefficient"], msg: "Decimal input should have no more than 3 decimal places" }],
+            errors: [
+              { loc: ["body", 4, "hit_threshold"], msg: "Input should be less than or equal to 10000000" },
+              { loc: ["body", 2, "like_coefficient"], msg: "Decimal input should have no more than 3 decimal places" },
+            ],
           },
         },
       },
@@ -184,8 +196,45 @@ describe("PromotionPlatformSettingTab", () => {
     expect(input("快手点赞折算系数").getAttribute("aria-describedby")).toBe(cellError.id);
     expect(input("抖音点赞折算系数").getAttribute("aria-invalid")).toBeNull();
     expect(await screen.findByText("有数据不符合要求，请按提示修改")).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(input("快手点赞折算系数")));
+    expect(scrollMock).toHaveBeenCalledWith({ block: "nearest", inline: "nearest" });
+    expect(scrollMock.mock.instances).toContain(input("快手点赞折算系数"));
+    expect(input("快手点赞折算系数").value).toBe("9.999");
     fireEvent.change(input("快手点赞折算系数"), { target: { value: "9.99" } });
     expect(screen.queryByText("系数须大于 0、不超过 10，最多 3 位小数")).toBeNull();
+    expect(input("得物爆文阈值").getAttribute("aria-invalid")).toBe("true");
+    expect(document.activeElement).toBe(input("快手点赞折算系数"));
+  });
+
+  it.each(["saved", "error"] as const)("确认弹窗已关闭后才收到 %s 响应，也正确转移焦点", async (outcome) => {
+    let resolve!: (value: PromotionPlatformSettings) => void;
+    let reject!: (reason: unknown) => void;
+    updateMock.mockReturnValue(new Promise<PromotionPlatformSettings>((done, fail) => {
+      resolve = done;
+      reject = fail;
+    }));
+    wrap(<PromotionPlatformSettingTab />);
+    fireEvent.change(await screen.findByLabelText("抖音点赞折算系数"), { target: { value: "0.5" } });
+    await openConfirm();
+    fireEvent.click(screen.getByRole("button", { name: "确认保存" }));
+    await waitFor(() => expect(screen.queryByText(CONFIRM_TEXT)).toBeNull());
+    await act(async () => {
+      if (outcome === "saved") {
+        resolve(settings({
+          items: ITEMS.map((row) => row.platform === "抖音" ? { ...row, like_coefficient: "0.500" } : row),
+          changed: ["抖音"],
+        }));
+      } else {
+        reject({ response: { status: 422, data: {
+          code: "VALIDATION_ERROR",
+          message: "请求数据校验失败",
+          details: { errors: [{ loc: ["body", 1, "like_coefficient"], msg: "校验失败" }] },
+        } } });
+      }
+    });
+    await waitFor(() => expect(document.activeElement).toBe(outcome === "saved"
+      ? screen.getByRole("heading", { name: "平台指标" })
+      : input("抖音点赞折算系数")));
   });
 
   it("清空的格子先标「必填」，不弹确认也不发请求", async () => {

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Alert, Button, InputNumber, Modal, Skeleton, Table, Typography, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -86,6 +86,23 @@ export function PromotionPlatformSettingTab() {
   });
   const [draft, setDraft] = useState<DraftRow[] | null>(null);
   const [cellErrors, setCellErrors] = useState<CellErrors>({});
+  const panelRef = useRef<HTMLDivElement>(null);
+  const titleRef = useRef<HTMLHeadingElement>(null);
+  const [confirmationOpen, setConfirmationOpen] = useState(false);
+  const [focusTarget, setFocusTarget] = useState<"error" | "saved" | null>(null);
+
+  useEffect(() => {
+    // 接口可能在弹窗退出动画前返回；等 afterClose，避免弹窗恢复焦点把这里的焦点覆盖。
+    if (confirmationOpen || focusTarget === null) return;
+    if (focusTarget === "error") {
+      const input = panelRef.current?.querySelector<HTMLInputElement>('input[aria-invalid="true"]');
+      input?.scrollIntoView({ block: "nearest", inline: "nearest" });
+      input?.focus({ preventScroll: true });
+    } else {
+      titleRef.current?.focus();
+    }
+    setFocusTarget(null);
+  }, [confirmationOpen, focusTarget]);
 
   const saveMutation = useMutation({
     mutationFn: (items: PromotionPlatformSetting[]) => updatePromotionPlatformSettings(items),
@@ -93,6 +110,7 @@ export function PromotionPlatformSettingTab() {
       qc.setQueryData(queryKey, res);
       setDraft(null);
       setCellErrors({});
+      setFocusTarget("saved");
       if (res.changed.length === 0) message.info("没有改动");
       else if (res.quality_recompute_queued) message.success("已保存，博主标签将在几分钟内更新");
       else message.success("已保存");
@@ -106,6 +124,7 @@ export function PromotionPlatformSettingTab() {
       const parsed = resp?.status === 422 ? parseValidationErrors(err) : null;
       if (parsed) {
         setCellErrors(parsed.cells);
+        setFocusTarget("error");
         message.error(parsed.others[0] ?? "有数据不符合要求，请按提示修改");
         return;
       }
@@ -149,6 +168,7 @@ export function PromotionPlatformSettingTab() {
       like_coefficient: row.like_coefficient as string,
       hit_threshold: row.hit_threshold as number,
     }));
+    setConfirmationOpen(true);
     Modal.confirm({
       title: "保存平台指标？",
       content: CONFIRM_TEXT,
@@ -156,6 +176,7 @@ export function PromotionPlatformSettingTab() {
       cancelText: "取消",
       // 只有点了确认才发请求；取消什么都不发
       onOk: () => saveMutation.mutate(payload),
+      afterClose: () => setConfirmationOpen(false),
     });
   }
 
@@ -227,7 +248,10 @@ export function PromotionPlatformSettingTab() {
   ];
 
   return (
-    <>
+    <div ref={panelRef}>
+      <Typography.Title ref={titleRef} level={5} tabIndex={-1}>
+        平台指标
+      </Typography.Title>
       <Typography.Paragraph style={MUTED_STYLE}>
         {/* 两句拼成一个字符串：JSX 换行会在中文句号后多出一个空格 */}
         {"点赞数达到所在平台的爆文阈值算爆文（推广列表、工作进度爆文数、博主「带货型」都按它判）。" +
@@ -256,6 +280,6 @@ export function PromotionPlatformSettingTab() {
           保存修改
         </Button>
       )}
-    </>
+    </div>
   );
 }
