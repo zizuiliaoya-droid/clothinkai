@@ -4,7 +4,8 @@
 ``PlatformMetricSettings`` 显式传下去。缺行回落默认，不报错（见 ``settings.py``）。
 
 ``update_settings``（``PUT /api/settings/promotion-platforms``，报表视图设计 5.1）：
-值没变的行不写；有任何一行变了，同一个事务里 ① 清汇总覆盖（先拿刷新锁，撞锁 409 时什么都没写）
+先拿刷新锁再读现值、比较改动（撞锁 409 时什么都没写）；值没变的行不写。
+有任何一行变了，同一个事务里 ① 清汇总覆盖
 → ② 只 upsert 变了的行 → ③ 写审计（改前改后）→ commit；提交后投递
 ``recompute_blogger_quality_tags``（只重算质量标签），投递失败只记 warning + Sentry，不影响保存。
 """
@@ -29,7 +30,10 @@ from app.modules.metric_config.schemas import (
 )
 from app.modules.metric_config.settings import PlatformMetricSettings
 from app.modules.report.exceptions import SummaryRefreshBusyError
-from app.modules.report.summary_invalidation import invalidate_summary_coverage
+from app.modules.report.summary_invalidation import (
+    acquire_summary_refresh_lock,
+    invalidate_summary_coverage,
+)
 
 log = logging.getLogger(__name__)
 
@@ -76,6 +80,12 @@ class PlatformMetricSettingService:
         self, payload: PlatformSettingsUpdate, user: User, *, can_edit: bool
     ) -> PlatformSettingsResponse:
         tenant_id = user.tenant_id
+        try:
+            # 首次保存可能还没有配置行；与刷新 / 其他保存共用租户锁，拿锁后才读现值。
+            await acquire_summary_refresh_lock(self._session, tenant_id=tenant_id)
+        except SummaryRefreshBusyError:
+            await self._session.rollback()
+            raise
         current = await self.get_settings(tenant_id)
         before: dict[str, Any] = {}
         after: dict[str, Any] = {}
@@ -93,14 +103,10 @@ class PlatformMetricSettingService:
         if not rows:
             return _response(current, can_edit=can_edit)
 
-        try:
-            # 先拿刷新锁再写配置：撞锁就整事务回滚，配置一行都没写
-            invalidated = await invalidate_summary_coverage(
-                self._session, tenant_id=tenant_id, reason=INVALIDATE_REASON
-            )
-        except SummaryRefreshBusyError:
-            await self._session.rollback()
-            raise
+        # helper 重入同一事务已持有的刷新锁；只有真正有改动才清覆盖。
+        invalidated = await invalidate_summary_coverage(
+            self._session, tenant_id=tenant_id, reason=INVALIDATE_REASON
+        )
         await self._repo.upsert(tenant_id, rows, updated_by=user.id)
         await self._audit.log(
             action="metric_config.update",
