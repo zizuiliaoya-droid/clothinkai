@@ -684,9 +684,11 @@ describe("BiDashboardPage 单品分析", () => {
       });
       goodsTrendMock.mockResolvedValue({ points: [point("2026-10-11"), point("2026-10-12")] });
       renderPage("/bi?tab=goods");
-      const amount = await screen.findByRole("img", { name: "单品金额趋势折线图" });
-      expect(amount.getAttribute("width")).toBe("480");
-      expect(screen.getByRole("img", { name: "单品净投产趋势折线图" }).getAttribute("width")).toBe("480");
+      // 首屏需串行完成偏好、BI 与趋势加载；等两张图量好宽度，沿用 waitData 的 3 秒预算。
+      await waitFor(() => {
+        expect(screen.getByRole("img", { name: "单品金额趋势折线图" }).getAttribute("width")).toBe("480");
+        expect(screen.getByRole("img", { name: "单品净投产趋势折线图" }).getAttribute("width")).toBe("480");
+      }, { timeout: 3000 });
     } finally {
       vi.unstubAllGlobals();
     }
