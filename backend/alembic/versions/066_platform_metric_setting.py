@@ -14,7 +14,7 @@
 只回滚代码不跑 downgrade 时要另清一次覆盖（设计 3.4）。
 
 Revision ID: 066_platform_metric_setting
-Revises: 064_urge_complete
+Revises: 065_settlement_flow
 Create Date: 2026-10-13
 """
 
@@ -31,7 +31,7 @@ from app.core.security.rls import disable_rls_sql, enable_rls_sql
 
 revision: str = "066_platform_metric_setting"
 # 流程线 PR-6 的 065 合并后由编排方改成 065_settlement_flow（brief-rep7e7 第 1 节）
-down_revision: str | Sequence[str] | None = "064_urge_complete"
+down_revision: str | Sequence[str] | None = "065_settlement_flow"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -210,5 +210,5 @@ def downgrade() -> None:
     op.drop_index("uq_promotion_platform_setting_tenant_platform", table_name=_TABLE)
     op.drop_table(_TABLE)
     _log(f"{_TABLE} 表已删除")
-    # 回到 064 后工作进度爆文数按 >= 500 算，按平台阈值写下的覆盖记录作废
+    # 回到 065 后工作进度爆文数按 >= 500 算，按平台阈值写下的覆盖记录作废
     _clear_coverage(bind)
