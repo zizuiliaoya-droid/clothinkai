@@ -24,6 +24,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.db import get_session
+from app.core.security.permissions import EffectivePermissions
 from app.modules.auth.deps import get_current_perms, get_current_user_active
 from app.modules.auth.models import AuditLog, Role
 from app.modules.auth.service import AuthService
@@ -430,6 +431,32 @@ class TestValidation:
 # 权限
 # --------------------------------------------------------------------------- #
 class TestPermissions:
+    @pytest.mark.parametrize(
+        ("role_code", "scopes", "status", "can_edit"),
+        [
+            ("pr", {"metric_config:read"}, 200, False),
+            ("designer", {"metric_config.*:read"}, 200, False),
+            ("designer", {"metric_config.*:*"}, 200, True),
+            ("pr", {"*"}, 200, True),
+            ("pr_manager", set(), 403, False),
+            ("pr", {"promotion.*:*"}, 403, False),
+        ],
+    )
+    async def test_get_capability_uses_effective_permissions(
+        self, as_role: Any, role_code: str, scopes: set[str], status: int, can_edit: bool
+    ) -> None:
+        """前端 GET 探测沿用后端权限语义：个人授权、撤回及本域通配。"""
+        user = await as_role(role_code)
+        effective = EffectivePermissions(user_id=str(user.id), scopes=frozenset(scopes))
+        _app().dependency_overrides[get_current_perms] = lambda: effective
+        async with _client() as ac:
+            response = await ac.get(URL)
+        assert response.status_code == status, response.text
+        if status == 200:
+            assert response.json()["can_edit"] is can_edit
+        else:
+            assert response.json()["code"] == "PERMISSION_DENIED"
+
     @pytest.mark.parametrize(
         ("role_code", "get_status", "put_status"),
         [

@@ -11,8 +11,8 @@ import type {
   PromotionPlatformSettings,
 } from "@/features/settings/api";
 import { extractErrorMessage, isApiError } from "@/services/apiClient";
+import { useAuthStore } from "@/stores/authStore";
 
-const QUERY_KEY = ["promotion-platform-settings"] as const;
 const REFRESH_BUSY_CODE = "REPORT_SUMMARY_REFRESH_BUSY";
 export const CONFIRM_TEXT = "保存后报表回到实时口径，约 1 小时内恢复";
 export const BUSY_TEXT = "报表正在刷新，请稍后再试";
@@ -75,9 +75,14 @@ function parseValidationErrors(err: unknown): { cells: CellErrors; others: strin
  */
 export function PromotionPlatformSettingTab() {
   const qc = useQueryClient();
+  const userId = useAuthStore((s) => s.user?.id);
+  const queryKey = ["promotion-platform-settings", userId] as const;
   const { data, isLoading, error } = useQuery({
-    queryKey: QUERY_KEY,
+    queryKey,
     queryFn: () => getPromotionPlatformSettings(),
+    // 设置页刚完成读权限探测，点开 Tab 复用同一用户的数据。
+    refetchOnMount: false,
+    retry: false,
   });
   const [draft, setDraft] = useState<DraftRow[] | null>(null);
   const [cellErrors, setCellErrors] = useState<CellErrors>({});
@@ -85,7 +90,7 @@ export function PromotionPlatformSettingTab() {
   const saveMutation = useMutation({
     mutationFn: (items: PromotionPlatformSetting[]) => updatePromotionPlatformSettings(items),
     onSuccess: (res: PromotionPlatformSettings) => {
-      qc.setQueryData(QUERY_KEY, res);
+      qc.setQueryData(queryKey, res);
       setDraft(null);
       setCellErrors({});
       if (res.changed.length === 0) message.info("没有改动");
