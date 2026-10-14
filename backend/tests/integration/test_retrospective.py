@@ -1,13 +1,13 @@
 """复盘环节集成测试（PRD V1.4 改动 4）。
 
 守的不变量：
-- 录 7 天数据要求 ``settlement_status='已付款'``（结款没完成复盘没有意义）
+- 录 7 天数据要求 ``settlement_status='已结款'``（门槛与只录一次见 test_metrics_gate）
 - 三个指标 + 截图都必填，截图缺了整个操作回滚（不留「数字录了图没传」的中间态）
 - 指标与状态推进同事务
 - 禁止确认自己写的复盘 —— 这条必须在 service 层挡，权限层拦不住
 - 打回不删旧记录，重写时追加新行
 - 博主档案只收已确认的复盘，未确认的不进 hover 卡
-- retro_status 与 settlement_status 正交：复盘推进不影响「已付款」这个过滤条件
+- retro_status 与 settlement_status 正交：复盘推进不影响「已结款」这个过滤条件
 """
 
 from __future__ import annotations
@@ -22,9 +22,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.tenancy import tenant_id_ctx
 from app.modules.promotion.enums import PublishStatus, RetroStatus, SettlementStatus
 from app.modules.promotion.exceptions import (
+    MetricsNotAvailableYetError,
     MetricsScreenshotRequiredError,
     RetroSelfConfirmForbiddenError,
-    SettlementNotPaidError,
 )
 from app.modules.promotion.schemas import (
     PromotionMetricsRequest,
@@ -74,7 +74,7 @@ async def _paid_promo(
     pr: Any,
     *,
     code: str,
-    settlement_status: str = SettlementStatus.PAID.value,
+    settlement_status: str = SettlementStatus.SETTLED.value,
 ) -> Any:
     """造一张已结款、已发布的推广单 —— 复盘的起点。"""
     style = await product_factory.style(style_code=code)
@@ -114,7 +114,7 @@ class TestRecordMetrics:
             assert resp.comment_count == 45
             assert resp.metrics_recorded_at is not None
             # 结款状态不受影响 —— 两个状态机正交
-            assert resp.settlement_status == SettlementStatus.PAID.value
+            assert resp.settlement_status == SettlementStatus.SETTLED.value
         finally:
             tenant_id_ctx.reset(token)
 
@@ -140,7 +140,7 @@ class TestRecordMetrics:
                 code="RT_UNPAID",
                 settlement_status=SettlementStatus.PENDING_PAYMENT.value,
             )
-            with pytest.raises(SettlementNotPaidError):
+            with pytest.raises(MetricsNotAvailableYetError):
                 await PromotionService(session).record_metrics(
                     promo.id, _METRICS, pr, screenshot=_SHOT
                 )
@@ -378,7 +378,7 @@ class TestRetrospectiveFlow:
                     blogger=blogger,
                     pr=pr,
                     publish_status=PublishStatus.PUBLISHED.value,
-                    settlement_status=SettlementStatus.PAID.value,
+                    settlement_status=SettlementStatus.SETTLED.value,
                 )
                 await svc.record_metrics(promo.id, _METRICS, pr, screenshot=_SHOT)
                 await svc.submit_retrospective(

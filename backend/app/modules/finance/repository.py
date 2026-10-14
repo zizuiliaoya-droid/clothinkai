@@ -23,7 +23,9 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, select, text, update
+from sqlalchemy import bindparam, func, select, text, update
+from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.metrics import settlement_sequence_lock_duration_seconds
@@ -32,6 +34,24 @@ from app.modules.finance.models import (
     Settlement,
     SettlementExtraItem,
 )
+from app.modules.promotion.display_name import display_short_name_sql
+
+
+@dataclass(frozen=True)
+class SettlementPromotionInfo:
+    """结款页「单据信息」要的推广单字段（流程线 7.5 / 7d-3）。收款码只给引用，签不签由 service 按字段规则定。"""
+
+    line_id: UUID
+    internal_code: str
+    cooperation_mode: str | None
+    publish_url: str | None
+    remark: str | None
+    review_reason: str | None
+    resubmit_note: str | None
+    display_short_name: str | None
+    payment_qr_r2_key: str | None
+    payment_qr_status: str | None
+
 
 # ---------------------------------------------------------------------------
 # Filters dataclass
@@ -89,6 +109,63 @@ class SettlementRepository:
         """事件重放兜底 SELECT（DB UNIQUE 已防，service 层 SELECT 友好 audit 区分）。"""
         stmt = select(Settlement).where(Settlement.request_event_id == request_event_id)
         return (await self._session.execute(stmt)).scalar_one_or_none()
+
+    async def promotion_line_id(self, promotion_id: UUID) -> UUID:
+        """结款单所属推广单的主线号（写结款组时间线事件用，流程线 6.3）。
+
+        原生 SQL，不 import promotion 的 model；``settlement.promotion_id`` 有 FK，推广单必在。
+        """
+        result = await self._session.execute(
+            text("SELECT line_id FROM promotion WHERE id = CAST(:pid AS uuid)"),
+            {"pid": promotion_id},
+        )
+        line_id: UUID = result.scalar_one()
+        return line_id
+
+    async def promotion_doc_info(
+        self, *, tenant_id: UUID, promotion_ids: Sequence[UUID]
+    ) -> dict[UUID, SettlementPromotionInfo]:
+        """结款页的单据信息（流程线 7.5 / 7d-3）：一页的推广单一条查询批量取。
+
+        原生 SQL，不 import promotion 的 model；只取 7d-3 列的几项（不取收件与发货，Q4）。
+        品名照 ``promotion/display_name.py`` 的 SQL 片段（商品简称，没填回落建单快照）。
+        """
+        if not promotion_ids:
+            return {}
+        sql = text(
+            f"""
+            SELECT p.id AS promotion_id, p.line_id, p.internal_code, p.cooperation_mode,
+                   p.publish_url, p.remark, p.review_reason, p.resubmit_note,
+                   {display_short_name_sql(promotion="p", goods="g")} AS display_short_name,
+                   qr.r2_key AS payment_qr_r2_key, qr.status AS payment_qr_status
+            FROM promotion p
+            LEFT JOIN goods_main g ON g.id = p.goods_main_id AND g.tenant_id = p.tenant_id
+            LEFT JOIN attachment qr
+              ON qr.id = p.payment_qr_attachment_id AND qr.tenant_id = p.tenant_id
+            WHERE p.tenant_id = :tenant_id AND p.id = ANY(:promotion_ids)
+            """  # noqa: S608  片段是模块常量拼出来的列表达式，不含用户输入
+        ).bindparams(
+            bindparam("tenant_id", type_=PGUUID(as_uuid=True)),
+            bindparam("promotion_ids", type_=ARRAY(PGUUID(as_uuid=True))),
+        )
+        rows = await self._session.execute(
+            sql, {"tenant_id": tenant_id, "promotion_ids": list(promotion_ids)}
+        )
+        return {
+            row["promotion_id"]: SettlementPromotionInfo(
+                line_id=row["line_id"],
+                internal_code=row["internal_code"],
+                cooperation_mode=row["cooperation_mode"],
+                publish_url=row["publish_url"],
+                remark=row["remark"],
+                review_reason=row["review_reason"],
+                resubmit_note=row["resubmit_note"],
+                display_short_name=row["display_short_name"],
+                payment_qr_r2_key=row["payment_qr_r2_key"],
+                payment_qr_status=row["payment_qr_status"],
+            )
+            for row in rows.mappings().all()
+        }
 
     # ----------------------- write helper ----------------------- #
 
@@ -153,6 +230,7 @@ class SettlementRepository:
         from_state_value: str,
         to_state_value: str,
         extra_fields: dict[str, Any] | None = None,
+        expected_total_amount: Decimal | None = None,
     ) -> Settlement | None:
         """乐观并发 UPDATE WHERE old_state RETURNING（FB7 模式）.
 
@@ -160,6 +238,7 @@ class SettlementRepository:
         - ``id = :settlement_id``
         - ``tenant_id = :tenant_id``（多租户防护，与 RLS 双保险）
         - ``settlement_status = :from_state_value``（旧状态防护）
+        - 传了 ``expected_total_amount`` 时再加 ``total_amount = :expected``（填实付：应付读出后被改 → 0 行）
 
         **不含 ``is_active`` 字段**（FB3：财务记录无软删除字段）。
 
@@ -175,13 +254,17 @@ class SettlementRepository:
         values["settlement_status"] = to_state_value
         values["updated_at"] = func.now()
 
+        conditions = [
+            Settlement.id == settlement_id,
+            Settlement.tenant_id == tenant_id,
+            Settlement.settlement_status == from_state_value,
+        ]
+        if expected_total_amount is not None:
+            conditions.append(Settlement.total_amount == expected_total_amount)
+
         stmt = (
             update(Settlement)
-            .where(
-                Settlement.id == settlement_id,
-                Settlement.tenant_id == tenant_id,
-                Settlement.settlement_status == from_state_value,
-            )
+            .where(*conditions)
             .values(**values)
             .returning(Settlement)
             .execution_options(synchronize_session=False)

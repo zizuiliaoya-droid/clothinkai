@@ -12,10 +12,13 @@
 - promotion 缺失 → failed
 - 不触发事件（event_capture 空）
 - 跨租户 tenant_id 正确
+- 流程线 PR-6 C4 行级规则：只收推广单未核查、文件状态已付款（空按已付款）的行；之后发布审核走 R2 ⑥
 """
 
 from __future__ import annotations
 
+from datetime import timedelta
+from decimal import Decimal
 from typing import Any
 from uuid import uuid4
 
@@ -24,20 +27,28 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import app.tasks.import_tasks as tasks
+from app.core.events import subscribe
+from app.core.tenancy import tenant_id_ctx
 from app.modules.importer.adapters.settlement import SettlementImportAdapter
 from app.modules.importer.registry import ImportAdapterRegistry
+from app.modules.promotion.enums import ReviewAction
+from app.modules.promotion.schemas import PromotionPublishRequest, PromotionReviewRequest
+from app.modules.promotion.service import PromotionService
+from app.modules.promotion.urge_calculator import get_today
 from app.tasks.import_tasks import _run_import_batch
 from tests.conftest import purge_promotions
 
 
-async def _seed(Maker, suffix: str, batch_id):
+async def _seed(Maker, suffix: str, batch_id, *, extra: dict[str, str] | None = None):
     """committed seed：tenant + style + blogger + 2 promotion（1 待结算 / 1 已有结算）
     + 1 已有 settlement（模拟事件创建）+ processing batch。
 
+    ``extra``：再建几张推广单，推广编号 → 推广单结款状态（行级规则用例用）；两张基础单都是未核查。
     返回 (tenant_id, promo1_code, promo2_code)。
     """
     promo1_code = f"PR{suffix}1"
     promo2_code = f"PR{suffix}2"
+    promo_statuses = {promo1_code: "未核查", promo2_code: "未核查", **(extra or {})}
     async with Maker() as s:
         tenant_id = (
             await s.execute(text("SELECT id FROM tenant ORDER BY created_at ASC LIMIT 1"))
@@ -65,16 +76,17 @@ async def _seed(Maker, suffix: str, batch_id):
             )
         ).scalar_one()
         promo_ids = {}
-        for code in (promo1_code, promo2_code):
+        for code, settlement_status in promo_statuses.items():
             pid = (
                 await s.execute(
                     text(
                         "INSERT INTO promotion (id, tenant_id, style_id, blogger_id, "
                         "internal_code, style_code_snapshot, style_short_name_snapshot, "
-                        "quote_amount, platform, cooperation_date, is_active, "
-                        "created_at, updated_at) "
+                        "quote_amount, platform, cooperation_date, settlement_status, "
+                        "is_active, created_at, updated_at) "
                         "VALUES (gen_random_uuid(), :tid, :sid, :bid, :code, :scode, "
-                        "'连衣裙A', 500.00, '小红书', '2026-06-01', true, NOW(), NOW()) "
+                        "'连衣裙A', 500.00, '小红书', '2026-06-01', "
+                        "CAST(:sst AS varchar), true, NOW(), NOW()) "
                         "RETURNING id"
                     ),
                     {
@@ -83,6 +95,7 @@ async def _seed(Maker, suffix: str, batch_id):
                         "bid": blogger_id,
                         "code": code,
                         "scode": f"ST{suffix}A",
+                        "sst": settlement_status,
                     },
                 )
             ).scalar_one()
@@ -173,9 +186,9 @@ class TestSettlementImportEndToEnd:
 
         csv_bytes = (
             "推广编号,结算日期,金额,总金额,付款金额,结算状态\n"
-            f"{promo1_code},2026-06-01,500.00,1500.00,1500.00,待付款\n"
-            f"{promo2_code},2026-06-01,500.00,500.00,,待核查\n"
-            f"PR{suffix}MISSING,2026-06-01,100,100,,待核查\n"
+            f"{promo1_code},2026-06-01,500.00,1500.00,1500.00,已付款\n"
+            f"{promo2_code},2026-06-01,500.00,500.00,,已付款\n"
+            f"PR{suffix}MISSING,2026-06-01,100,100,,已付款\n"
         ).encode()
 
         import app.core.attachment as att_mod
@@ -212,7 +225,7 @@ class TestSettlementImportEndToEnd:
                 # 派生：settlement.blogger_id/style_id == promotion 的
                 assert str(row[1]) == str(row[7])
                 assert str(row[2]) == str(row[8])
-                assert row[3] == "待付款"
+                assert row[3] == "已付款"
                 assert row[4] is not None  # 合成 request_event_id 非空
                 assert str(row[5]) == str(tenant_id)  # 跨租户正确
                 assert str(row[6]) == "1500.00"
@@ -295,3 +308,173 @@ class TestSettlementImportEndToEnd:
         finally:
             ImportAdapterRegistry.clear()
             await _cleanup(Maker, suffix, batch_id)
+
+    async def test_row_rules_only_unreviewed_promotion_and_paid_status(
+        self, engine: Any, monkeypatch, event_capture: list
+    ) -> None:
+        """流程线 PR-6 C4（设计 7.5 ②③）：推广单已进系统结款流程的行、文件状态 ≠ 已付款的行整行失败
+        并写明原因；推广单未核查 + 状态留空 → 成功、记已付款。从中文表头的导出样子走（千分位、多余列）。"""
+        Maker = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+        monkeypatch.setattr(tasks, "AsyncSessionApp", Maker)
+        monkeypatch.setattr(tasks, "AsyncSessionBypass", Maker)
+        ImportAdapterRegistry.clear()
+        ImportAdapterRegistry.register(SettlementImportAdapter())
+
+        suffix = uuid4().hex[:8]
+        batch_id = uuid4()
+        in_flow = ["待核查", "已驳回", "待付款", "结款驳回", "已付款", "已结款"]
+        extra = {f"PR{suffix}S{i}": status for i, status in enumerate(in_flow)}
+        fresh_code = f"PR{suffix}N"
+        extra[fresh_code] = "未核查"
+        _tenant_id, promo1_code, _ = await _seed(Maker, suffix, batch_id, extra=extra)
+
+        lines = ["推广编号,博主昵称,结算日期,金额,总金额,付款金额,付款日期,结算状态"]
+        lines += [
+            f'{code},小美,2026-06-01,"1,000.00","1,000.00","1,000.00",2026-06-10,已付款'
+            for code in extra
+            if code != fresh_code
+        ]
+        # 推广单未核查，但文件状态不是已付款
+        lines.append(f"{promo1_code},小美,2026-06-01,500.00,500.00,,,待核查")
+        # 推广单未核查 + 状态留空 → 按已付款记
+        lines.append(f'{fresh_code},小美,2026-06-01,"1,200.00","1,200.00",1000.00,2026-06-10,')
+        csv_bytes = ("\n".join(lines) + "\n").encode()
+
+        import app.core.attachment as att_mod
+
+        monkeypatch.setattr(
+            att_mod.attachment_service,
+            "get_object_bytes",
+            lambda bucket, key: csv_bytes,
+        )
+
+        try:
+            result = await _run_import_batch(batch_id, only_failed=False)
+            assert (result["status"], result["imported"], result["failed"]) == ("partial", 1, 7)
+
+            async with Maker() as check:
+                jobs = (
+                    await check.execute(
+                        text(
+                            "SELECT status, error_detail FROM import_job "
+                            "WHERE batch_id = :b ORDER BY row_number"
+                        ),
+                        {"b": batch_id},
+                    )
+                ).fetchall()
+                assert [j[0] for j in jobs] == ["failed"] * 7 + ["success"]
+                for job, status in zip(jobs[:6], in_flow, strict=True):
+                    detail = job[1] or ""
+                    assert f"「{status}」" in detail and "走结款流程" in detail, detail
+                assert "结算状态只能为 已付款" in (jobs[6][1] or "")
+
+                rows = (
+                    await check.execute(
+                        text(
+                            "SELECT p.internal_code, s.settlement_status, s.total_amount, "
+                            "s.payment_amount FROM settlement s "
+                            "JOIN promotion p ON p.id = s.promotion_id "
+                            "WHERE p.style_code_snapshot = :scode ORDER BY p.internal_code"
+                        ),
+                        {"scode": f"ST{suffix}A"},
+                    )
+                ).fetchall()
+                # 只剩 seed 给 promo2 的那张 + 新导入的一张；走结款流程的推广单一张都没建
+                assert [(r[0], r[1]) for r in rows] == [
+                    (f"PR{suffix}2", "待核查"),
+                    (fresh_code, "已付款"),
+                ]
+                assert (str(rows[1][2]), str(rows[1][3])) == ("1200.00", "1000.00")
+            assert event_capture == []
+        finally:
+            ImportAdapterRegistry.clear()
+            await _cleanup(Maker, suffix, batch_id)
+
+
+@pytest.fixture
+def tenant_ctx(tenant_a: Any) -> Any:
+    token = tenant_id_ctx.set(tenant_a.id)
+    yield
+    tenant_id_ctx.reset(token)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("tenant_ctx", "cross_unit_event_bus")
+class TestImportedThenReviewed:
+    async def test_imported_paid_then_publish_and_approve(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        flow_users: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+    ) -> None:
+        """C4 + R2 ⑥：未发布的推广单先导入一张已付款结款单，之后在系统里发布、审核通过 →
+        推广单记已付款、不发 SettlementRequested、结款单仍是导入的那 1 张。"""
+        style = await product_factory.style()
+        blogger = await blogger_factory.blogger()
+        promo = await promotion_factory.promotion(
+            style=style,
+            blogger=blogger,
+            pr=flow_users.pr,
+            quote_amount=Decimal("300.00"),
+            brand_comment=True,
+            payment_qr=True,
+        )
+        assert promo.settlement_status == "未核查"
+
+        adapter = SettlementImportAdapter()
+        parsed = adapter.parse_row(
+            {
+                "推广编号": promo.internal_code,
+                "博主昵称": "小美",
+                "结算日期": "2026-06-01",
+                "金额": "280.00",
+                "总金额": "280.00",
+                "付款金额": "280.00",
+                "付款日期": "2026-06-10",
+                "结算状态": "",
+            },
+            None,
+        )
+        assert adapter.validate(parsed) == []
+        await adapter.upsert(
+            parsed, session=session, tenant_id=tenant_a.id, actor_id=flow_users.finance.id
+        )
+
+        requested: list[Any] = []
+
+        async def _spy(event: Any, _session: Any) -> None:
+            requested.append(event)
+
+        subscribe("SettlementRequested", _spy)  # cross_unit_event_bus 收尾时 clear_handlers
+
+        service = PromotionService(session)
+        await service.publish(
+            promo.id,
+            PromotionPublishRequest(
+                publish_url="https://www.xiaohongshu.com/explore/abc",
+                actual_publish_date=get_today() - timedelta(days=10),
+            ),
+            flow_users.pr,
+        )
+        resp = await service.review(
+            promo.id, PromotionReviewRequest(action=ReviewAction.APPROVE), flow_users.pr_manager
+        )
+        assert (resp.settlement_status, resp.review_outcome) == (
+            "已付款",
+            "imported_settlement_paid",
+        )
+        assert requested == []
+        rows = (
+            await session.execute(
+                text(
+                    "SELECT settlement_status, total_amount FROM settlement "
+                    "WHERE promotion_id = CAST(:p AS uuid)"
+                ),
+                {"p": promo.id},
+            )
+        ).all()
+        assert [(r[0], str(r[1])) for r in rows] == [("已付款", "280.00")]

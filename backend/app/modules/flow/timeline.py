@@ -462,7 +462,8 @@ class LineEventService:
     async def _doc(self, actor: FlowActor, header: LineHeader) -> tuple[str | None, FlowDocBase]:
         """留言按钮的矩阵快照（与 ``POST /comments`` 同一份）：有推广单按推广单，否则按谈款。
 
-        「留言 / 贴图」这一格不看卡点，``items_complete`` 不影响结果，这里不为它多查明细。
+        「留言 / 贴图」这一格不看卡点、不按结款单状态拆，``items_complete`` 与 ``settlement_status``
+        不影响结果，这里不为它们多查明细与结款单。
         返回的阶段只在线上有推广单时非空（推广头信息用）。
         """
         promotion, negotiation = header.promotion, header.negotiation
@@ -474,6 +475,9 @@ class LineEventService:
                 settlement_status=promotion.settlement_status,
                 ship_status=promotion.ship_status,
                 is_active=promotion.is_active,
+                retro_status=promotion.retro_status,
+                metrics_recorded_at=promotion.metrics_recorded_at,
+                actual_publish_date=promotion.actual_publish_date,
                 scheduled_publish_date=promotion.scheduled_publish_date,
                 today=get_today(),
                 thresholds=thresholds,
@@ -483,6 +487,7 @@ class LineEventService:
                 stage=stage,
                 negotiator_id=negotiation.pr_id if negotiation is not None else None,
                 items_complete=False,
+                settlement_status=None,
             )
         if negotiation is None:  # 第 1 层已挡住：线上至少有一张单
             raise LineNotFoundError()

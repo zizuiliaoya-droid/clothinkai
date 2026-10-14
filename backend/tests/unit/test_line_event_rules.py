@@ -130,8 +130,11 @@ def test_rules_point_to_registered_fields() -> None:
 def test_attachment_rules_keyed_by_existing_event_types() -> None:
     values = {t.value for t in LineEventType}
     assert set(ATTACHMENT_FIELD_RULES) <= values
+    # 收款码、付款凭证、结款聊天截图（PR-6）同一条规则：运营、仓库看不到
     assert ATTACHMENT_FIELD_RULES == {
-        LineEventType.PROMOTION_PAYMENT_QR_UPLOADED.value: ("promotion", "payment_qr")
+        LineEventType.PROMOTION_PAYMENT_QR_UPLOADED.value: ("promotion", "payment_qr"),
+        LineEventType.SETTLEMENT_PAID.value: ("promotion", "payment_qr"),
+        LineEventType.PROMOTION_SETTLED.value: ("promotion", "payment_qr"),
     }
 
 

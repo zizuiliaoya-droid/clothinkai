@@ -70,7 +70,11 @@ class TestOrthogonality:
     """
 
     def test_settlement_paid_still_terminal(self) -> None:
-        assert SettlementStatusMachine.get_allowed_transitions("已付款") == []
+        # 流程线 3.4：已付款之后只剩「传结款聊天截图 → 已结款」，已结款是终态
+        assert SettlementStatusMachine.get_allowed_transitions("已付款") == [
+            ("settle_chat", "已结款")
+        ]
+        assert SettlementStatusMachine.get_allowed_transitions("已结款") == []
 
     def test_retro_states_not_in_settlement_machine(self) -> None:
         settlement_states = {t.to_state for t in SettlementStatusMachine.transitions} | {

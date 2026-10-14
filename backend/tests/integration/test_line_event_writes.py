@@ -544,6 +544,7 @@ class TestReview:
             publish_status="已发布",
             settlement_status="待核查",
             cooperation_mode="送拍",
+            payment_qr=True,
         )
         line_id, pid = promo.line_id, promo.id
         await PromotionService(session).review(
@@ -565,7 +566,7 @@ class TestReview:
         ops = {e.event_type: e for e in (await svc.read(line_id, flow_users.operations)).events}
         assert ops["review.approved"].payload == {"destination": "待付款"}
 
-    async def test_barter_approve_goes_paid(
+    async def test_barter_approve_goes_settled(
         self,
         session: AsyncSession,
         flow_users: Any,
@@ -587,10 +588,18 @@ class TestReview:
         await PromotionService(session).review(
             promo.id, PromotionReviewRequest(action=ReviewAction.APPROVE), flow_users.pr_manager
         )
-        (approved,) = await events_of(session, line_id=line_id)
+        # 应付 0 直接结清（R3）：review.approved 之后跟一条 promotion.settled（6.3）
+        approved, settled = await events_of(session, line_id=line_id)
         assert approved.event_type == _T.REVIEW_APPROVED.value
-        assert approved.to_state == "已付款"
-        assert approved.payload == {"destination": "已付款", "payable": "0.00"}
+        assert approved.to_state == "已结款"
+        assert approved.payload == {"destination": "已结款", "payable": "0.00"}
+        assert settled.event_type == _T.PROMOTION_SETTLED.value
+        assert (settled.from_state, settled.to_state, settled.attachment_id) == (
+            "待核查",
+            "已结款",
+            None,
+        )
+        assert settled.actor_id == flow_users.pr_manager.id
 
     async def test_reject_then_resubmit(
         self,
@@ -678,7 +687,7 @@ class TestRetro:
             blogger_factory,
             promotion_factory,
             publish_status="已发布",
-            settlement_status="已付款",
+            settlement_status="已结款",
         )
         line_id, pid = promo.line_id, promo.id
         svc = PromotionService(session)
@@ -768,7 +777,15 @@ class TestUploads:
         from app.core import attachment as att_mod
 
         monkeypatch.setattr(att_mod.attachment_service, "_client", _FakeS3(), raising=False)
-        promo = await _promo(flow_users, product_factory, blogger_factory, promotion_factory)
+        # 收款码发布后才能传（7.3 ①）：待主管审核的单
+        promo = await _promo(
+            flow_users,
+            product_factory,
+            blogger_factory,
+            promotion_factory,
+            publish_status="已发布",
+            settlement_status="待核查",
+        )
         line_id, pid = promo.line_id, promo.id
         svc = PromotionService(session)
         first = await svc.upload_payment_qr(

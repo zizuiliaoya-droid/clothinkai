@@ -57,8 +57,25 @@ export interface Settlement {
   style_code: string | null;
   style_name: string | null;
   blogger_nickname: string | null;
+  /** 实付 ≠ 应付的调整说明（F3）。 */
+  payment_adjust_note: string | null;
+  // 单据信息（流程线 7.5 / 7d-3）：推广单的这几项；不带收件与发货信息（Q4）
+  promotion_internal_code: string | null;
+  cooperation_mode: string | null;
+  publish_url: string | null;
+  promotion_remark: string | null;
+  /** 推广审核最近一次驳回的原因。 */
+  promotion_review_reason: string | null;
+  promotion_resubmit_note: string | null;
+  /** 博主收款码签名 URL（字段规则 promotion.payment_qr：管理员、PR、主管、财务）。 */
+  payment_qr_signed_url: string | null;
+  /** 品名：商品简称，没填回落建单快照；界面不显示商品编码。 */
+  display_short_name: string | null;
+  line_id: string | null;
   // 子表
   extra_items: SettlementExtraItem[];
+  /** 行级流程矩阵（结款单只有动作行，8.6）。 */
+  ui: Pick<UiState, "actions"> | null;
 }
 
 export interface SettlementExtraItem {
@@ -85,6 +102,8 @@ export interface SettlementExtraItemCreateRequest {
 
 export interface SettlementPaymentAmountRequest {
   payment_amount: string;
+  /** 实付 ≠ 应付时必填（后端 422 FLOW_GATE_MISSING，key = payment_adjust_note）。 */
+  payment_adjust_note?: string | null;
 }
 
 export interface SettlementPage {

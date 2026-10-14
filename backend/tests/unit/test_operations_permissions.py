@@ -162,6 +162,7 @@ class TestOperationsRoleSpec:
             ("promotion", "write"),
             ("promotion.urge", "write"),
             ("promotion.retro", "write"),
+            ("promotion.metrics", "write"),
             ("promotion.warehouse", "write"),
             ("promotion.review", "approve"),
             ("settlement", "write"),

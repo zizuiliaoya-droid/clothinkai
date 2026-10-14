@@ -32,6 +32,7 @@ BLOGGER_ALL = "blogger.*:*"
 BLOGGER_READ = "blogger.*:read"
 PROMOTION_ALL = "promotion.*:*"
 PROMOTION_READ = "promotion.*:read"
+# 旧推广审核 scope。流程线 PR-6（065）起审核改挂 promotion_review:approve，已停用，仅为回滚保留
 PROMOTION_REVIEW = "promotion.review:approve"
 FINANCE_ALL = "finance.*:*"
 FINANCE_READ = "finance.*:read"
@@ -106,6 +107,11 @@ PROMOTION_SHIP_EXPORT = "promotion_ship:export"  # 导出待打单（业务方�
 # 管理员靠 *。独立一级域 promotion_create，刻意不叫 promotion.create:write —— PR 的 promotion.*:*
 # 会命中它，PR 就照旧能直接建单（Q6、7c-9、11-15）。
 PROMOTION_CREATE_WRITE = "promotion_create:write"
+
+# 流程线 PR-6 推广审核收权（迁移 065）。推广审核通过 / 驳回（R2 ~ R4）与寄回运费付款单审核（PR-8）只给主管，
+# 管理员靠 *。独立一级域 promotion_review：旧的 promotion.review:approve 被 PR 的 promotion.*:* 命中，
+# 只靠「不能审自己的单」兜底；默 6 要求 PR 完全没有审核权。
+PROMOTION_REVIEW_APPROVE = "promotion_review:approve"
 # 旧回填 scope。060 起回填接口改挂 promotion_ship:fill，已停用，仅为回滚保留
 PROMOTION_WAREHOUSE_WRITE_LEGACY = "promotion.warehouse:write"
 # 7e R1 报表视图（迁移 061，报表视图设计第 4 节）。read_own 是「只看本人」：
@@ -204,7 +210,8 @@ DEFAULT_ROLES: tuple[RoleSpec, ...] = (
         permissions=(
             PROMOTION_ALL,
             BLOGGER_ALL,
-            PROMOTION_REVIEW,
+            PROMOTION_REVIEW,  # 已停用，仅为回滚保留（库里授权不删）
+            PROMOTION_REVIEW_APPROVE,
             BLOGGER_TAG_WRITE,
             PROMOTION_SHIP_PUSH,
             PROMOTION_CREATE_WRITE,

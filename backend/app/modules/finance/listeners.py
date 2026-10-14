@@ -6,7 +6,7 @@
 - 同事务执行（与 U04 service.review approve 共享 session）
 - 三重幂等（DB UNIQUE × 2 + service SELECT，FB1+FB3）
 - handler 内 ``await session.flush()``（FB6：UNIQUE / FK 错误立即暴露）
-- settlement_status 起点 = "待核查"（FB1）
+- settlement_status 起点 = "待付款"（F1，流程线 PR-6；原为待核查），同事务写 ``settlement.created``
 
 注册位置：main.py register_event_listeners 第 1 步（强一致，缺失 fail fast）。
 """
@@ -27,7 +27,8 @@ from app.modules.finance.domain import format_settlement_no
 from app.modules.finance.enums import SettlementStatus
 from app.modules.finance.models import Settlement
 from app.modules.finance.repository import SettlementRepository
-from app.modules.promotion.events import SettlementRequested
+from app.modules.flow.line_events import LineEventRepository, LineEventType
+from app.modules.promotion.events import SettlementRequested, SettlementResubmitted
 
 log = logging.getLogger(__name__)
 
@@ -74,7 +75,7 @@ async def on_settlement_requested(event: SettlementRequested, session: AsyncSess
         sequence=seq,
     )
 
-    # 4. 创建实体 — settlement_status 起点 = 待核查（FB1）
+    # 4. 创建实体 — settlement_status 起点 = 待付款（F1：流程线 PR-6 去掉核查，原为待核查）
     settlement = Settlement(
         id=uuid4(),
         tenant_id=event.tenant_id,
@@ -85,7 +86,7 @@ async def on_settlement_requested(event: SettlementRequested, session: AsyncSess
         settlement_no=settlement_no,
         amount=event.amount,
         total_amount=event.amount,  # 初始无 extra_item
-        settlement_status=SettlementStatus.PENDING_REVIEW.value,
+        settlement_status=SettlementStatus.PENDING_PAYMENT.value,
         request_event_id=event.event_id,
     )
     repo.add(settlement)
@@ -108,8 +109,20 @@ async def on_settlement_requested(event: SettlementRequested, session: AsyncSess
             "promotion_id": str(event.promotion_id),
             "amount_changed": True,
             "total_amount_changed": True,
-            "settlement_status": SettlementStatus.PENDING_REVIEW.value,
+            "settlement_status": SettlementStatus.PENDING_PAYMENT.value,
         },
+    )
+
+    # 7. 时间线（流程线 6.3）：settlement.created，同事务、不吞异常（6.4）；actor 取审核通过的人
+    line_id = event.line_id or await repo.promotion_line_id(event.promotion_id)
+    await LineEventRepository(session).append(
+        tenant_id=event.tenant_id,
+        line_id=line_id,
+        event_type=LineEventType.SETTLEMENT_CREATED,
+        actor_id=event.requested_by,
+        promotion_id=event.promotion_id,
+        to_state=SettlementStatus.PENDING_PAYMENT.value,
+        payload={"settlement_id": str(settlement.id)},
     )
 
     settlement_created_via_event_total.labels(result="created").inc()
@@ -149,19 +162,38 @@ async def on_settlement_requested_auto_order(
         order_adjustment_auto_created_total.labels(result="failed").inc()
 
 
+async def on_settlement_resubmitted(event: SettlementResubmitted, session: AsyncSession) -> None:
+    """推广单 R7 → 结款单 F6：已驳回 → 待付款，清空实付与调整说明（流程线 3.4、7.5）。
+
+    与推广单的条件 UPDATE 同一事务：``autocommit=False``、不吞异常；结款单不在已驳回 → 409 冒泡，
+    推广单跟着回滚。租户与操作人取事件字段。
+    """
+    from app.modules.finance.service import SettlementService
+
+    await SettlementService(session).resubmit(
+        event.settlement_id,
+        tenant_id=event.tenant_id,
+        actor_id=event.actor_id,
+        autocommit=False,
+    )
+
+
 def register() -> None:
     """U05 finance listener 注册（强一致正向）+ U16 拍单自动生成（通知类）。
 
     被 main.py register_event_listeners 第 1 步调用。
     缺失时 main.py 视为 U05 未部署（warning），但因 SettlementRequested
     required_handler=True，U04 review approve 会抛 MissingRequiredHandlerError（FB1）。
+    ``SettlementResubmitted`` 同样必须有监听（流程线 R7 / F6）。
     """
     subscribe("SettlementRequested", on_settlement_requested)
     subscribe("SettlementRequested", on_settlement_requested_auto_order)
+    subscribe("SettlementResubmitted", on_settlement_resubmitted)
 
 
 __all__ = [
     "on_settlement_requested",
     "on_settlement_requested_auto_order",
+    "on_settlement_resubmitted",
     "register",
 ]

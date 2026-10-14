@@ -13,6 +13,7 @@ import type {
   PromotionAmountLog,
   PromotionResubmitRequest,
   PromotionReviewRequest,
+  PromotionSettlementResubmitRequest,
   PromotionShipPushRequest,
   PromotionShipWithdrawRequest,
   PromotionUpdate,
@@ -26,6 +27,11 @@ export async function listPromotions(
     params: filters,
   });
   return resp.data;
+}
+
+/** 推广详情的 query key：在 ["promotions"] 前缀下，列表页弹窗成功 invalidate ["promotions"] 时一起重拉。 */
+export function promotionDetailKey(promotionId: string) {
+  return ["promotions", "detail", promotionId] as const;
 }
 
 export async function getPromotion(
@@ -233,6 +239,35 @@ export async function resubmitPromotion(
 }
 
 /**
+ * 结款重提（R7）：财务驳回结款单后，推广单 结款驳回 → 待付款，结款单回到待付款、实付与调整说明清空。
+ * 要有收款码（缺 → 422 FLOW_GATE_MISSING）；与 7a 的 resubmitPromotion（推广被主管驳回）是两回事。
+ */
+export async function resubmitSettlement(
+  promotionId: string,
+  payload: PromotionSettlementResubmitRequest
+): Promise<Promotion> {
+  const resp = await apiClient.post<Promotion>(
+    `/api/promotions/${promotionId}/settlement/resubmit`,
+    payload
+  );
+  return resp.data;
+}
+
+/** 上传结款聊天截图（R9）：财务付款后（推广单 = 已付款），提交即记为已结款。后端代传。 */
+export async function uploadSettlementChat(
+  promotionId: string,
+  file: File
+): Promise<Promotion> {
+  const form = new FormData();
+  form.append("file", file, file.name);
+  const resp = await apiClient.post<Promotion>(
+    `/api/promotions/${promotionId}/settlement-chat`,
+    form
+  );
+  return resp.data;
+}
+
+/**
  * 上传博主寄回衣服单号。寄拍模式审核通过的前提 —— 没有单号后端会拒绝过审。
  * 与仓库发货单号是两个方向：那个寄给博主，这个博主寄回来。
  */
@@ -252,7 +287,7 @@ export async function setReturnWaybill(
 // ---------------------------------------------------------------------------
 
 /**
- * 录发布满 7 天的数据，推进到「待复盘」。
+ * 录发布满 7 天的数据（只录一次）。已结款且满 7 天才能录，没到日子 422 带可录日期。
  *
  * 走 multipart 是因为截图必传 —— 三个指标和图得在同一个请求里，分两步会出现
  * 「数字录了图没传」的中间态。要求单据已结款。

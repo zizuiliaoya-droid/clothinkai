@@ -102,6 +102,18 @@ class InvalidPaymentQrAttachmentError(ValidationError):
     code = "INVALID_PAYMENT_QR_ATTACHMENT"
 
 
+class PaymentQrLockedError(AppException):
+    """收款码锁定（流程线 7.3 收款码接口 ② ③，7.4 错误码表）。
+
+    ``details.lock``：``settlement_paying``（结款单待财务付款，码不对由财务驳回后重传）/
+    ``settled``（推广单已付款 / 已结款）/ ``settlement_created``（结款单已生成后不能删码，管理员也一样）。
+    持 ``*`` 的管理员不受前两种限制；召回中 / 寄回运费付款单已驳回的例外随 PR-8。
+    """
+
+    code = "PAYMENT_QR_LOCKED"
+    status_code = 409
+
+
 class PublishUrlRequiredError(ValidationError):
     """publish 时 publish_url 必填。"""
 
@@ -171,19 +183,26 @@ class SelfReviewForbiddenError(ValidationError):
     status_code = 403
 
 
+class SettlementAlreadyExistsError(DuplicateResourceError):
+    """R2 ⑥：审核通过时这张推广单已有结款单、且不是导入的已付款单（details 带结算单号与状态，管理员核对）。"""
+
+    code = "SETTLEMENT_ALREADY_EXISTS"
+    status_code = 409
+
+
 # ---------------------------------------------------------------------------
 # 复盘（PRD V1.4 改动 4）
 # ---------------------------------------------------------------------------
 
 
-class SettlementNotPaidError(ValidationError):
-    """录 7 天数据要求结款已完成。
+class MetricsNotAvailableYetError(ValidationError):
+    """7 天数据还不能录（流程线 3.7 门槛：已结款且 ``get_today() ≥ 发布日 + 7``，7.4 错误码表）。
 
-    复盘是结完款之后的事。钱还没结清就复盘没有意义 —— ROI 的分母都还没定。
+    ``details.blocked_by``：``settlement``（推广单还没到已结款）/ ``seven_days``（发文未满 7 天，北京时间）；
+    ``details.available_from``：可以录的第一天（发布日 + 7，ISO 日期；没有发布日为 ``None``，门槛不拦 7 天）。
     """
 
-    code = "SETTLEMENT_NOT_PAID"
-    status_code = 409
+    code = "METRICS_NOT_AVAILABLE_YET"
 
 
 class MetricsScreenshotRequiredError(ValidationError):
@@ -220,6 +239,15 @@ class BrandCommentScreenshotRequiredError(ValidationError):
     """
 
     code = "BRAND_COMMENT_SCREENSHOT_REQUIRED"
+
+
+class SettlementChatScreenshotRequiredError(ValidationError):
+    """结款聊天截图必传（流程线 3.4 R9）：财务付款后 PR 把截图传上来，推广单才到已结款。
+
+    图片不合格（空、超 10 MB、不是图）也抛这个 —— 截图是「博主知道已付款」的凭据。
+    """
+
+    code = "SETTLEMENT_CHAT_SCREENSHOT_REQUIRED"
 
 
 class RetroContentMissingError(ValidationError):
@@ -264,6 +292,30 @@ class StateTransitionConflictError(IllegalStateTransitionError):
     status_code = 409
 
 
+class PromotionInactiveError(StateTransitionConflictError):
+    """财务驳回结款单时推广单已停用（流程线 PR-6 收尾 L3 兜底）。
+
+    停用门（``PromotionSettlementInProgressError``）之后正常到不了，只可能是之前停用的历史数据。
+    推广单的条件 UPDATE 带 ``is_active = true``，停用的单驳不掉；单独给个码，不再报「推广单不在待财务付款」。
+    """
+
+    code = "PROMOTION_INACTIVE"
+    status_code = 409
+    message = "推广单已停用，不能驳回结款单"
+
+
+class PromotionSettlementInProgressError(AppException):
+    """停用推广单时它的结款单还在进行中（待付款 / 待财务付款，流程线 PR-6 收尾 L3）。
+
+    停用后推广单的状态 UPDATE 都带 ``is_active = true``，结款单就只能付款、驳不掉；先让财务驳回再停。
+    ``details``：``{"settlement_no": 结算单号, "settlement_status": 结款单状态}``。
+    """
+
+    code = "PROMOTION_SETTLEMENT_IN_PROGRESS"
+    status_code = 409
+    message = "这张推广单有进行中的结款单，请先让财务驳回结款单再停用"
+
+
 # ---------------------------------------------------------------------------
 # 重复检测（warning，非阻塞）
 # ---------------------------------------------------------------------------
@@ -291,11 +343,15 @@ __all__ = [
     "InvalidBloggerReferenceError",
     "InvalidPaymentQrAttachmentError",
     "InvalidReceiverPhoneError",
+    "PaymentQrLockedError",
     "InvalidSkuReferenceError",
     "InvalidStyleReferenceError",
+    "MetricsNotAvailableYetError",
     "MetricsScreenshotRequiredError",
+    "PromotionInactiveError",
     "PromotionInternalCodeConflictError",
     "PromotionNotFoundError",
+    "PromotionSettlementInProgressError",
     "PublishDateInFutureError",
     "PublishUrlRequiredError",
     "RetroContentMissingError",
@@ -303,7 +359,8 @@ __all__ = [
     "ReviewReasonRequiredError",
     "SelfReviewForbiddenError",
     "SequenceOverflowError",
-    "SettlementNotPaidError",
+    "SettlementAlreadyExistsError",
+    "SettlementChatScreenshotRequiredError",
     "ShippedAtInFutureError",
     "SourceExtraKeyRetiredError",
     "StateTransitionConflictError",

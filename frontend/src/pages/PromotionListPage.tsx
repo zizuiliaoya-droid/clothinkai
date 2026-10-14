@@ -32,7 +32,13 @@ import type {
   ShipStatusFilter,
 } from "@/features/promotion/types";
 import { itemSpecLines, promotionImages, shipDetailLines } from "@/features/promotion/shipDisplay";
-import { shipStatusStyle } from "@/features/flow/stageStyle";
+import { promotionSettlementStyle, shipStatusStyle } from "@/features/flow/stageStyle";
+import {
+  approveConfirmText,
+  expandReviewItem,
+  metricsBadge,
+  reviewOutcomeText,
+} from "@/features/promotion/settlementFlow";
 import { goodsDisplayName } from "@/features/product/api";
 import {
   COOPERATION_MODE_HINT,
@@ -56,6 +62,12 @@ import { RetroConfirmModal } from "@/features/promotion/components/RetroConfirmM
 import { RetroModal } from "@/features/promotion/components/RetroModal";
 import { ReturnWaybillModal } from "@/features/promotion/components/ReturnWaybillModal";
 import { SourceExtraModal } from "@/features/promotion/components/SourceExtraModal";
+import { PaymentQrModal } from "@/features/promotion/components/PaymentQrModal";
+import { SettlementChatModal } from "@/features/promotion/components/SettlementChatModal";
+import {
+  SettlementResubmitModal,
+  type SettlementResubmitTarget,
+} from "@/features/promotion/components/SettlementResubmitModal";
 import { ItemsModal } from "@/features/promotion/components/ItemsModal";
 import { ReceiverModal } from "@/features/promotion/components/ReceiverModal";
 import {
@@ -64,8 +76,6 @@ import {
 } from "@/features/promotion/components/ShipPushModal";
 import { ShipWithdrawModal } from "@/features/promotion/components/ShipWithdrawModal";
 import { useFlowFeedback } from "@/features/promotion/components/useFlowFeedback";
-import { extractErrorMessage } from "@/services/apiClient";
-import { useAuthStore } from "@/stores/authStore";
 import { ImportUploadButton } from "@/components/ImportUploadButton";
 import { GoodsImages } from "@/components/GoodsImages/GoodsImages";
 import { DisplayNameCell } from "@/components/DisplayNameCell/DisplayNameCell";
@@ -90,14 +100,6 @@ const cooperationModeColor: Record<string, string> = {
   置换: "purple",
 };
 
-const settlementColor: Record<string, string> = {
-  未核查: "default",
-  待核查: "gold",
-  待付款: "blue",
-  已付款: "green",
-  已驳回: "red",
-};
-
 /** 复盘状态配色（PRD 改动 4）。「未开始」不上色，由渲染逻辑决定显示什么。 */
 const retroColor: Record<string, string> = {
   待复盘: "gold",
@@ -119,10 +121,6 @@ const statusColor: Record<string, string> = {
 export function PromotionListPage() {
   const qc = useQueryClient();
   const { token } = theme.useToken();
-  const user = useAuthStore((s) => s.user);
-  const canManagePaymentQr = Boolean(
-    user?.roles.some((r) => ["admin", "platform_admin", "pr", "pr_manager"].includes(r))
-  );
   // 谈款定稿后「去推广管理」带 ?keyword=内部编码 过来（流程线 8.3）
   const [searchParams] = useSearchParams();
   const initialKeyword = searchParams.get("keyword")?.trim() || undefined;
@@ -157,6 +155,11 @@ export function PromotionListPage() {
   const [shipWithdrawTarget, setShipWithdrawTarget] = useState<Promotion | null>(null);
   const [receiverTarget, setReceiverTarget] = useState<Promotion | null>(null);
   const [itemsTarget, setItemsTarget] = useState<Promotion | null>(null);
+  // 结款（流程线 PR-6，8.4）：收款码 / 结款重提 / 传结款截图，按行 ui 出菜单项
+  const [paymentQrTarget, setPaymentQrTarget] = useState<Promotion | null>(null);
+  const [settlementResubmitTarget, setSettlementResubmitTarget] =
+    useState<SettlementResubmitTarget | null>(null);
+  const [settlementChatTarget, setSettlementChatTarget] = useState<Promotion | null>(null);
   const flowFeedback = useFlowFeedback();
   const openLine = (row: Promotion, tab?: LineTab) => {
     if (row.line_id) setLineTarget({ row, tab });
@@ -190,20 +193,32 @@ export function PromotionListPage() {
   const canCreate = data?.ui?.actions?.create?.state === "enabled";
   const canImport = data?.ui?.actions?.import?.state === "enabled";
 
-  /** 审核通过。寄拍没有寄回单号时后端会拒，错误信息直接透出给操作人。 */
+  /**
+   * 审核通过（R2 / R3）。成功提示按接口的 review_outcome 出，不看 settlement_status（置换单直接已结款）；
+   * 缺收款码 / 寄回单号（422 FLOW_GATE_MISSING）时把缺项写进提示。
+   */
   const approveMutation = useMutation({
     mutationFn: (id: string) => reviewPromotion(id, { action: "approve" }),
     onSuccess: (saved) => {
-      message.success(
-        saved.settlement_status === "已付款"
-          ? "审核通过。置换无需付款，已直接结清"
-          : "审核通过，已转待财务付款"
-      );
-      void qc.invalidateQueries({ queryKey: ["promotions"] });
-      void qc.invalidateQueries({ queryKey: LINE_EVENTS_ALL });
+      message.success(reviewOutcomeText(saved.review_outcome));
+      flowFeedback.refresh();
     },
-    onError: (err) => message.error(extractErrorMessage(err)),
+    onError: (err) => {
+      const missing = flowFeedback.handleError(err);
+      if (missing) message.error(`缺：${missing.map((m) => m.label).join("、")}`);
+    },
   });
+
+  /** 审核通过前的确认框：写清应付与去向。 */
+  function confirmApprove(record: Promotion) {
+    Modal.confirm({
+      title: `审核通过 · ${record.internal_code}`,
+      content: approveConfirmText(record.quote_amount, record.existing_settlement_status),
+      okText: "审核通过",
+      cancelText: "取消",
+      onOk: () => approveMutation.mutateAsync(record.id).catch(() => undefined),
+    });
+  }
 
   /** 纳入发货：历史单 → 待发货（之后才出「确认推送仓库」）。 */
   const shipIncludeMutation = useMutation({
@@ -216,10 +231,10 @@ export function PromotionListPage() {
   });
 
   /**
-   * 按 row.ui 出的菜单项（发货、催发、留言、改归属商品 / 收件 / 颜色尺码）：顺序与禁用原因由 buildMenuItems 定；
-   * 没有的项不出现。
+   * 按 row.ui 出的菜单项（发货、催发、审核、结款、录 7 天数据、留言、改归属商品 / 收件 / 颜色尺码 / 收款码）：
+   * 顺序与禁用原因由 buildMenuItems 定；没有的项不出现。审核一个动作拆成通过 / 驳回两项（expandReviewItem）。
    */
-  function shipMenuItems(record: Promotion): NonNullable<MenuProps["items"]> {
+  function flowMenuItems(record: Promotion): NonNullable<MenuProps["items"]> {
     const built = buildMenuItems("promotion", record.ui, {
       actions: {
         ship_push: {
@@ -245,6 +260,15 @@ export function PromotionListPage() {
         // 催发任务在这里发起最顺手：PR 本来就在这页看哪单还没发出来。
         // 与催发任务页共用 UrgeModal，可以直接附聊天截图（7a-3）
         urge: { label: "催发", onClick: () => setUrgeTarget(record) },
+        // 审核（★¹⁵）：缺收款码 / 寄回单号时 expandReviewItem 把「审核通过」禁用并写缺项，驳回照常
+        review: { label: "审核通过", onClick: () => confirmApprove(record) },
+        settlement_resubmit: {
+          label: "结款重提",
+          onClick: (action) => setSettlementResubmitTarget({ row: record, action }),
+        },
+        settlement_chat: { label: "传结款截图", onClick: () => setSettlementChatTarget(record) },
+        // 门槛（已结款、满 7 天）以接口为准：灰显时 label 带「YYYY-MM-DD 起可录」「已结款后可录」
+        metrics: { label: "录 7 天数据", onClick: () => setMetricsTarget(record) },
         // 留言在抽屉底部（6.6）：菜单项只负责打开抽屉
         comment: { label: "留言", onClick: () => openLine(record) },
       },
@@ -253,10 +277,21 @@ export function PromotionListPage() {
         goods: { label: "改归属商品", onClick: () => setGoodsTarget(record) },
         receiver: { label: "改收件信息", onClick: () => setReceiverTarget(record) },
         goods_items: { label: "改颜色尺码", onClick: () => setItemsTarget(record) },
+        payment_qr: { label: "收款码", onClick: () => setPaymentQrTarget(record) },
       },
     });
+    const items = expandReviewItem(built, record.ui?.actions?.review, () => setRejectTarget(record));
+    // 换不了收款码（锁定 / 只读）但看得到、也传过：给一个只看的入口，弹窗里写为什么锁
+    if (!record.ui?.edits?.includes("payment_qr") && record.payment_qr_attachment_id) {
+      items.push({
+        key: "payment_qr_view",
+        label: "查看收款码",
+        disabled: false,
+        onClick: () => setPaymentQrTarget(record),
+      });
+    }
     // FlowMenuItem 是 interface（没有 antd MenuItemType 的 data-* 索引签名），逐项转成字面量
-    return built.map(({ key, label, disabled, danger, onClick }) => ({
+    return items.map(({ key, label, disabled, danger, onClick }) => ({
       key,
       label,
       disabled,
@@ -418,9 +453,10 @@ export function PromotionListPage() {
       dataIndex: "settlement_status",
       // 放得下「上轮驳回：流量差补发」这个 Tag（7a-4）
       width: 150,
+      // 文案按 3.4「界面显示」列（已付款 = 待传结款截图、已结款 = 已结款 等）
       render: (v: string, row) => (
         <Space size={4} wrap>
-          <Tag color={settlementColor[v]}>{v}</Tag>
+          <Tag color={promotionSettlementStyle(v).color}>{promotionSettlementStyle(v).label}</Tag>
           {row.review_reason_category &&
             (v === "已驳回" ? (
               <Tooltip title={row.review_reason ?? undefined}>
@@ -475,22 +511,25 @@ export function PromotionListPage() {
       },
     },
     {
-      // 复盘状态（PRD 改动 4）。与结款状态正交，所以单列一列而不是挤进结款那列
+      // 复盘状态（PRD 改动 4）。与结款状态正交，所以单列一列而不是挤进结款那列。
+      // 7 天数据的提示读接口的 badges（满 7 天可录 / 满 7 天 · 待结款），不按结款状态推
       title: "复盘",
       dataIndex: "retro_status",
-      width: 110,
-      render: (v: RetroStatus, row) =>
-        v === "未开始" ? (
-          row.settlement_status === "已付款" ? (
-            <Tooltip title="已结款，发布满 7 天后可录数据">
-              <Tag color="blue">待录数据</Tag>
-            </Tooltip>
-          ) : (
-            "—"
-          )
-        ) : (
-          <Tag color={retroColor[v]}>{v}</Tag>
-        ),
+      width: 130,
+      render: (v: RetroStatus, row) => {
+        const badge = metricsBadge(row.badges);
+        if (v === "未开始" && !badge) return "—";
+        return (
+          <Space size={4} wrap>
+            {v !== "未开始" && <Tag color={retroColor[v]}>{v}</Tag>}
+            {badge && (
+              <Tooltip title={badge.tip}>
+                <Tag color={badge.color}>{badge.label}</Tag>
+              </Tooltip>
+            )}
+          </Space>
+        );
+      },
     },
     ...SOURCE_LIST_COLUMNS.map((f) => ({
       title: f,
@@ -507,11 +546,12 @@ export function PromotionListPage() {
       fixed: "right",
       className: LINE_ROW_IGNORE_CLASS,
       render: (_, record) => {
-        const flowItems = shipMenuItems(record);
+        const flowItems = flowMenuItems(record);
         const legacyItems = [
           {
             key: "extra",
-            label: "录入信息",
+            // 收款码已移到「收款码」菜单项（PaymentQrModal），这里只剩订单号等
+            label: "其他信息",
             onClick: () => setExtraTarget(record),
           },
           {
@@ -549,20 +589,6 @@ export function PromotionListPage() {
             onClick: () => setRecallTarget(record),
           },
           {
-            key: "approve",
-            label: "审核通过",
-            // 只有待核查的单据能审。以前没有这个门槛，点了必然 422
-            disabled: record.settlement_status !== "待核查",
-            onClick: () => approveMutation.mutate(record.id),
-          },
-          {
-            key: "reject",
-            label: "审核驳回",
-            danger: true,
-            disabled: record.settlement_status !== "待核查",
-            onClick: () => setRejectTarget(record),
-          },
-          {
             // 驳回后 PR 改完重新交给主管（已驳回 → 待核查）。后端还要求「已发布」
             // （否则进了待核查也批不了），这里对齐，免得点了得到 409
             key: "resubmit",
@@ -572,16 +598,7 @@ export function PromotionListPage() {
               record.publish_status !== "已发布",
             onClick: () => setResubmitTarget(record),
           },
-          // 复盘三步（PRD 改动 4）。每一步的 disabled 条件都对着后端的状态机门槛，
-          // 点了不会白跑一次 422
-          {
-            key: "metrics",
-            label: "录 7 天数据",
-            disabled:
-              record.settlement_status !== "已付款" ||
-              record.retro_status !== "未开始",
-            onClick: () => setMetricsTarget(record),
-          },
+          // 复盘（PRD 改动 4，PR-7 改 3 态）。录 7 天数据已改按 ui.actions.metrics 出（见 flowMenuItems）
           {
             key: "retro",
             label: "写复盘",
@@ -758,10 +775,18 @@ export function PromotionListPage() {
         }}
       />
 
-      <SourceExtraModal
-        target={extraTarget}
-        onClose={() => setExtraTarget(null)}
-        canManagePaymentQr={canManagePaymentQr}
+      <SourceExtraModal target={extraTarget} onClose={() => setExtraTarget(null)} />
+
+      <PaymentQrModal target={paymentQrTarget} onClose={() => setPaymentQrTarget(null)} />
+
+      <SettlementResubmitModal
+        target={settlementResubmitTarget}
+        onClose={() => setSettlementResubmitTarget(null)}
+      />
+
+      <SettlementChatModal
+        target={settlementChatTarget}
+        onClose={() => setSettlementChatTarget(null)}
       />
 
       <ShipPushModal target={shipPushTarget} onClose={() => setShipPushTarget(null)} />

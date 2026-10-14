@@ -56,6 +56,8 @@ class TestReviewApprove:
                 publish_status="已发布",
                 settlement_status="待核查",
                 quote_amount=Decimal("500.00"),
+                # 应付 > 0 审核通过要收款码（流程线 R2 ⑤）
+                payment_qr=True,
             )
             svc = PromotionService(session)
             response = await svc.review(
@@ -64,6 +66,7 @@ class TestReviewApprove:
                 reviewer,
             )
             assert response.settlement_status == "待付款"
+            assert response.review_outcome == "settlement_created"
             assert response.review_action == "approve"
             assert response.reviewed_by == reviewer.id
 
@@ -219,6 +222,7 @@ class TestEventFailureRollback:
                 pr=pr,
                 publish_status="已发布",
                 settlement_status="待核查",
+                payment_qr=True,
             )
             # 注：autouse fixture clear_handlers 已清空了 handlers
             svc = PromotionService(session)
@@ -265,6 +269,7 @@ class TestEventFailureRollback:
                 pr=pr,
                 publish_status="已发布",
                 settlement_status="待核查",
+                payment_qr=True,
             )
             svc = PromotionService(session)
             with pytest.raises(ValueError, match="敏感金额"):

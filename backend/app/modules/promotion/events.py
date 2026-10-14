@@ -3,6 +3,7 @@
 按 functional-design/domain-entities.md §7 + nfr-design-patterns.md §3 设计：
 - ``SettlementRequested``：强一致事件（``required_handler=True``），U05 监听
 - ``PromotionPublished``：通知类事件（``required_handler=False``），U07 监听（U04 阶段无 handler）
+- ``SettlementResubmitted``：promotion → finance 强一致事件（``required_handler=True``，流程线 R7 / F6）
 
 事件实例不可变（``frozen=True``），通过 ``app.core.events.dispatch(event, session=...)`` 投递。
 失败处理见 ``service.py::_log_event_dispatch_failure``（脱敏 audit）。
@@ -44,6 +45,8 @@ class SettlementRequested:
     pr_id: UUID | None
     requested_by: UUID
     requested_at: datetime
+    line_id: UUID | None = None
+    """推广单的主线号：监听写 ``settlement.created`` 用（流程线 6.3）；没带时监听按推广单回查。"""
 
 
 @dataclass(frozen=True)
@@ -72,4 +75,26 @@ class PromotionPublished:
     pr_id: UUID | None
 
 
-__all__ = ["PromotionPublished", "SettlementRequested"]
+@dataclass(frozen=True)
+class SettlementResubmitted:
+    """PR 重提结款（推广单 结款驳回 → 待付款，R7）→ 结款单 已驳回 → 待付款（F6，流程线 3.4、7.5）。
+
+    强一致：
+    - ``required_handler=True``：finance 监听没注册时 dispatch 抛 ``MissingRequiredHandlerError``
+    - promotion service 先条件 UPDATE 推广单，再同一 session 发出；finance 监听调
+      ``SettlementService.resubmit(…, autocommit=False)``（0 行 → 409，整笔回滚），不 commit、不吞异常
+    """
+
+    event_type: ClassVar[str] = "SettlementResubmitted"
+    required_handler: ClassVar[bool] = True
+
+    event_id: UUID
+    timestamp: datetime
+    tenant_id: UUID
+    promotion_id: UUID
+    settlement_id: UUID
+    note: str
+    actor_id: UUID
+
+
+__all__ = ["PromotionPublished", "SettlementRequested", "SettlementResubmitted"]

@@ -1,16 +1,16 @@
 """推广单派生阶段：Python ``compute_stage`` 与 SQL ``stage_sql_expr`` 穷举对拍（流程线 3.8）。
 
-PR-2 的离散输入：发布 5 × 召回 4 × 结款 5 × 发货 4（含 NULL）× 启用 2 × 排期相对今天 6 档 = 4,800 组，
-每列一个数组参数、``unnest`` 一次算完（不插表）。PR-6 / PR-7 补规则时同步加维度（完结、复盘、已录、发布日）。
-
-场景有效性：PR-2 可达的 17 个阶段名每个至少命中一次，走不到的 5 个恰好没出现——
+PR-6 的离散输入：发布 5 × 召回 4 × 结款 7 × 发货 4（含 NULL）× 启用 2 × 排期相对今天 6 档
+× 复盘 4 × 已录 2 × 发布日相对今天 3 档 = 161,280 组，每列一个数组参数、``unnest`` 一次算完（不插表）。
+PR-7 补完结（``completed_at``）时同步加维度、复盘收成 3 档。
+场景有效性：22 个阶段名每个至少命中一次（「已完结」此时靠过渡规则 D8 命中）——
 防止「两边都没走到」的假绿。
 """
 
 from __future__ import annotations
 
 import itertools
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
@@ -19,10 +19,17 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.tenancy import tenant_id_ctx
-from app.modules.promotion.enums import PublishStatus, RecallStatus, SettlementStatus, ShipStatus
+from app.modules.promotion.enums import (
+    PublishStatus,
+    RecallStatus,
+    RetroStatus,
+    SettlementStatus,
+    ShipStatus,
+)
 from app.modules.promotion.repository import PromotionListFilters as RepoFilters
 from app.modules.promotion.repository import PromotionRepository
 from app.modules.promotion.stage_calculator import (
+    METRICS_WAIT_DAYS,
     PROMOTION_STAGES,
     compute_stage,
     stage_sql_expr,
@@ -32,11 +39,9 @@ from app.modules.promotion.urge_calculator import UrgeThresholds, get_today
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
 TH = UrgeThresholds(urge_days=10, important_days=3)
+RECORDED = datetime(2026, 10, 1, 8, 0, tzinfo=UTC)
 
-# PR-2 还没有对应状态值 / 列的阶段（PR-6 / PR-7 补规则后可达）
-_UNREACHABLE_IN_PR2 = frozenset(
-    {"结款驳回 · 待重提", "待传结款截图", "待满 7 天", "待录 7 天数据", "已完结"}
-)
+Combo = tuple[str, str, str, str | None, bool, date | None, str, datetime | None, date | None]
 
 
 def _sched_tiers(today: date) -> list[date | None]:
@@ -51,7 +56,16 @@ def _sched_tiers(today: date) -> list[date | None]:
     ]
 
 
-def _combos(today: date) -> list[tuple[str, str, str, str | None, bool, date | None]]:
+def _publish_tiers(today: date) -> list[date | None]:
+    """发布日 3 档：没有 / 恰满 7 天（发布日 + 7 = 今天）/ 差一天。"""
+    return [
+        None,
+        today - timedelta(days=METRICS_WAIT_DAYS),
+        today - timedelta(days=METRICS_WAIT_DAYS - 1),
+    ]
+
+
+def _combos(today: date) -> list[Combo]:
     return list(
         itertools.product(
             [s.value for s in PublishStatus],
@@ -60,15 +74,14 @@ def _combos(today: date) -> list[tuple[str, str, str, str | None, bool, date | N
             [None, *(s.value for s in ShipStatus)],
             [True, False],
             _sched_tiers(today),
+            [s.value for s in RetroStatus],
+            [None, RECORDED],
+            _publish_tiers(today),
         )
     )
 
 
-async def _sql_stages(
-    session: AsyncSession,
-    combos: list[tuple[str, str, str, str | None, bool, date | None]],
-    today: date,
-) -> list[str]:
+async def _sql_stages(session: AsyncSession, combos: list[Combo], today: date) -> list[str]:
     cols = list(zip(*combos, strict=True))
     sql = text(
         f"""
@@ -80,9 +93,13 @@ async def _sql_stages(
             CAST(:stl AS text[]),
             CAST(:ship AS text[]),
             CAST(:act AS boolean[]),
-            CAST(:sched AS date[])
+            CAST(:sched AS date[]),
+            CAST(:retro AS text[]),
+            CAST(:recorded AS timestamptz[]),
+            CAST(:published AS date[])
         ) AS t(i, publish_status, recall_status, settlement_status, ship_status,
-               is_active, scheduled_publish_date)
+               is_active, scheduled_publish_date, retro_status, metrics_recorded_at,
+               actual_publish_date)
         ORDER BY t.i
         """
     )
@@ -97,6 +114,9 @@ async def _sql_stages(
                 "ship": list(cols[3]),
                 "act": list(cols[4]),
                 "sched": list(cols[5]),
+                "retro": list(cols[6]),
+                "recorded": list(cols[7]),
+                "published": list(cols[8]),
                 "today": today,
                 **TH.sql_params(),
             },
@@ -106,9 +126,7 @@ async def _sql_stages(
     return [r[1] for r in rows]
 
 
-def _py_stages(
-    combos: list[tuple[str, str, str, str | None, bool, date | None]], today: date
-) -> list[str]:
+def _py_stages(combos: list[Combo], today: date) -> list[str]:
     return [
         compute_stage(
             publish_status=pub,
@@ -116,34 +134,35 @@ def _py_stages(
             settlement_status=stl,
             ship_status=ship,
             is_active=act,
+            retro_status=retro,
+            metrics_recorded_at=recorded,
+            actual_publish_date=published,
             scheduled_publish_date=sched,
             today=today,
             thresholds=TH,
         )
-        for pub, rec, stl, ship, act, sched in combos
+        for pub, rec, stl, ship, act, sched, retro, recorded, published in combos
     ]
 
 
 async def test_python_and_sql_agree_on_every_combo(session: AsyncSession) -> None:
     today = get_today()
     combos = _combos(today)
-    assert len(combos) == 4800
-
+    assert len(combos) == 161_280
     py = _py_stages(combos, today)
     sql = await _sql_stages(session, combos, today)
-
     mismatches = [
         f"{combos[i]!r}: py={p!r} sql={s!r}"
         for i, (p, s) in enumerate(zip(py, sql, strict=True))
         if p != s
     ]
     assert not mismatches, f"{len(mismatches)} 组不一致：\n" + "\n".join(mismatches[:20])
-
-    # 场景有效性：可达阶段全命中、不可达的一个都没出现、没有矩阵外的名字
+    # 场景有效性：22 个阶段全命中、没有矩阵外的名字
     hit = set(py)
-    reachable = set(PROMOTION_STAGES) - _UNREACHABLE_IN_PR2
-    assert len(reachable) == 17
-    assert hit == reachable, f"缺 {sorted(reachable - hit)}，多 {sorted(hit - reachable)}"
+    assert len(PROMOTION_STAGES) == 22
+    assert hit == set(
+        PROMOTION_STAGES
+    ), f"缺 {sorted(set(PROMOTION_STAGES) - hit)}，多 {sorted(hit - set(PROMOTION_STAGES))}"
 
 
 async def test_list_with_cte_carries_stage(
@@ -162,6 +181,7 @@ async def test_list_with_cte_carries_stage(
         pr = await factory.user(tenant_a, roles=[admin_role])
         style = await product_factory.style(style_code="STAGE_CTE")
         blogger = await blogger_factory.blogger()
+        settled: dict[str, Any] = {"publish_status": "已发布", "settlement_status": "已结款"}
         cases: list[dict[str, Any]] = [
             {"ship_status": "待发货"},
             {"ship_status": "待打单", "publish_status": "异常"},
@@ -170,10 +190,16 @@ async def test_list_with_cte_carries_stage(
             {"publish_status": "已发布", "settlement_status": "待付款"},
             {"publish_status": "已取消", "recall_status": "召回成功"},
             {"publish_status": "已发布", "settlement_status": "未核查"},
+            {"publish_status": "已发布", "settlement_status": "结款驳回"},
+            {"publish_status": "已发布", "settlement_status": "已付款"},
+            {**settled, "actual_publish_date": today - timedelta(days=METRICS_WAIT_DAYS - 1)},
+            {**settled, "actual_publish_date": today - timedelta(days=METRICS_WAIT_DAYS)},
+            {**settled, "metrics_recorded_at": RECORDED, "retro_status": "待确认"},
+            {**settled, "metrics_recorded_at": RECORDED, "retro_status": "已完成"},
         ]
         expected: dict[Any, str] = {}
         for kw in cases:
-            # 工厂默认编号只有 3 位随机，一次建 7 张约 0.5% 撞唯一键：给足 8 位
+            # 工厂默认编号只有 3 位随机，一次建十几张会撞唯一键：给足 8 位
             p = await promotion_factory.promotion(
                 style=style,
                 blogger=blogger,
@@ -187,11 +213,13 @@ async def test_list_with_cte_carries_stage(
                 settlement_status=p.settlement_status,
                 ship_status=p.ship_status,
                 is_active=p.is_active,
+                retro_status=p.retro_status,
+                metrics_recorded_at=p.metrics_recorded_at,
+                actual_publish_date=p.actual_publish_date,
                 scheduled_publish_date=p.scheduled_publish_date,
                 today=today,
                 thresholds=TH,
             )
-
         rows, _total = await PromotionRepository(session).list_with_cte(
             tenant_id=tenant_a.id,
             filters=RepoFilters(is_active=None),  # 默认只列启用的，停用那张也要看
@@ -211,6 +239,12 @@ async def test_list_with_cte_carries_stage(
             "待财务付款",
             "已完结 · 召回",
             "状态异常",
+            "结款驳回 · 待重提",
+            "待传结款截图",
+            "待满 7 天",
+            "待录 7 天数据",
+            "待复盘",
+            "已完结",
         }
     finally:
         tenant_id_ctx.reset(token)

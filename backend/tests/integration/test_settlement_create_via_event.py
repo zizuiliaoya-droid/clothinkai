@@ -1,7 +1,7 @@
 """U05 集成测试：on_settlement_requested 强一致创建（FB1 + FB3 + FB6）。
 
 覆盖：
-- FB1：SettlementRequested handler 创建 settlement，起点 settlement_status='待核查'
+- F1：SettlementRequested handler 创建 settlement，起点 settlement_status='待付款'
 - FB3：UNIQUE(tenant_id, promotion_id) 永久 — 重复事件被幂等跳过
 - FB6：handler 内 flush 立即暴露错误
 - FB2：序列号原子分配（settlement_no 格式正确）
@@ -53,7 +53,7 @@ class TestCreateViaEvent:
         blogger_factory: Any,
         promotion_factory: Any,
     ) -> None:
-        """FB1：handler 创建 settlement + 起点 = 待核查（不是待付款）。"""
+        """F1：handler 创建 settlement + 起点 = 待付款（流程线 PR-6 起不再经过待核查）。"""
         token = tenant_id_ctx.set(tenant_a.id)
         try:
             pr = await factory.user(tenant_a, roles=[pr_role])
@@ -81,7 +81,7 @@ class TestCreateViaEvent:
                     select(Settlement).where(Settlement.promotion_id == promotion.id)
                 )
             ).scalar_one()
-            assert row.settlement_status == "待核查"  # FB1 起点
+            assert row.settlement_status == "待付款"  # F1 起点（流程线 PR-6 去掉核查）
             assert row.amount == Decimal("500.00")
             assert row.total_amount == Decimal("500.00")
             assert row.request_event_id == event.event_id

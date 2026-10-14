@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, replace
+from datetime import date
 from decimal import Decimal
 from typing import Any, ClassVar
 from uuid import UUID, uuid4
@@ -47,6 +48,7 @@ from app.modules.flow.matrix import (
     NotFirstReviewer,
     NotPrOwner,
     Owner,
+    PromotionSettlementIn,
     Row,
     Scope,
     SettlementIn,
@@ -385,10 +387,12 @@ def test_expected_table_covers_registered_matrices() -> None:
 
 def test_real_matrices_registered() -> None:
     """PR-2：推广单与仓库行（import ``promotion.flow_doc`` 即登记）；PR-3：谈款（``negotiation.flow_doc``）。"""
-    assert set(MATRICES) == {"promotion", "warehouse", "negotiation"}
+    assert set(MATRICES) == {"promotion", "warehouse", "negotiation", "settlement"}
     for kind in ("promotion", "warehouse"):
         assert MATRICES[kind].stages == PROMOTION_STAGES, kind
     assert MATRICES["negotiation"].stages == NEGOTIATION_STAGES
+    # PR-6：结款单（import ``finance.flow_doc``），列 = 5 个结款状态
+    assert MATRICES["settlement"].stages == ("待核查", "待付款", "待财务付款", "已付款", "已驳回")
     assert NEGOTIATION_STAGES == (
         "草稿",
         "主管待审",
@@ -621,17 +625,18 @@ def test_actions_follow_constant_order(toy: Matrix) -> None:
 
 
 def test_unregistered_kind_raises() -> None:
+    # 结款单 PR-6 起已登记；R33 付款单随 PR-8
     @dataclass(frozen=True, kw_only=True)
-    class SettleDoc(FlowDocBase):
-        kind: ClassVar[str] = "settlement"
+    class FreightDoc(FlowDocBase):
+        kind: ClassVar[str] = "freight"
 
         def allowed_actions(self) -> frozenset[str]:
             return frozenset()
 
-    doc = SettleDoc(stage="待付款", state="待付款")
+    doc = FreightDoc(stage="待审核", state="待审核")
     for call in (
         lambda: ui_for(PERSONAS["pr"], doc),
-        lambda: require(PERSONAS["pr"], doc, "reject"),
+        lambda: require(PERSONAS["pr"], doc, "freight_review"),
         lambda: writable_fields(PERSONAS["pr"], doc),
     ):
         with pytest.raises(KeyError):
@@ -1077,11 +1082,13 @@ def test_real_ui_shape() -> None:
         "quote_amount": {"state": "edit"},
         "receiver": {"state": "edit"},
         "shipping": {"state": "grey", "hint": "推送后由仓库回填"},
+        "metrics": {"state": "grey", "hint": "已结款后可录"},
+        "payment_qr": {"state": "grey", "hint": "发布后上传"},
         "timeline": {"state": "read"},
     }
     # PR：合作信息、归属商品、服务费都只读（11-16），只能改收件
     assert _real_ui("pr", P_DOCS["待推送仓库"]).to_dict(view="list")["edits"] == ["receiver"]
-    # 财务在 C 列什么都看不到；E 列只读颜色尺码
+    # 财务在 C 列什么都看不到；E 列读颜色尺码与收款码、改结款单（PR-6），结款聊天截图付款后才有
     assert _real_ui("finance", P_DOCS["催发"]).to_dict(view="detail") == {
         "column": "C",
         "actions": {},
@@ -1093,6 +1100,9 @@ def test_real_ui_shape() -> None:
         "cooperation": {"state": "read"},
         "cooperation_mode": {"state": "read"},
         "quote_amount": {"state": "read"},
+        "payment_qr": {"state": "read"},
+        "settlement": {"state": "edit"},
+        "settlement_chat": {"state": "grey", "hint": "财务付款后上传"},
         "timeline": {"state": "read"},
     }
 
@@ -1126,20 +1136,29 @@ def test_real_writable_fields() -> None:
     cooperation = {"platform", "scheduled_publish_date", "remark"}
     # PR-5 入矩阵：归属商品、合作信息、合作模式、服务费、停用（is_active 归动作 deactivate）
     pr5 = {"goods_main_id", *cooperation, "cooperation_mode", "quote_amount", "is_active"}
-    managed = receiver | {"sku_id"} | pr5
+    # PR-6 入矩阵：like_count 归 7 天数据（metrics）
+    managed = receiver | {"sku_id"} | pr5 | {"like_count"}
     wf = writable_fields(PERSONAS["pr"], P_DOCS["催发"])
     assert wf.managed == managed
     # 已发货的 C 列：PR 全都只读；历史单按 A 列，PR 能改收件，颜色尺码、归属商品仍读
     assert wf.allowed == frozenset()
     assert writable_fields(PERSONAS["pr"], P_DOCS["催发·历史单"]).allowed == receiver
     assert writable_fields(PERSONAS["pr"], P_DOCS["待推送仓库·模式空"]).allowed == receiver
+    # 7 天数据（D13）：PR 只在待录 7 天数据时能写点赞；录过之后（待复盘）只有管理员
+    assert writable_fields(PERSONAS["pr"], P_DOCS["待录 7 天数据"]).allowed == {"like_count"}
+    for label in ("待满 7 天", "待复盘", "待传结款截图"):
+        assert "like_count" not in writable_fields(PERSONAS["pr"], P_DOCS[label]).allowed, label
     # 主管：合作模式有值只读、空值可补
     pm = PERSONAS["pr_manager"]
-    assert writable_fields(pm, P_DOCS["待推送仓库"]).allowed == managed - {"cooperation_mode"}
-    assert writable_fields(pm, P_DOCS["待推送仓库·模式空"]).allowed == managed
+    assert writable_fields(pm, P_DOCS["待推送仓库"]).allowed == managed - {
+        "cooperation_mode",
+        "like_count",
+    }
+    assert writable_fields(pm, P_DOCS["待推送仓库·模式空"]).allowed == managed - {"like_count"}
     assert writable_fields(pm, P_DOCS["待仓库发货"]).allowed == managed - {
         "cooperation_mode",
         "sku_id",
+        "like_count",
     }
     # 结款单生成后（E 列）：服务费所有人只读，合作信息与停用只有管理员
     assert writable_fields(pm, P_DOCS["待财务付款·模式空"]).allowed == {
@@ -1152,6 +1171,8 @@ def test_real_writable_fields() -> None:
             expected.discard("quote_amount")
         if doc.cooperation_mode is not None:
             expected.discard("cooperation_mode")
+        if doc.stage not in ("待录 7 天数据", "待复盘") and doc.column != "H":
+            expected.discard("like_count")
         assert writable_fields(PERSONAS["admin"], doc).allowed == expected, label
         assert writable_fields(PERSONAS["operations"], doc).allowed == frozenset(), label
 
@@ -1168,6 +1189,10 @@ def test_real_writable_fields() -> None:
             {"is_active", "quote_amount", "platform", "goods_main_id", "note_title"},
         )
     assert exc.value.details["fields"] == ["goods_main_id", "platform", "quote_amount", "is_active"]
+    # 录过 7 天数据之后 PR 再 PATCH 点赞（G2）
+    with pytest.raises(FieldPermissionDenied) as exc:
+        ensure_patch_allowed(PERSONAS["pr"], P_DOCS["待复盘"], {"like_count", "note_title"})
+    assert exc.value.details["fields"] == ["like_count"]
     # 没入矩阵的字段照旧放行
     ensure_patch_allowed(PERSONAS["pr"], P_DOCS["催发"], {"note_title", "source_extra"})
 
@@ -1281,6 +1306,179 @@ def test_new_capabilities() -> None:
     # ShipIn 用在没有 ship_status 的单据上是写错了
     with pytest.raises(AttributeError):
         ShipIn(None).matches(TOY_DOCS["待推送"])
+    # PR-6：推广单自己的结款状态（PromotionSettlementIn）与结款单状态（SettlementIn）是两样
+    locked = PromotionSettlementIn("已付款", "已结款")
+    assert locked.matches(P_DOCS["召回中·已结款"])
+    assert not locked.matches(P_DOCS["召回中"])
+    assert SettlementIn("待财务付款").matches(P_DOCS["待财务付款·结款单待财务付款"])
+    assert not SettlementIn("待财务付款").matches(P_DOCS["待财务付款"])
+    assert SettlementIn(None).matches(P_DOCS["待主管审核"])
+    with pytest.raises(AttributeError):
+        locked.matches(TOY_DOCS["待推送"])
+
+
+# ---------------------------------------------------------------------------
+# 真实矩阵：推广审核与结款链（PR-6）。逐格在 test_real_matrices_match_expected；
+# 这里是状态机、★ 缺项与 require 一致、灰格提示、字段规则
+# ---------------------------------------------------------------------------
+
+_REVIEW_MISSING = [
+    {"key": "return_waybill", "label": "寄回单号"},
+    {"key": "payment_qr", "label": "收款码"},
+]
+
+
+def test_promotion_review_ui_and_require() -> None:
+    """推广审核（★¹⁵，D11）：PR 读「需 PR 主管审核」、调了 403；主管 / 管理员可点；
+    缺码 / 寄拍缺寄回单号只在弹窗里提示（驳回不卡），通过时 ensure_gates 拦，缺项与 ui 一致；
+    审自己谈的单 403 self_review；推广驳回时状态机不允许。"""
+    doc = P_DOCS["待主管审核"]
+    assert _real_ui("pr", doc).actions["review"] == mx.UiAction("disabled", reason="需 PR 主管审核")
+    with pytest.raises(AppException) as exc:
+        require(PERSONAS["pr"], doc, "review", gates=False)
+    assert _code(exc) == "PERMISSION_DENIED"
+    for who in ("pr_manager", "admin"):
+        assert _real_ui(who, doc).actions["review"] == mx.UiAction("enabled"), who
+        require(PERSONAS[who], doc, "review")
+    assert _real_ui("pr2", doc).actions["review"].state == "disabled"
+    for who in ("finance", "operations", "warehouse"):
+        assert "review" not in _real_ui(who, doc).actions, who
+
+    bare = replace(doc, has_payment_qr=False, return_waybill="  ")
+    ui = _real_ui("pr_manager", bare).actions["review"]
+    assert ui.state == "enabled"
+    assert ui.to_dict()["missing"] == _REVIEW_MISSING
+    require(PERSONAS["pr_manager"], bare, "review", gates=False)
+    with pytest.raises(AppException) as exc:
+        ensure_gates(PERSONAS["pr_manager"], bare, "review")
+    assert _code(exc) == "FLOW_GATE_MISSING"
+    assert exc.value.details["missing"] == _REVIEW_MISSING
+    # 应付 0 不要码、送拍不要寄回单号；寄拍召回成功且有召回寄回截图也算寄回
+    for ok in (
+        replace(bare, quote_amount=Decimal("0"), cooperation_mode="送拍"),
+        replace(bare, quote_amount=None, recall_status="召回成功", has_recall_waybill=True),
+    ):
+        require(PERSONAS["pr_manager"], ok, "review")
+        assert "missing" not in _real_ui("pr_manager", ok).actions["review"].to_dict()
+    no_shot = replace(bare, quote_amount=None, recall_status="召回成功")
+    with pytest.raises(AppException) as exc:
+        ensure_gates(PERSONAS["admin"], no_shot, "review")
+    assert exc.value.details["missing"] == _REVIEW_MISSING[:1]
+
+    own = replace(doc, negotiator_id=MANAGER_ID)
+    assert _real_ui("pr_manager", own).actions["review"] == mx.UiAction(
+        "disabled", reason="不能审核自己谈的单"
+    )
+    with pytest.raises(AppException) as exc:
+        require(PERSONAS["pr_manager"], own, "review", gates=False)
+    assert _code(exc) == "FLOW_ACTION_FORBIDDEN"
+
+    rejected = P_DOCS["推广驳回 · 待重提"]
+    assert "review" not in _real_ui("pr_manager", rejected).actions
+    with pytest.raises(AppException) as exc:
+        require(PERSONAS["pr_manager"], rejected, "review")
+    assert _code(exc) == "ILLEGAL_STATE_TRANSITION"
+
+
+def test_settlement_resubmit_and_chat() -> None:
+    """结款重提只在结款驳回（★¹⁷ 收款码在弹窗里补）；结款聊天截图只在待传结款截图，之前灰「财务付款后上传」。"""
+    rejected = P_DOCS["结款驳回 · 待重提"]
+    for who in ("pr", "pr_manager", "admin"):
+        acts = _real_ui(who, rejected).actions
+        assert acts["settlement_resubmit"] == mx.UiAction("enabled"), who
+        assert acts["settlement_chat"] == mx.UiAction("grey", hint="财务付款后上传"), who
+        require(PERSONAS[who], rejected, "settlement_resubmit")
+    for who in ("finance", "operations", "warehouse"):
+        acts = _real_ui(who, rejected).actions
+        assert "settlement_resubmit" not in acts and "settlement_chat" not in acts, who
+
+    no_qr = replace(rejected, has_payment_qr=False)
+    assert _real_ui("pr", no_qr).actions["settlement_resubmit"] == mx.UiAction(
+        "enabled", missing=(("payment_qr", "收款码"),)
+    )
+    with pytest.raises(AppException) as exc:
+        require(PERSONAS["pr"], no_qr, "settlement_resubmit")
+    assert _code(exc) == "FLOW_GATE_MISSING"
+    assert exc.value.details["missing"] == [{"key": "payment_qr", "label": "收款码"}]
+
+    for label in ("待财务付款", "待财务付款·结款单待财务付款"):
+        paying = P_DOCS[label]
+        acts = _real_ui("pr", paying).actions
+        assert "settlement_resubmit" not in acts, label
+        assert acts["settlement_chat"] == mx.UiAction("grey", hint="财务付款后上传"), label
+        for action in ("settlement_resubmit", "settlement_chat"):
+            with pytest.raises(AppException) as exc:
+                require(PERSONAS["pr"], paying, action)
+            assert _code(exc) == "ILLEGAL_STATE_TRANSITION"
+
+    paid = P_DOCS["待传结款截图"]
+    acts = _real_ui("pr", paid).actions
+    assert acts["settlement_chat"] == mx.UiAction("enabled")
+    assert "settlement_resubmit" not in acts
+    require(PERSONAS["pr"], paid, "settlement_chat")
+    with pytest.raises(AppException) as exc:
+        require(PERSONAS["operations"], paid, "settlement_chat")
+    assert _code(exc) == "PERMISSION_DENIED"
+    # 已发布后召回（G 列）不出这两个按钮
+    for label in ("召回中·已付款", "召回中"):
+        acts = _real_ui("admin", P_DOCS[label]).actions
+        assert "settlement_chat" not in acts and "settlement_resubmit" not in acts, label
+
+
+def test_metrics_action_hints() -> None:
+    """录 7 天数据（★⁸，D12）：没结款灰「已结款后可录」、没满 7 天灰「YYYY-MM-DD 起可录」、
+    待录可点、录过之后不出现；绕过界面直接调按状态机 422。"""
+    for label in ("待主管审核", "待财务付款", "待传结款截图", "推广驳回 · 待重提·历史单"):
+        assert _real_ui("pr", P_DOCS[label]).actions["metrics"] == mx.UiAction(
+            "grey", hint="已结款后可录"
+        ), label
+    waiting = P_DOCS["待满 7 天"]
+    assert _real_ui("pr", waiting).actions["metrics"] == mx.UiAction(
+        "grey", hint="2026-10-27 起可录"
+    )
+    later = replace(waiting, metrics_available_from=date(2026, 11, 3))
+    assert _real_ui("pr_manager", later).actions["metrics"].hint == "2026-11-03 起可录"
+    assert _real_ui("pr", later).fields["metrics"] == mx.UiField("grey", hint="2026-11-03 起可录")
+    with pytest.raises(AppException) as exc:
+        require(PERSONAS["admin"], waiting, "metrics")
+    assert _code(exc) == "ILLEGAL_STATE_TRANSITION"
+
+    due = P_DOCS["待录 7 天数据"]
+    for who in ("pr", "pr_manager", "admin"):
+        assert _real_ui(who, due).actions["metrics"] == mx.UiAction("enabled"), who
+        require(PERSONAS[who], due, "metrics")
+    assert "metrics" not in _real_ui("operations", due).actions
+    assert _real_ui("operations", due).fields["metrics"] == mx.UiField("read")
+    for label in ("待复盘", "已完结", "召回中", "催发", "待推送仓库"):
+        assert "metrics" not in _real_ui("admin", P_DOCS[label]).actions, label
+    assert _real_ui("pr", P_DOCS["待复盘"]).fields["metrics"] == mx.UiField("read")
+    assert _real_ui("admin", P_DOCS["待复盘"]).fields["metrics"] == mx.UiField("edit")
+
+
+def test_payment_qr_follows_field_rule() -> None:
+    """收款码与结款聊天截图先过字段规则 promotion.payment_qr：财务 E 列起读、D 列看不到；运营看不到；撤销读 → 不出现。"""
+    assert _real_ui("finance", P_DOCS["待财务付款"]).fields["payment_qr"] == mx.UiField("read")
+    assert "payment_qr" not in _real_ui("finance", P_DOCS["待主管审核"]).fields
+    for label in ("待主管审核", "待传结款截图", "待复盘"):
+        fields = _real_ui("operations", P_DOCS[label]).fields
+        assert "payment_qr" not in fields and "settlement_chat" not in fields, label
+        assert "settlement" not in fields, label
+    paid = P_DOCS["待传结款截图"]
+    assert _real_ui("pr", paid).fields["settlement_chat"] == mx.UiField("edit")
+    pr = PERSONAS["pr"]
+    revoked = replace(
+        pr,
+        field_ctx=replace(pr.field_ctx, revokes=frozenset({"field.promotion.payment_qr:read"})),
+    )
+    for label in ("待主管审核", "待传结款截图"):
+        fields = _real_ui(revoked, P_DOCS[label]).fields
+        assert "payment_qr" not in fields and "settlement_chat" not in fields, label
+    # 撤销写 → 主管审核前也只读
+    no_write = replace(
+        pr,
+        field_ctx=replace(pr.field_ctx, revokes=frozenset({"field.promotion.payment_qr:write"})),
+    )
+    assert _real_ui(no_write, P_DOCS["待主管审核"]).fields["payment_qr"] == mx.UiField("read")
 
 
 # ---------------------------------------------------------------------------
@@ -1596,3 +1794,80 @@ def test_negotiation_receiver_follows_field_rules() -> None:
         field_ctx=replace(pr.field_ctx, revokes=frozenset({"field.promotion.quote_amount:read"})),
     )
     assert "quote_amount" not in _real_ui(no_quote, N_DOCS["主管待审"]).fields
+
+
+# ---------------------------------------------------------------------------
+# 结款单（PR-6，计划 D10）：状态机由 SettlementStatusMachine 推导，矩阵只管谁能点
+# ---------------------------------------------------------------------------
+
+S_DOCS = DOCS["settlement"]
+
+
+def test_settlement_allowed_actions_follow_state_machine() -> None:
+    """``SettlementDoc.allowed_actions`` 与 service 用的状态机同一份：每个状态的转移（重提除外，
+    没有页面按钮）一一映射到动作键；追加项只在待付款（service 同判）。"""
+    from app.modules.finance.enums import SettlementStatus
+    from app.modules.finance.flow_doc import TRANSITION_ACTIONS, build_settlement_doc
+    from app.modules.finance.state_machines import SettlementStatusMachine
+
+    assert set(TRANSITION_ACTIONS.values()) <= set(ACTION_KEYS["settlement"])
+    machine_actions = {t.action for t in SettlementStatusMachine.transitions}
+    assert machine_actions == set(TRANSITION_ACTIONS) | {"resubmit"}
+    seen: set[str] = set()
+    for status in SettlementStatus:
+        doc = build_settlement_doc(status=status.value, pr_id=PR_ID)
+        expected = {
+            TRANSITION_ACTIONS[action]
+            for action, _to in SettlementStatusMachine.get_allowed_transitions(status.value)
+            if action in TRANSITION_ACTIONS
+        }
+        if status is SettlementStatus.PENDING_PAYMENT:
+            expected.add("extra_item")
+        assert doc.allowed_actions() == frozenset(expected), status
+        assert (doc.stage, doc.state, doc.column) == (status.value, status.value, None)
+        seen |= expected
+    # 场景有效性：五个动作键都有状态允许
+    assert seen == set(ACTION_KEYS["settlement"])
+    assert build_settlement_doc(status="已付款", pr_id=PR_ID).allowed_actions() == frozenset()
+
+
+def test_settlement_ui_by_role() -> None:
+    finance = _real_ui(PERSONAS["finance"], S_DOCS["待财务付款"]).to_dict(view="list")
+    assert finance == {
+        "actions": {"reject": {"state": "enabled"}, "upload_proof": {"state": "enabled"}},
+        "edits": [],
+    }
+    manager = _real_ui(PERSONAS["pr_manager"], S_DOCS["待付款"]).to_dict(view="detail")
+    assert manager == {
+        "actions": {
+            "reject": {"state": "enabled"},
+            "extra_item": {"state": "enabled"},
+            "fill_payment": {"state": "enabled"},
+        },
+        "fields": {},
+    }
+    # 主管不能上传凭证（¹⁶）：待财务付款只有驳回
+    assert set(_real_ui(PERSONAS["pr_manager"], S_DOCS["待财务付款"]).actions) == {"reject"}
+    # 自己提交的结款单：核查 / 驳回是「读」，原因与 service 的自审拒绝一致
+    own = _real_ui(PERSONAS["pr_manager"], S_DOCS["待付款·主管提交"]).actions["reject"]
+    assert own.to_dict() == {"state": "disabled", "reason": "不能审核自己提交的推广对应的结款单"}
+    old = _real_ui(PERSONAS["pr_manager"], S_DOCS["待核查"]).actions
+    assert set(old) == {"legacy_approve"}
+    # 已付款、已驳回：没有按钮（付款后对所有人只读；重提在推广单那边）
+    for state in ("已付款", "已驳回"):
+        for who in ("pr_manager", "admin", "finance"):
+            assert _real_ui(PERSONAS[who], S_DOCS[state]).actions == {}, (state, who)
+    # PR、运营、仓库：任何状态都没有按钮
+    for label, doc in S_DOCS.items():
+        for who in ("pr", "pr2", "operations", "warehouse"):
+            assert _real_ui(PERSONAS[who], doc).actions == {}, (label, who)
+
+
+def test_settlement_self_review_rule_registered() -> None:
+    from app.modules.finance.flow_matrix import NotSubmitter
+
+    assert NotSubmitter.rule in FLOW_RULES
+    # 结款单没有 pr_id（导入的旧单）：没有可比的人，放行
+    doc = replace(S_DOCS["待付款"], owner_id=None, negotiator_id=None)
+    assert "reject" in _real_ui(PERSONAS["pr_manager"], doc).actions
+    assert _real_ui(PERSONAS["pr_manager"], doc).actions["reject"].state == "enabled"

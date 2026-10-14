@@ -649,6 +649,7 @@ async def promotion_factory(session: AsyncSession, tenant_a: Any) -> Any:
                     "resubmit_note",
                     "resubmitted_at",
                     "brand_comment",
+                    "payment_qr",
                     # 流程线 M1（060）收件 / 发货
                     "ship_status",
                     "receiver_name",
@@ -661,6 +662,9 @@ async def promotion_factory(session: AsyncSession, tenant_a: Any) -> Any:
                     "ship_pushed_by",
                     # 流程线 M2（063）主线号；不传由库发号
                     "line_id",
+                    # 复盘（阶段 #14 ~ #16 造数用）；retro_status 不传走库默认。
+                    # 7 天数据 metrics_recorded_at 在上面（main 已加）
+                    "retro_status",
                     # [(style, sku), …]：按顺序插 promotion_item（不校验成员 / 归属，造数用）
                     "items",
                 }
@@ -751,6 +755,7 @@ async def promotion_factory(session: AsyncSession, tenant_a: Any) -> Any:
                     ship_pushed_by=kw.get("ship_pushed_by"),
                     # 显式 None 会插 NULL（NOT NULL）：只在传了时给，否则走库默认
                     **({"line_id": kw["line_id"]} if "line_id" in kw else {}),
+                    **({"retro_status": kw["retro_status"]} if "retro_status" in kw else {}),
                 )
                 session.add(p)
                 await session.flush()
@@ -785,6 +790,24 @@ async def promotion_factory(session: AsyncSession, tenant_a: Any) -> Any:
                         {"id": att_id, "t": t.id, "key": f"{t.id}/bc/{att_id}.png"},
                     )
                     p.brand_comment_attachment_id = att_id
+                    await session.flush()
+                # 流程线 PR-6：应付 > 0 审核通过要收款码（R2 ⑤）。payment_qr=True 同样直插 attachment 行
+                if kw.get("payment_qr"):
+                    qr_id = uuid4()
+                    await session.execute(
+                        sa_text(
+                            """
+                            INSERT INTO attachment
+                              (id, tenant_id, bucket, r2_key, purpose, filename,
+                               mime_type, size_bytes, status, created_at, updated_at)
+                            VALUES
+                              (:id, :t, 'private', :key, 'promotion_payment_qr',
+                               'qr.png', 'image/png', 128, 'ready', NOW(), NOW())
+                            """
+                        ),
+                        {"id": qr_id, "t": t.id, "key": f"{t.id}/qr/{qr_id}.png"},
+                    )
+                    p.payment_qr_attachment_id = qr_id
                     await session.flush()
                 return p
             finally:
@@ -914,6 +937,9 @@ async def event_capture() -> AsyncIterator[Any]:
     subscribe("SettlementRequested", _settlement_handler)
     subscribe("PromotionPublished", _published_handler)
     subscribe("SettlementPaid", _paid_handler)
+    # 流程线 R6 / R7：两个必须有监听的跨模块事件，只捕获不处理（要真实链路用 cross_unit_event_bus）
+    subscribe("SettlementRejected", _settlement_handler)
+    subscribe("SettlementResubmitted", _settlement_handler)
     yield captured
     clear_handlers()
 
@@ -1006,6 +1032,7 @@ async def settlement_factory(session: AsyncSession, tenant_a: Any) -> Any:
                     "amount",
                     "total_amount",
                     "payment_amount",
+                    "payment_adjust_note",
                     "payment_date",
                     "payment_proof_attachment_id",
                     "note_title",
@@ -1090,6 +1117,7 @@ async def settlement_factory(session: AsyncSession, tenant_a: Any) -> Any:
                     amount=kw.get("amount", Decimal("500.00")),
                     total_amount=kw.get("total_amount", Decimal("500.00")),
                     payment_amount=kw.get("payment_amount"),
+                    payment_adjust_note=kw.get("payment_adjust_note"),
                     payment_date=kw.get("payment_date"),
                     payment_proof_attachment_id=kw.get("payment_proof_attachment_id"),
                     note_title=kw.get("note_title"),

@@ -19,6 +19,7 @@ from app.core.audit import AuditService
 from app.core.db import AsyncSessionBypass
 from app.core.exceptions import ValidationError
 from app.core.security.field_permissions import (
+    FieldPermissionContext,
     build_field_perm_context,
     can_read_field,
     can_write_field,
@@ -34,7 +35,7 @@ from app.modules.flow.line_events import (
     LineEventType,
     payload_size,
 )
-from app.modules.flow.matrix import FlowActor, View, ui_for
+from app.modules.flow.matrix import FlowActor, Level, View, cell_level, ui_for
 from app.modules.product.models import Sku
 from app.modules.product.repository import SkuRepository, StyleRepository
 from app.modules.promotion.display_name import (
@@ -48,6 +49,7 @@ from app.modules.promotion.enums import (
     AMOUNT_LOG_FIELDS,
     CooperationMode,
     RetroStatus,
+    ReviewAction,
 )
 from app.modules.promotion.exceptions import (
     FieldPermissionDenied,
@@ -88,10 +90,16 @@ from app.modules.promotion.schemas import (
     PromotionCreate,
     PromotionItemResponse,
     PromotionResponse,
+    PromotionSettlementBlock,
+    PromotionSettlementExtraItem,
     PromotionShipPushRequest,
     PromotionUpdate,
 )
-from app.modules.promotion.stage_calculator import compute_stage
+from app.modules.promotion.stage_calculator import (
+    compute_badges,
+    compute_stage,
+    metrics_available_from,
+)
 from app.modules.promotion.urge_calculator import (
     UrgeThresholds,
     calculate_urge_status,
@@ -652,6 +660,9 @@ class PromotionServiceBase:
             settlement_status=promotion.settlement_status,
             ship_status=promotion.ship_status,
             is_active=promotion.is_active,
+            retro_status=promotion.retro_status,
+            metrics_recorded_at=promotion.metrics_recorded_at,
+            actual_publish_date=promotion.actual_publish_date,
             scheduled_publish_date=promotion.scheduled_publish_date,
             today=today or get_today(),
             thresholds=thresholds,
@@ -666,10 +677,12 @@ class PromotionServiceBase:
         negotiators: Mapping[UUID, UUID] | None = None,
         members_by_goods: Mapping[UUID, builtins.list[UUID]] | None = None,
         members: builtins.list[UUID] | None = None,
+        attachment_refs: PromotionAttachmentRefs | None = None,
     ) -> PromotionDoc:
-        """组矩阵快照。没透传的（阶段、明细、谈款人、套装成员）按这一张单现查。
+        """组矩阵快照。没透传的（阶段、明细、谈款人、套装成员、结款单状态）按这一张单现查。
 
-        ``members`` 是这张单已算好的成员款式（优先于 ``members_by_goods``）。
+        ``members`` 是这张单已算好的成员款式（优先于 ``members_by_goods``）；
+        ``attachment_refs`` 带结款单状态（列表整页一次查好）。
         """
         if stage is None:
             stage = await self._compute_stage(promotion)
@@ -681,11 +694,20 @@ class PromotionServiceBase:
             negotiators = await self._repo.negotiator_ids([promotion.id])
         if members is None:
             members = await self._members_of(promotion, members_by_goods)
+        if attachment_refs is None:
+            attachment_refs = (
+                await self._repo.get_payment_attachment_refs(
+                    tenant_id=promotion.tenant_id, promotion_ids=[promotion.id]
+                )
+            ).get(promotion.id)
         return build_promotion_doc(
             promotion,
             stage=stage,
             negotiator_id=negotiators.get(promotion.id),
             items_complete=goods_items_complete((i.style_id for i in items), members),
+            settlement_status=(
+                attachment_refs.settlement_status if attachment_refs is not None else None
+            ),
         )
 
     async def _to_response(
@@ -743,20 +765,20 @@ class PromotionServiceBase:
             field: (getattr(promotion, field) if can_read_field("promotion", field, ctx) else None)
             for field in RECEIVER_FIELDS
         }
-        can_see_payment_attachments = bool(
-            ctx.role_codes & {"admin", "platform_admin", "pr", "pr_manager"}
-        )
+        # 收款码与结款凭证 / 结款聊天截图同一个开关：字段规则 promotion.payment_qr（4.6，含财务）
+        can_see_payment_attachments = can_read_field("promotion", "payment_qr", ctx)
 
         payment_qr_url: str | None = None
         settlement_proof_url: str | None = None
         visible_payment_qr_id: UUID | None = None
+        # 引用里还有结款单状态（矩阵快照要用），所以不管看不看得到附件都取
+        if attachment_refs is None:
+            attachment_refs = (
+                await self._repo.get_payment_attachment_refs(
+                    tenant_id=user.tenant_id, promotion_ids=[promotion.id]
+                )
+            ).get(promotion.id)
         if can_see_payment_attachments:
-            if attachment_refs is None:
-                attachment_refs = (
-                    await self._repo.get_payment_attachment_refs(
-                        tenant_id=user.tenant_id, promotion_ids=[promotion.id]
-                    )
-                ).get(promotion.id)
             if attachment_refs is not None:
                 visible_payment_qr_id = attachment_refs.payment_qr_attachment_id
                 try:
@@ -776,6 +798,12 @@ class PromotionServiceBase:
                         )
                 except Exception:
                     log.warning("promotion_payment_attachment_signed_url_failed")
+        # 结款聊天截图（R9）：跟收款码同一个可见开关（4.6）；只在详情签，列表不逐行查（7.3）
+        settlement_chat_url: str | None = None
+        if can_see_payment_attachments and view != "list":
+            settlement_chat_url = await self._signed_url_for(
+                promotion.settlement_chat_attachment_id
+            )
 
         resolved_style_image_key = style_main_image_key
         if not style_main_image_preloaded:
@@ -894,8 +922,31 @@ class PromotionServiceBase:
             items=items,
             negotiators=negotiators,
             members=members,
+            attachment_refs=attachment_refs,
         )
         ui = ui_for(actor, doc).to_dict(view=view)
+        settlement_block = (
+            await self._settlement_block(promotion, ctx, ui) if view != "list" else None
+        )
+        # 已有结款单的状态（审核确认框写去向，R2 ⑥）：列表、详情同取上面的结款引用，不另查；
+        # 矩阵「结款单」一行对当前用户是隐（运营）就给 None，与结款块同一条规则
+        existing_settlement_status = (
+            attachment_refs.settlement_status
+            if attachment_refs is not None
+            and cell_level(actor, doc, "field", "settlement") is not Level.HIDDEN
+            else None
+        )
+        badges = compute_badges(
+            stage=stage,
+            publish_status=promotion.publish_status,
+            settlement_status=promotion.settlement_status,
+            retro_status=promotion.retro_status,
+            metrics_recorded_at=promotion.metrics_recorded_at,
+            actual_publish_date=promotion.actual_publish_date,
+            quote_amount=promotion.quote_amount,
+            has_payment_qr=promotion.payment_qr_attachment_id is not None,
+            today=today,
+        )
 
         pushed_by = promotion.ship_pushed_by
         if pushed_by is not None and user_names is None:
@@ -957,6 +1008,9 @@ class PromotionServiceBase:
             review_reason_category=promotion.review_reason_category,
             resubmit_note=promotion.resubmit_note,
             resubmitted_at=promotion.resubmitted_at,
+            settled_at=promotion.settled_at,
+            metrics_available_from=metrics_available_from(promotion.actual_publish_date),
+            badges=badges,
             is_active=promotion.is_active,
             created_at=promotion.created_at,
             updated_at=promotion.updated_at,
@@ -983,8 +1037,54 @@ class PromotionServiceBase:
             payment_qr_attachment_id=visible_payment_qr_id,
             payment_qr_signed_url=payment_qr_url,
             settlement_payment_proof_signed_url=settlement_proof_url,
+            settlement_chat_signed_url=settlement_chat_url,
+            settlement=settlement_block,
+            existing_settlement_status=existing_settlement_status,
             duplicate_warnings=[],
             ui=ui,
+        )
+
+    async def _settlement_block(
+        self, promotion: Promotion, ctx: FieldPermissionContext, ui: Mapping[str, Any]
+    ) -> PromotionSettlementBlock | None:
+        """推广详情的结款块（7.3）。矩阵「结款单」一行对当前用户是读 / 改才给（运营是隐，7.1：
+        读不到的分组不出现）；块里的金额与调整说明再逐项过字段规则（4.6，PR 可读不可写，11-17）。"""
+        state = (ui.get("fields") or {}).get("settlement", {}).get("state")
+        if state not in ("read", "edit"):
+            return None
+        detail = await self._repo.settlement_detail(
+            tenant_id=promotion.tenant_id, promotion_id=promotion.id
+        )
+        if detail is None:
+            return None
+        can_see_total = can_read_field("settlement", "total_amount", ctx)
+        return PromotionSettlementBlock(
+            settlement_id=detail.settlement_id,
+            status=detail.settlement_status,
+            amount=detail.amount if can_read_field("promotion", "quote_amount", ctx) else None,
+            extra_items=[
+                PromotionSettlementExtraItem(
+                    item_type=item.item_type,
+                    amount=item.amount if can_see_total else None,
+                    remark=item.remark,
+                )
+                for item in detail.extra_items
+            ],
+            total_amount=detail.total_amount if can_see_total else None,
+            payment_amount=(
+                detail.payment_amount
+                if can_read_field("settlement", "payment_amount", ctx)
+                else None
+            ),
+            payment_adjust_note=(
+                detail.payment_adjust_note
+                if can_read_field("settlement", "payment_adjust_note", ctx)
+                else None
+            ),
+            payment_date=detail.payment_date,
+            reject_reason=(
+                detail.review_reason if detail.review_action == ReviewAction.REJECT.value else None
+            ),
         )
 
     async def _log_event_dispatch_failure(

@@ -101,6 +101,9 @@ class Settlement(TenantScopedModel):
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     total_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     payment_amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    payment_adjust_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """实付 ≠ 应付时的调整说明（流程线 M4，065）。「不一致必须写」只在 service 对新录入强制：
+    存量已付款单里有实付 ≠ 应付的，库级 CHECK 会让迁移失败。"""
 
     # --- 业务字段 ---
     payment_date: Mapped[date | None] = mapped_column(Date, nullable=True)

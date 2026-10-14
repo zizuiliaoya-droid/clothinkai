@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import date
+from decimal import Decimal
 from typing import ClassVar
 from uuid import UUID
 
@@ -15,19 +17,28 @@ from app.modules.flow.matrix import FlowDocBase
 from app.modules.promotion import flow_matrix as _flow_matrix  # noqa: F401  登记 MATRICES
 from app.modules.promotion.enums import PublishStatus, RecallStatus, ShipStatus
 from app.modules.promotion.models import Promotion
-from app.modules.promotion.stage_calculator import STAGE_COLUMN
+from app.modules.promotion.stage_calculator import STAGE_COLUMN, metrics_available_from
 
 _UNPUBLISHED = PublishStatus.UNPUBLISHED.value
 _NOT_RECALLED = RecallStatus.NOT_RECALLED.value
 # 能催发的发布状态，与 urge.service._URGEABLE_PUBLISH_STATUS / _load_urgeable_promotion 一致
 _URGEABLE = frozenset({PublishStatus.UNPUBLISHED.value, PublishStatus.ABNORMAL.value})
+# PR-6 推广审核与结款链：只在一个精确阶段允许的动作（3.4 R2 ~ R9、3.7）。阶段按 3.8 的顺序已排除
+# 删除 / 停用 / 召回中 / 完结，所以「推广单结款状态 = X」在这里等同「阶段 = X 对应的那一个」
+_STAGE_ACTIONS: dict[str, str] = {
+    "待主管审核": "review",
+    "结款驳回 · 待重提": "settlement_resubmit",
+    "待传结款截图": "settlement_chat",
+    "待录 7 天数据": "metrics",
+}
 
 
 @dataclass(frozen=True, kw_only=True)
 class PromotionDoc(FlowDocBase):
     """推广单快照。``stage`` = 3.8 派生阶段，``state`` 同 ``stage``，``column`` = A ~ H。
 
-    不放推广单的 ``settlement_status``：矩阵的 ``SettlementIn`` 指结款单状态（PR-6）。
+    结款有两个状态（PR-6）：``settlement_status`` 是这张推广单**结款单**的状态（谓词 ``SettlementIn``，
+    还没有结款单为 None），``promotion_settlement_status`` 是推广单自己的（谓词 ``PromotionSettlementIn``）。
     """
 
     kind: ClassVar[str] = "promotion"
@@ -42,6 +53,19 @@ class PromotionDoc(FlowDocBase):
     """颜色尺码明细齐：款式集合 = 归属商品的启用成员（单品 1 行、套装每个成员 1 行）。"""
     cooperation_mode: str | None
     """合作模式；为空时主管 / 管理员可补一次（5.3 ²³，谓词 ``ModeIn``）。"""
+    promotion_settlement_status: str
+    """推广单自己的结款状态（3.4 的 7 个值）。"""
+    settlement_status: str | None
+    """结款单状态；还没有结款单为 None。"""
+    quote_amount: Decimal | None
+    """服务费（= 审核时的应付）：> 0 才要收款码（★¹⁵）。"""
+    has_payment_qr: bool
+    return_waybill: str | None
+    """寄拍寄回单号（★¹⁵ 寄拍要有寄回单号，或召回成功且有召回寄回截图）。"""
+    has_recall_waybill: bool
+    """有召回寄回截图。"""
+    metrics_available_from: date | None
+    """7 天数据可以录的第一天（发布日 + 7），灰格提示用；没有发布日为 None。"""
 
     def _open_unpublished(self) -> bool:
         return (
@@ -52,6 +76,7 @@ class PromotionDoc(FlowDocBase):
 
     def allowed_actions(self) -> frozenset[str]:
         """细化 §6 的状态机列。PR-2 有发货三个动作、PR-4 有留言（任何阶段都允许）、PR-5 有催发与停用，
+        PR-6 有推广审核、结款重提、结款聊天截图、录 7 天数据（各只在一个阶段，``_STAGE_ACTIONS``），
         其余动作随各自的 PR 入矩阵。
 
         「标记完成」（``urge_complete``）不在这里：它的状态在催发任务上（进行中才能点），按钮只在催发页。
@@ -67,6 +92,9 @@ class PromotionDoc(FlowDocBase):
             allowed.add("ship_withdraw")
         if self.ship_status is None and self._open_unpublished():
             allowed.add("ship_include")
+        stage_action = _STAGE_ACTIONS.get(self.stage)
+        if stage_action is not None:
+            allowed.add(stage_action)
         return frozenset(allowed)
 
 
@@ -95,8 +123,12 @@ def build_promotion_doc(
     stage: str,
     negotiator_id: UUID | None,
     items_complete: bool,
+    settlement_status: str | None,
 ) -> PromotionDoc:
-    """``negotiator_id``：这张单谈款的 PR；没有谈款（导入、主管补录）回落到负责 PR（L1）。"""
+    """``negotiator_id``：这张单谈款的 PR；没有谈款（导入、主管补录）回落到负责 PR（L1）。
+
+    ``settlement_status``：结款单状态（没有结款单传 None），不给默认值——漏传会让收款码锁静默放开。
+    """
     return PromotionDoc(
         stage=stage,
         state=stage,
@@ -112,6 +144,13 @@ def build_promotion_doc(
         receiver_address=promotion.receiver_address,
         items_complete=items_complete,
         cooperation_mode=promotion.cooperation_mode,
+        promotion_settlement_status=promotion.settlement_status,
+        settlement_status=settlement_status,
+        quote_amount=promotion.quote_amount,
+        has_payment_qr=promotion.payment_qr_attachment_id is not None,
+        return_waybill=promotion.return_waybill,
+        has_recall_waybill=promotion.recall_waybill_attachment_id is not None,
+        metrics_available_from=metrics_available_from(promotion.actual_publish_date),
     )
 
 

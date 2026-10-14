@@ -18,13 +18,19 @@ from __future__ import annotations
 
 import logging
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.events import subscribe
 from app.core.metrics import settlement_paid_sync_no_match_total
-from app.modules.finance.events import SettlementPaid
+from app.modules.finance.enums import SettlementStatus as SettlementDocStatus
+from app.modules.finance.events import SettlementPaid, SettlementRejected
+from app.modules.flow.line_events import LineEventRepository, LineEventType
 from app.modules.promotion.enums import SettlementStatus
+from app.modules.promotion.exceptions import PromotionInactiveError, StateTransitionConflictError
+from app.modules.promotion.models import Promotion
 from app.modules.promotion.repository import PromotionRepository
+from app.modules.promotion.state_machines import SettlementStatusMachine
 
 log = logging.getLogger(__name__)
 
@@ -60,13 +66,68 @@ async def on_settlement_paid(event: SettlementPaid, session: AsyncSession) -> No
         )
 
 
+async def on_settlement_rejected(event: SettlementRejected, session: AsyncSession) -> None:
+    """财务驳回结款单（F5）→ 推广单 待付款 → 结款驳回（R6，流程线 3.4、7.5）。
+
+    强一致（与 ``on_settlement_paid`` 不同）：条件 UPDATE ``WHERE settlement_status = '待付款'``，
+    0 行（推广单不在待付款，例如导入来的结款单）→ 409 ``PROMOTION_STATE_CONFLICT`` 冒泡，结款单一起回滚；
+    推广单已停用（停用门之前的历史数据，收尾 L3）→ 409 ``PROMOTION_INACTIVE``。
+    同事务写 ``settlement.rejected``（驳回原因进 note，from / to 记结款单状态）；不 commit、不吞异常。
+    """
+    SettlementStatusMachine.assert_can_transition(
+        from_state=SettlementStatus.PENDING_PAYMENT,
+        to_state=SettlementStatus.SETTLEMENT_REJECTED,
+        action="settlement_reject",
+    )
+    updated = await PromotionRepository(session).update_state(
+        promotion_id=event.promotion_id,
+        tenant_id=event.tenant_id,
+        from_state_field="settlement_status",
+        from_state_value=SettlementStatus.PENDING_PAYMENT.value,
+        to_state_value=SettlementStatus.SETTLEMENT_REJECTED.value,
+    )
+    if updated is None:
+        details = {
+            "promotion_id": str(event.promotion_id),
+            "settlement_id": str(event.settlement_id),
+        }
+        # 收尾 L3 兜底：0 行再读一次停用标记（直接查列，不走身份映射）；停用的单单独报
+        is_active = (
+            await session.execute(
+                select(Promotion.is_active).where(
+                    Promotion.id == event.promotion_id,
+                    Promotion.tenant_id == event.tenant_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if is_active is False:
+            raise PromotionInactiveError(details=details)
+        raise StateTransitionConflictError(
+            "推广单不在待财务付款，不能驳回这张结款单",
+            details=details,
+        )
+    await LineEventRepository(session).append(
+        tenant_id=event.tenant_id,
+        line_id=updated.line_id,
+        event_type=LineEventType.SETTLEMENT_REJECTED,
+        actor_id=event.actor_id,
+        promotion_id=event.promotion_id,
+        from_state=event.from_state,
+        to_state=SettlementDocStatus.REJECTED.value,
+        note=event.reason,
+        payload={"settlement_id": str(event.settlement_id)},
+    )
+
+
 def register() -> None:
-    """U04 端 SettlementPaid listener 注册（通知类反向）。
+    """U04 端 listener 注册：SettlementPaid（通知类反向）+ SettlementRejected（强一致，R6）。
 
     被 main.py register_event_listeners 第 2 步调用。
-    缺失时 main.py 仅 warning（不阻塞，因 SettlementPaid required_handler=False，FB5）。
+    SettlementPaid 缺失不阻塞（required_handler=False，FB5）；SettlementRejected 缺失时财务驳回
+    抛 ``MissingRequiredHandlerError``。
     """
     subscribe("SettlementPaid", on_settlement_paid)
+    subscribe("SettlementRejected", on_settlement_rejected)
 
 
-__all__ = ["on_settlement_paid", "register"]
+__all__ = ["on_settlement_paid", "on_settlement_rejected", "register"]

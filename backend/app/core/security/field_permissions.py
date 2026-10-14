@@ -78,8 +78,8 @@ FIELD_PERMISSION_REGISTRY: dict[str, dict[str, FieldRule]] = {
             frozenset({"admin", "pr", "pr_manager", "warehouse"}),
             frozenset({"admin", "pr", "pr_manager"}),
         ),
-        # 流程线 4.6 / 7d-3：收款码（含财务）。PR-4 先给时间线的收款码附件用；
-        # 推广响应里收款码签名的硬编码角色集合随 PR-6 换成这条
+        # 流程线 4.6 / 7d-3：收款码（含财务）。时间线的收款码类附件、推广响应里收款码 /
+        # 结款凭证 / 结款聊天截图的签名都过这条
         "payment_qr": FieldRule(
             frozenset({"admin", "pr", "pr_manager", "finance"}),
             frozenset({"admin", "pr", "pr_manager"}),
@@ -95,11 +95,17 @@ FIELD_PERMISSION_REGISTRY: dict[str, dict[str, FieldRule]] = {
         "settlement": FieldRule(frozenset({"admin", "pr", "pr_manager", "finance", "operations"})),
         "retro": FieldRule(frozenset({"admin", "pr", "pr_manager", "operations"})),
     },
+    # 流程线 4.6 / 11-17：应付、实付、调整说明加 PR 只读（推广抽屉的结款块；PR 没有 settlement scope，
+    # 结款页仍进不去）。结款页自己的 amount 不变（列表「看不到金额就只看自己提交的」读的是它）
     "settlement": {
         "amount": FieldRule(frozenset({"admin", "pr_manager", "finance"})),
-        "total_amount": FieldRule(frozenset({"admin", "pr_manager", "finance"})),
+        "total_amount": FieldRule(frozenset({"admin", "pr_manager", "finance", "pr"})),
         "payment_amount": FieldRule(
+            frozenset({"admin", "pr_manager", "finance", "pr"}),
             frozenset({"admin", "pr_manager", "finance"}),
+        ),
+        "payment_adjust_note": FieldRule(
+            frozenset({"admin", "pr_manager", "finance", "pr"}),
             frozenset({"admin", "pr_manager", "finance"}),
         ),
     },

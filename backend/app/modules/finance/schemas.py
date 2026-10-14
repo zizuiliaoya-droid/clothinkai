@@ -24,7 +24,6 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    field_validator,
     model_validator,
 )
 
@@ -63,26 +62,29 @@ class SettlementReviewRequest(BaseModel):
 
 
 class SettlementPaymentAmountRequest(BaseModel):
-    """fill_payment 入参（PR 主管确认付款金额）。"""
+    """fill_payment 入参（F3，设计 3.4、7.5）。
 
-    model_config = ConfigDict()
+    实付 ≥ 0（0 = 全额扣除，11-63）；实付 ≠ 应付（``total_amount``）时 ``payment_adjust_note`` 必填，
+    在 service 层判（422 ``FLOW_GATE_MISSING``，key = ``payment_adjust_note``），相等时可空。
+    """
 
-    payment_amount: _PositiveAmountField
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    payment_amount: _AmountField
+    payment_adjust_note: str | None = Field(default=None, max_length=2000)
 
 
 class SettlementPaymentProofRequest(BaseModel):
-    """mark_paid 入参（财务上传付款截图）。"""
+    """mark_paid 入参（财务上传付款截图）。
+
+    ``payment_date`` 只为兼容旧客户端的请求体保留：**忽略此字段**，付款日期一律取服务端的
+    北京时间当天（F4，Q11；照推广建单 ``cooperation_date`` 的兼容写法）。
+    """
 
     model_config = ConfigDict()
 
-    payment_date: date
+    payment_date: date | None = None
     payment_proof_attachment_id: UUID
-
-    @field_validator("payment_date")
-    @classmethod
-    def _validate_payment_date(cls, v: date) -> date:
-        # service 层会再校验 ≤ today (Asia/Shanghai)
-        return v
 
 
 class SettlementResubmitRequest(BaseModel):
@@ -177,8 +179,28 @@ class SettlementResponse(BaseModel):
     style_name: str | None = None
     blogger_nickname: str | None = None
 
+    # 实付 ≠ 应付的调整说明（F3）：字段规则 settlement.payment_adjust_note（4.6）
+    payment_adjust_note: str | None = None
+
+    # 单据信息（流程线 7.5 / 7d-3）：推广单的这几项，一页一条查询批量取；不带收件与发货信息（Q4）
+    promotion_internal_code: str | None = None
+    cooperation_mode: str | None = None
+    publish_url: str | None = None
+    promotion_remark: str | None = None
+    promotion_review_reason: str | None = None
+    """推广审核最近一次驳回的原因。"""
+    promotion_resubmit_note: str | None = None
+    payment_qr_signed_url: str | None = None
+    """博主收款码签名（字段规则 promotion.payment_qr：管理员、PR、主管、财务）。"""
+    display_short_name: str | None = None
+    """品名（7a：商品简称，没填回落建单快照）；界面不显示商品编码。"""
+    line_id: UUID | None = None
+
     # 子表关联
     extra_items: list[SettlementExtraItemResponse] = Field(default_factory=list)
+
+    # 流程线矩阵（7.1）：列表行 = actions + edits，详情 / 各动作的返回 = actions + fields（结款单只有动作行）
+    ui: dict[str, Any] | None = None
 
 
 class SettlementPage(BaseModel):
@@ -188,7 +210,7 @@ class SettlementPage(BaseModel):
     page_size: int
     ui: dict[str, Any] = Field(default_factory=lambda: {"actions": {}})
     """页级 ``ui.actions.import``：能上传结款单（``manual_settlement``，即 ``finance.settlement:pay``）才有
-    （流程线 PR-5，7.5）；结款单行级 ``ui`` 随 PR-6。"""
+    （流程线 PR-5，7.5）；行级 ``ui`` 在每条 ``items[].ui``（PR-6）。"""
 
 
 # ---------------------------------------------------------------------------

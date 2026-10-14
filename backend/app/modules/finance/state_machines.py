@@ -7,13 +7,13 @@
 - classmethod ``assert_can_transition`` / ``get_allowed_transitions``
 - service 层并发安全通过 ``UPDATE WHERE old_state RETURNING`` 实施（FB7）
 
-5 状态 6 转移（FB1 起点 = "待核查"）：
-- 待核查 → 待付款（approve）
-- 待核查 → 已驳回（reject）
-- 待付款 → 已驳回（reject）
-- 待付款 → 待财务付款（fill_payment）
-- 待财务付款 → 已付款（mark_paid）
-- 已驳回 → 待核查（resubmit）
+5 状态 6 转移（流程线 PR-6，设计 3.4：去掉核查，F1 建单直接落在「待付款」）：
+- 待核查 → 待付款（approve，F0：只给上线前已建、停在待核查的旧单）
+- 待付款 → 已驳回（reject，F5）
+- 待财务付款 → 已驳回（reject，F5：填完实付、付款前发现收款码不对）
+- 待付款 → 待财务付款（fill_payment，F3）
+- 待财务付款 → 已付款（mark_paid，F4）
+- 已驳回 → 待付款（resubmit，F6：由推广单 R7 发起）
 
 跨实体校验（自审禁止）：
 - approve 时 reviewer.id != settlement.pr_id（来自 promotion.pr_id 冗余）
@@ -40,27 +40,27 @@ class SettlementStatusMachine:
     """settlement_status 状态机（5 状态 6 转移）。"""
 
     transitions: ClassVar[tuple[TransitionRule, ...]] = (
-        # 待核查 → 待付款（approve）
+        # F0 待核查 → 待付款（approve）：只给上线前停在待核查的旧单，新单不再进待核查
         TransitionRule(
             from_state=SettlementStatus.PENDING_REVIEW.value,
             action="approve",
             to_state=SettlementStatus.PENDING_PAYMENT.value,
             actor_roles=(_ROLE_PR_MANAGER, _ROLE_ADMIN),
         ),
-        # 待核查 → 已驳回（reject）
-        TransitionRule(
-            from_state=SettlementStatus.PENDING_REVIEW.value,
-            action="reject",
-            to_state=SettlementStatus.REJECTED.value,
-            actor_roles=(_ROLE_PR_MANAGER, _ROLE_ADMIN),
-            required_fields=("review_reason",),
-        ),
-        # 待付款 → 已驳回（reject）— 增加 extra_item 后发现问题
+        # F5 待付款 → 已驳回（reject）
         TransitionRule(
             from_state=SettlementStatus.PENDING_PAYMENT.value,
             action="reject",
             to_state=SettlementStatus.REJECTED.value,
-            actor_roles=(_ROLE_PR_MANAGER, _ROLE_ADMIN),
+            actor_roles=(_ROLE_PR_MANAGER, _ROLE_FINANCE, _ROLE_ADMIN),
+            required_fields=("review_reason",),
+        ),
+        # F5 待财务付款 → 已驳回（reject）：填完实付、付款前发现收款码不对要能退回
+        TransitionRule(
+            from_state=SettlementStatus.PENDING_FINANCE.value,
+            action="reject",
+            to_state=SettlementStatus.REJECTED.value,
+            actor_roles=(_ROLE_PR_MANAGER, _ROLE_FINANCE, _ROLE_ADMIN),
             required_fields=("review_reason",),
         ),
         # 待付款 → 待财务付款（fill_payment）
@@ -79,11 +79,11 @@ class SettlementStatusMachine:
             actor_roles=(_ROLE_FINANCE, _ROLE_ADMIN),
             required_fields=("payment_date", "payment_proof_attachment_id"),
         ),
-        # 已驳回 → 待核查（resubmit，PR 修改后重新提交）
+        # F6 已驳回 → 待付款（resubmit）：推广单 R7 重提结款时由事件监听推进
         TransitionRule(
             from_state=SettlementStatus.REJECTED.value,
             action="resubmit",
-            to_state=SettlementStatus.PENDING_REVIEW.value,
+            to_state=SettlementStatus.PENDING_PAYMENT.value,
             actor_roles=(_ROLE_PR_MANAGER, _ROLE_ADMIN, _ROLE_SYSTEM),
         ),
     )

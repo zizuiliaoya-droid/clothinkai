@@ -58,6 +58,7 @@ from app.modules.promotion.exceptions import (
     InvalidSkuReferenceError,
     InvalidStyleReferenceError,
     PromotionNotFoundError,
+    PromotionSettlementInProgressError,
     PublishUrlRequiredError,
     StateTransitionConflictError,
 )
@@ -92,11 +93,15 @@ from app.modules.promotion.service_parts.publish import PromotionPublishMixin
 from app.modules.promotion.service_parts.recall import PromotionRecallMixin
 from app.modules.promotion.service_parts.retro import PromotionRetroMixin
 from app.modules.promotion.service_parts.review import PromotionReviewMixin
+from app.modules.promotion.service_parts.settlement_link import PromotionSettlementLinkMixin
 from app.modules.promotion.service_parts.shipping import PromotionShippingMixin
 from app.modules.promotion.urge_calculator import (
     get_today,
 )
 from app.modules.urge.service import UrgeService
+
+# 进行中的结款单状态（收尾 L3 停用门）；推广模块不 import finance，同 payment_qr 的写法
+_SETTLEMENT_IN_PROGRESS = frozenset({"待付款", "待财务付款"})
 
 
 class PromotionService(
@@ -105,6 +110,7 @@ class PromotionService(
     PromotionRecallMixin,
     PromotionReviewMixin,
     PromotionRetroMixin,
+    PromotionSettlementLinkMixin,
     PromotionShippingMixin,
 ):
     """推广合作业务服务。"""
@@ -374,7 +380,12 @@ class PromotionService(
         弹窗开着期间仓库回填的发货单号不会被 PR 的旧快照冲掉；毫秒级的并发与其他字段
         一样不加锁。
         """
-        promotion = await self._repo.get_by_id(promotion_id)
+        # 停用与审核建结款单互斥（评审 M1）：锁前不判矩阵、不查结款，锁后用当前快照。
+        promotion = (
+            await self._repo.get_for_deactivation(promotion_id, tenant_id=user.tenant_id)
+            if "is_active" in payload.model_fields_set and payload.is_active is False
+            else await self._repo.get_by_id(promotion_id)
+        )
         if promotion is None:
             raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
         # 顺序（流程线 7.1）：404 → 退役键 422 → 合作模式改成另一个值 409 → 已入矩阵的字段（越权全列 403）
@@ -396,6 +407,9 @@ class PromotionService(
             ensure_patch_allowed(
                 await self._flow_actor(user), await self._promotion_doc(promotion), managed
             )
+        # 停用门（收尾 L3）：与 DELETE 同一道，矩阵之后判
+        if "is_active" in managed and payload.is_active is False and promotion.is_active:
+            await self._ensure_no_settlement_in_progress(promotion)
 
         # 金额时间线的「更新前」快照必须在这里取 —— 下面补合作模式那一步就会改成本，
         # 等到算 changes 时拿到的已经是中间值了。
@@ -745,13 +759,14 @@ class PromotionService(
         """通用软停用：is_active=false（与状态机正交）.
 
         顺序：404 → 矩阵 ``deactivate``（已停用 / 已删除 422；A ~ D、G 列主管能停，结款单生成后只有
-        管理员，11-15；不够 403）→ 条件 UPDATE（并发下 0 行 409）→ 时间线 ``promotion.updated``
-        （diff ``is_active``，同 PATCH 的写法）→ 审计 → 提交。
+        管理员，11-15；不够 403）→ 停用门（结款单进行中 409，收尾 L3）→ 条件 UPDATE（并发下 0 行 409）
+        → 时间线 ``promotion.updated``（diff ``is_active``，同 PATCH 的写法）→ 审计 → 提交。
         """
-        promotion = await self._repo.get_by_id(promotion_id)
+        promotion = await self._repo.get_for_deactivation(promotion_id, tenant_id=user.tenant_id)
         if promotion is None:
             raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
         require(await self._flow_actor(user), await self._promotion_doc(promotion), "deactivate")
+        await self._ensure_no_settlement_in_progress(promotion)
         tenant_id, line_id = promotion.tenant_id, promotion.line_id
 
         deactivated = await self._repo.soft_deactivate(
@@ -779,6 +794,23 @@ class PromotionService(
             user_id=user.id,
         )
         await self._session.commit()
+
+    async def _ensure_no_settlement_in_progress(self, promotion: Promotion) -> None:
+        """停用门（收尾 L3）：结款单待付款 / 待财务付款时不能停用，管理员也一样 → 409。
+
+        停用后推广单的状态 UPDATE 都带 ``is_active = true``，结款单就驳不掉了。用户停用的两条路
+        （``DELETE /{id}``、``PATCH`` 带 ``is_active = false``）都过这里；导入、迁移这类系统路径不经过。
+        """
+        settlement = await self._repo.settlement_brief(
+            tenant_id=promotion.tenant_id, promotion_id=promotion.id
+        )
+        if settlement is not None and settlement.settlement_status in _SETTLEMENT_IN_PROGRESS:
+            raise PromotionSettlementInProgressError(
+                details={
+                    "settlement_no": settlement.settlement_no,
+                    "settlement_status": settlement.settlement_status,
+                }
+            )
 
 
 __all__ = ["PromotionService"]

@@ -25,13 +25,19 @@ class RecallStatus(str, Enum):
 
 
 class SettlementStatus(str, Enum):
-    """settlement_status 状态机（5 状态）。"""
+    """settlement_status 状态机（7 状态，流程线 3.4；列 String(16) 无 CHECK）。
+
+    界面文案：未核查 = 未发布、待核查 = 待主管审核、已驳回 = 推广驳回 · 待重提、
+    待付款 = 待财务付款、结款驳回 = 结款驳回 · 待重提、已付款 = 待传结款截图、已结款 = 已结款。
+    """
 
     NOT_REVIEWED = "未核查"
     PENDING_REVIEW = "待核查"
     PENDING_PAYMENT = "待付款"
     PAID = "已付款"
     REJECTED = "已驳回"
+    SETTLEMENT_REJECTED = "结款驳回"
+    SETTLED = "已结款"
 
 
 class ShipStatus(str, Enum):

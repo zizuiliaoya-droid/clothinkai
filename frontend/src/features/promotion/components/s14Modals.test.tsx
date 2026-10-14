@@ -67,7 +67,6 @@ describe("录入信息", () => {
             source_extra: { 颜色及规格: "黑色 M", 打单地址: "杭州", 发货单号: "SF1", 订单号: "ORD-9" },
           })}
           onClose={() => {}}
-          canManagePaymentQr={false}
         />
       )
     );

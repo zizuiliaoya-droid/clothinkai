@@ -1069,6 +1069,9 @@ class TestFlowUi:
                 "quote_amount": {"state": "read"},
                 "receiver": {"state": "edit"},
                 "shipping": {"state": "grey", "hint": "推送后由仓库回填"},
+                # PR-6：7 天数据与收款码入矩阵，没发布时都灰
+                "metrics": {"state": "grey", "hint": "已结款后可录"},
+                "payment_qr": {"state": "grey", "hint": "发布后上传"},
                 "timeline": {"state": "read"},
             },
         }
@@ -1091,6 +1094,8 @@ class TestFlowUi:
             "cooperation": {"state": "read"},
             "cooperation_mode": {"state": "read"},
             "shipping": {"state": "grey", "hint": "推送后由仓库回填"},
+            # 运营看得到 7 天数据（灰），看不到收款码（字段规则 promotion.payment_qr）
+            "metrics": {"state": "grey", "hint": "已结款后可录"},
             "timeline": {"state": "read"},
         }
         assert (await svc.get_promotion(promo.id, flow_users.finance)).ui == {
@@ -1289,11 +1294,28 @@ class TestFlowUi:
             publish_status="已发布",
             settlement_status="待核查",
         )
-        with pytest.raises(SelfReviewForbiddenError) as review_exc:
+        # 流程线 PR-6：推广审核改挂 promotion_review:approve，PR 没有审核权（先于自审判）
+        with pytest.raises(AppException) as review_exc:
             await svc.review(
                 reviewable.id, PromotionReviewRequest(action=ReviewAction.APPROVE), flow_users.pr
             )
-        assert review_exc.value.status_code == 403
+        assert (review_exc.value.status_code, review_exc.value.code) == (403, "PERMISSION_DENIED")
+        # 主管审自己负责的单仍是原 code
+        own = await _promotion(
+            flow_users,
+            product_factory,
+            blogger_factory,
+            promotion_factory,
+            publish_status="已发布",
+            settlement_status="待核查",
+        )
+        own.pr_id = flow_users.pr_manager.id
+        await session.flush()
+        with pytest.raises(SelfReviewForbiddenError) as self_exc:
+            await svc.review(
+                own.id, PromotionReviewRequest(action=ReviewAction.APPROVE), flow_users.pr_manager
+            )
+        assert self_exc.value.status_code == 403
 
 
 # ---------------------------------------------------------------------------

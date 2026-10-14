@@ -21,7 +21,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import bindparam, delete, exists, func, select, text, union_all, update
+from sqlalchemy import bindparam, case, delete, exists, func, select, text, union_all, update
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -35,7 +35,7 @@ from app.modules.promotion.display_name import (
     PROMOTION_DISPLAY_SHORT_NAME_SQL,
     display_short_name_sql,
 )
-from app.modules.promotion.enums import ShipStatus
+from app.modules.promotion.enums import RetroStatus, ShipStatus
 from app.modules.promotion.exceptions import SequenceOverflowError
 from app.modules.promotion.models import BloggerRetrospective, Promotion, PromotionItem
 from app.modules.promotion.stage_calculator import PROMOTION_STAGES, STAGE_COLUMN, stage_sql_expr
@@ -158,6 +158,40 @@ class PromotionAttachmentRefs:
     payment_qr_status: str | None = None
     settlement_proof_r2_key: str | None = None
     settlement_proof_status: str | None = None
+    settlement_status: str | None = None
+    """这张推广单结款单的状态（矩阵快照 ``PromotionDoc.settlement_status``）；没有结款单为 None。"""
+
+
+@dataclass(frozen=True)
+class PromotionSettlementBrief:
+    """推广单已有的结款单（R2 ⑥ 审核通过前查）。"""
+
+    settlement_id: UUID
+    settlement_no: str
+    settlement_status: str
+
+
+@dataclass(frozen=True)
+class PromotionSettlementExtraItemRow:
+    item_type: str
+    amount: Decimal
+    remark: str | None
+
+
+@dataclass(frozen=True)
+class PromotionSettlementDetail:
+    """推广详情结款块的原始值（流程线 7.3）；字段规则由 service 过。"""
+
+    settlement_id: UUID
+    settlement_status: str
+    amount: Decimal
+    total_amount: Decimal
+    payment_amount: Decimal | None
+    payment_adjust_note: str | None
+    payment_date: date | None
+    review_action: str | None
+    review_reason: str | None
+    extra_items: tuple[PromotionSettlementExtraItemRow, ...]
 
 
 # ---------------------------------------------------------------------------
@@ -201,10 +235,32 @@ class PromotionRepository:
             return None
         return promotion
 
+    async def get_for_deactivation(
+        self, promotion_id: UUID, *, tenant_id: UUID
+    ) -> Promotion | None:
+        """停用先锁推广行，串行于审核/重提先 UPDATE 推广、再写结款的同事务链。
+
+        持锁直到外层事务提交；等待后刷新 identity map，按当前状态判矩阵和结款门。
+        """
+        stmt = (
+            select(Promotion)
+            .where(
+                Promotion.id == promotion_id,
+                Promotion.tenant_id == tenant_id,
+                Promotion.is_active.is_(True),
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        return (await self._session.execute(stmt)).scalar_one_or_none()
+
     async def get_payment_attachment_refs(
         self, *, tenant_id: UUID, promotion_ids: list[UUID]
     ) -> dict[UUID, PromotionAttachmentRefs]:
-        """一次批量取得收款码与结算付款凭证引用，避免列表 N+1。"""
+        """一次批量取得收款码、结算付款凭证引用与结款单状态，避免列表 N+1。
+
+        结款单一张推广单最多一张（``uq_settlement_promotion``），LEFT JOIN 不会放大行数。
+        """
         if not promotion_ids:
             return {}
         sql = text(
@@ -212,7 +268,8 @@ class PromotionRepository:
             SELECT p.id AS promotion_id, p.payment_qr_attachment_id,
                    qr.r2_key AS payment_qr_r2_key, qr.status AS payment_qr_status,
                    proof.r2_key AS settlement_proof_r2_key,
-                   proof.status AS settlement_proof_status
+                   proof.status AS settlement_proof_status,
+                   s.settlement_status AS settlement_status
             FROM promotion p
             LEFT JOIN attachment qr
               ON qr.id=p.payment_qr_attachment_id AND qr.tenant_id=p.tenant_id
@@ -241,9 +298,94 @@ class PromotionRepository:
                 payment_qr_status=row["payment_qr_status"],
                 settlement_proof_r2_key=row["settlement_proof_r2_key"],
                 settlement_proof_status=row["settlement_proof_status"],
+                settlement_status=row["settlement_status"],
             )
             for row in result.mappings().all()
         }
+
+    async def settlement_brief(
+        self, *, tenant_id: UUID, promotion_id: UUID
+    ) -> PromotionSettlementBrief | None:
+        """这张推广单已有的结款单（R2 ⑥）：结算单号与状态；没有为 None。
+        原生 SQL，不 import finance（推广模块不依赖结款模块）；一张推广单最多一张（``uq_settlement_promotion``）。
+        """
+        row = (
+            (
+                await self._session.execute(
+                    text(
+                        "SELECT id, settlement_no, settlement_status FROM settlement "
+                        "WHERE tenant_id = CAST(:tenant_id AS uuid) "
+                        "AND promotion_id = CAST(:promotion_id AS uuid)"
+                    ),
+                    {"tenant_id": tenant_id, "promotion_id": promotion_id},
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if row is None:
+            return None
+        return PromotionSettlementBrief(
+            settlement_id=row["id"],
+            settlement_no=row["settlement_no"],
+            settlement_status=row["settlement_status"],
+        )
+
+    async def settlement_detail(
+        self, *, tenant_id: UUID, promotion_id: UUID
+    ) -> PromotionSettlementDetail | None:
+        """推广详情的结款块（7.3）：这张推广单的结款单与追加项（按建立时间）；没有结款单为 None。
+        原生 SQL，不 import finance（同 ``settlement_brief``）。"""
+        row = (
+            (
+                await self._session.execute(
+                    text(
+                        "SELECT id, settlement_status, amount, total_amount, payment_amount, "
+                        "payment_adjust_note, payment_date, review_action, review_reason "
+                        "FROM settlement "
+                        "WHERE tenant_id = CAST(:tenant_id AS uuid) "
+                        "AND promotion_id = CAST(:promotion_id AS uuid)"
+                    ),
+                    {"tenant_id": tenant_id, "promotion_id": promotion_id},
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if row is None:
+            return None
+        items = (
+            (
+                await self._session.execute(
+                    text(
+                        "SELECT item_type, amount, remark FROM settlement_extra_item "
+                        "WHERE tenant_id = CAST(:tenant_id AS uuid) "
+                        "AND settlement_id = CAST(:settlement_id AS uuid) "
+                        "ORDER BY created_at, id"
+                    ),
+                    {"tenant_id": tenant_id, "settlement_id": row["id"]},
+                )
+            )
+            .mappings()
+            .all()
+        )
+        return PromotionSettlementDetail(
+            settlement_id=row["id"],
+            settlement_status=row["settlement_status"],
+            amount=row["amount"],
+            total_amount=row["total_amount"],
+            payment_amount=row["payment_amount"],
+            payment_adjust_note=row["payment_adjust_note"],
+            payment_date=row["payment_date"],
+            review_action=row["review_action"],
+            review_reason=row["review_reason"],
+            extra_items=tuple(
+                PromotionSettlementExtraItemRow(
+                    item_type=i["item_type"], amount=i["amount"], remark=i["remark"]
+                )
+                for i in items
+            ),
+        )
 
     async def negotiator_ids(self, promotion_ids: Sequence[UUID]) -> dict[UUID, UUID]:
         """推广单 → 谈款的 PR（矩阵快照的 ``negotiator_id``）。没有谈款的单不在结果里；
@@ -569,6 +711,56 @@ class PromotionRepository:
             return None
         # SQLAlchemy 2.0: returning(Model) 可能命中 session 身份映射中的旧实例
         # （状态字段未同步）；refresh 以反映 DB 最新状态。
+        promotion: Promotion = row[0]
+        await self._session.refresh(promotion)
+        return promotion
+
+    _METRICS_FIELDS = frozenset(
+        {"like_count", "collect_count", "comment_count", "metrics_attachment_id"}
+    )
+
+    async def record_metrics_once(
+        self,
+        *,
+        promotion_id: UUID,
+        tenant_id: UUID,
+        values: Mapping[str, Any],
+    ) -> Promotion | None:
+        """7 天数据只录一次（流程线 3.7）：``UPDATE … WHERE … AND metrics_recorded_at IS NULL RETURNING``。
+
+        写三个指标、截图与 ``metrics_recorded_at = now()``；``update_state`` 只认状态字段，表达不了「未录过」，
+        所以单开这一条，不扩它。过渡期（PR-7 前复盘仍是旧流程）复盘 未开始 → 待复盘 也在这条 UPDATE 里，
+        其余复盘状态不动。0 行（已录过 / 软删 / 跨租户）→ ``None``，service 抛 409。
+        """
+        unknown = set(values) - self._METRICS_FIELDS
+        if unknown:
+            raise ValueError(f"unsupported metrics field: {sorted(unknown)}")
+        stmt = (
+            update(Promotion)
+            .where(
+                Promotion.id == promotion_id,
+                Promotion.tenant_id == tenant_id,
+                Promotion.is_active.is_(True),
+                Promotion.metrics_recorded_at.is_(None),
+            )
+            .values(
+                **values,
+                metrics_recorded_at=func.now(),
+                retro_status=case(
+                    (
+                        Promotion.retro_status == RetroStatus.NOT_STARTED.value,
+                        RetroStatus.PENDING_RETRO.value,
+                    ),
+                    else_=Promotion.retro_status,
+                ),
+                updated_at=func.now(),
+            )
+            .returning(Promotion)
+            .execution_options(synchronize_session=False)
+        )
+        row = (await self._session.execute(stmt)).fetchone()
+        if row is None:
+            return None
         promotion: Promotion = row[0]
         await self._session.refresh(promotion)
         return promotion

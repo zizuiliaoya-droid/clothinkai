@@ -282,6 +282,14 @@ class PromotionResubmitRequest(BaseModel):
         return None if v is None else _check_publish_url(v)
 
 
+class PromotionSettlementResubmitRequest(BaseModel):
+    """结款重提入参（流程线 R7）：结款驳回 → 待付款。说明必填（全空白 = 没填），只进事件。"""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    note: str = Field(min_length=1, max_length=2000)
+
+
 class PromotionCancelRequest(BaseModel):
     """cancel 入参（BR-U04-20）。"""
 
@@ -488,6 +496,33 @@ class GoodsMemberResponse(BaseModel):
     """该成员款式主图的签名 URL（推广列表主图列并排显示）；没有图或签名失败为 null。"""
 
 
+ReviewOutcome = Literal["settlement_created", "settled_directly", "imported_settlement_paid"]
+"""审核通过的去向（3.4 R2 / R3 / R2 ⑥）。"""
+
+
+class PromotionSettlementExtraItem(BaseModel):
+    item_type: str
+    amount: Decimal | None = None
+    """跟 ``settlement.total_amount`` 的字段规则（读不到为 None）。"""
+    remark: str | None = None
+
+
+class PromotionSettlementBlock(BaseModel):
+    """推广详情的结款块（流程线 7.3）。金额与调整说明按 4.6：PR 可读不可写（11-17）；
+    ``amount``（= 服务费）跟 ``promotion.quote_amount``，追加项金额跟 ``settlement.total_amount``。"""
+
+    settlement_id: UUID
+    status: str
+    amount: Decimal | None = None
+    extra_items: list[PromotionSettlementExtraItem] = Field(default_factory=list)
+    total_amount: Decimal | None = None
+    payment_amount: Decimal | None = None
+    payment_adjust_note: str | None = None
+    payment_date: date | None = None
+    reject_reason: str | None = None
+    """结款单最近一次驳回的原因（F5）；没驳回过为 None。"""
+
+
 class PromotionResponse(BaseModel):
     """推广响应。
 
@@ -593,6 +628,17 @@ class PromotionResponse(BaseModel):
     resubmit_note: str | None = None
     """最近一次驳回后重新提交的说明（7a-4，只留最近一轮）。"""
     resubmitted_at: datetime | None = None
+    review_outcome: ReviewOutcome | None = None
+    """只在审核通过的响应里有（7.3）：``settlement_created`` 已生成结款单、``settled_directly`` 应付 0 直接结清、
+    ``imported_settlement_paid`` 已有导入的已付款结款单（R2 ⑥），前端按它出成功提示。"""
+
+    # 结款（流程线 PR-6）
+    settled_at: datetime | None = None
+    """记为已结款的时间（应付 0 审核通过，或上传结款聊天截图）；存量已结款不回填。"""
+    metrics_available_from: date | None = None
+    """7 天数据可以录的第一天（发布日 + 7）；没有发布日为 None。"""
+    badges: list[str] = Field(default_factory=list)
+    """行角标（3.8 / 7.3）：``stage_calculator.BADGES`` 里命中的，按那里的顺序。"""
 
     # 通用
     is_active: bool
@@ -628,10 +674,18 @@ class PromotionResponse(BaseModel):
     # 明细应有的成员款式：套装 = 启用成员按 sort_order；单品或没有归属 = [style_id]
     goods_members: list[GoodsMemberResponse] = Field(default_factory=list)
 
-    # 结款附件（仅 PR/PR主管/管理员可见；warehouse 始终为 null）
+    # 结款附件（字段规则 promotion.payment_qr：PR / 主管 / 管理员 / 财务可见；运营、仓库为 null）
     payment_qr_attachment_id: UUID | None = None
     payment_qr_signed_url: str | None = None
     settlement_payment_proof_signed_url: str | None = None
+    settlement_chat_signed_url: str | None = None
+    """结款聊天截图（R9，流程线 7.3）：只在详情与各动作的返回里签，列表为 None；可见性同收款码。"""
+    settlement: PromotionSettlementBlock | None = None
+    """结款块（流程线 7.3）：只在详情与各动作的返回里有，列表为 None；还没有结款单、或矩阵「结款单」一行
+    对当前用户是隐（运营）时为 None。"""
+    existing_settlement_status: str | None = None
+    """这张推广单已有结款单的状态（审核确认框按它写去向，R2 ⑥）：列表与详情都给，取自已批量查的结款引用；
+    没有结款单、或矩阵「结款单」一行对当前用户是隐（运营）时为 None。"""
 
     # 重复警告（仅 create / detail 视图填入）
     duplicate_warnings: list[PromotionDuplicateWarning] = Field(default_factory=list)
@@ -761,6 +815,9 @@ __all__ = [
     "PromotionResponse",
     "PromotionResubmitRequest",
     "PromotionReviewRequest",
+    "PromotionSettlementBlock",
+    "PromotionSettlementExtraItem",
+    "PromotionSettlementResubmitRequest",
     "PromotionShipPushRequest",
     "PromotionShipWithdrawRequest",
     "PromotionUpdate",

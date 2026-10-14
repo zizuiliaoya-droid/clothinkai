@@ -2,9 +2,10 @@ import { useState } from "react";
 import {
   Button,
   Card,
-  DatePicker,
+  Descriptions,
   Dropdown,
   Form,
+  Image,
   Input,
   InputNumber,
   Modal,
@@ -12,30 +13,29 @@ import {
   Space,
   Table,
   Tag,
+  Tooltip,
   Typography,
-  Upload,
   message,
+  theme,
+  type MenuProps,
 } from "antd";
-import { DownOutlined, UploadOutlined } from "@ant-design/icons";
+import { DownOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnsType } from "antd/es/table";
-import dayjs from "dayjs";
-import {
-  PAYMENT_PROOF_MAX_BYTES,
-  PAYMENT_PROOF_MIME_TYPES,
-  addExtraItem,
-  fillPaymentAmount,
-  listSettlements,
-  reviewSettlement,
-  uploadPaymentProof,
-} from "@/features/finance/api";
+import { addExtraItem, listSettlements, reviewSettlement } from "@/features/finance/api";
+import { PaymentAmountModal } from "@/features/finance/components/PaymentAmountModal";
+import { PaymentProofModal } from "@/features/finance/components/PaymentProofModal";
 import type {
   ExtraItemType,
   Settlement,
   SettlementListFilters,
   SettlementStatus,
 } from "@/features/finance/types";
-import { extractErrorMessage } from "@/services/apiClient";
+import { LINE_EVENTS_ALL } from "@/features/flow/api";
+import { flowErrorOutcome } from "@/features/flow/flowError";
+import { buildMenuItems } from "@/features/flow/flowMenu";
+import { LineDrawer } from "@/features/flow/LineDrawer";
+import { DisplayNameCell } from "@/components/DisplayNameCell/DisplayNameCell";
 import { ImportUploadButton } from "@/components/ImportUploadButton";
 
 const money = (v: string | null) => (v == null ? "—" : `¥${v}`);
@@ -46,6 +46,8 @@ const STATUS: SettlementStatus[] = [
   "已付款",
   "已驳回",
 ];
+/** 筛选项的文案：新单不再进待核查，这一档只剩上线前的旧单（8.6）。 */
+const STATUS_LABEL: Partial<Record<SettlementStatus, string>> = { 待核查: "待核查（旧单）" };
 const statusColor: Record<string, string> = {
   待核查: "orange",
   待付款: "blue",
@@ -53,14 +55,17 @@ const statusColor: Record<string, string> = {
   已付款: "green",
   已驳回: "red",
 };
+// 「运费」过渡期保留：PR-8 与 R33 同时停用（流程线 10.3 PR-6「过渡期」）
 const EXTRA_ITEM_TYPES: ExtraItemType[] = ["运费", "赞奖", "其他"];
 
 /**
- * 财务结款。列对齐 final.xlsx「站外结款表」；操作列按结算状态提供状态推进动作：
- * 待核查 → 核查通过/驳回；待付款 → 填付款金额/增加结算项；待财务付款 → 上传付款凭证。
+ * 财务结款（流程线 8.6）。列对齐 final.xlsx「站外结款表」，另加推广编号（点开主线抽屉）、合作模式、应付、实付、
+ * 调整说明、收款码；「单据信息」用行展开（发布链接、推广备注、推广驳回原因、重提说明），不显示收件与发货信息（Q4）。
+ * 行内操作按接口的行级 `ui.actions`：核查通过（只给上线前的旧单）、驳回、增加结算项、填付款金额、上传付款凭证。
  */
 export function SettlementListPage() {
   const qc = useQueryClient();
+  const { token } = theme.useToken();
   const [filters, setFilters] = useState<SettlementListFilters>({
     page: 1,
     page_size: 20,
@@ -69,15 +74,12 @@ export function SettlementListPage() {
   // 弹窗状态
   const [target, setTarget] = useState<Settlement | null>(null);
   const [rejectOpen, setRejectOpen] = useState(false);
-  const [amountOpen, setAmountOpen] = useState(false);
   const [extraOpen, setExtraOpen] = useState(false);
-  const [proofOpen, setProofOpen] = useState(false);
+  const [amountTarget, setAmountTarget] = useState<Settlement | null>(null);
+  const [proofTarget, setProofTarget] = useState<Settlement | null>(null);
+  const [lineRow, setLineRow] = useState<Settlement | null>(null);
   const [rejectForm] = Form.useForm();
-  const [amountForm] = Form.useForm();
   const [extraForm] = Form.useForm();
-  const [proofForm] = Form.useForm();
-  const [proofFile, setProofFile] = useState<File | null>(null);
-  const [uploading, setUploading] = useState(false);
 
   const { data, isLoading } = useQuery({
     queryKey: ["settlements", filters],
@@ -88,6 +90,18 @@ export function SettlementListPage() {
 
   const refresh = () => {
     void qc.invalidateQueries({ queryKey: ["settlements"] });
+    void qc.invalidateQueries({ queryKey: LINE_EVENTS_ALL });
+  };
+  /** 8.2：409 / 权限刚变 → 统一文案并刷新（重新拿 ui）；其余显示接口的提示。 */
+  const onFlowError = (err: unknown) => {
+    const outcome = flowErrorOutcome(err);
+    if (outcome.kind === "gate") {
+      message.error(`缺：${outcome.missing.map((m) => m.label).join("、")}`);
+      return false;
+    }
+    message.error(outcome.text);
+    if (outcome.refresh) refresh();
+    return outcome.refresh;
   };
 
   const approveMutation = useMutation({
@@ -96,29 +110,20 @@ export function SettlementListPage() {
       message.success("已核查通过");
       refresh();
     },
-    onError: (err) => message.error(extractErrorMessage(err)),
+    onError: onFlowError,
   });
 
   const rejectMutation = useMutation({
     mutationFn: ({ id, reason }: { id: string; reason: string }) =>
       reviewSettlement(id, { action: "reject", review_reason: reason }),
     onSuccess: () => {
-      message.success("已驳回");
+      message.success("已驳回，推广单转「结款驳回」");
       setRejectOpen(false);
       refresh();
     },
-    onError: (err) => message.error(extractErrorMessage(err)),
-  });
-
-  const amountMutation = useMutation({
-    mutationFn: ({ id, amount }: { id: string; amount: string }) =>
-      fillPaymentAmount(id, { payment_amount: amount }),
-    onSuccess: () => {
-      message.success("付款金额已填写，转「待财务付款」");
-      setAmountOpen(false);
-      refresh();
+    onError: (err) => {
+      if (onFlowError(err)) setRejectOpen(false);
     },
-    onError: (err) => message.error(extractErrorMessage(err)),
   });
 
   const extraMutation = useMutation({
@@ -138,65 +143,63 @@ export function SettlementListPage() {
       setExtraOpen(false);
       refresh();
     },
-    onError: (err) => message.error(extractErrorMessage(err)),
+    onError: (err) => {
+      if (onFlowError(err)) setExtraOpen(false);
+    },
   });
-
-  async function submitProof(values: { payment_date: dayjs.Dayjs }) {
-    if (!target || !proofFile) {
-      message.error("请先选择付款截图");
-      return;
-    }
-    // 先在本地挡掉格式和大小不对的文件，省得传完 10MB 才被后端拒
-    if (!(PAYMENT_PROOF_MIME_TYPES as readonly string[]).includes(proofFile.type)) {
-      message.error("付款截图仅支持 JPG、PNG、WebP 图片");
-      return;
-    }
-    if (proofFile.size > PAYMENT_PROOF_MAX_BYTES) {
-      message.error("付款截图不能超过 10MB");
-      return;
-    }
-    setUploading(true);
-    try {
-      await uploadPaymentProof(
-        target.id,
-        dayjs(values.payment_date).format("YYYY-MM-DD"),
-        proofFile
-      );
-      message.success("付款凭证已上传，转「已付款」");
-      setProofOpen(false);
-      setProofFile(null);
-      refresh();
-    } catch (err) {
-      message.error(extractErrorMessage(err));
-    } finally {
-      setUploading(false);
-    }
-  }
 
   function openReject(r: Settlement) {
     setTarget(r);
     rejectForm.resetFields();
     setRejectOpen(true);
   }
-  function openAmount(r: Settlement) {
-    setTarget(r);
-    amountForm.resetFields();
-    setAmountOpen(true);
-  }
   function openExtra(r: Settlement) {
     setTarget(r);
     extraForm.resetFields();
     setExtraOpen(true);
   }
-  function openProof(r: Settlement) {
-    setTarget(r);
-    proofForm.resetFields();
-    proofForm.setFieldsValue({ payment_date: dayjs() });
-    setProofFile(null);
-    setProofOpen(true);
+
+  /** 行内「操作」：顺序与禁用原因由 buildMenuItems 按 row.ui 定；ui 里没有的项不出现。 */
+  function rowMenuItems(record: Settlement): NonNullable<MenuProps["items"]> {
+    const built = buildMenuItems("settlement", record.ui, {
+      actions: {
+        legacy_approve: { label: "核查通过", onClick: () => approveMutation.mutate(record.id) },
+        reject: { label: "驳回", danger: true, onClick: () => openReject(record) },
+        extra_item: { label: "增加结算项", onClick: () => openExtra(record) },
+        fill_payment: { label: "填付款金额", onClick: () => setAmountTarget(record) },
+        upload_proof: { label: "上传付款凭证", onClick: () => setProofTarget(record) },
+      },
+    });
+    return built.map(({ key, label, disabled, danger, onClick }) => ({
+      key,
+      label,
+      disabled,
+      danger,
+      onClick,
+    }));
   }
 
+  const rows = data?.items ?? [];
+  const menus = new Map(rows.map((r) => [r.id, rowMenuItems(r)]));
+  // 本页所有行都没有可做的动作时整列不显示（8.2）
+  const showOperations = [...menus.values()].some((items) => items.length > 0);
+  const dash = <span style={{ color: token.colorTextSecondary }}>—</span>;
+
   const columns: ColumnsType<Settlement> = [
+    {
+      title: "推广编号",
+      dataIndex: "promotion_internal_code",
+      width: 150,
+      fixed: "left",
+      render: (v: string | null, r) =>
+        v && r.line_id ? (
+          <Button type="link" size="small" style={{ padding: 0 }} onClick={() => setLineRow(r)}>
+            {v}
+          </Button>
+        ) : (
+          v || "—"
+        ),
+    },
     {
       title: "月份",
       width: 90,
@@ -210,18 +213,48 @@ export function SettlementListPage() {
     { title: "大类", width: 90, render: () => "站外推广" },
     { title: "项目", width: 80, render: () => "佣金" },
     { title: "货号", dataIndex: "style_code", width: 120, render: (v) => v || "—" },
-    { title: "款式", dataIndex: "style_name", width: 140, render: (v) => v || "—" },
+    {
+      title: "款式",
+      dataIndex: "display_short_name",
+      width: 140,
+      ellipsis: { showTitle: false },
+      render: (v: string | null, r) => (
+        <DisplayNameCell name={v ?? r.style_name} fullTitle={r.style_name} />
+      ),
+    },
     { title: "博主名", dataIndex: "blogger_nickname", width: 120, render: (v) => v || "—" },
+    { title: "合作模式", dataIndex: "cooperation_mode", width: 90, render: (v) => v || "—" },
     { title: "结算单号", dataIndex: "settlement_no", width: 150 },
     { title: "金额", dataIndex: "amount", width: 100, render: money },
-    { title: "付款金额", dataIndex: "payment_amount", width: 110, render: money },
+    { title: "应付", dataIndex: "total_amount", width: 100, render: money },
+    { title: "实付", dataIndex: "payment_amount", width: 100, render: money },
+    {
+      title: "调整说明",
+      dataIndex: "payment_adjust_note",
+      width: 160,
+      ellipsis: { showTitle: false },
+      render: (v: string | null) =>
+        v ? (
+          <Tooltip title={v} placement="topLeft">
+            <span>{v}</span>
+          </Tooltip>
+        ) : (
+          dash
+        ),
+    },
     {
       title: "付款日期",
       dataIndex: "payment_date",
       width: 110,
       render: (v) => v || "—",
     },
-    { title: "总成本", dataIndex: "total_amount", width: 100, render: money },
+    {
+      title: "收款码",
+      dataIndex: "payment_qr_signed_url",
+      width: 80,
+      render: (v: string | null) =>
+        v ? <Image src={v} alt="收款码" width={40} height={40} style={{ objectFit: "cover" }} /> : dash,
+    },
     {
       title: "付款图片",
       width: 90,
@@ -241,55 +274,55 @@ export function SettlementListPage() {
       render: (v: string) => <Tag color={statusColor[v]}>{v}</Tag>,
     },
     { title: "备注", dataIndex: "remark", width: 140, render: (v) => v || "—" },
-    {
-      title: "操作",
-      width: 110,
-      fixed: "right",
-      render: (_, record) => {
-        const s = record.settlement_status;
-        const items = [
+    ...(showOperations
+      ? [
           {
-            key: "approve",
-            label: "核查通过",
-            disabled: s !== "待核查",
-            onClick: () => approveMutation.mutate(record.id),
+            title: "操作",
+            key: "operations",
+            width: 110,
+            fixed: "right" as const,
+            render: (_: unknown, record: Settlement) => {
+              const items = menus.get(record.id) ?? [];
+              if (items.length === 0) return null;
+              return (
+                <Dropdown menu={{ items }} trigger={["click"]}>
+                  <Button type="link" size="small">
+                    操作 <DownOutlined />
+                  </Button>
+                </Dropdown>
+              );
+            },
           },
-          {
-            key: "reject",
-            label: "驳回",
-            danger: true,
-            disabled: s !== "待核查",
-            onClick: () => openReject(record),
-          },
-          {
-            key: "amount",
-            label: "填付款金额",
-            disabled: s !== "待付款",
-            onClick: () => openAmount(record),
-          },
-          {
-            key: "extra",
-            label: "增加结算项",
-            disabled: s !== "待付款",
-            onClick: () => openExtra(record),
-          },
-          {
-            key: "proof",
-            label: "上传付款凭证",
-            disabled: s !== "待财务付款",
-            onClick: () => openProof(record),
-          },
-        ];
-        return (
-          <Dropdown menu={{ items }} trigger={["click"]}>
-            <Button type="link" size="small">
-              操作 <DownOutlined />
-            </Button>
-          </Dropdown>
-        );
-      },
-    },
+        ]
+      : []),
   ];
+
+  /** 单据信息（7d-3）：推广单的发布链接、备注、推广驳回原因、重提说明；不含收件与发货。 */
+  function docInfo(r: Settlement) {
+    return (
+      <Descriptions
+        size="small"
+        column={1}
+        title="单据信息"
+        items={[
+          {
+            key: "publish_url",
+            label: "发布链接",
+            children: r.publish_url ? (
+              <a href={r.publish_url} target="_blank" rel="noreferrer" style={{ wordBreak: "break-all" }}>
+                {r.publish_url}
+              </a>
+            ) : (
+              dash
+            ),
+          },
+          { key: "remark", label: "推广备注", children: r.promotion_remark || dash },
+          { key: "review_reason", label: "推广驳回原因", children: r.promotion_review_reason || dash },
+          { key: "resubmit_note", label: "重提说明", children: r.promotion_resubmit_note || dash },
+        ]}
+      />
+    );
+  }
 
   return (
     <Card
@@ -312,9 +345,10 @@ export function SettlementListPage() {
       <Space style={{ marginBottom: 16 }} wrap>
         <Select
           placeholder="结算状态"
+          aria-label="结算状态"
           allowClear
-          style={{ width: 140 }}
-          options={STATUS.map((s) => ({ label: s, value: s }))}
+          style={{ width: 160 }}
+          options={STATUS.map((s) => ({ label: STATUS_LABEL[s] ?? s, value: s }))}
           onChange={(v) =>
             setFilters((f) => ({ ...f, settlement_status: v, page: 1 }))
           }
@@ -325,8 +359,9 @@ export function SettlementListPage() {
         size="small"
         loading={isLoading}
         columns={columns}
-        dataSource={data?.items ?? []}
-        scroll={{ x: 1700 }}
+        dataSource={rows}
+        expandable={{ expandedRowRender: docInfo }}
+        scroll={{ x: 2200 }}
         pagination={{
           current: data?.page ?? 1,
           pageSize: data?.page_size ?? 20,
@@ -335,6 +370,13 @@ export function SettlementListPage() {
           onChange: (page, page_size) =>
             setFilters((f) => ({ ...f, page, page_size })),
         }}
+      />
+
+      <LineDrawer
+        lineId={lineRow?.line_id ?? null}
+        onClose={() => setLineRow(null)}
+        goodsName={lineRow ? lineRow.display_short_name ?? lineRow.style_name : null}
+        bloggerName={lineRow?.blogger_nickname}
       />
 
       <Modal
@@ -349,53 +391,24 @@ export function SettlementListPage() {
           form={rejectForm}
           layout="vertical"
           onFinish={(v) =>
-            target && rejectMutation.mutate({ id: target.id, reason: v.reason })
+            target && rejectMutation.mutate({ id: target.id, reason: v.reason.trim() })
           }
         >
           <Form.Item
             name="reason"
             label="驳回原因"
-            rules={[{ required: true, message: "请输入驳回原因" }]}
+            rules={[
+              { required: true, whitespace: true, message: "请输入驳回原因" },
+              { max: 2000, message: "驳回原因最多 2000 字" },
+            ]}
+            extra="驳回后推广单转「结款驳回」，PR 改好后重提"
           >
-            <Input.TextArea rows={3} placeholder="请填写驳回原因" />
+            <Input.TextArea rows={3} maxLength={2000} showCount placeholder="请填写驳回原因" />
           </Form.Item>
         </Form>
       </Modal>
 
-      <Modal
-        title="填写付款金额"
-        open={amountOpen}
-        onCancel={() => setAmountOpen(false)}
-        onOk={() => amountForm.submit()}
-        confirmLoading={amountMutation.isPending}
-        destroyOnHidden
-      >
-        <Form
-          form={amountForm}
-          layout="vertical"
-          onFinish={(v) =>
-            target &&
-            amountMutation.mutate({
-              id: target.id,
-              amount: String(v.payment_amount),
-            })
-          }
-        >
-          <Form.Item
-            name="payment_amount"
-            label="付款金额"
-            rules={[{ required: true, message: "请输入付款金额" }]}
-          >
-            <InputNumber
-              min={0}
-              precision={2}
-              style={{ width: "100%" }}
-              prefix="¥"
-              placeholder="实际付款金额"
-            />
-          </Form.Item>
-        </Form>
-      </Modal>
+      <PaymentAmountModal target={amountTarget} onClose={() => setAmountTarget(null)} onChanged={refresh} />
 
       <Modal
         title="增加结算项"
@@ -442,40 +455,7 @@ export function SettlementListPage() {
         </Form>
       </Modal>
 
-      <Modal
-        title="上传付款凭证"
-        open={proofOpen}
-        onCancel={() => setProofOpen(false)}
-        onOk={() => proofForm.submit()}
-        confirmLoading={uploading}
-        destroyOnHidden
-      >
-        <Form form={proofForm} layout="vertical" onFinish={submitProof}>
-          <Form.Item
-            name="payment_date"
-            label="付款日期"
-            rules={[{ required: true, message: "请选择付款日期" }]}
-          >
-            <DatePicker style={{ width: "100%" }} />
-          </Form.Item>
-          <Form.Item label="付款截图" required>
-            <Upload
-              beforeUpload={(file) => {
-                setProofFile(file as File);
-                return false;
-              }}
-              maxCount={1}
-              accept={PAYMENT_PROOF_MIME_TYPES.join(",")}
-              onRemove={() => setProofFile(null)}
-            >
-              <Button icon={<UploadOutlined />}>选择图片</Button>
-            </Upload>
-            <Typography.Text style={{ color: "#475569", fontSize: 12 }}>
-              支持 JPG、PNG、WebP，不超过 10MB
-            </Typography.Text>
-          </Form.Item>
-        </Form>
-      </Modal>
+      <PaymentProofModal target={proofTarget} onClose={() => setProofTarget(null)} onChanged={refresh} />
     </Card>
   );
 }

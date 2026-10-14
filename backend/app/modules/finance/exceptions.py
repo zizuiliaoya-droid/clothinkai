@@ -1,4 +1,4 @@
-"""U05 finance 模块业务异常（18 个）。
+"""U05 finance 模块业务异常（19 个）。
 
 继承自 ``core/exceptions.py`` 的 base 异常。
 ``FieldPermissionDenied`` 复用自 ``modules/product/exceptions``（与 U03/U04 同模式）。
@@ -60,6 +60,16 @@ class StateTransitionConflictError(IllegalStateTransitionError):
     """
 
     code = "SETTLEMENT_STATE_CONFLICT"
+    status_code = 409
+
+
+class SettlementTotalChangedError(StateTransitionConflictError):
+    """填实付时应付（``total_amount``）在读出之后被改了（如同时「增加结算项」），状态仍是待付款。
+
+    调整说明是否必填按读出的应付判，应付一变这次判断就作废，要用户看着新应付重填。
+    """
+
+    code = "SETTLEMENT_TOTAL_CHANGED"
     status_code = 409
 
 
@@ -206,5 +216,6 @@ __all__ = [
     "SequenceOverflowError",
     "SettlementNoConflictError",
     "SettlementNotFoundError",
+    "SettlementTotalChangedError",
     "StateTransitionConflictError",
 ]

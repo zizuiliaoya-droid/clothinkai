@@ -51,6 +51,7 @@ from app.modules.promotion.schemas import (
     PromotionResubmitRequest,
     PromotionReturnWaybillRequest,
     PromotionReviewRequest,
+    PromotionSettlementResubmitRequest,
     PromotionUpdate,
     RetrospectiveConfirmRequest,
     RetrospectiveResponse,
@@ -363,7 +364,8 @@ async def recall_failure(
 @router.post(
     "/promotions/{promotion_id}/review",
     response_model=PromotionResponse,
-    dependencies=[require_permission("promotion.review", "approve")],
+    # 独立一级域（流程线 4.3，默 6）：PR 的 promotion.*:* 命中不了，PR 完全没有审核权
+    dependencies=[require_permission("promotion_review", "approve")],
 )
 async def review_promotion(
     promotion_id: UUID,
@@ -371,17 +373,19 @@ async def review_promotion(
     user: CurrentActiveUser,
     service: PromotionServiceDep,
 ) -> PromotionResponse:
-    """EP05-S13 PR 主管审核（approve / reject）.
+    """EP05-S13 PR 主管审核（approve / reject），流程线 3.4 R2 ~ R4。
 
-    approve 后按合作模式分三个出口（PRD V1.4 模块二）：
+    approve 按应付分流（与合作模式无关）：
 
-    - 寄拍：必须已上传博主寄回衣服单号，否则 422；通过后到待财务付款
-    - 送拍：直接到待财务付款
-    - 置换：直接到已付款，不发 SettlementRequested（没有钱要付，不建结款单）
+    - 服务费 = 0：直接已结款（R3），写 ``settled_at``，不发 SettlementRequested、不建结款单
+    - 服务费 > 0：要收款码（缺 → 422 ``FLOW_GATE_MISSING``），发 SettlementRequested，
+      结款单直接建在待付款（R2）
+    - 已有导入的已付款结款单：推广单直接记已付款、不发事件；已有其他状态的结款单 → 409
+      ``SETTLEMENT_ALREADY_EXISTS``（R2 ⑥）
+    - 寄拍要有寄回单号（或召回成功且有召回寄回截图），缺 → 422 ``FLOW_GATE_MISSING``
 
-    驳回要同时给 review_reason 与 review_reason_category（三选一）；通过时不改这两列
-    （保留最近一次驳回，重提后通过仍看得到上一轮驳回原因，7a-4）。
-    禁止自审（reviewer != pr_id）。
+    响应带 ``review_outcome``。驳回要同时给 review_reason 与 review_reason_category（三选一）；
+    通过时不改这两列（保留最近一次驳回，7a-4）。禁止自审 → 403 ``SELF_REVIEW_FORBIDDEN``。
     """
     return await service.review(promotion_id, payload, user)
 
@@ -405,6 +409,57 @@ async def resubmit_promotion(
     - 上一轮驳回原因保留，不清
     """
     return await service.resubmit(promotion_id, payload, user)
+
+
+@router.post(
+    "/promotions/{promotion_id}/settlement/resubmit",
+    response_model=PromotionResponse,
+    dependencies=[require_permission("promotion", "write")],
+)
+async def resubmit_settlement(
+    promotion_id: UUID,
+    payload: PromotionSettlementResubmitRequest,
+    user: CurrentActiveUser,
+    service: PromotionServiceDep,
+) -> PromotionResponse:
+    """流程线 R7 结款重提：财务驳回结款单后，推广单 结款驳回 → 待付款，结款单 已驳回 → 待付款.
+
+    - 只在推广单 = 结款驳回（其余 422 ILLEGAL_STATE_TRANSITION）；要有收款码（缺 → 422 FLOW_GATE_MISSING）
+    - 说明 note 必填（≤ 2000 字），进时间线
+    - 同事务发 ``SettlementResubmitted``：结款单清空实付与调整说明，由财务重新填；结款单不在已驳回 → 409，整笔回滚
+    - 与 7a 的 ``/resubmit`` 分开：那个是推广被主管驳回
+    """
+    return await service.resubmit_settlement(promotion_id, payload, user)
+
+
+@router.post(
+    "/promotions/{promotion_id}/settlement-chat",
+    response_model=PromotionResponse,
+    dependencies=[require_permission("promotion", "write")],
+)
+async def upload_settlement_chat(
+    promotion_id: UUID,
+    user: CurrentActiveUser,
+    service: PromotionServiceDep,
+    file: Annotated[UploadFile, File(description="结款聊天截图（JPG / PNG / WebP）")],
+) -> PromotionResponse:
+    """流程线 R9 上传结款聊天截图：财务付款后，推广单 已付款 → 已结款.
+
+    - 只在推广单 = 已付款（其余 422 ILLEGAL_STATE_TRANSITION）；截图必传（不合格 422
+      SETTLEMENT_CHAT_SCREENSHOT_REQUIRED）
+    - 同事务写截图、``settled_at`` 与时间线 ``promotion.settled``；后端代传，失败删对象
+    """
+    try:
+        data = await file.read(10 * 1024 * 1024 + 1)
+    finally:
+        await file.close()
+    return await service.upload_settlement_chat(
+        promotion_id,
+        filename=file.filename,
+        mime_type=file.content_type,
+        data=data,
+        user=user,
+    )
 
 
 @router.post(
@@ -482,7 +537,8 @@ async def promotion_amount_log(
 @router.post(
     "/promotions/{promotion_id}/metrics",
     response_model=PromotionResponse,
-    dependencies=[require_permission("promotion.retro", "write")],
+    # 流程线 3.7：从 promotion.retro:write 改名，PR / 主管的 promotion.*:* 照样命中，不入册、不授权
+    dependencies=[require_permission("promotion.metrics", "write")],
 )
 async def record_metrics(
     promotion_id: UUID,
@@ -493,9 +549,9 @@ async def record_metrics(
     comment_count: Annotated[int, Form(ge=0)],
     screenshot: Annotated[UploadFile, File(description="7 天数据截图")],
 ) -> PromotionResponse:
-    """录发布满 7 天的数据，推进到「待复盘」。
+    """录 7 天数据（已结款且发文满 7 天，只录一次；过渡期仍把复盘 未开始 推进到「待复盘」）。
 
-    PRD「已结款 → 发布满 7 天，PR 录入点赞/收藏/评论 + 截图 → 待复盘」。走 multipart
+    门槛不满足 → 422 ``METRICS_NOT_AVAILABLE_YET``（带 ``available_from``、``blocked_by``）。走 multipart
     是因为截图必传，三个指标和图得在同一个请求里 —— 分两步会出现「数字录了图没传」
     的中间态。
     """

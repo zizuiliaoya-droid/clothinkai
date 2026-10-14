@@ -4,7 +4,8 @@
 
 - ``POST /api/promotions/``、``DELETE /api/promotions/{id}`` 路由层改挂它，PR → 403 ``PERMISSION_DENIED``；
 - 导入 ``manual_promotion`` 的上传与重试按来源判它（``importer/access.py``），其他来源（博主）不受影响；
-- 停用另按矩阵 ``deactivate`` 判：A ~ D、G 列主管能停，结款单生成后（E / F / H）只有管理员；已停用的单 404（同详情）。
+- 停用另按矩阵 ``deactivate`` 判：A ~ D、G 列主管能停，结款单生成后（E / F / H）只有管理员；已停用的单 404（同详情）；
+  结款单待付款 / 待财务付款时谁都不能停（收尾 L3，409 ``PROMOTION_SETTLEMENT_IN_PROGRESS``）。
 
 主管新建默认不进发货（``need_shipping`` 不勾 → ``ship_status`` NULL，「待发货」筛不到），勾了才是待发货。
 HTTP 级，角色用 ``flow_users``（迁移 seed 的真实角色）。
@@ -314,3 +315,133 @@ class TestDeactivateScope:
             resp = await c.delete(f"/api/promotions/{promo.id}")
         assert resp.status_code == 204, resp.text
         assert await _is_active(session, promo.id) is False
+
+
+async def _with_settlement(
+    flow_users: Any,
+    product_factory: Any,
+    blogger_factory: Any,
+    promotion_factory: Any,
+    settlement_factory: Any,
+    *,
+    promotion_status: str,
+    settlement_status: str,
+) -> tuple[UUID, UUID]:
+    """已发布的推广单 + 它的结款单，两边状态按参数给（结款单状态与推广单结款状态一一对应）。"""
+    style = await product_factory.style()
+    blogger = await blogger_factory.blogger()
+    promo = await promotion_factory.promotion(
+        style=style,
+        blogger=blogger,
+        pr=flow_users.pr,
+        internal_code=f"DEPS{uuid4().hex[:8].upper()}",
+        publish_status="已发布",
+        settlement_status=promotion_status,
+    )
+    s = await settlement_factory.settlement(
+        style=style, blogger=blogger, promotion=promo, settlement_status=settlement_status
+    )
+    return promo.id, s.id
+
+
+async def _states(
+    session: AsyncSession, promotion_id: UUID, settlement_id: UUID
+) -> tuple[str, str]:
+    """（推广单结款状态，结款单状态）。"""
+    row = await session.execute(
+        sa_text(
+            "SELECT p.settlement_status, s.settlement_status FROM promotion p "
+            "JOIN settlement s ON s.promotion_id = p.id WHERE p.id = :pid AND s.id = :sid"
+        ),
+        {"pid": promotion_id, "sid": settlement_id},
+    )
+    a, b = row.one()
+    return str(a), str(b)
+
+
+async def _deactivate(c: AsyncClient, promotion_id: UUID, via: str) -> Any:
+    if via == "delete":
+        return await c.delete(f"/api/promotions/{promotion_id}")
+    return await c.patch(f"/api/promotions/{promotion_id}", json={"is_active": False})
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+class TestDeactivateSettlementGate:
+    """收尾 L3：有进行中的结款单（待付款 / 待财务付款）不能停用，DELETE 与 PATCH ``is_active`` 两条路都挡。
+
+    管理员在 E 列有停用格（11-15），所以用管理员发起：挡住它的只能是这道门，不是矩阵。
+    """
+
+    @pytest.mark.parametrize("via", ["delete", "patch"])
+    @pytest.mark.parametrize("settlement_status", ["待付款", "待财务付款"])
+    async def test_in_progress_settlement_blocks_deactivate(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        as_user: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        settlement_factory: Any,
+        settlement_status: str,
+        via: str,
+    ) -> None:
+        pid, sid = await _with_settlement(
+            flow_users,
+            product_factory,
+            blogger_factory,
+            promotion_factory,
+            settlement_factory,
+            promotion_status="待付款",
+            settlement_status=settlement_status,
+        )
+        await as_user(flow_users.admin)
+        async with _client() as c:
+            resp = await _deactivate(c, pid, via)
+        assert resp.status_code == 409, resp.text
+        assert (resp.json()["code"], resp.json()["message"]) == (
+            "PROMOTION_SETTLEMENT_IN_PROGRESS",
+            "这张推广单有进行中的结款单，请先让财务驳回结款单再停用",
+        )
+        assert await _is_active(session, pid) is True
+        assert await _states(session, pid, sid) == ("待付款", settlement_status)
+        assert await _updated_events(session, pid) == []
+
+    @pytest.mark.parametrize("via", ["delete", "patch"])
+    @pytest.mark.parametrize(
+        ("promotion_status", "settlement_status"),
+        [("已付款", "已付款"), ("结款驳回", "已驳回")],
+    )
+    async def test_closed_settlement_allows_deactivate(
+        self,
+        session: AsyncSession,
+        flow_users: Any,
+        as_user: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        settlement_factory: Any,
+        promotion_status: str,
+        settlement_status: str,
+        via: str,
+    ) -> None:
+        """结款单已付款 / 已驳回：管理员照常停用，结款单不动。"""
+        pid, sid = await _with_settlement(
+            flow_users,
+            product_factory,
+            blogger_factory,
+            promotion_factory,
+            settlement_factory,
+            promotion_status=promotion_status,
+            settlement_status=settlement_status,
+        )
+        await as_user(flow_users.admin)
+        async with _client() as c:
+            resp = await _deactivate(c, pid, via)
+        assert resp.status_code == (204 if via == "delete" else 200), resp.text
+        assert await _is_active(session, pid) is False
+        assert await _states(session, pid, sid) == (promotion_status, settlement_status)
+        events = await _updated_events(session, pid)
+        assert [e["payload"]["diff"]["is_active"] for e in events] == [
+            {"before": True, "after": False}
+        ]

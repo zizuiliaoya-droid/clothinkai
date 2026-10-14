@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -60,6 +61,10 @@ async def _make(
     blogger = await blogger_factory.blogger()
     kw.setdefault("publish_status", "已发布")
     kw.setdefault("settlement_status", "待核查")
+    # 流程线 PR-6：应付 > 0 审核通过要收款码；置换的服务费恒为 0（建单时压 0），按应付走 R3
+    kw.setdefault("payment_qr", True)
+    if kw.get("cooperation_mode") == "置换":
+        kw.setdefault("quote_amount", Decimal("0.00"))
     promotion = await promotion_factory.promotion(
         style=style,
         blogger=blogger,
@@ -461,7 +466,7 @@ class TestResubmit:
         ("cooperation_mode", "approve_reason", "expected_status"),
         [
             (None, None, "待付款"),
-            ("置换", None, "已付款"),
+            ("置换", None, "已结款"),
             # 接口允许通过时带说明（前端不传）：同样不覆盖上一轮的驳回说明
             (None, "通过备注", "待付款"),
         ],
@@ -518,7 +523,7 @@ class TestResubmit:
             settlement_events = [
                 e.promotion_id for e in event_capture if e.event_type == "SettlementRequested"
             ]
-            assert settlement_events == ([] if expected_status == "已付款" else [ctx.promotion.id])
+            assert settlement_events == ([] if expected_status == "已结款" else [ctx.promotion.id])
 
             row = await _reload(session, ctx.promotion.id)
             assert row.settlement_status == expected_status
