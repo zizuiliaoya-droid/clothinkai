@@ -235,6 +235,25 @@ class PromotionRepository:
             return None
         return promotion
 
+    async def get_for_deactivation(
+        self, promotion_id: UUID, *, tenant_id: UUID
+    ) -> Promotion | None:
+        """停用先锁推广行，串行于审核/重提先 UPDATE 推广、再写结款的同事务链。
+
+        持锁直到外层事务提交；等待后刷新 identity map，按当前状态判矩阵和结款门。
+        """
+        stmt = (
+            select(Promotion)
+            .where(
+                Promotion.id == promotion_id,
+                Promotion.tenant_id == tenant_id,
+                Promotion.is_active.is_(True),
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        return (await self._session.execute(stmt)).scalar_one_or_none()
+
     async def get_payment_attachment_refs(
         self, *, tenant_id: UUID, promotion_ids: list[UUID]
     ) -> dict[UUID, PromotionAttachmentRefs]:
