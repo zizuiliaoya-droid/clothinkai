@@ -11,9 +11,11 @@
 from __future__ import annotations
 
 import logging
+from decimal import Decimal
 from typing import Any
 
 from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from slowapi.errors import RateLimitExceeded
@@ -43,7 +45,12 @@ async def _validation_exception_handler(
         content=_payload(
             code="VALIDATION_ERROR",
             message="请求数据校验失败",
-            details={"errors": exc.errors()},
+            # Pydantic ctx 可能带 Decimal 边界或 ValueError；保留可读值，避免转 float 丢精度。
+            details={
+                "errors": jsonable_encoder(
+                    exc.errors(), custom_encoder={Decimal: str, ValueError: str}
+                )
+            },
         ),
     )
 
