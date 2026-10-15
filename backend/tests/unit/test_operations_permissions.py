@@ -125,10 +125,11 @@ class TestOperationsRoleSpec:
         perms = _ops_now()
         assert "product.*:*" in perms
         assert "product.*:read" in perms
-        # 流程线 M2（063）另加看全部谈款（只读，service 层判，不在任何路由依赖上）
+        # 流程线 M2（063）另加看全部谈款（只读，service 层判，不在任何路由依赖上）；
+        # 7e R7（066）另加平台指标只读
         assert (
             set(perms) - set(_OPS_BASELINE_DEFAULT)
-            == {"product.*:*", "negotiation_all:read"} | _OPS_061_ADDED
+            == {"product.*:*", "negotiation_all:read", "metric_config:read"} | _OPS_061_ADDED
         )
         assert set(_OPS_BASELINE_DEFAULT) <= set(perms)
 
@@ -223,6 +224,8 @@ class TestNoSpillOutsideProduct:
         changed = {(s, a) for s, a in checks if old.has(s, a) != new.has(s, a)}
         assert changed, "运营应该多了商品写权限"
         allowed = {tuple(p.split(":", 1)) for p in _OPS_061_ADDED}
+        # 066（7e R7）：运营能看平台指标配置（GET /api/settings/promotion-platforms），不能改
+        allowed.add(("metric_config", "read"))
         outside = {
             (s, a) for s, a in changed if s.split(".", 1)[0] != "product" and (s, a) not in allowed
         }

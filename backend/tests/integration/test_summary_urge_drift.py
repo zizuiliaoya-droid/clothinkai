@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.modules.report.summary_refresh_service as refresh_module
 from app.core.tenancy import tenant_id_ctx
+from app.modules.metric_config.service import PlatformMetricSettingService
 from app.modules.promotion.urge_calculator import DEFAULT_TENANT_TZ, get_today
 from app.modules.report.advanced_repository import WorkProgressRepository
 from app.modules.report.summary_models import PrWorkProgressSummary
@@ -103,6 +104,7 @@ async def _live_urge_counts(session: AsyncSession, tenant: Any, day: date) -> di
         date_to=day,
         today=TODAY,
         thresholds=await UrgeService(session).get_urge_thresholds(tenant.id),
+        metric_settings=await PlatformMetricSettingService(session).get_settings(tenant.id),
         by_goods=False,
     )
     return {c: sum(int(r[c]) for r in rows) for c in _URGE_COLS}

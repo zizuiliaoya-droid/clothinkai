@@ -5,7 +5,8 @@
 关键防御：
 - 显式 ``WHERE tenant_id = :tid``（测试引擎 bypass 角色 RLS OFF，全局聚合必须显式过滤）。
 - ``LIMIT QUALITY_AGG_LIMIT`` 截断超大历史，保证 ≤200ms。
-- CPL 折算复用 U04 ``metrics_calculator``（平台系数）；hit 用原始 like_count 与阈值比较。
+- CPL 折算复用 U04 ``metrics_calculator``（平台系数读租户配置 ``settings``，调用方按租户读一次
+  传进来，不给默认值）；hit 用原始 like_count 与同一份配置里该平台的阈值比较。
 - safe_div（复用 U08 services/metric/common）分母 0/None→None。
 """
 
@@ -24,7 +25,7 @@ from app.modules.blogger.tag_config import (
     TAG_BESTSELLER,
     TAG_HIGH_VALUE,
 )
-from app.modules.promotion.legacy_settings import HIT_THRESHOLD_LIKE_COUNT
+from app.modules.metric_config.settings import PlatformMetricSettings
 from app.modules.promotion.metrics_calculator import (
     calculate_cpl,
     calculate_effective_like_count,
@@ -52,7 +53,11 @@ async def _load_promotions(
 
 
 async def avg_cpl_for_blogger(
-    blogger_id: UUID, session: AsyncSession, tenant_id: UUID
+    blogger_id: UUID,
+    session: AsyncSession,
+    tenant_id: UUID,
+    *,
+    settings: PlatformMetricSettings,
 ) -> Decimal | None:
     """该博主历史推广的平均单赞成本（CPL）。
 
@@ -62,7 +67,9 @@ async def avg_cpl_for_blogger(
     rows = await _load_promotions(blogger_id, session, tenant_id)
     cpls: list[Decimal] = []
     for p in rows:
-        eff = calculate_effective_like_count(platform=p.platform, like_count=p.like_count)
+        eff = calculate_effective_like_count(
+            platform=p.platform, like_count=p.like_count, settings=settings
+        )
         # 与推广单、博主卡片同一口径：总推广成本 ÷ 折算点赞，录过 7 天数据才算
         cpl = calculate_cpl(
             total_promo_cost=p.total_promo_cost,
@@ -77,9 +84,13 @@ async def avg_cpl_for_blogger(
 
 
 async def hit_rate_for_blogger(
-    blogger_id: UUID, session: AsyncSession, tenant_id: UUID
+    blogger_id: UUID,
+    session: AsyncSession,
+    tenant_id: UUID,
+    *,
+    settings: PlatformMetricSettings,
 ) -> Decimal | None:
-    """该博主历史推广的爆文率（is_hit 数 / 总数）。
+    """该博主历史推广的爆文率（is_hit 数 / 总数）。爆文按平台阈值判（``settings``）。
 
     无推广样本 → None。
     """
@@ -89,20 +100,24 @@ async def hit_rate_for_blogger(
     hit_count = sum(
         1
         for p in rows
-        if calculate_is_hit(like_count=p.like_count, threshold=HIT_THRESHOLD_LIKE_COUNT)
+        if calculate_is_hit(platform=p.platform, like_count=p.like_count, settings=settings)
     )
     return safe_div(hit_count, len(rows), quantize=Decimal("0.0001"))
 
 
 async def compute_quality_tags(
-    blogger_id: UUID, session: AsyncSession, tenant_id: UUID
+    blogger_id: UUID,
+    session: AsyncSession,
+    tenant_id: UUID,
+    *,
+    settings: PlatformMetricSettings,
 ) -> list[str]:
-    """按聚合结果生成质量标签（多标签可叠加）。"""
+    """按聚合结果生成质量标签（多标签可叠加）。``settings`` = 租户的平台指标，调用方读一次。"""
     tags: list[str] = []
-    cpl = await avg_cpl_for_blogger(blogger_id, session, tenant_id)
+    cpl = await avg_cpl_for_blogger(blogger_id, session, tenant_id, settings=settings)
     if cpl is not None and cpl <= HIGH_CPL_THRESHOLD:
         tags.append(TAG_HIGH_VALUE)
-    hit = await hit_rate_for_blogger(blogger_id, session, tenant_id)
+    hit = await hit_rate_for_blogger(blogger_id, session, tenant_id, settings=settings)
     if hit is not None and hit >= HIT_RATE_THRESHOLD:
         tags.append(TAG_BESTSELLER)
     return tags

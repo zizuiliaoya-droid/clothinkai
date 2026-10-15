@@ -65,10 +65,8 @@ def _sqlstate(exc: DBAPIError) -> str | None:
     return None
 
 
-async def invalidate_summary_coverage(
-    session: AsyncSession, *, tenant_id: UUID, reason: str
-) -> int:
-    """在当前事务里清掉 ``tenant_id`` 的汇总覆盖，返回删掉的行数。不 commit。
+async def acquire_summary_refresh_lock(session: AsyncSession, *, tenant_id: UUID) -> None:
+    """先串行再读现值：在当前事务拿同一租户的刷新锁，不清覆盖、不 commit。
 
     等刷新锁超时抛 ``SummaryRefreshBusyError``；此时事务已中止，调用方必须回滚。
     """
@@ -82,6 +80,17 @@ async def invalidate_summary_coverage(
         raise
     # 拿到锁就还原：业务事务后面的语句不该受 30s 等锁上限影响
     await session.execute(_SET_TIMEOUT_SQL, {"value": original})
+
+
+async def invalidate_summary_coverage(
+    session: AsyncSession, *, tenant_id: UUID, reason: str
+) -> int:
+    """在当前事务里拿刷新锁并清覆盖，返回删掉的行数。不 commit。
+
+    已持有同一锁时事务内重入，保留本接口给其他调用方的锁保护。
+    等锁超时抛 ``SummaryRefreshBusyError``；调用方必须回滚。
+    """
+    await acquire_summary_refresh_lock(session, tenant_id=tenant_id)
     result = await session.execute(_DELETE_SQL, {"tenant_id": tenant_id})
     rows = int(getattr(result, "rowcount", 0) or 0)
     log.info(
@@ -91,4 +100,9 @@ async def invalidate_summary_coverage(
     return rows
 
 
-__all__ = ["LOCK_TIMEOUT", "invalidate_summary_coverage", "summary_lock_key"]
+__all__ = [
+    "LOCK_TIMEOUT",
+    "acquire_summary_refresh_lock",
+    "invalidate_summary_coverage",
+    "summary_lock_key",
+]

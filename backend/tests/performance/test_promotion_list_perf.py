@@ -17,6 +17,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.tenancy import tenant_id_ctx
+from app.modules.metric_config.settings import PlatformMetricSettings
 from app.modules.promotion.repository import (
     PromotionListFilters,
     PromotionRepository,
@@ -68,6 +69,7 @@ async def test_list_with_cte_smoke_perf(
                 today=get_today(),
                 urge_threshold_days=10,
                 important_threshold_days=3,
+                metric_settings=PlatformMetricSettings.defaults(),
             )
             elapsed_ms = (time.perf_counter() - start) * 1000
             max_ms = max(max_ms, elapsed_ms)

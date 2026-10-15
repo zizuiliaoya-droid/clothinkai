@@ -38,7 +38,7 @@ class WecomScanService:
 
         阈值从 ``urge_config`` 读（PRD 改动 2「阈值后台可配」）。原来这里有一份
         ``_URGE_DAYS = 10 / _IMPORTANT_DAYS = 3``，和
-        ``promotion/legacy_settings.py`` 里的同名常量各写一遍 —— 双份真相，
+        推广模块旧常量文件里的同名常量各写一遍 —— 双份真相，
         谁改一边就不一致。现在两边都读同一张配置表。
 
         ``tenant_id`` 可选只为兼容既有调用：取不到就回落默认阈值，行为与改造前一致。

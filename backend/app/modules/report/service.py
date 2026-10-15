@@ -16,6 +16,7 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.metric_config.service import PlatformMetricSettingService
 from app.modules.promotion.urge_calculator import get_today
 from app.modules.report.domain import (
     level_overdue_rate,
@@ -41,6 +42,7 @@ class PublishProgressService:
     def __init__(self, session: AsyncSession) -> None:
         self._repo = PublishProgressRepository(session)
         self._urge = UrgeService(session)
+        self._metric = PlatformMetricSettingService(session)
 
     async def _common(self, tenant_id: UUID, time_range: tuple) -> dict[str, Any]:
         # 发文进度只数「超时」，结果与两个阈值无关；照样读租户配置，不再留一份写死的 10 / 3
@@ -51,6 +53,8 @@ class PublishProgressService:
             "date_to": time_range[1],
             "today": get_today(),
             **thresholds.sql_params(),
+            # 点赞折算系数读租户的平台指标配置（7e R7），每次请求读一次
+            "metric_settings": await self._metric.get_settings(tenant_id),
         }
 
     async def get_summary(

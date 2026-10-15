@@ -32,7 +32,7 @@ from app.core.db import TenantScopedModel
 class UrgeConfig(TenantScopedModel):
     """催发阈值（单租户单行）。
 
-    顺便收编了 ``promotion/legacy_settings.py`` 里的 ``URGE_THRESHOLD_DAYS`` 与
+    顺便收编了推广模块旧常量文件里的 ``URGE_THRESHOLD_DAYS`` 与
     ``IMPORTANT_THRESHOLD_DAYS`` —— 那两个常量在 ``wecom/scan_service.py`` 还被
     重复定义了一遍（``_URGE_DAYS`` / ``_IMPORTANT_DAYS``），双份真相谁改一边就不一致。
     """
@@ -61,7 +61,7 @@ class UrgeConfig(TenantScopedModel):
     urge_threshold_days: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default=text("10")
     )
-    """urge_status 的「档期内 / 催发」分界（原 legacy_settings.URGE_THRESHOLD_DAYS）。"""
+    """urge_status 的「档期内 / 催发」分界（原推广模块旧常量 URGE_THRESHOLD_DAYS）。"""
 
     important_threshold_days: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default=text("3")

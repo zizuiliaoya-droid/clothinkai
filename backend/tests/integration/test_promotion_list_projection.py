@@ -20,6 +20,7 @@ from sqlalchemy import text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.tenancy import tenant_id_ctx
+from app.modules.metric_config.settings import PlatformMetricSettings
 from app.modules.promotion.enums import CooperationMode, PublishStatus, SettlementStatus
 from app.modules.promotion.models import Promotion
 from app.modules.promotion.repository import PromotionListFilters as RepoFilters
@@ -127,6 +128,7 @@ class TestListProjection:
                 today=get_today(),
                 urge_threshold_days=10,
                 important_threshold_days=3,
+                metric_settings=PlatformMetricSettings.defaults(),
             )
             assert total >= 1
             listed = next(r.promotion for r in rows if r.promotion.id == pid)

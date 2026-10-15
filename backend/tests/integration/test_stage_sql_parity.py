@@ -19,6 +19,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.tenancy import tenant_id_ctx
+from app.modules.metric_config.settings import PlatformMetricSettings
 from app.modules.promotion.enums import (
     PublishStatus,
     RecallStatus,
@@ -228,6 +229,7 @@ async def test_list_with_cte_carries_stage(
             today=today,
             urge_threshold_days=TH.urge_days,
             important_threshold_days=TH.important_days,
+            metric_settings=PlatformMetricSettings.defaults(),
         )
         got = {r.promotion.id: r.stage for r in rows if r.promotion.id in expected}
         assert got == expected

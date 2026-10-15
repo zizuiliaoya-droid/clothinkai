@@ -126,6 +126,12 @@ REPORT_EXPORT_READ = "report.export:read"
 REPORT_STORE_DAILY_WRITE = "report.store_daily:write"
 REPORT_SUMMARY_REFRESH = "report.summary:refresh"
 
+# 7e R7 平台指标（迁移 066）：爆文阈值与点赞折算系数。独立一级域 metric_config，刻意不挂在
+# promotion. / report. 下 —— PR 的 promotion.*:* 会命中写权限，report.*:read 会捞走读权限。
+# 读：主管、运营；写：主管；管理员靠 *。
+METRIC_CONFIG_READ = "metric_config:read"
+METRIC_CONFIG_WRITE = "metric_config:write"
+
 
 # ---------------------------------------------------------------------------
 # 10 个预设角色
@@ -224,6 +230,8 @@ DEFAULT_ROLES: tuple[RoleSpec, ...] = (
             # 催发任务本身由 promotion.*:* 覆盖；阈值配置是独立域，要显式给
             URGE_CONFIG_READ,
             URGE_CONFIG_WRITE,
+            METRIC_CONFIG_READ,  # 066
+            METRIC_CONFIG_WRITE,  # 066
             RETRO_CONFIRM,
             FINANCE_REVIEW,
             "finance.settlement:read",
@@ -292,6 +300,7 @@ DEFAULT_ROLES: tuple[RoleSpec, ...] = (
             OPS_PLATFORM_LINK_WRITE,
             NEGOTIATION_READ,
             NEGOTIATION_ALL_READ,
+            METRIC_CONFIG_READ,  # 066：平台指标只读
         ),
     ),
     RoleSpec(
