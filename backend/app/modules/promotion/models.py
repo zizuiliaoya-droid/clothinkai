@@ -216,6 +216,8 @@ class Promotion(TenantScopedModel):
     retro_confirmed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    """完结唯一标记；系统条件更新写入，管理员编辑也不重开。"""
 
     note_title: Mapped[str | None] = mapped_column(String(255), nullable=True)
     remark: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -394,10 +396,16 @@ class Promotion(TenantScopedModel):
             name="ck_promotion_comment_count_nonneg",
         ),
         CheckConstraint(
-            "retro_status IN ('未开始', '待复盘', '待确认', '已完成')",
+            "retro_status IN ('未开始', '待复盘', '已完成')",
             name="ck_promotion_retro_status",
         ),
         Index("idx_promotion_retro_status", "tenant_id", "retro_status"),
+        Index(
+            "idx_promotion_completed",
+            "tenant_id",
+            completed_at.desc(),
+            postgresql_where=text("completed_at IS NOT NULL"),
+        ),
         CheckConstraint(
             "quote_amount >= 0",
             name="ck_promotion_quote_amount_nonneg",

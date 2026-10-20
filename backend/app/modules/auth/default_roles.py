@@ -90,6 +90,8 @@ URGE_CONFIG_WRITE = "urge_config:write"
 # promotion.review:approve 同一个处境。
 RETRO_WRITE = "promotion.retro:write"
 RETRO_CONFIRM = "promotion.retro:confirm"
+# 流程线 PR-7（067）：主管写完即完成。独立一级域，PR 的 promotion.*:* 不命中。
+PROMOTION_RETRO_WRITE = "promotion_retro:write"
 # 7a-1 款式下拉（款式列表 / 款式下的商品 / 颜色尺码）。PR 只给这一条窄 scope，
 # 不给 product.*:read（会连带成本表、字典等整个 product 域）。
 PRODUCT_STYLE_READ = "product.style:read"
@@ -233,6 +235,7 @@ DEFAULT_ROLES: tuple[RoleSpec, ...] = (
             METRIC_CONFIG_READ,  # 066
             METRIC_CONFIG_WRITE,  # 066
             RETRO_CONFIRM,
+            PROMOTION_RETRO_WRITE,
             FINANCE_REVIEW,
             "finance.settlement:read",
             "finance.settlement:write",
