@@ -4,19 +4,27 @@
 
 > 这份文件是执行台账。每批完成后更新状态与 PR 号，避免规划只存在于对话里。
 
-## 当前进度（交接用，2026-10-15）
+## 当前进度（交接用，2026-10-21）
+
+- **杭州正式生产**：10/20激活成功，入口 https://47.110.76.9，源码 `fe23ede` / revision066 / PG18.6；API / Web / worker / beat / PG / Redis六容器，仅Web公开80/443。用户明确接受10/15备份作为正式基线，旧站10/15后未再使用；首个本地 + 私有R2备份通过。旧Zeabur四业务应用已SUSPENDED，PG / Redis保留。详见[杭州发布与回退](../杭州发布与回退.md)。
+- **验收与存储边界**：R2仍承载附件与新备份，迁Aliyun OSS已登记、尚未完成；私有桶 / 精确新origin已核，18个ready附件完整读取与36次GET / PUT OPTIONS通过，不等于新上传通过。客户原密码登录和完整业务验收未完成；找到保存凭据不等于成功登录，密码恢复流程已停。
+- **维护现况**：北京时间11:00备份、08:00 / 20:00续期，随机≤5分钟；timer启用，未来自动轮次未验收、未配外部失败通知。下一次备份开始前已有累计达到10GiB则停止，不是存储硬限额；历史备份 / 审计不自动删除。原三项维护调度停用，新PG18 host备份替代；升级不能恢复旧不兼容备份任务。
+- **继续1007**：用户已要求继续开发。PR-7开发中，迁移067接066；PR-8无新增计划迁移，先开发验证完成再请求PR-7发布，PR-7合并后下一工作日内合PR-8，实际生产部署也须连续。PR-7过渡期保留旧运费追加项，PR-8启用R33同批停用；间隔内取消且已完结单逐单确认是否补提运费，不自动付款。
+- **后续排队**：R8无迁移、前置已满足，排在PR-7/8连续交付后，避免同时修改推广repo / API / 列表页；PR-9内容分类和PR-10阶段 / 矩阵收尾继续排队。周 / 月汇总表仍写无人读另开迁移清理，8c在7e后，包含列设置 / 拖排、5模块页签和已登记窄屏 / 图表 / 负数金额问题；7b第二步 / 7f仍暂缓。原待业务确认和已关闭口径保持。
+- **发布与验证**：杭州尚无合并自动部署链路，每次合并及每次生产写入分别须明确批准；已有一次性迁移包装不得重跑，升级须独立准备、审查并固定制品SHA。文档[PR #54](https://github.com/zizuiliaoya-droid/clothinkai/pull/54)仍open / draft，本次更新不等于合并或部署。本机Docker恢复失败已收束；CI验证方案已完成但尚未实际跑，不能把历史测试通过当PR-7本轮通过；CI PG16与生产PG18.6差异须补迁移兼容验收。
+- **数据窗与看板**：旧K4 / K5 / K6核对须解释停机、10/15恢复基线与新机任务空窗，不能因日期到期就判验收通过。独立1007看板仍在Zeabur，原地址HTTP200 / 服务RUNNING，未迁杭州；本机同步进程已停，最后成功北京时间10/15 01:28:48，元数据仍待修，不能据看板百分比或planned状态判断真实进度。
+
+以下保留10/15及更早的版本、通知与验收记录；当时“当前”状态均为历史语境，现行生产与发布指导以上述杭州状态为准。
 
 - **线上版本**：`main` = `origin/main` = `fe23ede`（PR #53 7e R7，10-15上线并即时核对）← `04eb450`（PR #52 流程线 PR-6，10-14 上线并核对）← `dcfbabf`（PR #51 7e R6，10-13 上线并核对）← `bc11032`（PR #50 7e R5，10-13 上线并核对）← `28003d9`（PR #49 流程线 PR-5，10-13 上线并核对）← `d357a3b`（PR #48 7e R4，10-13 上线并核对）← `6943e50`（PR #47 流程线 PR-4）← `29e4e39`（PR #46 7e R3）← `432a80c`（PR #45 文档；这次合并补上了 #44 漏掉的部署）← `393c019`（PR #44 流程线 PR-3）……，
-  alembic head `066_platform_metric_setting`，生产 10-15 01:04:42Z 已由 065 升到 066（链：056 → `057_7a_quick_fixes` → `058_8a_goods_master_data` → `059_8b_blogger_library` → `060_promotion_shipping` → `061_report_view_permissions` → `062_report_view_columns` → `063_negotiation_two_level` → `064_urge_complete` → `065_settlement_flow` → `066_platform_metric_setting`）。合并到 main 后 Zeabur
-  自动重新部署 backend / frontend / worker / beat 四个服务；backend 启动时先跑 `alembic upgrade head`，
-  迁移失败就起不来（`backend/Dockerfile`）。`.github/workflows/migrate.yml` 只是手动补跑通道
-- **已完成**：批次 0 ~ 5b-1e、两个修复、7b 第一步、7a（#32）、8a（#33），**第二波：流程线 PR-1（#36）、8a 补充（#35）、8b 博主库（#37）、流程线 PR-2（#40）、7e R1（#41）、7e R2（#43）、流程线 PR-3（#44）、7e R3（#46）、流程线 PR-4（#47）、7e R4（#48）、流程线 PR-5（#49）、7e R5（#50）、7e R6（#51）、流程线 PR-6（#52）、7e R7（#53）**，见下表与各小节；均有当时生产验收记录；R7当前连接异常见下文
-- **第二波进行中**（截至10-15 09:25，北京时间）：流程线 PR-1 ~ PR-6 已上线。PR-6 的 [PR #52](https://github.com/zizuiliaoya-droid/clothinkai/pull/52) 在用户回复「可以」后于 10-14 14:48:27Z（北京时间 22:48:27）squash 合并为 `04eb450e6755b94f756996569c5af2d7dd12a78f`；HEAD `48c8f2d` 四项 CI 全成功，065、四服务 RUNNING、ready、五分钟后 SQL / ACL / 同日 S4 核对均完成，见「流程线 PR-6」小节。最新待核查缺码阻断 0，flow6 分支 / worktree / 测试库已清理。
+  alembic head `066_platform_metric_setting`，生产 10-15 01:04:42Z 已由 065 升到 066（链：056 → `057_7a_quick_fixes` → `058_8a_goods_master_data` → `059_8b_blogger_library` → `060_promotion_shipping` → `061_report_view_permissions` → `062_report_view_columns` → `063_negotiation_two_level` → `064_urge_complete` → `065_settlement_flow` → `066_platform_metric_setting`）。当时Zeabur在合并到main后自动部署四应用，backend启动先跑迁移；此为旧环境历史，不再作为杭州升级方法
+- **已完成**：批次 0 ~ 5b-1e、两个修复、7b 第一步、7a（#32）、8a（#33），**第二波：流程线 PR-1（#36）、8a 补充（#35）、8b 博主库（#37）、流程线 PR-2（#40）、7e R1（#41）、7e R2（#43）、流程线 PR-3（#44）、7e R3（#46）、流程线 PR-4（#47）、7e R4（#48）、流程线 PR-5（#49）、7e R5（#50）、7e R6（#51）、流程线 PR-6（#52）、7e R7（#53）**，见下表与各小节；均有当时生产验收记录；R7当日连接异常见下文历史记录
+- **第二波历史进度**（截至10-15 09:25，北京时间）：流程线 PR-1 ~ PR-6 已上线。PR-6 的 [PR #52](https://github.com/zizuiliaoya-droid/clothinkai/pull/52) 在用户回复「可以」后于 10-14 14:48:27Z（北京时间 22:48:27）squash 合并为 `04eb450e6755b94f756996569c5af2d7dd12a78f`；HEAD `48c8f2d` 四项 CI 全成功，065、四服务 RUNNING、ready、五分钟后 SQL / ACL / 同日 S4 核对均完成，见「流程线 PR-6」小节。最新待核查缺码阻断 0，flow6 分支 / worktree / 测试库已清理。
   另一路 **7e 报表视图**（[设计](20261009-报表视图设计.md)）：R1 ~ R6 已上线；**R7 平台指标 [PR #53](https://github.com/zizuiliaoya-droid/clothinkai/pull/53)** 已获本轮「可以，继续」批准，于 2026-10-15 01:03:26Z（北京时间 09:03:26）squash 合并为 `fe23edebb0f6ab28729bbb903215ed364ea51884`。冻结 HEAD `8225aac`，066 接 065，最终本地后端 4044 passed / 90.05%、前端 616 tests，独评 APPROVED（0 HIGH / 0 MEDIUM / 0 LOW），四项 CI 全成功；四服务RUNNING、ready200，066默认值 / 三条授权 / 清覆盖34 / RLS / ACL / K2′即时只读验收通过；独立high复核无阻断，09:20复查首次发现连接异常（实际起点未确认），未能核对汇总恢复，当前健康未确认（见下条）。
-  后续迁移从 067 取；之后 PR-7 ~ PR-10、R8，8c 排在 7e 之后。R7 此次合并已获批，文档拟开 Draft PR 留存，连接问题核清前暂不请求合并，合并仍须单独批准；文档合并也会触发四服务部署。
+  后续迁移从 067 取；之后 PR-7 ~ PR-10、R8，8c 排在 7e 之后。R7当次合并已获批，当时文档拟开Draft PR并因连接问题暂不请求合并；文档合并当时也会触发Zeabur四服务。现有PR #54仍draft，杭州合并与部署分开审批。
   7e 上线前要业务方确认的三条已在 10-10 答复：爆文数按平台阈值，同意；毛利只给管理员看；聚合金额按报表读权限，同意（原话见「已关闭的确认项」）。店铺日报按日期并集只需通知。
   第二波的简报、计划、评审、报告在 `.agents/tasks/20261008-wave2/`（git 忽略）
-- **当前生产连接异常（10-15 09:20复查首次发现，实际起点未确认，北京时间）**：计划刷新时点后的只读SELECT返回 `CLUSTER_UNREACHABLE`，runtime日志请求超时，公开ready出现TLS关闭 / 连接超时。09:21控制面仍显示四新deployment RUNNING / 旧版REMOVED，这不能替代实际可用性。09:06即时验收事实保留，当前健康及:20汇总恢复尚未确认；编排方继续只读排查并询问是否服务器维护，未重启或写生产。截至北京时间09:25，第三次p78仍返回MCP isError / CLUSTER_UNREACHABLE，ready仍SSL失败；有限源码及已存日志诊断尚未确认因果。
+- **历史连接异常（旧Zeabur，10-15 09:20复查首次发现，实际起点未确认，北京时间）**：计划刷新时点后的只读SELECT返回 `CLUSTER_UNREACHABLE`，runtime日志请求超时，公开ready出现TLS关闭 / 连接超时。09:21控制面仍显示四新deployment RUNNING / 旧版REMOVED，这不能替代实际可用性。09:06即时验收事实保留，当前健康及:20汇总恢复尚未确认；编排方继续只读排查并询问是否服务器维护，未重启或写生产。截至北京时间09:25，第三次p78仍返回MCP isError / CLUSTER_UNREACHABLE，ready仍SSL失败；有限源码及已存日志诊断尚未确认因果。
 - **等业务方**（详见「待业务确认」）：用 **WPS** 打开聚水潭全量商品资料导一次（补简称 / 季节，并自动补款式主图）；
   主管先在博主页「标签字典」里建好博主标签再带标签导入；首次导入后处理冲突；运营重新登录拿新权限
 - **要通知（内测同事，7e R7，10-15上线）**：工作进度爆文数从统一 ≥500 改为按平台原始点赞阈值判断，推广列表 / 详情和博主「带货型」同口径，PR 爆文数可能减少。默认系数 / 阈值为小红书 1 / 1000、抖音 0.1 / 10000、快手 0.1 / 1000、B站 1 / 1000、得物 1 / 1000；默认折算系数与旧值相同。
@@ -1186,7 +1194,7 @@ flow6 远端 / 本地分支、worktree 和 clothing_erp_test_flow6 均删除；�
 
 清理阶段：R7远端 / 本地功能分支、worktree、精确PRE备份ref已删除，提交信息已归档ciwork，主node_modules前后269不变，当前仅main/docs1013。迁移前专库dump保留。**clothing_erp_test_rep7e7 与历史容器 rep7e7-s2 本轮均未清理，也未重新查询存在 / 运行状态**。Docker一次可恢复的run目录隔离重启绕过dockerInference障碍，又在docker-secrets-engine/engine.sock遇到系统无法访问故障；原run目录已恢复、新失败启动文件保留在run.failed-r7-20261015，本轮Docker进程已停止。备份散列已核对，无DROP、容器 / 卷删除或其他库修改；详见 verify-r7-local-cleanup-1015.md。此为本地清理阻碍，不推断它与生产连接异常有因果关系。
 
-09:20生产只读复查首次发现连接异常（实际起点未确认），复查未完成：p78刷新时点后SELECT返回 `CLUSTER_UNREACHABLE`，runtime日志请求 `context deadline exceeded`；公开ready两次TLS连接关闭、curl连接超时。01:21Z控制面仍报四新deployment RUNNING / 旧版REMOVED，但不等于当前健康。list-projects只读返回 Tencent Hong Kong 2C 4GB 专服（`server-6aa62dd1af2f6201b2304d4d`）；是否维护及根因尚未确认。09:06验收仅证明当时通过；不能声称09:20刷新已恢复、覆盖31天或当前生产正常。编排方继续只读排查，已询问用户服务器维护情况，未执行生产重启、写入或手工redeploy。截至北京时间09:25，第三次p78仍为MCP isError / CLUSTER_UNREACHABLE，ready仍SSL失败；有限源码及已存日志核对尚未确认因果。文档先开Draft PR留存，连接问题核清前暂不请求合并。
+09:20生产只读复查首次发现连接异常（实际起点未确认），复查未完成：p78刷新时点后SELECT返回 `CLUSTER_UNREACHABLE`，runtime日志请求 `context deadline exceeded`；公开ready两次TLS连接关闭、curl连接超时。01:21Z控制面仍报四新deployment RUNNING / 旧版REMOVED，但不等于当前健康。list-projects只读返回 Tencent Hong Kong 2C 4GB 专服（`server-6aa62dd1af2f6201b2304d4d`）；是否维护及根因尚未确认。09:06验收仅证明当时通过；不能声称09:20刷新已恢复、覆盖31天或当前生产正常。编排方继续只读排查，已询问用户服务器维护情况，未执行生产重启、写入或手工redeploy。截至北京时间09:25，第三次p78仍为MCP isError / CLUSTER_UNREACHABLE，ready仍SSL失败；有限源码及已存日志核对尚未确认因果。当时文档先开Draft PR留存，连接问题核清前暂不请求合并。10/20杭州正式激活后，当前入口和后续发布以本台账“当前进度”及杭州发布文档为准；故障史与未完成的旧汇总验收仍保留。
 
 后续：R8接推广列表筛选、下钻落点及 `detail_url`；周 / 月汇总表无人读仍写另开迁移清理，再接8c。新租户读取回落、054历史注释、`aggregate_by_half_month` 原始点赞和既有mock验证范围保留，不扩大修复范围。
 
