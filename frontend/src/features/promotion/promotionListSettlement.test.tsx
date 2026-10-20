@@ -16,6 +16,7 @@ const api = vi.hoisted(() => ({
   uploadSettlementChat: vi.fn(),
   uploadPaymentQrFile: vi.fn(),
   removePaymentQr: vi.fn(),
+  writeRetrospective: vi.fn(),
 }));
 vi.mock("@/features/promotion/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/features/promotion/api")>()),
@@ -29,6 +30,7 @@ vi.mock("@/features/flow/api", () => ({
 }));
 
 import { PromotionListPage } from "@/pages/PromotionListPage";
+import { RetroModal } from "./components/RetroModal";
 import { PaymentQrModal } from "./components/PaymentQrModal";
 import { SettlementChatModal } from "./components/SettlementChatModal";
 import { SettlementResubmitModal } from "./components/SettlementResubmitModal";
@@ -457,5 +459,57 @@ describe("SettlementChatModal", () => {
     fireEvent.change(input, { target: { files: [file] } });
     fireEvent.click(within(dialog).getByRole("button", { name: "提交，记为已结款" }));
     await waitFor(() => expect(api.uploadSettlementChat).toHaveBeenCalledWith("p1", file));
+  });
+});
+
+describe("PR-7 主管复盘与完结只读", () => {
+  it("PR的行ui没有写权限时不显示写复盘或确认复盘", async () => {
+    renderPage([promotion({ retro_status: "待复盘", ui: { actions: {}, edits: [] } })]);
+    const labels = (await openMenu()).map((item) => item.textContent);
+    expect(labels.some((label) => label?.includes("写复盘"))).toBe(false);
+    expect(labels.some((label) => label?.includes("确认复盘"))).toBe(false);
+  });
+
+  it("主管按独立ui动作写复盘，已完成版管理员按修订动作进入", async () => {
+    renderPage([promotion({ retro_status: "待复盘", ui: { actions: { retro_write: ENABLED }, edits: [] } })]);
+    expect(isDisabled(menuItem(await openMenu(), "写复盘"))).toBe(false);
+    cleanup();
+    renderPage([promotion({ retro_status: "已完成", ui: { actions: { retro_revise: ENABLED }, edits: ["cooperation"] } })]);
+    expect(isDisabled(menuItem(await openMenu(), "修改复盘"))).toBe(false);
+  });
+
+  it("已完结单的旧写菜单禁用并给只读原因，管理员保留编辑能力", async () => {
+    renderPage([promotion({ completed_at: "2026-10-20T10:00:00Z", ui: { actions: {}, edits: [] } })]);
+    expect(isDisabled(menuItem(await openMenu(), "其他信息（已完结，只读）"))).toBe(true);
+    cleanup();
+    renderPage([promotion({ completed_at: "2026-10-20T10:00:00Z", ui: { actions: {}, edits: ["cooperation"] } })]);
+    expect(isDisabled(menuItem(await openMenu(), "其他信息"))).toBe(false);
+  });
+});
+
+
+describe("PR-7 复盘写入弹窗", () => {
+  it("主管写完即完成，保存后刷新博主档案缓存", async () => {
+    const qc=client();
+    const refresh=vi.spyOn(qc,"invalidateQueries");
+    const close=vi.fn();
+    api.writeRetrospective.mockResolvedValue(promotion({retro_status:"已完成"}));
+    render(<QueryClientProvider client={qc}><RetroModal target={promotion({retro_status:"待复盘"})} onClose={close}/></QueryClientProvider>);
+    fireEvent.change(await screen.findByRole("textbox", {name:"复盘内容"}), {target:{value:"配合及时，建议二搭"}});
+    fireEvent.click(screen.getByRole("button", {name:"完成复盘"}));
+    await waitFor(()=>expect(api.writeRetrospective).toHaveBeenCalledWith("p1","配合及时，建议二搭"));
+    await waitFor(()=>expect(close).toHaveBeenCalledOnce());
+    expect(refresh).toHaveBeenCalledWith({queryKey:["blogger-retrospectives"]});
+    expect(screen.queryByText("复盘已提交，等主管确认")).toBeNull();
+  });
+
+  it("管理员修改预填旧文并保存新版本，空白内容不发送", async () => {
+    render(wrap(<RetroModal target={promotion({retro_status:"已完成",retro_content:"旧版内容"})} onClose={()=>{}}/>));
+    const input=await screen.findByRole("textbox", {name:"复盘内容"});
+    expect((input as HTMLTextAreaElement).value).toBe("旧版内容");
+    fireEvent.change(input,{target:{value:"   "}});
+    fireEvent.click(screen.getByRole("button",{name:"保存新版本"}));
+    await screen.findByText("请填写复盘内容");
+    expect(api.writeRetrospective).not.toHaveBeenCalled();
   });
 });
