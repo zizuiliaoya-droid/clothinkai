@@ -34,6 +34,7 @@ from app.core.tenancy import tenant_id_ctx
 from app.modules.auth.models import Permission, UserPermissionOverride
 from app.modules.flow.exceptions import LineNotFoundError
 from app.modules.flow.line_events import LineEventRepository, LineEventType
+from app.modules.flow.models import LineEvent
 from app.modules.flow.timeline import HIDDEN_NEGOTIATION_REASON, TIMELINE_LIMIT, LineEventService
 from app.modules.promotion.urge_calculator import DEFAULT_TENANT_TZ
 
@@ -1033,3 +1034,45 @@ class TestNextStep:
         resp = await LineEventService(session).read(neg.line_id, flow_users.pr)
         assert resp.next_step is not None
         assert (resp.next_step.text, resp.next_step.who) == ("等主管审核", "主管")
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+async def test_m5_completion_marker_uses_full_event_history(
+    session: AsyncSession, flow_users: Any, line: _Line, signed: list[str]
+) -> None:
+    """有其它早期事件的迁移旧单仍显示标记；真实完结事件即使被500条截断也不能冒充迁移。"""
+    from app.modules.promotion.models import Promotion
+
+    promotion = await session.get(Promotion, line.promotion_id)
+    assert promotion is not None
+    promotion.completed_at = datetime.now(UTC)
+    await session.flush()
+    service = LineEventService(session)
+    migrated = await service.read(line.line_id, flow_users.admin)
+    assert any(p.text == "上线时完结" for p in migrated.legacy)
+    await LineEventRepository(session).append(
+        tenant_id=promotion.tenant_id,
+        line_id=line.line_id,
+        promotion_id=promotion.id,
+        actor_id=flow_users.admin.id,
+        event_type=LineEventType.PROMOTION_COMPLETED,
+    )
+    session.add_all(
+        [
+            LineEvent(
+                tenant_id=promotion.tenant_id,
+                line_id=line.line_id,
+                promotion_id=promotion.id,
+                actor_id=flow_users.admin.id,
+                event_type="line.comment",
+                note="synthetic cutoff",
+                payload={},
+            )
+            for _ in range(TIMELINE_LIMIT + 1)
+        ]
+    )
+    await session.flush()
+    current = await service.read(line.line_id, flow_users.admin)
+    assert current.truncated
+    assert not any(e.event_type == "promotion.completed" for e in current.events)
+    assert not any(p.source == "promotion.completed_at" for p in current.legacy)

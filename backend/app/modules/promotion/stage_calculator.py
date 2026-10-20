@@ -8,15 +8,7 @@
 第 8 条（未发布 / 异常）直接嵌 ``calculate_urge_status`` / ``URGE_STATUS_SQL_EXPR``，
 SQL 的绑定参数沿用它的 ``:today`` / ``:urge_days`` / ``:important_days``。
 
-PR-6 覆盖 #1、#1a、#4 ~ #16；还没有 ``completed_at``（M5，PR-7）前按两条过渡规则：
-- 已取消 + 召回成功 → 「已完结 · 召回」（#2 的过渡）
-- #16 之后：已结款 且 已录 7 天数据 且 复盘 = 已完成 → 「已完结」（#3 的过渡，D8），
-  免得存量已完成的单落「状态异常」；复盘「待确认」算 ≠ 已完成
-- 发布日为空时 #14「待满 7 天」不拦（与录数的 7 天门槛同口径）
-- 其余（如已发布却还是未核查）→ 状态异常
-
-SQL 片段引用的列名不带表前缀（``publish_status`` 等）：放在只有推广单列的一层里用，
-``style`` 也有 ``is_active``，直接放进 JOIN 了款式的 SELECT 会歧义。
+PR-7按completed_at唯一标记完结；正常条件已满足却缺完结标记时回落“状态异常”。
 """
 
 from __future__ import annotations
@@ -103,7 +95,7 @@ def seven_days_reached(actual_publish_date: date | None, today: date) -> bool:
 
 @dataclass(frozen=True)
 class StageFacts:
-    """算阶段要用到的离散输入（PR-7 补完结 ``completed_at``）。"""
+    """算阶段要用到的离散输入（含M5完结标记）。"""
 
     publish_status: str
     recall_status: str

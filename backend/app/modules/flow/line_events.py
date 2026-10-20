@@ -248,6 +248,7 @@ PAYLOAD_FIELD_RULES: dict[str, tuple[str, str] | PayloadContainer | None] = {
     "publish_url": None,
     "actual_publish_date": None,
     "completed_at": None,
+    "completion_kind": None,
     "by_cancel": None,
     "like_count": None,
     "collect_count": None,

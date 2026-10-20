@@ -10,7 +10,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.core.exceptions import AppException
 from app.core.tenancy import tenant_id_ctx
 from app.modules.auth.models import User
-from app.modules.promotion.schemas import PromotionUpdate, RetrospectiveWriteRequest
+from app.modules.promotion.schemas import (
+    PromotionMetricsRequest,
+    PromotionUpdate,
+    RetrospectiveWriteRequest,
+)
 from app.modules.promotion.service import PromotionService
 from tests.integration.test_metrics_gate import _SHOT, _FakeS3
 
@@ -25,7 +29,7 @@ from tests.integration.test_settlement_routing import _pending_review
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
 
-@pytest.mark.parametrize("first", ["chat", "retro", "complete_then_patch"])
+@pytest.mark.parametrize("first", ["chat", "retro", "complete_then_patch", "metrics_again"])
 async def test_last_steps_and_completed_gate_are_serialized(
     engine: Any,
     session: AsyncSession,  # noqa: F811 fixture以原名导入注册
@@ -46,9 +50,11 @@ async def test_last_steps_and_completed_gate_are_serialized(
         product_factory,
         blogger_factory,
         promotion_factory,
-        settlement_status="已结款" if first == "complete_then_patch" else "已付款",
+        settlement_status="已结款"
+        if first in {"complete_then_patch", "metrics_again"}
+        else "已付款",
         retro_status="待复盘",
-        metrics_recorded_at=datetime.now(UTC),
+        metrics_recorded_at=None if first == "metrics_again" else datetime.now(UTC),
     )
     pid, tid = promo.id, promo.tenant_id
     await session.commit()
@@ -65,7 +71,8 @@ async def test_last_steps_and_completed_gate_are_serialized(
             manager1 = await first_s.get(User, flow_users.pr_manager.id)
             manager2 = await second_s.get(User, flow_users.pr_manager.id)
             assert manager1 is not None and manager2 is not None
-            original = first_svc._repo.update_state
+            update_method = "record_metrics_once" if first == "metrics_again" else "update_state"
+            original = getattr(first_svc._repo, update_method)
 
             async def pause_after_update(**kw: Any) -> Any:
                 updated = await original(**kw)
@@ -74,10 +81,19 @@ async def test_last_steps_and_completed_gate_are_serialized(
                 await asyncio.wait_for(release.wait(), 10)
                 return updated
 
-            monkeypatch.setattr(first_svc._repo, "update_state", pause_after_update)
+            monkeypatch.setattr(first_svc._repo, update_method, pause_after_update)
 
             async def action(svc: PromotionService, user: User, action_name: str) -> Any:
                 try:
+                    if action_name == "metrics":
+                        return await svc.record_metrics(
+                            pid,
+                            PromotionMetricsRequest(
+                                like_count=100, collect_count=20, comment_count=3
+                            ),
+                            user,
+                            screenshot=_SHOT,
+                        )
                     if action_name == "chat":
                         return await svc.upload_settlement_chat(
                             pid, user=user, filename=_SHOT[0], mime_type=_SHOT[1], data=_SHOT[2]
@@ -93,11 +109,17 @@ async def test_last_steps_and_completed_gate_are_serialized(
                     await svc._session.rollback()
                     return exc
 
-            first_action = "chat" if first == "chat" else "retro"
+            first_action = (
+                "metrics" if first == "metrics_again" else ("chat" if first == "chat" else "retro")
+            )
             second_action = (
-                "retro"
-                if first == "chat"
-                else ("patch" if first == "complete_then_patch" else "chat")
+                "metrics"
+                if first == "metrics_again"
+                else (
+                    "retro"
+                    if first == "chat"
+                    else ("patch" if first == "complete_then_patch" else "chat")
+                )
             )
             tasks.append(asyncio.create_task(action(first_svc, manager1, first_action)))
             await asyncio.wait_for(held.wait(), 10)
@@ -106,7 +128,7 @@ async def test_last_steps_and_completed_gate_are_serialized(
             release.set()
             results = await asyncio.wait_for(asyncio.gather(*tasks), 15)
             assert not isinstance(results[0], AppException)
-            if first == "complete_then_patch":
+            if first in {"complete_then_patch", "metrics_again"}:
                 assert isinstance(results[1], AppException)
                 assert results[1].status_code == 409
             else:
@@ -122,8 +144,21 @@ async def test_last_steps_and_completed_gate_are_serialized(
                     {"pid": pid},
                 )
             ).one()
-            assert row[0] is not None and row[1:3] == ("已完成", "已结款")
-            assert row[3] != "不得穿透" and row[4] == 1
+            if first == "metrics_again":
+                assert row[0] is None and row[1:3] == ("待复盘", "已结款")
+                assert row[4] == 0
+                assert (
+                    await check.scalar(
+                        text(
+                            "SELECT count(*) FROM line_event WHERE promotion_id=:pid AND event_type='promotion.metrics_recorded'"
+                        ),
+                        {"pid": pid},
+                    )
+                ) == 1
+            else:
+                assert row[0] is not None, "FLOW7_FAULT_EXPECTED:completion_order"
+                assert row[1:3] == ("已完成", "已结款")
+                assert row[3] != "不得穿透" and row[4] == 1
     finally:
         release.set()
         for task in tasks:

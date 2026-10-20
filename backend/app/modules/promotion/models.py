@@ -202,7 +202,7 @@ class Promotion(TenantScopedModel):
     retro_status: Mapped[str] = mapped_column(
         String(8), nullable=False, server_default=text("'未开始'")
     )
-    """未开始 / 待复盘 / 待确认 / 已完成。第 4 个并行状态机。
+    """未开始 / 待复盘 / 已完成。主管写完即完成，与结款并行。
 
     不复用 ``settlement_status``：那边 ``已付款`` 是终态，而且全系统有一批查询按
     ``settlement_status = '已付款'`` 过滤，塞进去会让它们漏掉进入复盘的单子。

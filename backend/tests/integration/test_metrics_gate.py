@@ -224,9 +224,15 @@ class TestGate:
             promotion_factory,
             actual_publish_date=_BEIJING_TODAY - timedelta(days=7),
         )
-        resp = await PromotionService(session).record_metrics(
-            promo.id, _METRICS, flow_users.pr, screenshot=_SHOT
-        )
+        from app.modules.promotion.exceptions import MetricsNotAvailableYetError
+
+        try:
+            resp = await PromotionService(session).record_metrics(
+                promo.id, _METRICS, flow_users.pr, screenshot=_SHOT
+            )
+        except MetricsNotAvailableYetError as exc:
+            assert exc.details["blocked_by"] == "seven_days"
+            raise AssertionError("FLOW7_FAULT_EXPECTED:beijing") from exc
         assert resp.metrics_recorded_at is not None
         assert (resp.like_count, resp.collect_count, resp.comment_count) == (120, 30, 8)
         assert len(fake_r2.puts) == 1
@@ -490,7 +496,7 @@ class TestRecordOnceConcurrent:
 
         try:
             results = await run_concurrently(engine, 2, attempt, tenant_id=tenant_id)
-            assert sorted(results) == [False, True], results
+            assert sorted(results) == [False, True], "FLOW7_FAULT_EXPECTED:metrics_once"
             async with committed(engine) as check:
                 like = (
                     await check.execute(

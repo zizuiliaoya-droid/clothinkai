@@ -204,12 +204,14 @@ class PromotionServiceBase:
         promotion = await self._repo.get_for_write(
             promotion_id,
             tenant_id=user.tenant_id,
-            include_inactive=include_inactive,
+            include_inactive=True,
         )
         if promotion is None:
             raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
         if promotion.completed_at is not None and not (await self._flow_actor(user)).is_star:
             raise PromotionCompletedReadonlyError("已完结，只读")
+        if not promotion.is_active and not include_inactive:
+            raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
         return promotion
 
     async def maybe_complete(self, promotion_id: UUID, user: User) -> None:
@@ -227,7 +229,10 @@ class PromotionServiceBase:
             event_type=LineEventType.PROMOTION_COMPLETED,
             actor_id=user.id,
             promotion_id=promotion_id,
-            payload={"completed_at": completed_at.isoformat()},
+            payload={
+                "completed_at": completed_at.isoformat(),
+                "completion_kind": "召回" if completed.publish_status == "已取消" else "正常",
+            },
         )
         await self._audit.log(
             action="promotion.complete",

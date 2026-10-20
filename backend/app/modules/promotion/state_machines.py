@@ -7,7 +7,7 @@
 1. ``PublishStatusMachine`` — publish_status (5 状态)
 2. ``RecallStatusMachine`` — recall_status (4 状态)
 3. ``SettlementStatusMachine`` — settlement_status (7 状态，流程线 3.4 R1 ~ R9)
-4. ``RetroStatusMachine`` — retro_status (4 状态，PRD V1.4 改动 4)
+4. ``RetroStatusMachine`` — retro_status (3 状态，流程线3.6)
 
 业务前置校验通过 ``assert_can_transition()`` classmethod 触发友好错误；
 service 层并发安全通过 ``UPDATE WHERE old_state RETURNING`` 实施

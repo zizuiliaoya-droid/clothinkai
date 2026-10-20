@@ -212,6 +212,11 @@ def drill(values: dict[str, str]) -> dict:
     phases = []
     with closing(connect(values["DATABASE_URL_SYNC"])) as conn:
         verify_server(conn)
+        assert scalar(conn, "SELECT current_user") == "clothing_bypass"
+        assert scalar(
+            conn,
+            "SELECT NOT rolsuper AND rolbypassrls AND NOT rolinherit FROM pg_roles WHERE rolname=current_user",
+        )
         assert current(conn) == PREVIOUS
         tid = str(scalar(conn, "SELECT id FROM tenant ORDER BY created_at LIMIT 1"))
         execute(
@@ -232,7 +237,7 @@ def drill(values: dict[str, str]) -> dict:
             )
         execute(
             conn,
-            "INSERT INTO promotion(id,tenant_id,style_id,blogger_id,internal_code,style_code_snapshot,blogger_xhs_snapshot,cooperation_date,quote_amount) SELECT gen_random_uuid(),%s,%s,%s,'F7BULK'||i,'FLOW7DRILL','FLOW7DRILL',CURRENT_DATE,100 FROM generate_series(1,5000) i",
+            "INSERT INTO promotion(id,tenant_id,style_id,blogger_id,internal_code,style_code_snapshot,style_short_name_snapshot,platform,cooperation_date,quote_amount) SELECT gen_random_uuid(),%s,%s,%s,'F7BULK'||i,'FLOW7DRILL','FLOW7DRILL','小红书',CURRENT_DATE,100 FROM generate_series(1,5000) i",
             (tid, ids["style"], ids["blogger"]),
         )
         cases = {
@@ -248,7 +253,7 @@ def drill(values: dict[str, str]) -> dict:
         for key, (pub, stl, recall, retro, metrics) in cases.items():
             execute(
                 conn,
-                "INSERT INTO promotion(id,tenant_id,style_id,blogger_id,internal_code,style_code_snapshot,blogger_xhs_snapshot,cooperation_date,quote_amount,publish_status,settlement_status,recall_status,retro_status,metrics_recorded_at) VALUES (%s,%s,%s,%s,%s,'FLOW7DRILL','FLOW7DRILL',CURRENT_DATE,100,%s,%s,%s,%s,CASE WHEN %s THEN now() END)",
+                "INSERT INTO promotion(id,tenant_id,style_id,blogger_id,internal_code,style_code_snapshot,style_short_name_snapshot,platform,cooperation_date,quote_amount,publish_status,settlement_status,recall_status,retro_status,metrics_recorded_at) VALUES (%s,%s,%s,%s,%s,'FLOW7DRILL','FLOW7DRILL','小红书',CURRENT_DATE,100,%s,%s,%s,%s,CASE WHEN %s THEN now() END)",
                 (
                     ids[key],
                     tid,
@@ -320,6 +325,8 @@ def verify_results(values: dict[str, str]) -> dict:
     assert drill_report["passed"] and {
         p["phase"] for p in drill_report["phases"] if p["passed"]
     } == {"baseline066", "upgrade1", "downgrade", "upgrade2"}
+    faults = json.loads((ARTIFACTS / "flow7-faults.json").read_text(encoding="utf-8"))
+    assert len(faults) == 14 and all(f["passed"] and f["source_restored"] for f in faults)
     cases = ET.parse(ARTIFACTS / "flow7-pg18-tests.xml").findall(".//testcase")  # noqa: S314 本job生成的pytest报告
     assert cases and all(
         not any(c.find(tag) is not None for tag in ("failure", "error", "skipped")) for c in cases

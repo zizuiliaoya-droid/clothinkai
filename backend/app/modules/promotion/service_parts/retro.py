@@ -73,11 +73,16 @@ class PromotionRetroMixin(PromotionServiceBase):
         """
         from fastapi.concurrency import run_in_threadpool
 
+        # 锁前捕获“未录过”：并发等待期间被录入应报409，串行重复仍按既有422。
+        snapshot = await self._repo.get_by_id(promotion_id)
+        was_unrecorded = snapshot is not None and snapshot.metrics_recorded_at is None
         promotion = await self._writable_promotion(promotion_id, user)
         if promotion is None:
             raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
 
         if promotion.metrics_recorded_at is not None:
+            if was_unrecorded:
+                raise StateTransitionConflictError("7 天数据已被录入，请刷新后重试")
             raise IllegalStateTransitionError(
                 "7 天数据已经录过，只能录一次",
                 details={"promotion_id": str(promotion_id), "action": "metrics"},

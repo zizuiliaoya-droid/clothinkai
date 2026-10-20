@@ -163,7 +163,7 @@ async def test_python_and_sql_agree_on_every_combo(session: AsyncSession) -> Non
         for i, (p, s) in enumerate(zip(py, sql, strict=True))
         if p != s
     ]
-    assert not mismatches, f"{len(mismatches)} 组不一致：\n" + "\n".join(mismatches[:20])
+    assert not mismatches, "FLOW7_FAULT_EXPECTED:stage_sql\n" + "\n".join(mismatches[:20])
     # 场景有效性：22 个阶段全命中、没有矩阵外的名字
     hit = set(py)
     assert len(PROMOTION_STAGES) == 22

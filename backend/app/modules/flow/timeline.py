@@ -113,7 +113,7 @@ def legacy_points(
     同样过第 2 层：按点所属的事件分组 ``can_read_field("line_event", 组)``，谈款的点还要看得到这张谈款（行级）；
     看不到的直接不出（不计入 ``hidden_segments``：那里数的是事件）。只出动作与原因，金额、收件不进文案。
     发货两点（推送、发货）是计划 D7 加的：PR-2 ~ PR-4 之间的推送 / 回填没有事件；
-    两条迁移标记（``settled_at`` / ``completed_at``）的列随 PR-6 / M5 才有，那时再加。
+    M5迁移完结标记独立于首事件截止点；是否有真实完结事件由头查询判断，不受500条截断影响。
     """
     # (分组, 时间, 文案, 来源字段)，按业务先后排列：同一时刻的几点，后发生的排在上面
     points: list[tuple[str, datetime | date | None, str, str]] = []
@@ -178,6 +178,21 @@ def legacy_points(
         if not can_read_field("line_event", group, ctx):
             continue
         out.append((at, order, LegacyPoint(at=at, text=text, source=source)))
+    if (
+        promo is not None
+        and promo.completed_at is not None
+        and not header.has_completion_event
+        and can_read_field("line_event", "promotion", ctx)
+    ):
+        out.append(
+            (
+                promo.completed_at,
+                len(points),
+                LegacyPoint(
+                    at=promo.completed_at, text="上线时完结", source="promotion.completed_at"
+                ),
+            )
+        )
     out.sort(key=lambda item: (item[0], item[1]), reverse=True)
     return [point for _, _, point in out]
 

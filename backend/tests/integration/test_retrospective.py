@@ -320,7 +320,7 @@ class TestRetrospectiveFlow:
             f"/api/promotions/{promo.id}/retrospective",
             {"content": "越权"},
         )
-        assert resp.status_code == 403
+        assert resp.status_code == 403, "FLOW7_FAULT_EXPECTED:scope"
         assert resp.json()["code"] == "PERMISSION_DENIED"
 
     async def test_deleted_confirm_endpoint_and_empty_content(

@@ -759,8 +759,8 @@ class PromotionRepository:
         """7 天数据只录一次（流程线 3.7）：``UPDATE … WHERE … AND metrics_recorded_at IS NULL RETURNING``。
 
         写三个指标、截图与 ``metrics_recorded_at = now()``；``update_state`` 只认状态字段，表达不了「未录过」，
-        所以单开这一条，不扩它。过渡期（PR-7 前复盘仍是旧流程）复盘 未开始 → 待复盘 也在这条 UPDATE 里，
-        其余复盘状态不动。0 行（已录过 / 软删 / 跨租户）→ ``None``，service 抛 409。
+        所以单开这一条，不扩它。复盘状态不动。
+        0 行（已录过 / 软删 / 跨租户）→ ``None``，service 抛 409。
         """
         unknown = set(values) - self._METRICS_FIELDS
         if unknown:
