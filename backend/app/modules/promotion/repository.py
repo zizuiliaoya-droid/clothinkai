@@ -21,7 +21,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import bindparam, case, delete, exists, func, select, text, union_all, update
+from sqlalchemy import bindparam, delete, exists, func, select, text, union_all, update
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,7 +36,7 @@ from app.modules.promotion.display_name import (
     PROMOTION_DISPLAY_SHORT_NAME_SQL,
     display_short_name_sql,
 )
-from app.modules.promotion.enums import RetroStatus, ShipStatus
+from app.modules.promotion.enums import ShipStatus
 from app.modules.promotion.exceptions import SequenceOverflowError
 from app.modules.promotion.models import BloggerRetrospective, Promotion, PromotionItem
 from app.modules.promotion.stage_calculator import PROMOTION_STAGES, STAGE_COLUMN, stage_sql_expr
@@ -746,13 +746,6 @@ class PromotionRepository:
             .values(
                 **values,
                 metrics_recorded_at=func.now(),
-                retro_status=case(
-                    (
-                        Promotion.retro_status == RetroStatus.NOT_STARTED.value,
-                        RetroStatus.PENDING_RETRO.value,
-                    ),
-                    else_=Promotion.retro_status,
-                ),
                 updated_at=func.now(),
             )
             .returning(Promotion)
@@ -858,7 +851,7 @@ class PromotionRepository:
                 BloggerRetrospective.tenant_id == tenant_id,
                 BloggerRetrospective.promotion_id == promotion_id,
             )
-            .order_by(BloggerRetrospective.created_at.desc())
+            .order_by(BloggerRetrospective.created_at.desc(), BloggerRetrospective.id.desc())
             .limit(1)
         )
         return (await self._session.execute(stmt)).scalar_one_or_none()
@@ -887,7 +880,13 @@ class PromotionRepository:
                     WHERE r.tenant_id = :tenant_id
                       AND r.blogger_id = :blogger_id
                       AND r.confirmed_at IS NOT NULL
-                    ORDER BY r.created_at DESC
+                    AND NOT EXISTS (
+                        SELECT 1 FROM blogger_retrospective newer
+                        WHERE newer.tenant_id=r.tenant_id AND newer.promotion_id=r.promotion_id
+                          AND newer.confirmed_at IS NOT NULL
+                          AND (newer.created_at, newer.id) > (r.created_at, r.id)
+                      )
+                    ORDER BY r.created_at DESC, r.id DESC
                     LIMIT :limit
                     """
                 ),

@@ -207,48 +207,26 @@ class RecallStatusMachine:
 
 
 class RetroStatusMachine:
-    """retro_status 状态机（PRD V1.4 改动 4，第 4 个并行机器）。
-
-    跨状态机前置（由 service 显式实施，不在这里耦合）：
-    - ``record_metrics`` 前：``settlement_status = '已结款'`` 且发文满 7 天，只录一次（流程线 3.7）。
-      过渡期（PR-7 前）录数在 ``record_metrics_once`` 的条件 UPDATE 里把 未开始 → 待复盘，
-      service 不再经这条转移判（未录过才是门槛，复盘状态不是）。
-    - ``record_metrics`` 要求点赞/收藏/评论三个指标 + 数据截图，PRD 原文明确列了截图。
-
-    ``reject_retro`` 不在 PRD 原文里。加它的理由：PRD 只写了「主管确认复盘内容」，
-    但主管看完觉得写得没用时，没有打回就只剩「卡死」或「硬着头皮确认」两条路。
-    打回退回待复盘，PR 重写 —— 与结款审核的驳回同一个形状。
-    """
+    """复盘三态；修改完成版的真正*权限由service检查。"""
 
     transitions: ClassVar[tuple[TransitionRule, ...]] = (
-        # 未开始 → 待复盘（录 7 天数据）
         TransitionRule(
             from_state=RetroStatus.NOT_STARTED.value,
-            action="record_metrics",
+            action="publish",
             to_state=RetroStatus.PENDING_RETRO.value,
             actor_roles=(_ROLE_PR, _ROLE_PR_MANAGER, _ROLE_ADMIN),
-            required_fields=("like_count", "collect_count", "comment_count"),
         ),
-        # 待复盘 → 待确认（PR 写完复盘文字提交）
         TransitionRule(
             from_state=RetroStatus.PENDING_RETRO.value,
-            action="submit_retro",
-            to_state=RetroStatus.PENDING_CONFIRM.value,
-            actor_roles=(_ROLE_PR, _ROLE_PR_MANAGER, _ROLE_ADMIN),
-        ),
-        # 待确认 → 已完成（主管确认，终态）
-        TransitionRule(
-            from_state=RetroStatus.PENDING_CONFIRM.value,
-            action="confirm_retro",
+            action="write_retro",
             to_state=RetroStatus.COMPLETED.value,
             actor_roles=(_ROLE_PR_MANAGER, _ROLE_ADMIN),
         ),
-        # 待确认 → 待复盘（主管打回重写）
         TransitionRule(
-            from_state=RetroStatus.PENDING_CONFIRM.value,
-            action="reject_retro",
-            to_state=RetroStatus.PENDING_RETRO.value,
-            actor_roles=(_ROLE_PR_MANAGER, _ROLE_ADMIN),
+            from_state=RetroStatus.COMPLETED.value,
+            action="revise_retro",
+            to_state=RetroStatus.COMPLETED.value,
+            actor_roles=(_ROLE_ADMIN,),
         ),
     )
 

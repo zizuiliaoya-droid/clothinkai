@@ -22,8 +22,6 @@ from app.modules.promotion.exceptions import (
     MetricsNotAvailableYetError,
     MetricsScreenshotRequiredError,
     PromotionNotFoundError,
-    RetroContentMissingError,
-    RetroSelfConfirmForbiddenError,
     StateTransitionConflictError,
 )
 from app.modules.promotion.models import (
@@ -33,9 +31,8 @@ from app.modules.promotion.models import (
 from app.modules.promotion.schemas import (
     PromotionMetricsRequest,
     PromotionResponse,
-    RetrospectiveConfirmRequest,
     RetrospectiveResponse,
-    RetrospectiveSubmitRequest,
+    RetrospectiveWriteRequest,
 )
 from app.modules.promotion.service_parts.base import (
     PromotionServiceBase,
@@ -72,7 +69,7 @@ class PromotionRetroMixin(PromotionServiceBase):
         → 三个指标 + 截图（截图后端代传）→ ``record_metrics_once`` 条件 UPDATE（``metrics_recorded_at IS NULL``，
         0 行 → 409）。指标、截图与时间线同一事务，任何一步失败都回滚并删掉已传的对象。
 
-        过渡期（PR-7 前复盘仍是旧流程）：同一条 UPDATE 把复盘 未开始 → 待复盘。完结检查随 PR-7。
+        录数与复盘正交，不推进复盘状态。
         """
         from fastapi.concurrency import run_in_threadpool
 
@@ -226,29 +223,33 @@ class PromotionRetroMixin(PromotionServiceBase):
 
         return await self._to_response(updated, user)
 
-    async def submit_retrospective(
+    async def write_retrospective(
         self,
         promotion_id: UUID,
-        payload: RetrospectiveSubmitRequest,
+        payload: RetrospectiveWriteRequest,
         user: User,
     ) -> PromotionResponse:
-        """PR 提交复盘文字，推进到「待确认」。
+        """主管写即完成；持真正*者可追加完成版，旧稿和旧确认版永久留档。"""
+        from app.core.exceptions import PermissionDeniedError
+        from app.modules.promotion.enums import PublishStatus
 
-        文字写进 ``blogger_retrospective`` 子表而不是 promotion 字段：PRD 要求
-        「永久写入博主档案、不随单据关闭而丢失」，而被打回重写时字段会被覆盖。
-        子表里追加新行，旧版留着。
-        """
-        promotion = await self._repo.get_by_id(promotion_id)
+        promotion = await self._repo.get_for_deactivation(promotion_id, tenant_id=user.tenant_id)
         if promotion is None:
             raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
-
+        actor = await self._flow_actor(user)
+        if not actor.perms.has("promotion_retro", "write"):
+            raise PermissionDeniedError("缺少主管写复盘权限")
+        revising = promotion.retro_status == RetroStatus.COMPLETED.value
+        if revising and not actor.is_star:
+            raise IllegalStateTransitionError("已完成的复盘仅管理员可修改")
+        if promotion.publish_status != PublishStatus.PUBLISHED.value:
+            raise IllegalStateTransitionError("已发布后才可写复盘")
+        action = "revise_retro" if revising else "write_retro"
         RetroStatusMachine.assert_can_transition(
-            from_state=promotion.retro_status,
-            to_state=RetroStatus.PENDING_CONFIRM.value,
-            action="submit_retro",
+            promotion.retro_status, RetroStatus.COMPLETED.value, action
         )
-
-        retrospective_id = uuid4()
+        before = promotion.retro_status
+        now, retrospective_id = _utcnow(), uuid4()
         self._repo.add_retrospective(
             BloggerRetrospective(
                 id=retrospective_id,
@@ -257,148 +258,37 @@ class PromotionRetroMixin(PromotionServiceBase):
                 promotion_id=promotion_id,
                 content=payload.content,
                 created_by=user.id,
+                confirmed_by=user.id,
+                confirmed_at=now,
+                created_at=now,
             )
         )
         updated = await self._repo.update_state(
             promotion_id=promotion_id,
             tenant_id=user.tenant_id,
             from_state_field="retro_status",
-            from_state_value=RetroStatus.PENDING_RETRO.value,
-            to_state_value=RetroStatus.PENDING_CONFIRM.value,
+            from_state_value=before,
+            to_state_value=RetroStatus.COMPLETED.value,
+            extra_fields={"retro_confirmed_by": user.id, "retro_confirmed_at": now},
         )
         if updated is None:
-            raise StateTransitionConflictError(
-                "复盘状态已变更，请刷新后重试",
-                details={"promotion_id": str(promotion_id)},
-            )
-
-        promotion_state_transitions_total.labels(
-            from_state=RetroStatus.PENDING_RETRO.value,
-            to_state=RetroStatus.PENDING_CONFIRM.value,
-            status_field="retro",
-        ).inc()
-
-        # 时间线（流程线 6.3）：retro.written，note = 复盘全文；打回重写再追加一条（子表也是追加）
+            raise StateTransitionConflictError("复盘状态已变更，请刷新后重试")
         await LineEventRepository(self._session).append(
-            tenant_id=promotion.tenant_id,
-            line_id=promotion.line_id,
-            event_type=LineEventType.RETRO_WRITTEN,
+            tenant_id=updated.tenant_id,
+            line_id=updated.line_id,
+            event_type=LineEventType.RETRO_EDITED if revising else LineEventType.RETRO_WRITTEN,
             actor_id=user.id,
             promotion_id=promotion_id,
-            from_state=RetroStatus.PENDING_RETRO.value,
-            to_state=RetroStatus.PENDING_CONFIRM.value,
+            from_state=before,
+            to_state=RetroStatus.COMPLETED.value,
             note=payload.content,
             payload={"retrospective_id": str(retrospective_id)},
         )
-
         await self._audit.log(
-            action="promotion.submit_retro",
+            action=f"promotion.{action}",
             resource="promotion",
             resource_id=promotion_id,
-            after={"retro_status": RetroStatus.PENDING_CONFIRM.value},
-            user_id=user.id,
-        )
-        await self._session.commit()
-        return await self._to_response(updated, user)
-
-    async def confirm_retrospective(
-        self,
-        promotion_id: UUID,
-        payload: RetrospectiveConfirmRequest,
-        user: User,
-    ) -> PromotionResponse:
-        """主管确认复盘（→ 已完成）或打回（→ 待复盘）。
-
-        确认时给子表那条记录盖上 ``confirmed_by/confirmed_at`` —— hover 卡只展示
-        已确认的复盘，没过主管的是草稿，不该进博主档案误导下次选博主的人。
-
-        打回**不删**旧记录：PR 重写时追加一条，被打回的那版留着看得见演变过程。
-        """
-        promotion = await self._repo.get_by_id(promotion_id)
-        if promotion is None:
-            raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
-
-        retro = await self._repo.latest_retrospective(
-            tenant_id=user.tenant_id, promotion_id=promotion_id
-        )
-        if retro is None:
-            raise RetroContentMissingError(
-                "找不到复盘内容，无法确认",
-                details={"promotion_id": str(promotion_id)},
-            )
-        # 自己写的复盘自己批，主管这道关就没有意义。
-        # 必须在这里挡 —— promotion.retro:confirm 的一级域是 promotion，
-        # PR 的 promotion.*:* 会被通配命中，权限层拦不住。
-        if retro.created_by is not None and retro.created_by == user.id:
-            raise RetroSelfConfirmForbiddenError(
-                "不允许确认自己写的复盘",
-                details={"promotion_id": str(promotion_id), "user_id": str(user.id)},
-            )
-
-        now = _utcnow()
-        if payload.approve:
-            to_state = RetroStatus.COMPLETED.value
-            action_name = "confirm_retro"
-            extra: dict[str, Any] = {
-                "retro_confirmed_by": user.id,
-                "retro_confirmed_at": now,
-            }
-        else:
-            to_state = RetroStatus.PENDING_RETRO.value
-            action_name = "reject_retro"
-            extra = {}
-
-        RetroStatusMachine.assert_can_transition(
-            from_state=promotion.retro_status,
-            to_state=to_state,
-            action=action_name,
-        )
-        updated = await self._repo.update_state(
-            promotion_id=promotion_id,
-            tenant_id=user.tenant_id,
-            from_state_field="retro_status",
-            from_state_value=RetroStatus.PENDING_CONFIRM.value,
-            to_state_value=to_state,
-            extra_fields=extra,
-        )
-        if updated is None:
-            raise StateTransitionConflictError(
-                "复盘状态已变更，请刷新后重试",
-                details={"promotion_id": str(promotion_id)},
-            )
-
-        if payload.approve:
-            # 盖确认戳，这条复盘才会出现在博主档案里
-            retro.confirmed_by = user.id
-            retro.confirmed_at = now
-            await self._session.flush()
-
-        promotion_state_transitions_total.labels(
-            from_state=RetroStatus.PENDING_CONFIRM.value,
-            to_state=to_state,
-            status_field="retro",
-        ).inc()
-
-        # 时间线（计划 D12）：旧复盘的确认 / 打回，note = 主管意见；PR-7 复盘 3 态之后不再写
-        await LineEventRepository(self._session).append(
-            tenant_id=promotion.tenant_id,
-            line_id=promotion.line_id,
-            event_type=(
-                LineEventType.RETRO_CONFIRMED if payload.approve else LineEventType.RETRO_RETURNED
-            ),
-            actor_id=user.id,
-            promotion_id=promotion_id,
-            from_state=RetroStatus.PENDING_CONFIRM.value,
-            to_state=to_state,
-            note=payload.opinion or None,
-            payload={"retrospective_id": str(retro.id)},
-        )
-
-        await self._audit.log(
-            action=f"promotion.{action_name}",
-            resource="promotion",
-            resource_id=promotion_id,
-            after={"retro_status": to_state, "opinion": payload.opinion},
+            after={"retro_status": RetroStatus.COMPLETED.value},
             user_id=user.id,
         )
         await self._session.commit()

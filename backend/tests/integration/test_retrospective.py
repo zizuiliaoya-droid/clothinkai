@@ -24,12 +24,10 @@ from app.modules.promotion.enums import PublishStatus, RetroStatus, SettlementSt
 from app.modules.promotion.exceptions import (
     MetricsNotAvailableYetError,
     MetricsScreenshotRequiredError,
-    RetroSelfConfirmForbiddenError,
 )
 from app.modules.promotion.schemas import (
     PromotionMetricsRequest,
-    RetrospectiveConfirmRequest,
-    RetrospectiveSubmitRequest,
+    RetrospectiveWriteRequest,
 )
 from app.modules.promotion.service import PromotionService
 
@@ -85,6 +83,7 @@ async def _paid_promo(
         pr=pr,
         publish_status=PublishStatus.PUBLISHED.value,
         settlement_status=settlement_status,
+        retro_status="待复盘",
     )
 
 
@@ -170,7 +169,7 @@ class TestRecordMetrics:
                 )
             # 状态没动，指标也没写进去
             await session.refresh(promo)
-            assert promo.retro_status == RetroStatus.NOT_STARTED.value
+            assert promo.retro_status == RetroStatus.PENDING_RETRO.value
             assert promo.like_count is None
         finally:
             tenant_id_ctx.reset(token)
@@ -207,194 +206,143 @@ class TestRecordMetrics:
             PromotionMetricsRequest(like_count=-1, collect_count=0, comment_count=0)
 
 
+@pytest.mark.usefixtures("tenant_ctx")
 class TestRetrospectiveFlow:
-    async def test_full_flow_to_completed(
+    async def test_supervisor_self_owned_write_without_metrics_or_payment(
         self,
         session: AsyncSession,
-        tenant_a: Any,
-        factory: Any,
-        admin_role: Any,
+        flow_users: Any,
         product_factory: Any,
         blogger_factory: Any,
         promotion_factory: Any,
     ) -> None:
-        """录数据 → 写复盘 → 主管确认 → 已完成，复盘进博主档案。"""
-        token = tenant_id_ctx.set(tenant_a.id)
-        try:
-            pr = await factory.user(tenant_a, roles=[admin_role])
-            manager = await factory.user(tenant_a, roles=[admin_role])
-            promo = await _paid_promo(
-                promotion_factory, product_factory, blogger_factory, pr, code="RT_FLOW"
+        promo = await _paid_promo(
+            promotion_factory,
+            product_factory,
+            blogger_factory,
+            flow_users.pr_manager,
+            code="RT_MANAGER",
+            settlement_status="待核查",
+        )
+        svc = PromotionService(session)
+        resp = await svc.write_retrospective(
+            promo.id, RetrospectiveWriteRequest(content="主管自己负责也可写"), flow_users.pr_manager
+        )
+        assert resp.retro_status == "已完成"
+        assert resp.retro_confirmed_by == flow_users.pr_manager.id
+        assert resp.retro_confirmed_at is not None
+        assert resp.metrics_recorded_at is None
+        archive = await svc.blogger_retrospectives(promo.blogger_id, flow_users.pr_manager)
+        assert len(archive) == 1
+        assert archive[0].created_by == archive[0].confirmed_by == flow_users.pr_manager.id
+        with pytest.raises(Exception) as error:
+            await svc.write_retrospective(
+                promo.id, RetrospectiveWriteRequest(content="不能再写"), flow_users.pr_manager
             )
-            svc = PromotionService(session)
+        assert error.value.status_code == 422
 
-            await svc.record_metrics(promo.id, _METRICS, pr, screenshot=_SHOT)
-            submitted = await svc.submit_retrospective(
-                promo.id,
-                RetrospectiveSubmitRequest(content="数据一般，博主配合度高，建议二搭"),
-                pr,
-            )
-            assert submitted.retro_status == RetroStatus.PENDING_CONFIRM.value
-            assert submitted.retro_content == "数据一般，博主配合度高，建议二搭"
-
-            # 未确认之前不该进博主档案
-            archive = await svc.blogger_retrospectives(promo.blogger_id, manager)
-            assert archive == []
-
-            confirmed = await svc.confirm_retrospective(
-                promo.id, RetrospectiveConfirmRequest(approve=True), manager
-            )
-            assert confirmed.retro_status == RetroStatus.COMPLETED.value
-            assert confirmed.retro_confirmed_by == manager.id
-            assert confirmed.retro_confirmed_at is not None
-
-            archive = await svc.blogger_retrospectives(promo.blogger_id, manager)
-            assert len(archive) == 1
-            assert archive[0].content == "数据一般，博主配合度高，建议二搭"
-            assert archive[0].confirmed_by == manager.id
-            assert archive[0].created_by == pr.id
-            assert archive[0].promotion_internal_code == promo.internal_code
-        finally:
-            tenant_id_ctx.reset(token)
-
-    async def test_reject_keeps_old_record_and_allows_rewrite(
+    async def test_admin_appends_version_and_legacy_draft_stays_hidden(
         self,
         session: AsyncSession,
-        tenant_a: Any,
-        factory: Any,
-        admin_role: Any,
+        flow_users: Any,
         product_factory: Any,
         blogger_factory: Any,
         promotion_factory: Any,
     ) -> None:
-        """打回退回待复盘；旧版留着，重写追加新行。"""
-        token = tenant_id_ctx.set(tenant_a.id)
-        try:
-            pr = await factory.user(tenant_a, roles=[admin_role])
-            manager = await factory.user(tenant_a, roles=[admin_role])
-            promo = await _paid_promo(
-                promotion_factory, product_factory, blogger_factory, pr, code="RT_REJECT"
-            )
-            svc = PromotionService(session)
-            await svc.record_metrics(promo.id, _METRICS, pr, screenshot=_SHOT)
-            await svc.submit_retrospective(
-                promo.id, RetrospectiveSubmitRequest(content="第一版，写得太敷衍"), pr
-            )
-            rejected = await svc.confirm_retrospective(
-                promo.id,
-                RetrospectiveConfirmRequest(approve=False, opinion="补充下二搭建议"),
-                manager,
-            )
-            assert rejected.retro_status == RetroStatus.PENDING_RETRO.value
-            assert rejected.retro_confirmed_at is None
+        from uuid import uuid4
 
-            resubmitted = await svc.submit_retrospective(
-                promo.id, RetrospectiveSubmitRequest(content="第二版，补了二搭建议"), pr
+        from app.modules.promotion.models import BloggerRetrospective
+
+        promo = await _paid_promo(
+            promotion_factory,
+            product_factory,
+            blogger_factory,
+            flow_users.pr,
+            code="RT_VERSIONS",
+            settlement_status="待核查",
+        )
+        session.add(
+            BloggerRetrospective(
+                id=uuid4(),
+                tenant_id=promo.tenant_id,
+                blogger_id=promo.blogger_id,
+                promotion_id=promo.id,
+                content="PR旧草稿",
+                created_by=flow_users.pr.id,
             )
-            assert resubmitted.retro_status == RetroStatus.PENDING_CONFIRM.value
-            # 「当前生效」是最新那条
-            assert resubmitted.retro_content == "第二版，补了二搭建议"
-
-            # 旧版没被删
-            count = (
-                await session.execute(
-                    sa_text(
-                        "SELECT COUNT(*) FROM blogger_retrospective " "WHERE promotion_id = :p"
-                    ),
-                    {"p": promo.id},
-                )
-            ).scalar_one()
-            assert count == 2
-
-            await svc.confirm_retrospective(
-                promo.id, RetrospectiveConfirmRequest(approve=True), manager
+        )
+        await session.flush()
+        svc = PromotionService(session)
+        assert await svc.blogger_retrospectives(promo.blogger_id, flow_users.pr) == []
+        await svc.write_retrospective(
+            promo.id, RetrospectiveWriteRequest(content="主管版本"), flow_users.pr_manager
+        )
+        await svc.write_retrospective(
+            promo.id, RetrospectiveWriteRequest(content="管理员修订"), flow_users.admin
+        )
+        archive = await svc.blogger_retrospectives(promo.blogger_id, flow_users.pr)
+        assert [r.content for r in archive] == ["管理员修订"]
+        assert archive[0].created_by == archive[0].confirmed_by == flow_users.admin.id
+        rows = (
+            await session.execute(
+                sa_text(
+                    "SELECT content, confirmed_at FROM blogger_retrospective WHERE promotion_id=:p"
+                ),
+                {"p": promo.id},
             )
-            # 档案里只收确认过的那一条，被打回那版不进
-            archive = await svc.blogger_retrospectives(promo.blogger_id, manager)
-            assert len(archive) == 1
-            assert archive[0].content == "第二版，补了二搭建议"
-        finally:
-            tenant_id_ctx.reset(token)
+        ).all()
+        assert len(rows) == 3
+        assert dict(rows)["PR旧草稿"] is None
 
-    async def test_self_confirm_forbidden(
+    @pytest.mark.parametrize("who", ["pr", "finance", "operations"])
+    async def test_independent_scope_http_forbids_old_wildcards(
         self,
         session: AsyncSession,
-        tenant_a: Any,
-        factory: Any,
-        admin_role: Any,
+        flow_users: Any,
         product_factory: Any,
         blogger_factory: Any,
         promotion_factory: Any,
+        who: str,
     ) -> None:
-        """自己写的复盘自己批，主管这道关就没有意义。
+        from tests.integration.test_settlement_routing import _call
 
-        这条只能在 service 层挡 —— promotion.retro:confirm 的一级域是 promotion，
-        PR 的 promotion.*:* 会被通配命中。
-        """
-        token = tenant_id_ctx.set(tenant_a.id)
-        try:
-            pr = await factory.user(tenant_a, roles=[admin_role])
-            promo = await _paid_promo(
-                promotion_factory, product_factory, blogger_factory, pr, code="RT_SELF"
-            )
-            svc = PromotionService(session)
-            await svc.record_metrics(promo.id, _METRICS, pr, screenshot=_SHOT)
-            await svc.submit_retrospective(
-                promo.id, RetrospectiveSubmitRequest(content="自己写自己批"), pr
-            )
-            with pytest.raises(RetroSelfConfirmForbiddenError):
-                await svc.confirm_retrospective(
-                    promo.id, RetrospectiveConfirmRequest(approve=True), pr
-                )
-        finally:
-            tenant_id_ctx.reset(token)
+        promo = await _paid_promo(
+            promotion_factory,
+            product_factory,
+            blogger_factory,
+            flow_users.pr,
+            code=f"RT_DENY_{who}",
+        )
+        resp = await _call(
+            session,
+            getattr(flow_users, who),
+            "POST",
+            f"/api/promotions/{promo.id}/retrospective",
+            {"content": "越权"},
+        )
+        assert resp.status_code == 403
+        assert resp.json()["error"]["code"] == "PERMISSION_DENIED"
 
-    async def test_reject_requires_opinion(self) -> None:
-        with pytest.raises(PydanticValidationError):
-            RetrospectiveConfirmRequest(approve=False)
-
-    async def test_blogger_archive_spans_promotions(
+    async def test_deleted_confirm_endpoint_and_empty_content(
         self,
         session: AsyncSession,
-        tenant_a: Any,
-        factory: Any,
-        admin_role: Any,
-        product_factory: Any,
-        blogger_factory: Any,
-        promotion_factory: Any,
+        flow_users: Any,
     ) -> None:
-        """PRD：复盘跨单据伴随这个博主。两单复盘都要出现在同一个博主档案里。"""
-        token = tenant_id_ctx.set(tenant_a.id)
-        try:
-            pr = await factory.user(tenant_a, roles=[admin_role])
-            manager = await factory.user(tenant_a, roles=[admin_role])
-            blogger = await blogger_factory.blogger()
-            svc = PromotionService(session)
+        from uuid import uuid4
 
-            for i, code in enumerate(["RT_SPAN_A", "RT_SPAN_B"]):
-                style = await product_factory.style(style_code=code)
-                promo = await promotion_factory.promotion(
-                    style=style,
-                    blogger=blogger,
-                    pr=pr,
-                    publish_status=PublishStatus.PUBLISHED.value,
-                    settlement_status=SettlementStatus.SETTLED.value,
-                )
-                await svc.record_metrics(promo.id, _METRICS, pr, screenshot=_SHOT)
-                await svc.submit_retrospective(
-                    promo.id, RetrospectiveSubmitRequest(content=f"第 {i + 1} 次合作的复盘"), pr
-                )
-                await svc.confirm_retrospective(
-                    promo.id, RetrospectiveConfirmRequest(approve=True), manager
-                )
+        from tests.integration.test_settlement_routing import _call
 
-            archive = await svc.blogger_retrospectives(blogger.id, manager)
-            assert len(archive) == 2
-            # 倒序：最近的在最前
-            assert archive[0].content == "第 2 次合作的复盘"
-        finally:
-            tenant_id_ctx.reset(token)
+        path = f"/api/promotions/{uuid4()}/retrospective"
+        assert (
+            await _call(session, flow_users.admin, "POST", path + "/confirm", {"approve": True})
+        ).status_code == 404
+        assert (
+            await _call(session, flow_users.pr_manager, "POST", path, {"content": "  "})
+        ).status_code == 422
 
 
-# 纯规则的状态机测试在 tests/unit/test_retro_state_machine.py ——
-# 本模块的 pytestmark 带 asyncio，会把同步测试一起标上然后报 warning。
+@pytest.fixture
+def tenant_ctx(tenant_a: Any) -> Any:
+    token = tenant_id_ctx.set(tenant_a.id)
+    yield
+    tenant_id_ctx.reset(token)

@@ -13,6 +13,7 @@ from app.modules.auth.models import User
 from app.modules.flow.line_events import LineEventRepository, LineEventType
 from app.modules.promotion.enums import (
     PublishStatus,
+    RetroStatus,
     SettlementStatus,
     ShipStatus,
 )
@@ -91,6 +92,7 @@ class PromotionPublishMixin(PromotionServiceBase):
             extra_fields={
                 "publish_url": payload.publish_url,
                 "actual_publish_date": payload.actual_publish_date,
+                "retro_status": RetroStatus.PENDING_RETRO.value,
             },
         )
         if updated is None:
