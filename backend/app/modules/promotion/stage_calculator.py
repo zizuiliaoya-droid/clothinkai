@@ -112,6 +112,7 @@ class StageFacts:
     is_active: bool
     retro_status: str
     metrics_recorded: bool
+    completed: bool
     seven_days_reached: bool
 
 
@@ -140,12 +141,13 @@ STAGE_RULES: tuple[StageRule, ...] = (
     StageRule("已删除", lambda f: f.publish_status == "已删除", "publish_status = '已删除'"),
     # 1a 停用（11-15）
     StageRule("已停用", lambda f: not f.is_active, "is_active = false"),
-    # 过渡：还没有 completed_at（M5），已取消 + 召回成功按「召回完结」
+    # 2 / 3：completed_at是唯一完结标记，优先于召回和结款阶段。
     StageRule(
         "已完结 · 召回",
-        lambda f: f.publish_status == "已取消" and f.recall_status == "召回成功",
-        "publish_status = '已取消' AND recall_status = '召回成功'",
+        lambda f: f.completed and f.publish_status == "已取消",
+        "completed_at IS NOT NULL AND publish_status = '已取消'",
     ),
+    StageRule("已完结", lambda f: f.completed, "completed_at IS NOT NULL"),
     # 4
     StageRule("召回中", lambda f: f.recall_status == "召回中", "recall_status = '召回中'"),
     # 5
@@ -217,12 +219,6 @@ STAGE_RULES: tuple[StageRule, ...] = (
         lambda f: _settled(f) and f.retro_status != "已完成",
         f"{_SETTLED_SQL} AND retro_status <> '已完成'",
     ),
-    # 过渡（D8）：还没有 completed_at（PR-7），已结款 + 已录 + 复盘已完成 → 已完结
-    StageRule(
-        "已完结",
-        lambda f: _settled(f) and f.metrics_recorded and f.retro_status == "已完成",
-        f"{_SETTLED_SQL} AND metrics_recorded_at IS NOT NULL AND retro_status = '已完成'",
-    ),
 )
 
 
@@ -235,6 +231,7 @@ def compute_stage(
     is_active: bool,
     retro_status: str,
     metrics_recorded_at: datetime | None,
+    completed_at: datetime | None,
     actual_publish_date: date | None,
     scheduled_publish_date: date | None,
     today: date,
@@ -249,6 +246,7 @@ def compute_stage(
         is_active=is_active,
         retro_status=retro_status,
         metrics_recorded=metrics_recorded_at is not None,
+        completed=completed_at is not None,
         seven_days_reached=seven_days_reached(actual_publish_date, today),
     )
     for rule in STAGE_RULES:

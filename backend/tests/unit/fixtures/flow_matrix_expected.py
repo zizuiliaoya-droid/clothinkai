@@ -121,6 +121,7 @@ def _promotion_doc(stage: str, column: str, **override: Any) -> PromotionDoc:
         "receiver_phone": "13812345678",
         "receiver_address": "杭州市某路 1 号",
         "items_complete": True,
+        "retro_status": "待复盘" if column in "DEF" else "已完成",
         "cooperation_mode": "寄拍",
         "promotion_settlement_status": "未核查",
         "settlement_status": None,
@@ -349,6 +350,13 @@ _PROMOTION_ROWS: dict[tuple[str, str], list[tuple[list[str], str]]] = {
         (_labels("ABCDG") + _labels("CD", history=True), "隐改改隐隐隐"),
         (_labels("EFH") + _labels("EF", history=True), "隐隐改隐隐隐"),
     ],
+    # PR-7：复盘与结款并行；状态机收窄动作，H完成版只有*改。
+    ("field", "retro"): [
+        (_labels("DEF") + _labels("DEF", history=True), "读改改隐读隐"),
+        (_labels("H"), "读读改隐读隐"),
+    ],
+    ("action", "retro_write"): [(_labels("DEF") + _labels("DEF", history=True), "读改改隐隐隐")],
+    ("action", "retro_revise"): [(_labels("DEFH") + _labels("DEF", history=True), "隐隐改隐隐隐")],
     # —— PR-6 ——
     # 推广审核（★¹⁵）：PR 读「需 PR 主管审核」；推广驳回时由状态机藏
     ("action", "review"): [(_labels("D") + _labels("D", history=True), "读改改隐隐隐")],

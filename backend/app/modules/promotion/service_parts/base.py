@@ -710,6 +710,7 @@ class PromotionServiceBase:
             is_active=promotion.is_active,
             retro_status=promotion.retro_status,
             metrics_recorded_at=promotion.metrics_recorded_at,
+            completed_at=promotion.completed_at,
             actual_publish_date=promotion.actual_publish_date,
             scheduled_publish_date=promotion.scheduled_publish_date,
             today=today or get_today(),
