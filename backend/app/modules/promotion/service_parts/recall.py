@@ -39,7 +39,7 @@ class PromotionRecallMixin(PromotionServiceBase):
         user: User,
     ) -> PromotionResponse:
         """EP05-S09: 启动召回（跨状态机：要求 publish_status ∈ {已发布, 已取消}）."""
-        promotion = await self._repo.get_by_id(promotion_id)
+        promotion = await self._writable_promotion(promotion_id, user)
         if promotion is None:
             raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
 
@@ -143,7 +143,7 @@ class PromotionRecallMixin(PromotionServiceBase):
         to_state: str,
         action_log: str,
     ) -> PromotionResponse:
-        promotion = await self._repo.get_by_id(promotion_id)
+        promotion = await self._writable_promotion(promotion_id, user)
         if promotion is None:
             raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
 
@@ -199,5 +199,7 @@ class PromotionRecallMixin(PromotionServiceBase):
             after={"recall_status": to_state},
             user_id=user.id,
         )
+        if to_state == RecallStatus.RECALLED_SUCCESS.value:
+            await self.maybe_complete(promotion_id, user)
         await self._session.commit()
         return await self._to_response(updated, user)

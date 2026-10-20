@@ -21,7 +21,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import bindparam, delete, exists, func, select, text, union_all, update
+from sqlalchemy import and_, bindparam, delete, exists, func, or_, select, text, union_all, update
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -235,24 +235,54 @@ class PromotionRepository:
             return None
         return promotion
 
+    async def get_for_write(
+        self,
+        promotion_id: UUID,
+        *,
+        tenant_id: UUID,
+        include_inactive: bool = False,
+    ) -> Promotion | None:
+        """所有写操作先锁同一推广行；等待后刷新快照，锁保留至调用者提交。"""
+        stmt = select(Promotion).where(
+            Promotion.id == promotion_id, Promotion.tenant_id == tenant_id
+        )
+        if not include_inactive:
+            stmt = stmt.where(Promotion.is_active.is_(True))
+        stmt = stmt.with_for_update().execution_options(populate_existing=True)
+        return (await self._session.execute(stmt)).scalar_one_or_none()
+
     async def get_for_deactivation(
         self, promotion_id: UUID, *, tenant_id: UUID
     ) -> Promotion | None:
-        """停用先锁推广行，串行于审核/重提先 UPDATE 推广、再写结款的同事务链。
+        return await self.get_for_write(promotion_id, tenant_id=tenant_id)
 
-        持锁直到外层事务提交；等待后刷新 identity map，按当前状态判矩阵和结款门。
-        """
+    async def maybe_complete(self, *, promotion_id: UUID, tenant_id: UUID) -> Promotion | None:
+        """原子完结；条件在UPDATE中，只有首次命中返回实体，调用者同事务写事件。"""
+        eligible = or_(
+            and_(
+                Promotion.publish_status == "已发布",
+                Promotion.settlement_status == "已结款",
+                Promotion.metrics_recorded_at.is_not(None),
+                Promotion.retro_status == "已完成",
+            ),
+            and_(Promotion.publish_status == "已取消", Promotion.recall_status == "召回成功"),
+        )
         stmt = (
-            select(Promotion)
+            update(Promotion)
             .where(
                 Promotion.id == promotion_id,
                 Promotion.tenant_id == tenant_id,
-                Promotion.is_active.is_(True),
+                Promotion.completed_at.is_(None),
+                eligible,
             )
-            .with_for_update()
-            .execution_options(populate_existing=True)
+            .values(completed_at=func.now(), updated_at=func.now())
+            .returning(Promotion)
+            .execution_options(synchronize_session=False)
         )
-        return (await self._session.execute(stmt)).scalar_one_or_none()
+        promotion = (await self._session.execute(stmt)).scalar_one_or_none()
+        if promotion is not None:
+            await self._session.refresh(promotion)
+        return promotion
 
     async def get_payment_attachment_refs(
         self, *, tenant_id: UUID, promotion_ids: list[UUID]
@@ -799,6 +829,7 @@ class PromotionRepository:
                 Promotion.id == promotion_id,
                 Promotion.tenant_id == tenant_id,
                 Promotion.is_active.is_(True),
+                Promotion.completed_at.is_(None),
             )
             .values(like_count=like_count, updated_at=func.now())
             .returning(Promotion)

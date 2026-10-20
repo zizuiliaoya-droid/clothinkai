@@ -593,6 +593,7 @@ class PromotionResponse(BaseModel):
     publish_status: str
     recall_status: str
     settlement_status: str
+    completed_at: datetime | None = None
     retro_status: str = "未开始"
     """未开始 / 待复盘 / 待确认 / 已完成（PRD V1.4 改动 4，第 4 个并行状态机）。"""
 

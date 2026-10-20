@@ -188,6 +188,53 @@ class PromotionServiceBase:
     # Private helpers
     # ============================================================
 
+    async def _writable_promotion(
+        self,
+        promotion_id: UUID,
+        user: User,
+        *,
+        include_inactive: bool = False,
+    ) -> Promotion:
+        """同事务行锁内读取并判完结，防最后一步与PATCH/上传互相穿透。"""
+        from app.modules.promotion.exceptions import (
+            PromotionCompletedReadonlyError,
+            PromotionNotFoundError,
+        )
+
+        promotion = await self._repo.get_for_write(
+            promotion_id,
+            tenant_id=user.tenant_id,
+            include_inactive=include_inactive,
+        )
+        if promotion is None:
+            raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
+        if promotion.completed_at is not None and not (await self._flow_actor(user)).is_star:
+            raise PromotionCompletedReadonlyError("已完结，只读")
+        return promotion
+
+    async def maybe_complete(self, promotion_id: UUID, user: User) -> None:
+        """五条写路径提交前调用；只有条件UPDATE首次命中才写完结时间线。"""
+        completed = await self._repo.maybe_complete(
+            promotion_id=promotion_id, tenant_id=user.tenant_id
+        )
+        if completed is None:
+            return
+        await LineEventRepository(self._session).append(
+            tenant_id=completed.tenant_id,
+            line_id=completed.line_id,
+            event_type=LineEventType.PROMOTION_COMPLETED,
+            actor_id=user.id,
+            promotion_id=promotion_id,
+            payload={"completed_at": completed.completed_at.isoformat()},
+        )
+        await self._audit.log(
+            action="promotion.complete",
+            resource="promotion",
+            resource_id=promotion_id,
+            user_id=user.id,
+            after={"completed_at": completed.completed_at.isoformat()},
+        )
+
     async def _resolve_mode_costs(
         self,
         *,
@@ -1011,6 +1058,7 @@ class PromotionServiceBase:
             retro_status=promotion.retro_status,
             retro_confirmed_by=promotion.retro_confirmed_by,
             retro_confirmed_at=promotion.retro_confirmed_at,
+            completed_at=promotion.completed_at,
             retro_content=retro_content,
             reviewed_by=promotion.reviewed_by,
             reviewed_at=promotion.reviewed_at,

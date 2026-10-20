@@ -635,6 +635,7 @@ async def promotion_factory(session: AsyncSession, tenant_a: Any) -> Any:
                     "settlement_status",
                     "is_active",
                     "like_count",
+                    "completed_at",
                     "metrics_recorded_at",
                     "source_extra",
                     "cooperation_mode",
@@ -755,6 +756,7 @@ async def promotion_factory(session: AsyncSession, tenant_a: Any) -> Any:
                     ship_pushed_by=kw.get("ship_pushed_by"),
                     # 显式 None 会插 NULL（NOT NULL）：只在传了时给，否则走库默认
                     **({"line_id": kw["line_id"]} if "line_id" in kw else {}),
+                    **({"completed_at": kw["completed_at"]} if "completed_at" in kw else {}),
                     **({"retro_status": kw["retro_status"]} if "retro_status" in kw else {}),
                 )
                 session.add(p)

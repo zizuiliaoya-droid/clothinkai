@@ -381,13 +381,7 @@ class PromotionService(
         一样不加锁。
         """
         # 停用与审核建结款单互斥（评审 M1）：锁前不判矩阵、不查结款，锁后用当前快照。
-        promotion = (
-            await self._repo.get_for_deactivation(promotion_id, tenant_id=user.tenant_id)
-            if "is_active" in payload.model_fields_set and payload.is_active is False
-            else await self._repo.get_by_id(promotion_id)
-        )
-        if promotion is None:
-            raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
+        promotion = await self._writable_promotion(promotion_id, user)
         # 顺序（流程线 7.1）：404 → 退役键 422 → 合作模式改成另一个值 409 → 已入矩阵的字段（越权全列 403）
         # → 字段写权限 → 其余校验
         self._reject_retired_source_extra_keys(payload)
@@ -584,7 +578,7 @@ class PromotionService(
         顺序：404 → 矩阵 ``goods_items`` 不是「改」→ 403 ``FIELD_PERMISSION_DENIED``（fields=["goods_items"]）
         → 明细校验（款式集合 = 归属商品的成员、每行有 sku 且属于该款）422。同步 ``promotion.sku_id`` = 主款式那行。
         """
-        promotion = await self._repo.get_by_id(promotion_id)
+        promotion = await self._writable_promotion(promotion_id, user)
         if promotion is None:
             raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
         actor = await self._flow_actor(user)
@@ -767,7 +761,7 @@ class PromotionService(
         管理员，11-15；不够 403）→ 停用门（结款单进行中 409，收尾 L3）→ 条件 UPDATE（并发下 0 行 409）
         → 时间线 ``promotion.updated``（diff ``is_active``，同 PATCH 的写法）→ 审计 → 提交。
         """
-        promotion = await self._repo.get_for_deactivation(promotion_id, tenant_id=user.tenant_id)
+        promotion = await self._writable_promotion(promotion_id, user)
         if promotion is None:
             raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
         require(await self._flow_actor(user), await self._promotion_doc(promotion), "deactivate")

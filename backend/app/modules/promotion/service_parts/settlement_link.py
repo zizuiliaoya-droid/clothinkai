@@ -53,7 +53,7 @@ class PromotionSettlementLinkMixin(PromotionServiceBase):
         ``SettlementResubmitted``（finance 监听 ``autocommit=False``，结款单不在已驳回 → 409，异常冒泡、整笔回滚）
         → 写 ``settlement.resubmitted``（说明进 note）→ 统一 commit。
         """
-        promotion = await self._repo.get_by_id(promotion_id)
+        promotion = await self._writable_promotion(promotion_id, user)
         if promotion is None:
             raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
 
@@ -154,7 +154,7 @@ class PromotionSettlementLinkMixin(PromotionServiceBase):
         """
         from fastapi.concurrency import run_in_threadpool
 
-        promotion = await self._repo.get_by_id(promotion_id)
+        promotion = await self._writable_promotion(promotion_id, user)
         if promotion is None:
             raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
 
@@ -249,6 +249,7 @@ class PromotionSettlementLinkMixin(PromotionServiceBase):
                 },
                 user_id=user.id,
             )
+            await self.maybe_complete(promotion_id, user)
             await self._session.commit()
         except Exception:
             await self._session.rollback()

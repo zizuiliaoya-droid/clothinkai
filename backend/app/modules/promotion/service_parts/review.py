@@ -68,7 +68,7 @@ class PromotionReviewMixin(PromotionServiceBase):
         事件失败时 audit 脱敏 + 兜底（FB5）。
         review_reason / review_reason_category 只在 reject 时写，approve 不清（7a-4）。
         """
-        promotion = await self._repo.get_by_id(promotion_id)
+        promotion = await self._writable_promotion(promotion_id, user)
         if promotion is None:
             raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
 
@@ -266,6 +266,8 @@ class PromotionReviewMixin(PromotionServiceBase):
                 await self._log_event_dispatch_failure(event, exc, user, blocking=True)
                 raise
 
+        if outcome == "settled_directly":
+            await self.maybe_complete(promotion_id, user)
         await self._session.commit()
         response = await self._to_response(updated, user)
         if outcome is None:
@@ -288,7 +290,7 @@ class PromotionReviewMixin(PromotionServiceBase):
           主管再审时能看到上次为什么驳（再审通过也不清驳回原因，见 ``review``）；
           resubmit_note / resubmitted_at 每轮覆盖
         """
-        promotion = await self._repo.get_by_id(promotion_id)
+        promotion = await self._writable_promotion(promotion_id, user)
         if promotion is None:
             raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
 
@@ -386,7 +388,7 @@ class PromotionReviewMixin(PromotionServiceBase):
         不限制状态：PR 可能在发货后就拿到了单号，也可能审核被拦住之后才补。
         真正的门槛在 ``review()`` 里 —— 没有单号就通不过审核。
         """
-        promotion = await self._repo.get_by_id(promotion_id)
+        promotion = await self._writable_promotion(promotion_id, user)
         if promotion is None:
             raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
 

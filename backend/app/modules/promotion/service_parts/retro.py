@@ -73,7 +73,7 @@ class PromotionRetroMixin(PromotionServiceBase):
         """
         from fastapi.concurrency import run_in_threadpool
 
-        promotion = await self._repo.get_by_id(promotion_id)
+        promotion = await self._writable_promotion(promotion_id, user)
         if promotion is None:
             raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
 
@@ -206,6 +206,7 @@ class PromotionRetroMixin(PromotionServiceBase):
                 },
                 user_id=user.id,
             )
+            await self.maybe_complete(promotion_id, user)
             await self._session.commit()
         except Exception:
             await self._session.rollback()
@@ -233,7 +234,7 @@ class PromotionRetroMixin(PromotionServiceBase):
         from app.core.exceptions import PermissionDeniedError
         from app.modules.promotion.enums import PublishStatus
 
-        promotion = await self._repo.get_for_deactivation(promotion_id, tenant_id=user.tenant_id)
+        promotion = await self._writable_promotion(promotion_id, user)
         if promotion is None:
             raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
         actor = await self._flow_actor(user)
@@ -291,6 +292,7 @@ class PromotionRetroMixin(PromotionServiceBase):
             after={"retro_status": RetroStatus.COMPLETED.value},
             user_id=user.id,
         )
+        await self.maybe_complete(promotion_id, user)
         await self._session.commit()
         return await self._to_response(updated, user)
 
