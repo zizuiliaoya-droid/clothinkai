@@ -137,7 +137,7 @@ async def test_completed_http_writes_are_409(
         session, flow_users.pr_manager, method, f"/api/promotions/{promo.id}{suffix}", body
     )
     assert resp.status_code == 409, resp.text
-    assert resp.json()["error"]["code"] == "PROMOTION_COMPLETED_READONLY"
+    assert resp.json()["code"] == "PROMOTION_COMPLETED_READONLY"
 
 
 async def test_completed_admin_edit_does_not_reopen_and_collector_freezes(

@@ -321,7 +321,7 @@ class TestRetrospectiveFlow:
             {"content": "越权"},
         )
         assert resp.status_code == 403
-        assert resp.json()["error"]["code"] == "PERMISSION_DENIED"
+        assert resp.json()["code"] == "PERMISSION_DENIED"
 
     async def test_deleted_confirm_endpoint_and_empty_content(
         self,

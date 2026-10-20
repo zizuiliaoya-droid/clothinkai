@@ -219,20 +219,22 @@ class PromotionServiceBase:
         )
         if completed is None:
             return
+        completed_at = completed.completed_at
+        assert completed_at is not None
         await LineEventRepository(self._session).append(
             tenant_id=completed.tenant_id,
             line_id=completed.line_id,
             event_type=LineEventType.PROMOTION_COMPLETED,
             actor_id=user.id,
             promotion_id=promotion_id,
-            payload={"completed_at": completed.completed_at.isoformat()},
+            payload={"completed_at": completed_at.isoformat()},
         )
         await self._audit.log(
             action="promotion.complete",
             resource="promotion",
             resource_id=promotion_id,
             user_id=user.id,
-            after={"completed_at": completed.completed_at.isoformat()},
+            after={"completed_at": completed_at.isoformat()},
         )
 
     async def _resolve_mode_costs(
