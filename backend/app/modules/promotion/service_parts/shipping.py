@@ -24,7 +24,6 @@ from app.modules.promotion.display_name import normalize_goods_short_name
 from app.modules.promotion.enums import PublishStatus, RecallStatus, ShipCourier, ShipStatus
 from app.modules.promotion.exceptions import (
     ExportTooManyRowsError,
-    PromotionNotFoundError,
     ShippedAtInFutureError,
     StateTransitionConflictError,
 )
@@ -69,12 +68,6 @@ def _iso(v: datetime | None) -> str | None:
 
 class PromotionShippingMixin(PromotionServiceBase):
     """纳入发货 / 确认推送仓库 / 撤回推送；仓库页列表、导出与回填（7.4，S5 / S6）。"""
-
-    async def _get_or_404(self, promotion_id: UUID) -> Promotion:
-        promotion = await self._repo.get_by_id(promotion_id)
-        if promotion is None:
-            raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
-        return promotion
 
     async def _ship_transition(
         self,
@@ -133,7 +126,9 @@ class PromotionShippingMixin(PromotionServiceBase):
 
     async def ship_include(self, promotion_id: UUID, user: User) -> PromotionResponse:
         """S2 纳入发货：历史单（发货为空）→ 待发货。"""
-        promotion = await self._get_or_404(promotion_id)
+        promotion = await self._writable_promotion(
+            promotion_id, user, conflict_fields=("ship_status", "publish_status", "recall_status")
+        )
         actor = await self._flow_actor(user)
         require(actor, await self._promotion_doc(promotion), "ship_include")
 
@@ -163,7 +158,9 @@ class PromotionShippingMixin(PromotionServiceBase):
         → ③ 条件 UPDATE（409）→ ④ 写明细（整组替换，同步 ``promotion.sku_id``）与收件
         → ⑤ 按动作前的阶段重组快照判 ★（422 ``FLOW_GATE_MISSING``），失败连 ③ 一起回滚。
         """
-        promotion = await self._get_or_404(promotion_id)
+        promotion = await self._writable_promotion(
+            promotion_id, user, conflict_fields=("ship_status", "publish_status", "recall_status")
+        )
         actor = await self._flow_actor(user)
         doc = await self._promotion_doc(promotion)
         require(actor, doc, "ship_push", gates=False)
@@ -241,7 +238,7 @@ class PromotionShippingMixin(PromotionServiceBase):
         self, promotion_id: UUID, payload: PromotionShipWithdrawRequest, user: User
     ) -> PromotionResponse:
         """S4 撤回推送：待打单 → 待发货。推送时间 / 人保留（再推覆盖），原因进 audit_log。"""
-        promotion = await self._get_or_404(promotion_id)
+        promotion = await self._writable_promotion(promotion_id, user)
         actor = await self._flow_actor(user)
         require(actor, await self._promotion_doc(promotion), "ship_withdraw")
 
@@ -441,7 +438,7 @@ class PromotionShippingMixin(PromotionServiceBase):
         404 → 状态机（只认待打单 / 已发货，422）→ 矩阵（H 列只有管理员，403）→ 发货时间不晚于现在（422）
         → 条件 UPDATE（发货状态没被别人改过，否则 409）。audit_log 记前后值；只回仓库行投影。
         """
-        promotion = await self._get_or_404(promotion_id)
+        promotion = await self._writable_promotion(promotion_id, user)
         actor = await self._flow_actor(user)
         stage = await self._compute_stage(promotion)
         doc = build_warehouse_doc(

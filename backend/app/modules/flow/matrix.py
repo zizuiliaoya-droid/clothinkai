@@ -422,6 +422,10 @@ class RecallIn(_AttrIn):
     attr = "recall_status"
 
 
+class RetroIn(_AttrIn):
+    attr = "retro_status"
+
+
 class PublishIn(_AttrIn):
     attr = "publish_status"
 

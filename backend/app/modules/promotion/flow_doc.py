@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from typing import ClassVar
 from uuid import UUID
@@ -67,6 +67,9 @@ class PromotionDoc(FlowDocBase):
     metrics_available_from: date | None
     """7 天数据可以录的第一天（发布日 + 7），灰格提示用；没有发布日为 None。"""
 
+    retro_status: str = "未开始"
+    completed_at: datetime | None = None
+
     def _open_unpublished(self) -> bool:
         return (
             self.publish_status == _UNPUBLISHED
@@ -92,6 +95,11 @@ class PromotionDoc(FlowDocBase):
             allowed.add("ship_withdraw")
         if self.ship_status is None and self._open_unpublished():
             allowed.add("ship_include")
+        if self.publish_status == "已发布":
+            if self.retro_status == "待复盘" and self.completed_at is None:
+                allowed.add("retro_write")
+            if self.retro_status == "已完成":
+                allowed.add("retro_revise")
         stage_action = _STAGE_ACTIONS.get(self.stage)
         if stage_action is not None:
             allowed.add(stage_action)
@@ -148,6 +156,8 @@ def build_promotion_doc(
         settlement_status=settlement_status,
         quote_amount=promotion.quote_amount,
         has_payment_qr=promotion.payment_qr_attachment_id is not None,
+        retro_status=promotion.retro_status,
+        completed_at=promotion.completed_at,
         return_waybill=promotion.return_waybill,
         has_recall_waybill=promotion.recall_waybill_attachment_id is not None,
         metrics_available_from=metrics_available_from(promotion.actual_publish_date),

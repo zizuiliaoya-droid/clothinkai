@@ -13,6 +13,7 @@ from app.modules.auth.models import User
 from app.modules.flow.line_events import LineEventRepository, LineEventType
 from app.modules.promotion.enums import (
     PublishStatus,
+    RetroStatus,
     SettlementStatus,
     ShipStatus,
 )
@@ -59,7 +60,7 @@ class PromotionPublishMixin(PromotionServiceBase):
         user: User,
     ) -> PromotionResponse:
         """EP05-S07: 发布（= PRD 说的「提交发布审核」）。"""
-        promotion = await self._repo.get_by_id(promotion_id)
+        promotion = await self._writable_promotion(promotion_id, user)
         if promotion is None:
             raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
 
@@ -91,6 +92,7 @@ class PromotionPublishMixin(PromotionServiceBase):
             extra_fields={
                 "publish_url": payload.publish_url,
                 "actual_publish_date": payload.actual_publish_date,
+                "retro_status": RetroStatus.PENDING_RETRO.value,
             },
         )
         if updated is None:
@@ -184,7 +186,7 @@ class PromotionPublishMixin(PromotionServiceBase):
         if not payload.cancel_reason:
             raise CancelReasonRequiredError("cancel_reason 必填")
 
-        promotion = await self._repo.get_by_id(promotion_id)
+        promotion = await self._writable_promotion(promotion_id, user)
         if promotion is None:
             raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
 
@@ -286,7 +288,7 @@ class PromotionPublishMixin(PromotionServiceBase):
         """
         from fastapi.concurrency import run_in_threadpool
 
-        promotion = await self._repo.get_by_id(promotion_id)
+        promotion = await self._writable_promotion(promotion_id, user)
         if promotion is None:
             raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
 

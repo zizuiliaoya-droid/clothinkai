@@ -21,7 +21,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import bindparam, case, delete, exists, func, select, text, union_all, update
+from sqlalchemy import and_, bindparam, delete, exists, func, or_, select, text, union_all, update
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,7 +36,7 @@ from app.modules.promotion.display_name import (
     PROMOTION_DISPLAY_SHORT_NAME_SQL,
     display_short_name_sql,
 )
-from app.modules.promotion.enums import RetroStatus, ShipStatus
+from app.modules.promotion.enums import ShipStatus
 from app.modules.promotion.exceptions import SequenceOverflowError
 from app.modules.promotion.models import BloggerRetrospective, Promotion, PromotionItem
 from app.modules.promotion.stage_calculator import PROMOTION_STAGES, STAGE_COLUMN, stage_sql_expr
@@ -235,24 +235,54 @@ class PromotionRepository:
             return None
         return promotion
 
+    async def get_for_write(
+        self,
+        promotion_id: UUID,
+        *,
+        tenant_id: UUID,
+        include_inactive: bool = False,
+    ) -> Promotion | None:
+        """所有写操作先锁同一推广行；等待后刷新快照，锁保留至调用者提交。"""
+        stmt = select(Promotion).where(
+            Promotion.id == promotion_id, Promotion.tenant_id == tenant_id
+        )
+        if not include_inactive:
+            stmt = stmt.where(Promotion.is_active.is_(True))
+        stmt = stmt.with_for_update().execution_options(populate_existing=True)
+        return (await self._session.execute(stmt)).scalar_one_or_none()
+
     async def get_for_deactivation(
         self, promotion_id: UUID, *, tenant_id: UUID
     ) -> Promotion | None:
-        """停用先锁推广行，串行于审核/重提先 UPDATE 推广、再写结款的同事务链。
+        return await self.get_for_write(promotion_id, tenant_id=tenant_id)
 
-        持锁直到外层事务提交；等待后刷新 identity map，按当前状态判矩阵和结款门。
-        """
+    async def maybe_complete(self, *, promotion_id: UUID, tenant_id: UUID) -> Promotion | None:
+        """原子完结；条件在UPDATE中，只有首次命中返回实体，调用者同事务写事件。"""
+        eligible = or_(
+            and_(
+                Promotion.publish_status == "已发布",
+                Promotion.settlement_status == "已结款",
+                Promotion.metrics_recorded_at.is_not(None),
+                Promotion.retro_status == "已完成",
+            ),
+            and_(Promotion.publish_status == "已取消", Promotion.recall_status == "召回成功"),
+        )
         stmt = (
-            select(Promotion)
+            update(Promotion)
             .where(
                 Promotion.id == promotion_id,
                 Promotion.tenant_id == tenant_id,
-                Promotion.is_active.is_(True),
+                Promotion.completed_at.is_(None),
+                eligible,
             )
-            .with_for_update()
-            .execution_options(populate_existing=True)
+            .values(completed_at=func.now(), updated_at=func.now())
+            .returning(Promotion)
+            .execution_options(synchronize_session=False)
         )
-        return (await self._session.execute(stmt)).scalar_one_or_none()
+        promotion = (await self._session.execute(stmt)).scalar_one_or_none()
+        if promotion is not None:
+            await self._session.refresh(promotion)
+        return promotion
 
     async def get_payment_attachment_refs(
         self, *, tenant_id: UUID, promotion_ids: list[UUID]
@@ -729,8 +759,8 @@ class PromotionRepository:
         """7 天数据只录一次（流程线 3.7）：``UPDATE … WHERE … AND metrics_recorded_at IS NULL RETURNING``。
 
         写三个指标、截图与 ``metrics_recorded_at = now()``；``update_state`` 只认状态字段，表达不了「未录过」，
-        所以单开这一条，不扩它。过渡期（PR-7 前复盘仍是旧流程）复盘 未开始 → 待复盘 也在这条 UPDATE 里，
-        其余复盘状态不动。0 行（已录过 / 软删 / 跨租户）→ ``None``，service 抛 409。
+        所以单开这一条，不扩它。复盘状态不动。
+        0 行（已录过 / 软删 / 跨租户）→ ``None``，service 抛 409。
         """
         unknown = set(values) - self._METRICS_FIELDS
         if unknown:
@@ -746,13 +776,6 @@ class PromotionRepository:
             .values(
                 **values,
                 metrics_recorded_at=func.now(),
-                retro_status=case(
-                    (
-                        Promotion.retro_status == RetroStatus.NOT_STARTED.value,
-                        RetroStatus.PENDING_RETRO.value,
-                    ),
-                    else_=Promotion.retro_status,
-                ),
                 updated_at=func.now(),
             )
             .returning(Promotion)
@@ -806,6 +829,7 @@ class PromotionRepository:
                 Promotion.id == promotion_id,
                 Promotion.tenant_id == tenant_id,
                 Promotion.is_active.is_(True),
+                Promotion.completed_at.is_(None),
             )
             .values(like_count=like_count, updated_at=func.now())
             .returning(Promotion)
@@ -858,7 +882,7 @@ class PromotionRepository:
                 BloggerRetrospective.tenant_id == tenant_id,
                 BloggerRetrospective.promotion_id == promotion_id,
             )
-            .order_by(BloggerRetrospective.created_at.desc())
+            .order_by(BloggerRetrospective.created_at.desc(), BloggerRetrospective.id.desc())
             .limit(1)
         )
         return (await self._session.execute(stmt)).scalar_one_or_none()
@@ -887,7 +911,13 @@ class PromotionRepository:
                     WHERE r.tenant_id = :tenant_id
                       AND r.blogger_id = :blogger_id
                       AND r.confirmed_at IS NOT NULL
-                    ORDER BY r.created_at DESC
+                    AND NOT EXISTS (
+                        SELECT 1 FROM blogger_retrospective newer
+                        WHERE newer.tenant_id=r.tenant_id AND newer.promotion_id=r.promotion_id
+                          AND newer.confirmed_at IS NOT NULL
+                          AND (newer.created_at, newer.id) > (r.created_at, r.id)
+                      )
+                    ORDER BY r.created_at DESC, r.id DESC
                     LIMIT :limit
                     """
                 ),

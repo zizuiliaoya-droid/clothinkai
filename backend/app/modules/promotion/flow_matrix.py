@@ -36,6 +36,7 @@ from app.modules.flow.matrix import (
     NotPrOwner,
     PromotionSettlementIn,
     PublishIn,
+    RetroIn,
     Row,
     Scope,
     SettlementIn,
@@ -394,6 +395,50 @@ _metrics_action["待满 7 天"] = Cell(
 _metrics_action["待录 7 天数据"] = Cell(edit=(_METRICS_WRITE,))
 _metrics_action["待复盘"] = Cell(edit=(_METRICS_WRITE,))
 
+# 复盘与结款并行：主管写完即完成，完成版只允许真正*修订。
+_retro: dict[str, Cell | tuple[Cell, ...]] = {}
+
+_fill(
+    _retro,
+    "DEF",
+    (
+        Cell(edit=(Scope("promotion_retro", "write"),), read=(_READ,), when=(RetroIn("待复盘"),)),
+        Cell(edit=(_STAR,), read=(_READ,)),
+    ),
+)
+_fill(_retro, "H", Cell(edit=(_STAR,), read=(_READ,)))
+_fill(
+    _retro,
+    "G",
+    (
+        Cell(
+            edit=(Scope("promotion_retro", "write"),),
+            read=(_READ,),
+            when=(PublishIn("已发布"), RetroIn("待复盘")),
+        ),
+        Cell(edit=(_STAR,), read=(_READ,), when=(PublishIn("已发布"),)),
+    ),
+)
+_retro_write: dict[str, Cell | tuple[Cell, ...]] = {}
+_fill(
+    _retro_write,
+    "DEF",
+    Cell(edit=(Scope("promotion_retro", "write"),), read=(_WRITE,), reason="由主管写复盘"),
+)
+_retro_revise: dict[str, Cell | tuple[Cell, ...]] = {}
+_fill(_retro_revise, "DEFH", Cell(edit=(_STAR,)))
+_fill(
+    _retro_write,
+    "G",
+    Cell(
+        edit=(Scope("promotion_retro", "write"),),
+        read=(_WRITE,),
+        reason="由主管写复盘",
+        when=(PublishIn("已发布"),),
+    ),
+)
+_fill(_retro_revise, "G", Cell(edit=(_STAR,), when=(PublishIn("已发布"),)))
+
 PROMOTION_MATRIX = Matrix(
     kind="promotion",
     stages=PROMOTION_STAGES,
@@ -409,6 +454,8 @@ PROMOTION_MATRIX = Matrix(
         Row("settlement_resubmit", "action", _settlement_resubmit),
         Row("settlement_chat", "action", _settlement_chat_action),
         Row("metrics", "action", _metrics_action),
+        Row("retro_write", "action", _retro_write),
+        Row("retro_revise", "action", _retro_revise),
         Row("goods", "field", _goods),
         Row("goods_items", "field", _goods_items),
         Row("cooperation", "field", _cooperation),
@@ -418,6 +465,7 @@ PROMOTION_MATRIX = Matrix(
         Row("shipping", "field", _shipping),
         Row("timeline", "field", _timeline),
         Row("metrics", "field", _metrics),
+        Row("retro", "field", _retro),
         Row("payment_qr", "field", _payment_qr),
         Row("settlement", "field", _settlement),
         Row("settlement_chat", "field", _settlement_chat),

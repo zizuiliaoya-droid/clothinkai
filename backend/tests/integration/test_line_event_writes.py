@@ -32,7 +32,6 @@ from app.modules.promotion.enums import RejectReasonCategory, ReviewAction
 from app.modules.promotion.schemas import (
     GoodsItemIn,
     PromotionCancelRequest,
-    PromotionMetricsRequest,
     PromotionPaymentQrBindRequest,
     PromotionPublishRequest,
     PromotionRecallStartRequest,
@@ -40,8 +39,7 @@ from app.modules.promotion.schemas import (
     PromotionReturnWaybillRequest,
     PromotionReviewRequest,
     PromotionUpdate,
-    RetrospectiveConfirmRequest,
-    RetrospectiveSubmitRequest,
+    RetrospectiveWriteRequest,
 )
 from app.modules.promotion.service import PromotionService
 from app.modules.promotion.urge_calculator import get_today
@@ -669,91 +667,38 @@ class TestReview:
 
 @pytest.mark.usefixtures("tenant_ctx")
 class TestRetro:
-    async def test_metrics_written_returned_confirmed(
+    async def test_written_and_admin_revision_events(
         self,
         session: AsyncSession,
         flow_users: Any,
         product_factory: Any,
         blogger_factory: Any,
         promotion_factory: Any,
-        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from app.core import attachment as att_mod
-
-        monkeypatch.setattr(att_mod.attachment_service, "_client", _FakeS3(), raising=False)
         promo = await _promo(
             flow_users,
             product_factory,
             blogger_factory,
             promotion_factory,
             publish_status="已发布",
-            settlement_status="已结款",
+            settlement_status="待核查",
+            retro_status="待复盘",
         )
         line_id, pid = promo.line_id, promo.id
         svc = PromotionService(session)
-
-        await svc.record_metrics(
-            pid,
-            PromotionMetricsRequest(like_count=120, collect_count=30, comment_count=8),
-            flow_users.pr,
-            screenshot=("m.png", "image/png", _PNG),
+        await svc.write_retrospective(
+            pid, RetrospectiveWriteRequest(content="主管版本"), flow_users.pr_manager
         )
-        await svc.submit_retrospective(
-            pid, RetrospectiveSubmitRequest(content="第一版复盘"), flow_users.pr
+        await svc.write_retrospective(
+            pid, RetrospectiveWriteRequest(content="管理员修订"), flow_users.admin
         )
-        await svc.confirm_retrospective(
-            pid,
-            RetrospectiveConfirmRequest(approve=False, opinion="写细一点"),
-            flow_users.pr_manager,
-        )
-        await svc.submit_retrospective(
-            pid, RetrospectiveSubmitRequest(content="第二版复盘"), flow_users.pr
-        )
-        await svc.confirm_retrospective(
-            pid, RetrospectiveConfirmRequest(approve=True), flow_users.pr_manager
-        )
-
         events = await events_of(session, line_id=line_id)
-        assert _types(events) == [
-            _T.PROMOTION_METRICS_RECORDED.value,
-            _T.RETRO_WRITTEN.value,
-            _T.RETRO_RETURNED.value,
-            _T.RETRO_WRITTEN.value,
-            _T.RETRO_CONFIRMED.value,
-        ]
-        metrics, written1, returned, written2, confirmed = events
-        metrics_att = (
-            await session.execute(
-                sa_text("SELECT metrics_attachment_id FROM promotion WHERE id = :p"), {"p": pid}
-            )
-        ).scalar_one()
-        assert metrics_att is not None and metrics.attachment_id == metrics_att
-        assert (metrics.from_state, metrics.to_state) == ("未开始", "待复盘")
-        assert metrics.payload == {"like_count": 120, "collect_count": 30, "comment_count": 8}
-        assert metrics.actor_id == flow_users.pr.id
-
-        retro_ids = {
-            content: str(rid)
-            for rid, content in (
-                await session.execute(
-                    sa_text(
-                        "SELECT id, content FROM blogger_retrospective WHERE promotion_id = :p"
-                    ),
-                    {"p": pid},
-                )
-            ).all()
-        }
-        assert (written1.from_state, written1.to_state) == ("待复盘", "待确认")
-        assert written1.note == "第一版复盘" and written1.actor_id == flow_users.pr.id
-        assert written1.payload == {"retrospective_id": retro_ids["第一版复盘"]}
-        assert (returned.from_state, returned.to_state) == ("待确认", "待复盘")
-        assert returned.note == "写细一点" and returned.actor_id == flow_users.pr_manager.id
-        assert returned.payload == {"retrospective_id": retro_ids["第一版复盘"]}
-        assert written2.payload == {"retrospective_id": retro_ids["第二版复盘"]}
-        assert (confirmed.from_state, confirmed.to_state) == ("待确认", "已完成")
-        assert confirmed.note is None
-        assert confirmed.payload == {"retrospective_id": retro_ids["第二版复盘"]}
-        assert {e.promotion_id for e in events} == {pid}
+        assert _types(events) == [_T.RETRO_WRITTEN.value, _T.RETRO_EDITED.value]
+        assert (events[0].from_state, events[0].to_state) == ("待复盘", "已完成")
+        assert events[0].actor_id == flow_users.pr_manager.id and events[0].note == "主管版本"
+        assert (events[1].from_state, events[1].to_state) == ("已完成", "已完成")
+        assert events[1].actor_id == flow_users.admin.id and events[1].note == "管理员修订"
+        assert events[0].payload["retrospective_id"] != events[1].payload["retrospective_id"]
         _check_registered(events)
 
 

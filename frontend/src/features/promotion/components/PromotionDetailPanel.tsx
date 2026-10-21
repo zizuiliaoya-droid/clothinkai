@@ -29,12 +29,14 @@ export function PromotionDetailPanel({
   promotionId,
   onEditReceiver,
   onEditItems,
+  onEditRetro,
 }: {
   promotionId: string;
   /** 打开「改收件信息」弹窗（ui.fields.receiver = edit 时出按钮）。 */
   onEditReceiver?: (row: Promotion) => void;
   /** 打开「改颜色尺码」弹窗（ui.fields.goods_items = edit 时出按钮）。 */
   onEditItems?: (row: Promotion) => void;
+  onEditRetro?: (row: Promotion) => void;
 }) {
   const { data, isLoading, error } = useQuery({
     queryKey: promotionDetailKey(promotionId),
@@ -48,6 +50,7 @@ export function PromotionDetailPanel({
   const ship = data.ship_status ? shipStatusStyle(data.ship_status) : null;
   return (
     <Space direction="vertical" size={16} style={{ width: "100%" }}>
+      {data.completed_at && <Tag color="green">已完结 · {data.completed_at.slice(0, 10)}</Tag>}
       <Section title="合作信息">
         <Descriptions size="small" column={{ xs: 1, sm: 2 }}>
           <Descriptions.Item label="合作模式">{dash(data.cooperation_mode)}</Descriptions.Item>
@@ -123,6 +126,11 @@ export function PromotionDetailPanel({
           </Descriptions.Item>
         </Descriptions>
       </Section>
+      <FieldBlock ui={ui} group="retro" title="复盘" onEdit={onEditRetro ? () => onEditRetro(data) : undefined}>
+        <Typography.Paragraph style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}>
+          {data.retro_content || "主管尚未填写复盘"}
+        </Typography.Paragraph>
+      </FieldBlock>
     </Space>
   );
 }

@@ -58,7 +58,6 @@ import { PublishModal } from "@/features/promotion/components/PublishModal";
 import { RecallModal } from "@/features/promotion/components/RecallModal";
 import { RejectModal } from "@/features/promotion/components/RejectModal";
 import { ResubmitModal } from "@/features/promotion/components/ResubmitModal";
-import { RetroConfirmModal } from "@/features/promotion/components/RetroConfirmModal";
 import { RetroModal } from "@/features/promotion/components/RetroModal";
 import { ReturnWaybillModal } from "@/features/promotion/components/ReturnWaybillModal";
 import { SourceExtraModal } from "@/features/promotion/components/SourceExtraModal";
@@ -103,7 +102,6 @@ const cooperationModeColor: Record<string, string> = {
 /** 复盘状态配色（PRD 改动 4）。「未开始」不上色，由渲染逻辑决定显示什么。 */
 const retroColor: Record<string, string> = {
   待复盘: "gold",
-  待确认: "processing",
   已完成: "green",
 };
 
@@ -144,9 +142,6 @@ export function PromotionListPage() {
   const [urgeTarget, setUrgeTarget] = useState<Promotion | null>(null);
   const [metricsTarget, setMetricsTarget] = useState<Promotion | null>(null);
   const [retroTarget, setRetroTarget] = useState<Promotion | null>(null);
-  const [retroConfirmTarget, setRetroConfirmTarget] = useState<Promotion | null>(
-    null
-  );
   // 点一行（或「留言」「金额改动记录」菜单）开主线抽屉；tab = 打开时先显示的页签
   const [lineTarget, setLineTarget] = useState<{ row: Promotion; tab?: LineTab } | null>(null);
   const [recallTarget, setRecallTarget] = useState<Promotion | null>(null);
@@ -174,6 +169,7 @@ export function PromotionListPage() {
           promotionId={row.id}
           onEditReceiver={setReceiverTarget}
           onEditItems={setItemsTarget}
+          onEditRetro={setRetroTarget}
         />
       ),
     },
@@ -270,6 +266,10 @@ export function PromotionListPage() {
         // 门槛（已结款、满 7 天）以接口为准：灰显时 label 带「YYYY-MM-DD 起可录」「已结款后可录」
         metrics: { label: "录 7 天数据", onClick: () => setMetricsTarget(record) },
         // 留言在抽屉底部（6.6）：菜单项只负责打开抽屉
+        ...(record.ui?.actions?.retro_write?.state === "enabled" ? {
+          retro_write: { label: "写复盘", onClick: () => setRetroTarget(record) },
+        } : {}),
+        retro_revise: { label: "修改复盘", onClick: () => setRetroTarget(record) },
         comment: { label: "留言", onClick: () => openLine(record) },
       },
       edits: {
@@ -598,19 +598,6 @@ export function PromotionListPage() {
               record.publish_status !== "已发布",
             onClick: () => setResubmitTarget(record),
           },
-          // 复盘（PRD 改动 4，PR-7 改 3 态）。录 7 天数据已改按 ui.actions.metrics 出（见 flowMenuItems）
-          {
-            key: "retro",
-            label: "写复盘",
-            disabled: record.retro_status !== "待复盘",
-            onClick: () => setRetroTarget(record),
-          },
-          {
-            key: "retro-confirm",
-            label: "确认复盘",
-            disabled: record.retro_status !== "待确认",
-            onClick: () => setRetroConfirmTarget(record),
-          },
           // 金额改动记录 = 主线抽屉的一个页签（8.4）：打开抽屉并切过去。
           // 页级 ui.actions.amount_log 没有（读不到金额改动接口）就没有这个页签，菜单项也不出
           ...(record.line_id && canAmountLog
@@ -623,9 +610,14 @@ export function PromotionListPage() {
               ]
             : []),
         ];
+        // 已完结H列只有真正*能编辑合作信息；沿用后端矩阵能力守住尚未纳入PR-10的旧写菜单。
+        const completedReadonly = !!record.completed_at && !record.ui?.edits?.includes("cooperation");
+        const guardedLegacy = legacyItems.map((item) => completedReadonly && item.key !== "amount-log"
+          ? { ...item, label: `${item.label}（已完结，只读）`, disabled: true, onClick: undefined }
+          : item);
         const items: MenuProps["items"] = flowItems.length
-          ? [...flowItems, { type: "divider" as const }, ...legacyItems]
-          : legacyItems;
+          ? [...flowItems, { type: "divider" as const }, ...guardedLegacy]
+          : guardedLegacy;
         return (
           <Dropdown menu={{ items }} trigger={["click"]}>
             <Button type="link" size="small">
@@ -748,10 +740,7 @@ export function PromotionListPage() {
 
       <RetroModal target={retroTarget} onClose={() => setRetroTarget(null)} />
 
-      <RetroConfirmModal
-        target={retroConfirmTarget}
-        onClose={() => setRetroConfirmTarget(null)}
-      />
+
 
       <RecallModal target={recallTarget} onClose={() => setRecallTarget(null)} />
 

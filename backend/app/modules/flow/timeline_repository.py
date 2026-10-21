@@ -59,7 +59,12 @@ class LineReadRepository:
         """以 line_id 为锚，左连推广单与谈款（两边都可能没有），再左连推广单的结款单。"""
         anchor = select(literal(line_id, PGUUID(as_uuid=True)).label("line_id")).subquery()
         stmt = (
-            select(Promotion, Negotiation, Settlement.id, Settlement.payment_date)
+            select(
+                Promotion,
+                Negotiation,
+                Settlement.id,
+                Settlement.payment_date,
+            )
             .select_from(anchor)
             .outerjoin(
                 Promotion,
