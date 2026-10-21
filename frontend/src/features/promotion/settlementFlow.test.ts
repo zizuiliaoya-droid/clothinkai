@@ -152,9 +152,13 @@ describe("paymentQrView（收款码能不能换、只读写什么）", () => {
   it.each(["已付款", "已结款"])("read + 推广单 %s → 已结款锁定", (s) => {
     expect(paymentQrView(detail({ state: "read" }, { settlement_status: s })).notice).toBe(QR_LOCKED_SETTLED);
   });
-  it("已结款锁定文案：过渡期不写 PR-8 才有的召回 / 寄回运费例外", () => {
-    expect(QR_LOCKED_SETTLED).toBe("已结款，收款码已锁定");
-    expect(QR_LOCKED_SETTLED).not.toContain("召回");
+  it("已结款锁定文案说明召回 / 寄回运费驳回例外", () => {
+    expect(QR_LOCKED_SETTLED).toBe("已结款，收款码已锁定；召回或寄回运费被驳回时可换");
+  });
+  it("已结款或完结不覆盖后端的精确 edit 能力", () => {
+    expect(paymentQrView(detail({ state: "edit" }, { settlement_status: "已结款", completed_at: "2026-10-21T01:00:00Z", publish_status: "已取消" }))).toEqual({ editable: true, notice: null });
+    expect(paymentQrView(detail({ state: "read" }, { recall_status: "召回中", settlement_status: "已结款", settlement: settlement("待财务付款") }))).toEqual({ editable: false, notice: QR_LOCKED_PAYING });
+    expect(paymentQrView(detail(undefined, { recall_status: "召回中" })).editable).toBe(false);
   });
   it("read + 已停用 / 已取消 → 只读", () => {
     expect(paymentQrView(detail({ state: "read" }, { is_active: false })).notice).toBe(QR_READONLY_INACTIVE);

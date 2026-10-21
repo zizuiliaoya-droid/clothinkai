@@ -5,7 +5,7 @@
 // - 填付款金额：实付默认 = 应付，实时显示相差多少，不相等时调整说明必填；422 FLOW_GATE_MISSING 标回调整说明
 // - 上传付款凭证：没有日期选择，付款日期 = 今天、系统自动记录
 // - 新列（推广编号、合作模式、应付、实付、调整说明、收款码）、单据信息行展开（不含收件 / 发货）、「待核查（旧单）」筛选
-// - 增加结算项保留「运费」（过渡期，PR-8 与 R33 同时停用）
+// - 新增结算项默认「其他」，移除运费；历史运费响应仍可读取
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
@@ -260,15 +260,26 @@ describe("SettlementListPage 操作按行级 ui", () => {
     );
   });
 
-  it("增加结算项：类型保留「运费」（过渡期）", async () => {
+  it("增加结算项：默认其他且不再提供运费", async () => {
     renderPage([settlement({ ui: rowUi({ extra_item: { state: "enabled" } }) })]);
     await openMenu();
     fireEvent.click(screen.getByText("增加结算项"));
     const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).queryByText("运费")).toBeNull();
+    expect(within(dialog).getByText("其他")).toBeTruthy();
     fireEvent.mouseDown(within(dialog).getByRole("combobox"));
-    for (const t of ["运费", "赞奖", "其他"]) {
+    for (const t of ["赞奖", "其他"]) {
       expect((await screen.findAllByText(t)).length).toBeGreaterThan(0);
     }
+    expect(screen.queryByText("运费")).toBeNull();
+  });
+
+  it("历史运费响应保留，不影响已付款单原有呈现", async () => {
+    const history = settlement({ settlement_status: "已付款", total_amount: "418.00", extra_items: [{ id: "old-freight", settlement_id: "s1", item_type: "运费", amount: "18.00", remark: "历史寄回运费", created_by: "u-finance", created_at: "2026-10-01T08:00:00Z", updated_at: "2026-10-01T08:00:00Z" }] });
+    renderPage([history]);
+    expect(await screen.findByText("JS-20261013-001")).toBeTruthy();
+    expect(screen.getByText("¥418.00")).toBeTruthy();
+    expect(history.extra_items[0]).toMatchObject({ item_type: "运费", amount: "18.00" });
   });
 });
 

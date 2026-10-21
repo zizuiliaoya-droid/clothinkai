@@ -94,8 +94,7 @@ export function metricsBadge(
 }
 
 export const QR_LOCKED_PAYING = "财务付款中，已锁定；码不对请让财务驳回后重传";
-// 过渡期：召回 / 寄回运费被驳回时可换码的例外随 PR-8 才有，到时把后半句加回来。
-export const QR_LOCKED_SETTLED = "已结款，收款码已锁定";
+export const QR_LOCKED_SETTLED = "已结款，收款码已锁定；召回或寄回运费被驳回时可换";
 export const QR_READONLY_INACTIVE = "已停用 / 已取消，只读";
 
 /**
