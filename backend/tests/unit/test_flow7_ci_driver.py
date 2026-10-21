@@ -189,3 +189,43 @@ def test_fault_junit_rejects_accidental_red(tmp_path, bad) -> None:
             red=True,
             returncode=2 if bad == "returncode" else 1,
         )
+
+
+@pytest.mark.parametrize("action", ["bootstrap", "drill", "verify-results"])
+def test_ci_driver_actions_use_backend_module_entry(action) -> None:
+    """CI必须保留backend为导入根；直接scripts/path会让历史004的app导入失败。"""
+    import re
+    from pathlib import Path
+
+    workflow = Path(__file__).resolve().parents[3] / ".github/workflows/ci.yml"
+    source = workflow.read_text(encoding="utf-8")
+    calls = re.findall(r"python [^\n]*ci_flow7_pg18[^\n]*", source)
+    matching = [call for call in calls if f" {action} " in call]
+    assert len(matching) == 1
+    assert matching[0].startswith(f"python -m scripts.ci_flow7_pg18 {action} ")
+
+
+def test_history_scan_from_clean_backend_interpreter() -> None:
+    """真实子进程扫描历史迁移，无pytest导入根或继承PYTHONPATH掩盖入口错误。"""
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from alembic.config import Config; from alembic.script import ScriptDirectory; "
+            "cfg=Config(); cfg.set_main_option('script_location','alembic'); "
+            "assert ScriptDirectory.from_config(cfg).get_heads()==['067_retro_completion']",
+        ],
+        cwd=root,
+        env={key: value for key, value in os.environ.items() if key.upper() != "PYTHONPATH"},
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr

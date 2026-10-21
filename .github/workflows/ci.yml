@@ -243,10 +243,10 @@ jobs:
         run: pip install -r requirements-dev.txt
       - name: Bootstrap isolated roles and migrate as real bypass owner
         run: |
-          python scripts/ci_flow7_pg18.py bootstrap --ci
+          python -m scripts.ci_flow7_pg18 bootstrap --ci
           alembic upgrade 066_platform_metric_setting
       - name: Synthetic M5 migration round trip (066 to 067 to 066 to 067)
-        run: python scripts/ci_flow7_pg18.py drill --ci --output ci-artifacts/flow7-pg18-drill.json
+        run: python -m scripts.ci_flow7_pg18 drill --ci --output ci-artifacts/flow7-pg18-drill.json
       - name: PG18 targeted services, true RLS and independent connection concurrency
         run: |
           pytest -q --junitxml=ci-artifacts/flow7-pg18-tests.xml \
@@ -268,7 +268,7 @@ jobs:
       - name: Controlled fault injection and restored-source green tests
         run: python -m scripts.ci_flow7_faults
       - name: Verify mandatory phases, test selection and zero skips
-        run: python scripts/ci_flow7_pg18.py verify-results --ci --output ci-artifacts/flow7-pg18-result.json
+        run: python -m scripts.ci_flow7_pg18 verify-results --ci --output ci-artifacts/flow7-pg18-result.json
       - name: Retain synthetic validation evidence
         if: always()
         uses: actions/upload-artifact@v4
