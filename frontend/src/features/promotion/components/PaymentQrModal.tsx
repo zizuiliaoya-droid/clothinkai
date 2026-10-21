@@ -3,7 +3,7 @@
 // - 打开时拉详情（带 ui.fields 与结款块）：能不能换只看 ui.fields.payment_qr 是不是 edit（7.3 的锁 ① ② ③ ①' 在后端）
 // - 只读时按单据情况写一句说明（paymentQrView）；灰显时显示接口的 hint（「发布后上传」）
 // - 上传走后端代传；成功后 invalidate ["promotions"]（详情 key 在它下面，一起重拉）与时间线
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Alert, Button, Image, Modal, Space, Spin, Typography, Upload, message } from "antd";
 import { DeleteOutlined, EyeOutlined, UploadOutlined } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
@@ -15,14 +15,15 @@ import {
 } from "@/features/promotion/api";
 import { paymentQrView, settlementImageError } from "@/features/promotion/settlementFlow";
 import type { Promotion } from "@/features/promotion/types";
-import { useFlowFeedback } from "./useFlowFeedback";
+import { useRecallFreightFeedback } from "./useRecallFreightFeedback";
 
 /** 收款码的查看 / 上传 / 移除（收款码弹窗与结款重提弹窗共用）。editable = false 只看。 */
-export function PaymentQrEditor({ promotion, editable }: { promotion: Promotion; editable: boolean }) {
-  const feedback = useFlowFeedback();
+export function PaymentQrEditor({ promotion, editable, allowRemove = true, onPendingChange }: { promotion: Promotion; editable: boolean; allowRemove?: boolean; onPendingChange?: (pending: boolean) => void }) {
+  const feedback = useRecallFreightFeedback(promotion.line_id);
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const hasQr = Boolean(promotion.payment_qr_attachment_id);
+  useEffect(() => { onPendingChange?.(Boolean(file) || busy); }, [file, busy, onPendingChange]);
 
   async function upload() {
     if (!file) return;
@@ -93,7 +94,7 @@ export function PaymentQrEditor({ promotion, editable }: { promotion: Promotion;
             >
               {hasQr ? "替换收款码" : "上传收款码"}
             </Button>
-            {hasQr && (
+            {hasQr && allowRemove && !promotion.settlement && !promotion.existing_settlement_status && (
               <Button
                 danger
                 icon={<DeleteOutlined />}

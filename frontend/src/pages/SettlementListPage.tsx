@@ -1,5 +1,6 @@
 import { useState } from "react";
 import {
+  Alert,
   Button,
   Card,
   Descriptions,
@@ -12,6 +13,7 @@ import {
   Select,
   Space,
   Table,
+  Tabs,
   Tag,
   Tooltip,
   Typography,
@@ -25,6 +27,7 @@ import type { ColumnsType } from "antd/es/table";
 import { addExtraItem, listSettlements, reviewSettlement } from "@/features/finance/api";
 import { PaymentAmountModal } from "@/features/finance/components/PaymentAmountModal";
 import { PaymentProofModal } from "@/features/finance/components/PaymentProofModal";
+import { ReturnFreightTab } from "@/features/finance/ReturnFreightTab";
 import type {
   ExtraItemType,
   Settlement,
@@ -64,6 +67,13 @@ const EXTRA_ITEM_TYPES: ExtraItemType[] = ["赞奖", "其他"];
  * 行内操作按接口的行级 `ui.actions`：核查通过（只给上线前的旧单）、驳回、增加结算项、填付款金额、上传付款凭证。
  */
 export function SettlementListPage() {
+  return <Tabs defaultActiveKey="service" items={[
+    { key: "service", label: "服务费结款", children: <ServiceFeeSettlementTab /> },
+    { key: "freight", label: "寄回运费", children: <Card title="寄回运费"><ReturnFreightTab /></Card> },
+  ]} />;
+}
+
+function ServiceFeeSettlementTab() {
   const qc = useQueryClient();
   const { token } = theme.useToken();
   const [filters, setFilters] = useState<SettlementListFilters>({
@@ -81,12 +91,12 @@ export function SettlementListPage() {
   const [rejectForm] = Form.useForm();
   const [extraForm] = Form.useForm();
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ["settlements", filters],
     queryFn: () => listSettlements(filters),
   });
   // 「导入结款」只看页级 ui.actions.import（流程线 PR-5）：财务、管理员有，主管没有
-  const canImport = data?.ui?.actions?.import?.state === "enabled";
+  const canImport = !error && data?.ui?.actions?.import?.state === "enabled";
 
   const refresh = () => {
     void qc.invalidateQueries({ queryKey: ["settlements"] });
@@ -354,7 +364,7 @@ export function SettlementListPage() {
           }
         />
       </Space>
-      <Table
+      {error ? <Alert type="error" showIcon message={(error as { response?: { status?: number } }).response?.status === 403 ? "没有查看财务结款的权限" : "财务结款加载失败"} action={<Button onClick={() => void refetch()}>重试</Button>} /> : <Table
         rowKey="id"
         size="small"
         loading={isLoading}
@@ -370,7 +380,7 @@ export function SettlementListPage() {
           onChange: (page, page_size) =>
             setFilters((f) => ({ ...f, page, page_size })),
         }}
-      />
+      />}
 
       <LineDrawer
         lineId={lineRow?.line_id ?? null}

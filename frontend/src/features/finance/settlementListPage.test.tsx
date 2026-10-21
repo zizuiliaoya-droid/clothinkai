@@ -13,6 +13,7 @@ import dayjs from "dayjs";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UiState } from "@/features/flow/keys";
 import type { Settlement, SettlementPage } from "./types";
+vi.mock("./ReturnFreightTab", () => ({ ReturnFreightTab: () => <div>寄回运费内容</div> }));
 
 const api = vi.hoisted(() => ({
   listSettlements: vi.fn(),
@@ -137,6 +138,23 @@ function rowUi(actions: NonNullable<UiState["actions"]>): Pick<UiState, "actions
 }
 
 describe("SettlementListPage 导入结款", () => {
+  it("403明确提示无读取权限，不显示空成功列表", async () => {
+    api.listSettlements.mockRejectedValue({ response: { status: 403, data: { code: "PERMISSION_DENIED" } } });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<MemoryRouter><QueryClientProvider client={client}><SettlementListPage /></QueryClientProvider></MemoryRouter>);
+    expect(await screen.findByText("没有查看财务结款的权限")).toBeTruthy();
+    expect(screen.queryByRole("table")).toBeNull();
+  });
+  it("服务费与寄回运费页签可切换，服务费筛选保留", async () => {
+    renderPage();
+    fireEvent.mouseDown(screen.getByRole("combobox", { name: "结算状态" }));
+    fireEvent.click((await screen.findAllByText("待付款")).at(-1)!);
+    fireEvent.click(screen.getByRole("tab", { name: "寄回运费" }));
+    expect(await screen.findByText("寄回运费内容")).toBeTruthy();
+    fireEvent.click(screen.getByRole("tab", { name: "服务费结款" }));
+    expect(screen.getAllByText("待付款").length).toBeGreaterThan(0);
+    expect(api.listSettlements).toHaveBeenLastCalledWith(expect.objectContaining({ settlement_status: "待付款" }));
+  });
   it("页级 ui 没有 import（主管）：不出「导入结款」", async () => {
     renderPage([], { actions: {} });
     await waitFor(() => expect(api.listSettlements).toHaveBeenCalled());
