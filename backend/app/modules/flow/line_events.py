@@ -271,6 +271,12 @@ PAYLOAD_FIELD_RULES: dict[str, tuple[str, str] | PayloadContainer | None] = {
     "payment_amount": ("settlement", "payment_amount"),
     "payment_adjust_note": ("settlement", "payment_adjust_note"),
     "payment_date": None,
+    # R33金额独立走推广费用规则；图在附件层先裁剪再签名。
+    "freight_payment_id": None,
+    "freight_amount": ("promotion", "cost_snapshot"),
+    "return_shipping_fee": ("promotion", "cost_snapshot"),
+    "return_shipping_payer": None,
+    "snapshot_role": None,
     # 复盘
     "retrospective_id": None,
     # 发货：推送明细、明细前后值、快递信息（收件 diff 走上面的收件规则）
@@ -291,6 +297,13 @@ ATTACHMENT_FIELD_RULES: dict[str, tuple[str, str]] = {
     # 付款凭证、结款聊天截图（PR-6）：与收款码同一拨人可见（运营、仓库看不到）
     LineEventType.SETTLEMENT_PAID.value: ("promotion", "payment_qr"),
     LineEventType.PROMOTION_SETTLED.value: ("promotion", "payment_qr"),
+    LineEventType.RECALL_WAYBILL_UPLOADED.value: ("promotion", "payment_qr"),
+    LineEventType.RECALL_SUCCEEDED.value: ("promotion", "payment_qr"),
+    LineEventType.FREIGHT_SUBMITTED.value: ("promotion", "payment_qr"),
+    LineEventType.FREIGHT_APPROVED.value: ("promotion", "payment_qr"),
+    LineEventType.FREIGHT_REJECTED.value: ("promotion", "payment_qr"),
+    LineEventType.FREIGHT_PAID.value: ("promotion", "payment_qr"),
+    LineEventType.FREIGHT_RESUBMITTED.value: ("promotion", "payment_qr"),
 }
 
 

@@ -27,6 +27,7 @@ from app.modules.finance.models import Settlement
 from app.modules.flow.line_events import LineEventType
 from app.modules.flow.models import LineEvent
 from app.modules.negotiation.models import Negotiation
+from app.modules.promotion.freight_models import ReturnFreightPayment
 from app.modules.promotion.models import Promotion
 
 
@@ -36,6 +37,7 @@ class LineHeader:
     negotiation: Negotiation | None
     has_settlement: bool
     settlement_payment_date: date | None
+    has_freight: bool = False
 
 
 @dataclass(frozen=True)
@@ -64,6 +66,7 @@ class LineReadRepository:
                 Negotiation,
                 Settlement.id,
                 Settlement.payment_date,
+                ReturnFreightPayment.id,
             )
             .select_from(anchor)
             .outerjoin(
@@ -78,6 +81,13 @@ class LineReadRepository:
                 Settlement,
                 and_(Settlement.tenant_id == tenant_id, Settlement.promotion_id == Promotion.id),
             )
+            .outerjoin(
+                ReturnFreightPayment,
+                and_(
+                    ReturnFreightPayment.tenant_id == tenant_id,
+                    ReturnFreightPayment.promotion_id == Promotion.id,
+                ),
+            )
         )
         row = (await self._session.execute(stmt)).one()
         return LineHeader(
@@ -85,6 +95,7 @@ class LineReadRepository:
             negotiation=row[1],
             has_settlement=row[2] is not None,
             settlement_payment_date=row[3],
+            has_freight=row[4] is not None,
         )
 
     async def first_event_at(self, *, tenant_id: UUID, line_id: UUID) -> datetime | None:
