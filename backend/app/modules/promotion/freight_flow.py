@@ -8,10 +8,12 @@ from app.modules.flow.matrix import (
     MATRICES,
     Cell,
     FieldWrite,
+    FlowActor,
     FlowDocBase,
     Matrix,
     NotPrOwner,
     Row,
+    Rule,
     Scope,
 )
 from app.modules.promotion.freight_rules import TRANSITIONS
@@ -23,6 +25,15 @@ ACTION_MAP = {
     "reject_payment": "freight_reject_payment",
     "resubmit": "freight_resubmit",
 }
+
+
+@dataclass(frozen=True)
+class ReviewOwnerKnown(Rule):
+    rule: ClassVar[str] = "review_owner_missing"
+    reason: str = "缺少谈款人/负责PR，无法核对审核回避"
+
+    def ok(self, actor: FlowActor, doc: FlowDocBase) -> bool:
+        return doc.negotiator_id is not None
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -48,7 +59,7 @@ FREIGHT_MATRIX = Matrix(
             "action",
             {
                 "待审核": Cell(
-                    edit=(Scope("promotion_review", "approve"), NotPrOwner()),
+                    edit=(Scope("promotion_review", "approve"), ReviewOwnerKnown(), NotPrOwner()),
                     read=(Scope("promotion_review", "approve"),),
                 )
             },

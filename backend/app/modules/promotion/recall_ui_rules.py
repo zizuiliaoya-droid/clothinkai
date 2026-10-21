@@ -1,10 +1,19 @@
 """召回专用能力；读取完整状态快照，不按角色名字绕过完结。"""
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, ClassVar
 
-from app.modules.flow.matrix import Capability, FlowActor
+from app.modules.flow.matrix import Capability, FlowActor, Rule
 from app.modules.promotion.freight_rules import continuing_published_recall
+
+
+@dataclass(frozen=True)
+class NoOpenFreight(Rule):
+    rule: ClassVar[str] = "freight_in_progress"
+    reason: str = "寄回运费尚未付款，不能停用"
+
+    def ok(self, actor: FlowActor, doc: Any) -> bool:
+        return doc.freight_status not in ("待审核", "待付款", "已驳回")
 
 
 @dataclass(frozen=True)

@@ -820,6 +820,13 @@ class PromotionService(
         停用后推广单的状态 UPDATE 都带 ``is_active = true``，结款单就驳不掉了。用户停用的两条路
         （``DELETE /{id}``、``PATCH`` 带 ``is_active = false``）都过这里；导入、迁移这类系统路径不经过。
         """
+        freight_status = await ReturnFreightRepository(self._session).status_for_promotion(
+            promotion.id, tenant_id=promotion.tenant_id
+        )
+        if freight_status in ("待审核", "待付款", "已驳回"):
+            from app.modules.promotion.freight_rules import FreightStateConflictError
+
+            raise FreightStateConflictError("寄回运费尚未付款，不能停用")
         settlement = await self._repo.settlement_brief(
             tenant_id=promotion.tenant_id, promotion_id=promotion.id
         )

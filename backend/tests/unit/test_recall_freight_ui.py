@@ -81,3 +81,20 @@ def test_completed_legacy_without_r33_only_true_star_can_supplement():
     assert (
         admin.actions["freight_submit"].state == admin.actions["recall_waybill"].state == "enabled"
     )
+
+
+@pytest.mark.parametrize("status", ["待审核", "待付款", "已驳回"])
+def test_open_freight_makes_deactivate_readonly_even_star(status):
+    doc = replace(DOCS["promotion"]["召回中"], freight_status=status)
+    action = ui_for(PERSONAS["admin"], doc).actions["deactivate"]
+    assert action.state == "disabled"
+    assert action.reason == "寄回运费尚未付款，不能停用"
+
+
+@pytest.mark.parametrize("who", ["pr_manager", "admin"])
+def test_missing_negotiator_disables_review_without_breaking_read(who):
+    from app.modules.promotion.freight_flow import freight_doc
+
+    action = ui_for(PERSONAS[who], freight_doc("待审核", None)).actions["freight_review"]
+    assert action.state == "disabled"
+    assert action.reason == "缺少谈款人/负责PR，无法核对审核回避"
