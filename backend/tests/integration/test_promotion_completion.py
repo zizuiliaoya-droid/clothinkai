@@ -11,6 +11,7 @@ from app.core.tenancy import tenant_id_ctx
 from app.modules.flow.line_events import LineEventType
 from app.modules.promotion.schemas import (
     PromotionMetricsRequest,
+    PromotionRecallSuccessRequest,
     PromotionReviewRequest,
     RetrospectiveWriteRequest,
 )
@@ -39,6 +40,7 @@ async def test_every_last_step_completes_once(
     product_factory: Any,
     blogger_factory: Any,
     promotion_factory: Any,
+    attachment_factory: Any,
     last: str,
 ) -> None:
     kw: dict[str, Any] = {
@@ -67,6 +69,8 @@ async def test_every_last_step_completes_once(
     )
     if last == "recall":
         promo.publish_status = "已取消"
+        shot = await attachment_factory.attachment(purpose="recall_waybill_screenshot")
+        promo.recall_waybill_attachment_id = shot.id
         await session.flush()
     pid, line_id = promo.id, promo.line_id
     assert promo.completed_at is None
@@ -89,7 +93,11 @@ async def test_every_last_step_completes_once(
             pid, RetrospectiveWriteRequest(content="最后一步复盘"), flow_users.pr_manager
         )
     else:
-        await svc.recall_success(pid, flow_users.pr)
+        await svc.recall_success(
+            pid,
+            PromotionRecallSuccessRequest(return_shipping_fee=0, return_shipping_payer="到付"),
+            flow_users.pr,
+        )
     await session.refresh(promo)
     completed_at = promo.completed_at
     assert completed_at is not None, "FLOW7_FAULT_EXPECTED:completion_missing"
@@ -121,8 +129,8 @@ async def test_every_last_step_completes_once(
             {"publish_url": "https://example.test/p", "actual_publish_date": "2026-01-01"},
         ),
         ("POST", "/cancel", {"cancel_reason": "只读"}),
-        ("POST", "/recall/start", {}),
-        ("POST", "/recall/success", {}),
+        ("POST", "/recall/start", {"recall_reason": "只读"}),
+        ("POST", "/recall/success", {"return_shipping_fee": "0", "return_shipping_payer": "到付"}),
         ("POST", "/recall/failure", {}),
         ("POST", "/retrospective", {"content": "已完结"}),
         ("POST", "/review", {"action": "approve"}),

@@ -47,6 +47,7 @@ from app.modules.promotion.schemas import (
     PromotionPublishRequest,
     PromotionRecallResultRequest,
     PromotionRecallStartRequest,
+    PromotionRecallSuccessRequest,
     PromotionResponse,
     PromotionResubmitRequest,
     PromotionReturnWaybillRequest,
@@ -357,12 +358,12 @@ async def upload_recall_waybill(
 )
 async def recall_success(
     promotion_id: UUID,
-    payload: PromotionRecallResultRequest,
+    payload: PromotionRecallSuccessRequest,
     user: CurrentActiveUser,
     service: PromotionServiceDep,
 ) -> PromotionResponse:
     """EP05-S09 召回成功（终态）."""
-    return await service.recall_success(promotion_id, user)
+    return await service.recall_success(promotion_id, payload, user)
 
 
 @router.post(
@@ -377,7 +378,7 @@ async def recall_failure(
     service: PromotionServiceDep,
 ) -> PromotionResponse:
     """EP05-S09 召回失败（可重新发起）."""
-    return await service.recall_failure(promotion_id, user)
+    return await service.recall_failure(promotion_id, user, remark=payload.remark)
 
 
 @router.post(

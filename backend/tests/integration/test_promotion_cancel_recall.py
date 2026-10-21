@@ -9,10 +9,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import IllegalStateTransitionError
 from app.core.tenancy import tenant_id_ctx
-from app.modules.promotion.exceptions import StateTransitionConflictError
+from app.modules.promotion.freight_rules import FreightValidationError
 from app.modules.promotion.schemas import (
     PromotionCancelRequest,
     PromotionRecallStartRequest,
+    PromotionRecallSuccessRequest,
 )
 from app.modules.promotion.service import PromotionService
 
@@ -117,7 +118,7 @@ class TestRecall:
         finally:
             tenant_id_ctx.reset(token)
 
-    async def test_start_recall_unpublished_blocked_by_cross_machine(
+    async def test_start_recall_unshipped_suggests_cancel(
         self,
         session: AsyncSession,
         tenant_a: Any,
@@ -127,18 +128,20 @@ class TestRecall:
         blogger_factory: Any,
         promotion_factory: Any,
     ) -> None:
-        """BR-U04-24: publish_status=未发布 时不允许启动召回."""
+        """C2只接受已发货或历史NULL；尚未发货提示直接取消。"""
         token = tenant_id_ctx.set(tenant_a.id)
         try:
             user = await factory.user(tenant_a, roles=[admin_role])
             style = await product_factory.style()
             blogger = await blogger_factory.blogger()
-            promotion = await promotion_factory.promotion(style=style, blogger=blogger, pr=user)
+            promotion = await promotion_factory.promotion(
+                style=style, blogger=blogger, pr=user, ship_status="待发货"
+            )
             svc = PromotionService(session)
-            with pytest.raises(StateTransitionConflictError):
+            with pytest.raises(FreightValidationError):
                 await svc.start_recall(
                     promotion.id,
-                    PromotionRecallStartRequest(),
+                    PromotionRecallStartRequest(recall_reason="召回"),
                     user,
                 )
         finally:
@@ -153,6 +156,7 @@ class TestRecall:
         product_factory: Any,
         blogger_factory: Any,
         promotion_factory: Any,
+        attachment_factory: Any,
     ) -> None:
         """召回中 → 召回失败 → 重新发起 → 召回成功."""
         token = tenant_id_ctx.set(tenant_a.id)
@@ -168,12 +172,23 @@ class TestRecall:
             )
             svc = PromotionService(session)
 
-            await svc.start_recall(promotion.id, PromotionRecallStartRequest(), user)
+            await svc.start_recall(
+                promotion.id, PromotionRecallStartRequest(recall_reason="召回"), user
+            )
             r2 = await svc.recall_failure(promotion.id, user)
             assert r2.recall_status == "召回失败"
 
-            await svc.start_recall(promotion.id, PromotionRecallStartRequest(), user)
-            r4 = await svc.recall_success(promotion.id, user)
+            await svc.start_recall(
+                promotion.id, PromotionRecallStartRequest(recall_reason="再试"), user
+            )
+            shot = await attachment_factory.attachment(purpose="recall_waybill_screenshot")
+            promotion.recall_waybill_attachment_id = shot.id
+            await session.flush()
+            r4 = await svc.recall_success(
+                promotion.id,
+                PromotionRecallSuccessRequest(return_shipping_fee=0, return_shipping_payer="到付"),
+                user,
+            )
             assert r4.recall_status == "召回成功"
         finally:
             tenant_id_ctx.reset(token)

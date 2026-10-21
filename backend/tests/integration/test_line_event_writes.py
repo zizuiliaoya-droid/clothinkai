@@ -35,6 +35,7 @@ from app.modules.promotion.schemas import (
     PromotionPaymentQrBindRequest,
     PromotionPublishRequest,
     PromotionRecallStartRequest,
+    PromotionRecallSuccessRequest,
     PromotionResubmitRequest,
     PromotionReturnWaybillRequest,
     PromotionReviewRequest,
@@ -466,6 +467,7 @@ class TestRecall:
         product_factory: Any,
         blogger_factory: Any,
         promotion_factory: Any,
+        attachment_factory: Any,
     ) -> None:
         promo = await _promo(
             flow_users, product_factory, blogger_factory, promotion_factory, publish_status="已发布"
@@ -475,7 +477,14 @@ class TestRecall:
         await svc.start_recall(
             pid, PromotionRecallStartRequest(recall_reason="博主删帖"), flow_users.pr
         )
-        await svc.recall_success(pid, flow_users.pr_manager)
+        shot = await attachment_factory.attachment(purpose="recall_waybill_screenshot")
+        promo.recall_waybill_attachment_id = shot.id
+        await session.flush()
+        await svc.recall_success(
+            pid,
+            PromotionRecallSuccessRequest(return_shipping_fee=0, return_shipping_payer="到付"),
+            flow_users.pr_manager,
+        )
 
         events = await events_of(session, line_id=line_id)
         assert _types(events) == [_T.RECALL_STARTED.value, _T.RECALL_SUCCEEDED.value]
@@ -485,7 +494,13 @@ class TestRecall:
         assert (succeeded.from_state, succeeded.to_state) == ("召回中", "召回成功")
         assert succeeded.actor_id == flow_users.pr_manager.id and succeeded.note is None
         assert {e.promotion_id for e in events} == {pid}
-        assert all(e.negotiation_id is None and e.payload == {} for e in events)
+        assert all(e.negotiation_id is None for e in events)
+        assert started.payload == {} and succeeded.payload == {
+            "return_shipping_fee": "0.00",
+            "return_shipping_payer": "到付",
+        }
+        assert succeeded.attachment_id == shot.id
+        _check_registered(events)
 
     async def test_retry_after_failure(
         self,
@@ -500,7 +515,9 @@ class TestRecall:
         )
         line_id, pid = promo.line_id, promo.id
         svc = PromotionService(session)
-        await svc.start_recall(pid, PromotionRecallStartRequest(), flow_users.pr)
+        await svc.start_recall(
+            pid, PromotionRecallStartRequest(recall_reason="初次"), flow_users.pr
+        )
         await svc.recall_failure(pid, flow_users.pr)
         await svc.start_recall(
             pid, PromotionRecallStartRequest(recall_reason="再试"), flow_users.pr
@@ -512,7 +529,7 @@ class TestRecall:
             _T.RECALL_FAILED.value,
             _T.RECALL_STARTED.value,
         ]
-        assert events[0].note is None
+        assert events[0].note == "初次"
         assert (events[1].from_state, events[1].to_state) == ("召回中", "召回失败")
         assert (events[2].from_state, events[2].note) == ("召回失败", "再试")
 
