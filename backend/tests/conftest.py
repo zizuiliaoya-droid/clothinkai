@@ -541,6 +541,7 @@ _PURGE_PROMOTION_STEPS: tuple[str, ...] = (
     "DELETE FROM settlement_extra_item WHERE settlement_id IN "
     "(SELECT id FROM settlement WHERE promotion_id = ANY(CAST(:ids AS uuid[])))",
     "DELETE FROM settlement WHERE promotion_id = ANY(CAST(:ids AS uuid[]))",
+    "DELETE FROM return_freight_payment WHERE promotion_id = ANY(CAST(:ids AS uuid[]))",
     "DELETE FROM promotion_amount_log WHERE promotion_id = ANY(CAST(:ids AS uuid[]))",
     "DELETE FROM urge_record WHERE promotion_id = ANY(CAST(:ids AS uuid[]))",
     "DELETE FROM urge_task WHERE promotion_id = ANY(CAST(:ids AS uuid[]))",

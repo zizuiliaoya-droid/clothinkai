@@ -75,6 +75,12 @@ async def _as_app(session: AsyncSession, tenant_id: UUID) -> None:
     await session.execute(text("SELECT set_config('app.bypass_rls', 'off', true)"))
     # 场景有效性：后面的断言真的是 clothing_app 在跑
     assert (await session.execute(text("SELECT current_user"))).scalar_one() == _APP_ROLE
+    role = (
+        await session.execute(
+            text("SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user")
+        )
+    ).one()
+    assert tuple(role) == (False, False), "必须以NOSUPERUSER/NOBYPASSRLS应用身份验证"
 
 
 async def _visible_ids(session: AsyncSession, ids: list[UUID]) -> set[UUID]:
