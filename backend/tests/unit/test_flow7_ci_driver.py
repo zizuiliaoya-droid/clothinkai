@@ -229,3 +229,34 @@ def test_history_scan_from_clean_backend_interpreter() -> None:
         check=False,
     )
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("marked", [False, True])
+def test_e5_completion_event_count_requires_its_business_marker(tmp_path, marked) -> None:
+    """第三轮真实E5业务红为3个事件；未标记时仍必须拒绝，不能放行任意AssertionError。"""
+    import xml.etree.ElementTree as ET
+
+    from scripts.ci_flow7_faults import validate_junit
+
+    marker = "FLOW7_FAULT_EXPECTED:completion_repeated"
+    report = ET.Element("testsuites")
+    case = ET.SubElement(
+        report,
+        "testcase",
+        classname="tests.integration.test_promotion_completion",
+        name="test_every_last_step_completes_once[retro]",
+    )
+    failure = ET.SubElement(
+        case, "failure", message=(marker + "\n" if marked else "") + "assert 3 == 1"
+    )
+    failure.text = "E AssertionError: " + (marker if marked else "assert 3 == 1")
+    xml = tmp_path / "e5-count.xml"
+    ET.ElementTree(report).write(xml)
+    node = (
+        "tests/integration/test_promotion_completion.py::test_every_last_step_completes_once[retro]"
+    )
+    if marked:
+        assert validate_junit(xml, node, "E5_idempotent", red=True, returncode=1) == 1
+    else:
+        with pytest.raises(AssertionError, match="非预期业务断言"):
+            validate_junit(xml, node, "E5_idempotent", red=True, returncode=1)

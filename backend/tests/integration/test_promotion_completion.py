@@ -98,7 +98,10 @@ async def test_every_last_step_completes_once(
     await session.refresh(promo)
     assert promo.completed_at == completed_at, "FLOW7_FAULT_EXPECTED:completion_repeated"
     events = await events_of(session, line_id=line_id)
-    assert sum(e.event_type == LineEventType.PROMOTION_COMPLETED.value for e in events) == 1
+    # 同事务now()相同，重复UPDATE不一定改变时间戳；事件数也必须精确为1。
+    assert (
+        sum(e.event_type == LineEventType.PROMOTION_COMPLETED.value for e in events) == 1
+    ), "FLOW7_FAULT_EXPECTED:completion_repeated"
     completed_events = [
         e for e in events if e.event_type == LineEventType.PROMOTION_COMPLETED.value
     ]
