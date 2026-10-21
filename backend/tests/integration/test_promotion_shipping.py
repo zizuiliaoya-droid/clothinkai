@@ -1720,7 +1720,7 @@ class TestShipInclude:
 class TestShipRaceWithCancel:
     """评审 L2：读完单、条件 UPDATE 之前别人刚取消 / 召回 → 纳入 / 推送 409，发货状态不动。
 
-    用「读完单就在库里改状态」模拟并发：手上那份还是读到时的样子（状态机、规则都过），
+    用「新锁内门禁读完单就在同事务改状态」注入竞争结果：手上那份还是读到时的样子（状态机、规则都过），
     只有条件 UPDATE 能挡住。推送的单备齐收件与明细，修复前会一路推送成功。
     """
 
@@ -1754,17 +1754,19 @@ class TestShipRaceWithCancel:
         )
         await session.commit()
         pid, manager = promo.id, flow_users.pr_manager
-        read = PromotionService._get_or_404
+        read = PromotionService._writable_promotion
 
-        async def read_then_changed(self: PromotionService, promotion_id: UUID) -> Any:
-            promotion = await read(self, promotion_id)
+        async def read_then_changed(
+            self: PromotionService, promotion_id: UUID, user: User, **kwargs: Any
+        ) -> Any:
+            promotion = await read(self, promotion_id, user, **kwargs)
             res = await session.execute(
                 sa_text(f"UPDATE promotion SET {change} WHERE id = :pid"), {"pid": pid}
             )
             assert res.rowcount == 1  # type: ignore[attr-defined]
             return promotion
 
-        monkeypatch.setattr(PromotionService, "_get_or_404", read_then_changed)
+        monkeypatch.setattr(PromotionService, "_writable_promotion", read_then_changed)
         svc = PromotionService(session)
         with pytest.raises(StateTransitionConflictError) as exc_info:
             if action == "ship_include":
@@ -2594,8 +2596,9 @@ class TestShipEvents:
 
 
 class TestShipPushConcurrent:
-    async def test_30_concurrent_pushes(self, engine: Any) -> None:
+    async def test_30_concurrent_pushes(self, engine: Any, monkeypatch: pytest.MonkeyPatch) -> None:
         from app.core.security.auth import hash_password
+        from app.modules.promotion.repository import PromotionRepository
 
         tenant_id = await default_tenant_id(engine)
         suffix = uuid4().hex[:8]
@@ -2670,10 +2673,26 @@ class TestShipPushConcurrent:
 
         n = 30
         barrier = asyncio.Barrier(n)
+        read_barrier = asyncio.Barrier(n)
+        connection_ids: set[int] = set()
+        read_sessions: set[int] = set()
+        read = PromotionRepository.get_by_id
+
+        async def overlapping_read(self: Any, pid: UUID, **kwargs: Any) -> Any:
+            row = await read(self, pid, **kwargs)
+            if pid == promotion_id and id(self._session) not in read_sessions:
+                assert row is not None and row.ship_status == "待发货"
+                read_sessions.add(id(self._session))
+                # 30条真实连接都读到可推送快照后再争行锁，避免晚到请求被当作串行重复。
+                await asyncio.wait_for(read_barrier.wait(), timeout=20)
+            return row
+
+        monkeypatch.setattr(PromotionRepository, "get_by_id", overlapping_read)
 
         async def attempt(s: AsyncSession, i: int) -> str:
             user = await s.get(User, user_ids[i % 2])  # 顺带先拿到连接，再一起出发
             assert user is not None
+            connection_ids.add(int(await s.scalar(sa_text("SELECT pg_backend_pid()"))))
             await barrier.wait()
             try:
                 await PromotionService(s).ship_push(
@@ -2689,6 +2708,7 @@ class TestShipPushConcurrent:
 
         try:
             results = await run_concurrently(engine, n, attempt, tenant_id=tenant_id)
+            assert len(connection_ids) == len(read_sessions) == n
             assert results.count("ok") == 1, results
             assert results.count("conflict") == n - 1, results
             winner = user_ids[results.index("ok") % 2]

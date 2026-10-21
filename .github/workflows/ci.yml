@@ -260,6 +260,10 @@ jobs:
             tests/integration/test_retrospective.py \
             tests/integration/test_promotion_completion.py \
             tests/integration/test_metrics_gate.py \
+            tests/integration/test_e2e_review_to_paid.py \
+            tests/integration/test_promotion_publish.py \
+            tests/integration/test_promotion_shipping.py \
+            tests/integration/test_publish_progress.py \
             tests/integration/test_line_timeline.py \
             tests/integration/test_stage_sql_parity.py \
             tests/integration/test_import_settlement.py \
