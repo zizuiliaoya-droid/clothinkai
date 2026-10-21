@@ -1,14 +1,27 @@
 """R33 SQL：租户限定、同推广唯一、条件更新；事务由service持有。"""
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.blogger.models import Blogger
+from app.modules.product.goods_models import GoodsMain
 from app.modules.promotion.freight_models import ReturnFreightPayment as Freight
+from app.modules.promotion.freight_schemas import FreightListFilters
+from app.modules.promotion.models import Promotion
+
+
+@dataclass(frozen=True)
+class FreightReadRecord:
+    freight: Freight
+    promotion: Promotion
+    blogger_nickname: str
+    goods_short_name: str | None
 
 
 class ReturnFreightRepository:
@@ -85,3 +98,69 @@ class ReturnFreightRepository:
             .execution_options(populate_existing=True)
         )
         return (await self._session.execute(stmt)).scalar_one_or_none()
+
+    async def read_records(
+        self,
+        *,
+        tenant_id: UUID,
+        filters: FreightListFilters,
+        ids: Sequence[UUID] | None = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> tuple[list[FreightReadRecord], int]:
+        stmt = (
+            select(Freight, Promotion, Blogger.nickname, GoodsMain.short_name)
+            .join(
+                Promotion,
+                and_(
+                    Promotion.id == Freight.promotion_id, Promotion.tenant_id == Freight.tenant_id
+                ),
+            )
+            .join(
+                Blogger,
+                and_(Blogger.id == Promotion.blogger_id, Blogger.tenant_id == Promotion.tenant_id),
+            )
+            .outerjoin(
+                GoodsMain,
+                and_(
+                    GoodsMain.id == Promotion.goods_main_id,
+                    GoodsMain.tenant_id == Promotion.tenant_id,
+                ),
+            )
+            .where(Freight.tenant_id == tenant_id)
+        )
+        if ids is not None:
+            stmt = stmt.where(Freight.id.in_(ids))
+        if filters.status is not None:
+            stmt = stmt.where(Freight.status == filters.status)
+        if filters.promotion_id is not None:
+            stmt = stmt.where(Freight.promotion_id == filters.promotion_id)
+        if filters.keyword:
+            needle = (
+                "%"
+                + filters.keyword.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                + "%"
+            )
+            stmt = stmt.where(
+                or_(
+                    Promotion.internal_code.ilike(needle, escape="\\"),
+                    Blogger.nickname.ilike(needle, escape="\\"),
+                )
+            )
+        if filters.payment_date_from:
+            stmt = stmt.where(Freight.payment_date >= filters.payment_date_from)
+        if filters.payment_date_to:
+            stmt = stmt.where(Freight.payment_date <= filters.payment_date_to)
+        total = int(
+            (
+                await self._session.execute(select(func.count()).select_from(stmt.subquery()))
+            ).scalar_one()
+        )
+        rows = (
+            await self._session.execute(
+                stmt.order_by(Freight.submitted_at.desc(), Freight.id.desc())
+                .offset((page - 1) * page_size)
+                .limit(page_size)
+            )
+        ).all()
+        return [FreightReadRecord(*row) for row in rows], total
