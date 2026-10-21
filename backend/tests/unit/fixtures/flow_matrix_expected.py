@@ -354,9 +354,16 @@ _PROMOTION_ROWS: dict[tuple[str, str], list[tuple[list[str], str]]] = {
     ("field", "retro"): [
         (_labels("DEF") + _labels("DEF", history=True), "读改改隐读隐"),
         (_labels("H"), "读读改隐读隐"),
+        ([_v("召回中", v) for v in ("已付款", "已结款", "结款单待财务付款")], "读读改隐读隐"),
     ],
-    ("action", "retro_write"): [(_labels("DEF") + _labels("DEF", history=True), "读改改隐隐隐")],
-    ("action", "retro_revise"): [(_labels("DEFH") + _labels("DEF", history=True), "隐隐改隐隐隐")],
+    ("action", "retro_write"): [
+        (_labels("DEF") + _labels("DEF", history=True), "读改改隐隐隐"),
+        ([_v("召回中", v) for v in ("已付款", "已结款", "结款单待财务付款")], "读改改隐隐隐"),
+    ],
+    ("action", "retro_revise"): [
+        (_labels("DEFH") + _labels("DEF", history=True), "隐隐改隐隐隐"),
+        ([_v("召回中", v) for v in ("已付款", "已结款", "结款单待财务付款")], "隐隐改隐隐隐"),
+    ],
     # —— PR-6 ——
     # 推广审核（★¹⁵）：PR 读「需 PR 主管审核」；推广驳回时由状态机藏
     ("action", "review"): [(_labels("D") + _labels("D", history=True), "读改改隐隐隐")],

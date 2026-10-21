@@ -407,6 +407,18 @@ _fill(
     ),
 )
 _fill(_retro, "H", Cell(edit=(_STAR,), read=(_READ,)))
+_fill(
+    _retro,
+    "G",
+    (
+        Cell(
+            edit=(Scope("promotion_retro", "write"),),
+            read=(_READ,),
+            when=(PublishIn("已发布"), RetroIn("待复盘")),
+        ),
+        Cell(edit=(_STAR,), read=(_READ,), when=(PublishIn("已发布"),)),
+    ),
+)
 _retro_write: dict[str, Cell | tuple[Cell, ...]] = {}
 _fill(
     _retro_write,
@@ -415,6 +427,17 @@ _fill(
 )
 _retro_revise: dict[str, Cell | tuple[Cell, ...]] = {}
 _fill(_retro_revise, "DEFH", Cell(edit=(_STAR,)))
+_fill(
+    _retro_write,
+    "G",
+    Cell(
+        edit=(Scope("promotion_retro", "write"),),
+        read=(_WRITE,),
+        reason="由主管写复盘",
+        when=(PublishIn("已发布"),),
+    ),
+)
+_fill(_retro_revise, "G", Cell(edit=(_STAR,), when=(PublishIn("已发布"),)))
 
 PROMOTION_MATRIX = Matrix(
     kind="promotion",

@@ -346,3 +346,94 @@ def tenant_ctx(tenant_a: Any) -> Any:
     token = tenant_id_ctx.set(tenant_a.id)
     yield
     tenant_id_ctx.reset(token)
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+async def test_published_recalling_http_keeps_retro_entry_and_detail(
+    session: AsyncSession,
+    flow_users: Any,
+    product_factory: Any,
+    blogger_factory: Any,
+    promotion_factory: Any,
+) -> None:
+    """真实路由响应：召回中主管待复盘可写，完成后只有真正*修订，PR只读。"""
+    from tests.integration.test_settlement_routing import _call
+
+    promo = await _paid_promo(
+        promotion_factory, product_factory, blogger_factory, flow_users.pr, code="RT_RECALL_UI"
+    )
+    promo.recall_status = "召回中"
+    await session.flush()
+    path = f"/api/promotions/{promo.id}"
+    before = await _call(session, flow_users.pr_manager, "GET", path)
+    assert before.status_code == 200, before.text
+    ui = before.json()["ui"]
+    assert ui["column"] == "G"
+    assert ui["actions"]["retro_write"]["state"] == "enabled"
+    assert ui["fields"]["retro"]["state"] == "edit"
+    pr = await _call(session, flow_users.pr, "GET", path)
+    assert pr.status_code == 200, pr.text
+    assert pr.json()["ui"]["actions"]["retro_write"]["state"] == "disabled"
+    assert pr.json()["ui"]["fields"]["retro"]["state"] == "read"
+
+    written = await _call(
+        session,
+        flow_users.pr_manager,
+        "POST",
+        path + "/retrospective",
+        {"content": "已发布后召回，主管仍需复盘"},
+    )
+    assert written.status_code == 200, written.text
+    assert written.json()["retro_status"] == "已完成"
+    # 本例尚未录数，写复盘不满足正常完结条件，继续处于召回中G。
+    assert written.json()["completed_at"] is None
+    assert written.json()["ui"]["column"] == "G"
+    assert "retro_write" not in written.json()["ui"]["actions"]
+    assert "retro_revise" not in written.json()["ui"]["actions"]
+    assert written.json()["ui"]["fields"]["retro"]["state"] == "read"
+
+    admin = await _call(session, flow_users.admin, "GET", path)
+    assert admin.status_code == 200, admin.text
+    assert admin.json()["ui"]["actions"]["retro_revise"]["state"] == "enabled"
+    assert admin.json()["ui"]["fields"]["retro"]["state"] == "edit"
+    revised = await _call(
+        session,
+        flow_users.admin,
+        "POST",
+        path + "/retrospective",
+        {"content": "管理员追加召回期间修订"},
+    )
+    assert revised.status_code == 200, revised.text
+    assert revised.json()["completed_at"] is None
+    archive = await PromotionService(session).blogger_retrospectives(
+        promo.blogger_id, flow_users.pr
+    )
+    assert [row.content for row in archive] == ["管理员追加召回期间修订"]
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+async def test_cancelled_recalling_http_keeps_retro_hidden_and_rejects_write(
+    session: AsyncSession,
+    flow_users: Any,
+    product_factory: Any,
+    blogger_factory: Any,
+    promotion_factory: Any,
+) -> None:
+    from tests.integration.test_settlement_routing import _call
+
+    promo = await _paid_promo(
+        promotion_factory, product_factory, blogger_factory, flow_users.pr, code="RT_RECALL_CANCEL"
+    )
+    promo.publish_status, promo.recall_status, promo.retro_status = "已取消", "召回中", "未开始"
+    await session.flush()
+    path = f"/api/promotions/{promo.id}"
+    for user in (flow_users.pr_manager, flow_users.admin):
+        detail = await _call(session, user, "GET", path)
+        assert detail.status_code == 200, detail.text
+        ui = detail.json()["ui"]
+        assert ui["column"] == "G" and "retro" not in ui["fields"]
+        assert "retro_write" not in ui["actions"] and "retro_revise" not in ui["actions"]
+        write = await _call(
+            session, user, "POST", path + "/retrospective", {"content": "不得越过发布条件"}
+        )
+        assert write.status_code == 422, write.text
