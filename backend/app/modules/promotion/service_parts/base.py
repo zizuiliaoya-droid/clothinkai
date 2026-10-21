@@ -199,8 +199,12 @@ class PromotionServiceBase:
         from app.modules.promotion.exceptions import (
             PromotionCompletedReadonlyError,
             PromotionNotFoundError,
+            StateTransitionConflictError,
         )
 
+        snapshot = await self._repo.get_by_id(promotion_id, include_inactive=True)
+        # SELECT FOR UPDATE等待后会原地刷新实体，先复制锁前是否活跃。
+        was_active = snapshot is not None and snapshot.is_active
         promotion = await self._repo.get_for_write(
             promotion_id,
             tenant_id=user.tenant_id,
@@ -211,6 +215,10 @@ class PromotionServiceBase:
         if promotion.completed_at is not None and not (await self._flow_actor(user)).is_star:
             raise PromotionCompletedReadonlyError("已完结，只读")
         if not promotion.is_active and not include_inactive:
+            if was_active:
+                raise StateTransitionConflictError(
+                    "推广已被停用，请刷新后重试", details={"promotion_id": str(promotion_id)}
+                )
             raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
         return promotion
 
