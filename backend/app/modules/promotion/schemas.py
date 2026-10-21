@@ -39,6 +39,7 @@ from app.modules.promotion.enums import (
     SettlementStatus,
     ShipCourier,
 )
+from app.modules.promotion.freight_schemas import ReturnFreightPaymentBrief
 
 _QuoteField = Annotated[
     Decimal,
@@ -563,6 +564,10 @@ class PromotionResponse(BaseModel):
     # 合作模式与成本（PRD V1.4 模块二）
     cooperation_mode: str | None = None
     return_shipping_fee: Decimal | None = None  # 敏感
+    return_shipping_payer: Literal["博主垫付", "到付"] | None = None
+    recall_waybill_attachment_id: UUID | None = None
+    recall_waybill_signed_url: str | None = None
+    freight_payment: ReturnFreightPaymentBrief | None = None
     total_promo_cost: Decimal | None = None  # 敏感
     """站外推广成本 = 博主服务费 + 样品成本 + 寄回运费。数据库生成列，与 quote_amount
     同样受读权限门控 —— 它是三项金额之和，能看到它等于能推算出金额。"""

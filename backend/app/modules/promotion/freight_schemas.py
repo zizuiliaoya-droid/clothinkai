@@ -85,3 +85,14 @@ class ReturnFreightPaymentPage(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class ReturnFreightPaymentBrief(BaseModel):
+    """推广列表/详情的同形摘要；图片按需读取R33单笔接口。"""
+
+    id: UUID
+    status: FreightStatus
+    amount: Decimal | None = None
+    payment_date: date | None = None
+    reject_reason: str | None = None
+    ui: dict[str, Any] = Field(default_factory=dict)

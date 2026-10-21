@@ -48,7 +48,7 @@ from app.modules.finance.attachment_validator import (
     MAX_SIZE_BYTES as PROOF_MAX_SIZE_BYTES,
 )
 from app.modules.finance.attachment_validator import ProofAttachmentValidator
-from app.modules.finance.enums import SettlementStatus
+from app.modules.finance.enums import ExtraItemType, SettlementStatus
 from app.modules.finance.events import SettlementPaid, SettlementRejected
 from app.modules.finance.exceptions import (
     ExtraItemNotAllowedError,
@@ -624,8 +624,8 @@ class SettlementService:
                 "仅'待付款'状态可增加结算项",
                 details={"settlement_status": settlement.settlement_status},
             )
-        # F2：类型「运费」过渡期保留可用：召回仍是旧流程，寄回运费在 PR-8 之前只能走这里。
-        # PR-8 与 R33 同时停用（设计 10.3 PR-6「过渡期」）；枚举值照旧保留，存量行照常显示。
+        if payload.item_type == ExtraItemType.SHIPPING:
+            raise ExtraItemNotAllowedError("召回运费请走寄回运费单；普通寄拍费用请选其他并注明用途")
 
         item = SettlementExtraItem(
             id=uuid4(),

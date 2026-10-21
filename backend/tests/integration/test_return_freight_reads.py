@@ -33,6 +33,8 @@ async def test_freight_paid_does_not_advance_service_settlement(
     # 真实listener有可推进的推广状态；若错误发SettlementPaid会把待付款改成已付款。
     p.settlement_status = "待付款"
     await session.flush()
+    await session.refresh(p)
+    original_cost = p.total_promo_cost
     emitted: list[SettlementPaid] = []
 
     async def capture(event, session):
@@ -80,6 +82,11 @@ async def test_freight_paid_does_not_advance_service_settlement(
         p.settlement_status == "待付款" and not emitted
     ), "FLOW8_FAULT_EXPECTED:no_service_payment"
     assert p.return_shipping_fee == Decimal("30")
+    assert (
+        p.total_promo_cost
+        == original_cost
+        == p.quote_amount + (p.cost_snapshot or Decimal("0")) + Decimal("30")
+    )
     events = (await session.scalars(select(LineEvent).where(LineEvent.line_id == p.line_id))).all()
     assert sum(e.event_type == "freight.paid" for e in events) == 1
     assert not any(
@@ -168,9 +175,12 @@ async def test_single_read_clips_before_signing_and_finance_freight_only_timelin
     for event in timeline.events:
         if event.event_type.startswith("freight."):
             assert "freight_amount" not in event.payload and event.attachment is None
-    finance = await LineEventService(session).read(p.line_id, flow_users.finance)
-    assert finance.promotion is not None
-    assert sum(event.event_type == "freight.submitted" for event in finance.events) == 2
+    finance = await _call(session, flow_users.finance, "GET", f"/api/lines/{p.line_id}/events")
+    assert finance.status_code == 200, finance.text
+    assert finance.json()["promotion"] is not None
+    assert (
+        sum(event["event_type"] == "freight.submitted" for event in finance.json()["events"]) == 2
+    )
     assert len(signed) == 2
     assert (
         await _call(session, flow_users.pr, "GET", "/api/return-freight-payments/")
@@ -181,6 +191,26 @@ async def test_single_read_clips_before_signing_and_finance_freight_only_timelin
     assert (
         await _call(session, flow_users.warehouse, "GET", f"/api/return-freight-payments/{f.id}")
     ).status_code == 404
+
+
+async def test_default_manager_finance_list_is_read_only(session, freight_promotion, flow_users):
+    """真实默认角色读取财务列表；主管审核在推广页，财务支付权限没有临时补给。"""
+    p = freight_promotion
+    f = await ReturnFreightService(session).submit(p.id, FreightSubmitRequest(), flow_users.pr)
+    page = await _call(session, flow_users.pr_manager, "GET", "/api/return-freight-payments/")
+    assert page.status_code == 200, page.text
+    item = next(item for item in page.json()["items"] if item["id"] == str(f.id))
+    assert item["ui"]["actions"]["freight_review"]["state"] == "edit"
+    assert "freight_pay" not in item["ui"]["actions"]
+    for suffix, body in (("pay", None), ("reject-payment", {"reason": "无付款权限"})):
+        denied = await _call(
+            session,
+            flow_users.pr_manager,
+            "POST",
+            f"/api/return-freight-payments/{f.id}/{suffix}",
+            body,
+        )
+        assert denied.status_code == 403, denied.text
 
 
 async def test_freight_list_filters_and_tenant_hidden(

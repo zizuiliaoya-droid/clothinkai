@@ -3,7 +3,7 @@
 - 发布不卡收款码（D3，Q14 修正）：没码照样能发布
 - PR / 主管按顺序判：① 没发布 → 422「发布后上传」；①' 已停用 / 已删除 / 不合作 / 状态异常 → 422「只读」；
   ② 结款单待财务付款 → 409 ``PAYMENT_QR_LOCKED``（``settlement_paying``）；③ 推广单已付款 / 已结款 → 409（``settled``）；
-  D 列、结款单待付款、结款驳回、召回中放行。召回中 / R33 已驳回的例外随 PR-8，这里召回中 + 已结款仍锁
+  D 列、结款单待付款、结款驳回、召回中放行；召回中 / R33 已驳回可跨已结款，待财务付款仍锁
 - 持 ``*`` 的管理员只受 ①；结款单已生成后 DELETE 一律 409（``settlement_created``，管理员也一样）
 - 四个接口（upload-init / upload / PUT / DELETE）同一套锁；每格与矩阵 ``fields.payment_qr`` 一致（改 ⇔ 放行）
 - 财务能看到收款码签名（字段规则 ``promotion.payment_qr``），运营看不到
@@ -148,7 +148,7 @@ _CASES: list[tuple[str, dict[str, Any], str | None, Any]] = [
         "召回中·已结款",
         {"recall_status": "召回中", "settlement_status": "已结款"},
         "已付款",
-        _SETTLED,
+        None,
     ),
     ("已停用", {"is_active": False}, None, _ILLEGAL),
     ("已删除", {"publish_status": "已删除"}, None, _ILLEGAL),

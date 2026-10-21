@@ -278,7 +278,13 @@ def stage_sql_expr() -> str:
     return "CASE\n" + "\n".join(whens) + f"\n  ELSE {_sql_literal(STAGE_FALLBACK)}\nEND"
 
 
-BADGES: tuple[str, ...] = ("missing_qr", "metrics_due", "metrics_wait_settle", "retro_due")
+BADGES: tuple[str, ...] = (
+    "missing_qr",
+    "metrics_due",
+    "metrics_wait_settle",
+    "retro_due",
+    "freight_open",
+)
 """行角标（7.3 badge 行），按这个顺序出。``freight_open``（R33 付款单未结）随 PR-8；
 SQL 版与按角标筛选随 PR-10。"""
 
@@ -294,6 +300,7 @@ def compute_badges(
     quote_amount: Decimal | None,
     has_payment_qr: bool,
     today: date,
+    freight_status: str | None = None,
 ) -> list[str]:
     """不进阶段的派生量（3.8 末尾）：一格只放一个阶段，其余的作角标。
 
@@ -308,6 +315,7 @@ def compute_badges(
     settled = settlement_status == "已结款"
     published = publish_status == "已发布"
     flags = {
+        "freight_open": freight_status in ("待审核", "待付款", "已驳回"),
         "missing_qr": stage == "待主管审核"
         and (quote_amount or Decimal(0)) > 0
         and not has_payment_qr,

@@ -32,12 +32,12 @@ from app.modules.promotion.stage_calculator import STAGE_FALLBACK
 
 # 7.3 收款码接口 ①：没发布（未发布 / 异常）且不在召回中 → 「发布后上传」，管理员也一样
 _BEFORE_PUBLISH = frozenset({PublishStatus.UNPUBLISHED.value, PublishStatus.ABNORMAL.value})
-# ①'：H 列只读（PR / 主管）。「已完结 · 召回」是没有 completed_at 前的过渡阶段，PR-7 起改走「已完结只读」
+# ①'：H 列只读（PR / 主管）；召回成功过渡阶段另外判完结与R33驳回例外。
 _READONLY_STAGES = frozenset(
     {"已停用", "已删除", "已完结 · 不合作", "已完结 · 召回", STAGE_FALLBACK}
 )
 _READONLY_REASON = "已停用 / 已取消，只读"
-# ③：服务费已付 / 已结款（召回中、寄回运费付款单已驳回两个例外随 PR-8）
+# ③：服务费已付 / 已结款，召回中、R33已驳回为精确例外。
 _SETTLED = frozenset({SettlementStatus.PAID.value, SettlementStatus.SETTLED.value})
 # ④ 放行只剩 D 列、E 列的待财务付款（结款单待付款）与结款驳回、G 列召回中
 _OPEN_STAGES = frozenset(
@@ -74,9 +74,10 @@ class PromotionPaymentQrMixin(PromotionServiceBase):
 
         按顺序判，持 ``*`` 的管理员只受 ①：
         ① 发布状态 ∈ {未发布, 异常} 且不在召回中 → 422 ``ILLEGAL_STATE_TRANSITION``「发布后上传」；
-        ①' 已停用 / 已删除 / 状态异常 / 已完结 · 不合作（及过渡的已完结 · 召回）→ 422「已停用 / 已取消，只读」；
+        ①' 已停用 / 已删除 / 状态异常 / 已完结 · 不合作 → 422「已停用 / 已取消，只读」；
         ② 结款单 = 待财务付款 → 409 ``PAYMENT_QR_LOCKED``（``lock = settlement_paying``）；
         ③ 推广单 已付款 / 已结款 → 409 ``PAYMENT_QR_LOCKED``（``lock = settled``）；
+        ③的已结款与完结锁仅对召回中或R33已驳回放行；②始终优先。
         ④ 其余只放行 D 列、E 列的待财务付款与结款驳回、G 列召回中。
         """
         if (
