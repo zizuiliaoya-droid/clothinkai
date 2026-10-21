@@ -224,7 +224,19 @@ class TestBadges:
     """角标（7.3 badge 行）：缺收款码、满 7 天可录、满 7 天待结款、复盘待写。"""
 
     def test_names_and_order(self) -> None:
-        assert BADGES == ("missing_qr", "metrics_due", "metrics_wait_settle", "retro_due")
+        assert BADGES == (
+            "missing_qr",
+            "metrics_due",
+            "metrics_wait_settle",
+            "retro_due",
+            "freight_open",
+        )
+
+    @pytest.mark.parametrize("status", ["待审核", "待付款", "已驳回", "已付款", None])
+    def test_freight_badge_tracks_unpaid_work(self, status: str | None) -> None:
+        assert ("freight_open" in _badges(freight_status=status)) == (
+            status in {"待审核", "待付款", "已驳回"}
+        )
 
     def test_missing_qr_only_when_reviewing_with_fee(self) -> None:
         assert "missing_qr" in _badges(has_payment_qr=False)

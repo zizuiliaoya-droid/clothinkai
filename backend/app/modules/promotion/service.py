@@ -64,6 +64,7 @@ from app.modules.promotion.exceptions import (
     StateTransitionConflictError,
 )
 from app.modules.promotion.flow_matrix import PROMOTION_MATRIX
+from app.modules.promotion.freight_repository import ReturnFreightRepository
 from app.modules.promotion.models import (
     Promotion,
 )
@@ -703,6 +704,9 @@ class PromotionService(
         )
         # 商品明细整页一次查（流程线 7.3）
         page_ids = [row.promotion.id for row in rows]
+        freights = await ReturnFreightRepository(self._session).briefs(
+            page_ids, tenant_id=user.tenant_id
+        )
         page_items = await self._items_repo.list_by_promotions(page_ids)
         # 矩阵 ui 只用本页数据算（7.1）：当前用户、谈款人、套装成员各一次
         actor = await self._flow_actor(user)
@@ -745,6 +749,7 @@ class PromotionService(
                 user_names=user_names,
                 style_names=style_names,
                 metric_settings=metric_settings,
+                freights=freights,
             )
             for row in rows
         ]

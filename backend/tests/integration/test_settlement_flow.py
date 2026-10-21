@@ -34,6 +34,7 @@ from app.core.exceptions import (
 from app.core.tenancy import tenant_id_ctx
 from app.modules.finance.enums import ExtraItemType
 from app.modules.finance.exceptions import (
+    ExtraItemNotAllowedError,
     SettlementTotalChangedError,
 )
 from app.modules.finance.exceptions import (
@@ -260,7 +261,7 @@ class TestReviewApprove:
 class TestExtraItem:
     """F2：增加结算项照常并写事件；「运费」过渡期保留（设计 10.3 PR-6，PR-8 与 R33 同时停用）。"""
 
-    async def test_shipping_item_allowed_in_transition(
+    async def test_new_shipping_item_rejected_but_history_remains_readable(
         self,
         session: AsyncSession,
         tenant_a: Any,
@@ -270,24 +271,23 @@ class TestExtraItem:
         blogger_factory: Any,
         settlement_factory: Any,
     ) -> None:
-        """召回仍走旧流程，寄回运费在 PR-8 之前只能走结款单追加项：可加、金额进合计、写事件。"""
+        """R33同批关闭新运费追加项，历史枚举和历史已付款记录仍读。"""
         token = tenant_id_ctx.set(tenant_a.id)
         try:
             manager = await factory.user(tenant_a, roles=[pr_manager_role])
             s = await _settlement(
                 settlement_factory, product_factory, blogger_factory, status="待付款"
             )
-            resp = await SettlementService(session).add_extra_item(
-                s.id,
-                SettlementExtraItemCreateRequest(
-                    item_type=ExtraItemType.SHIPPING, amount=Decimal("12.00")
-                ),
-                manager,
-            )
-            assert resp.total_amount == Decimal("512.00")
-            assert [(it.item_type, it.amount) for it in resp.extra_items] == [
-                ("运费", Decimal("12.00"))
-            ]
+            with pytest.raises(ExtraItemNotAllowedError):
+                await SettlementService(session).add_extra_item(
+                    s.id,
+                    SettlementExtraItemCreateRequest(
+                        item_type=ExtraItemType.SHIPPING, amount=Decimal("12.00")
+                    ),
+                    manager,
+                )
+            await session.refresh(s)
+            assert s.total_amount == Decimal("500.00")
             items = (
                 (
                     await session.execute(
@@ -297,18 +297,29 @@ class TestExtraItem:
                 .scalars()
                 .all()
             )
-            assert [(it.item_type, it.amount) for it in items] == [("运费", Decimal("12.00"))]
+            assert not items
             events = await _events(
                 session, s.promotion_id, LineEventType.SETTLEMENT_EXTRA_ITEM_ADDED
             )
-            assert len(events) == 1
-            assert events[0].payload == {
-                "settlement_id": str(s.id),
-                "item_type": "运费",
-                "item_amount": "12.00",
-                "total_amount": "512.00",
-            }
-            assert_payload_registered(events[0].payload)
+            assert not events
+            session.add(
+                SettlementExtraItem(
+                    id=uuid4(),
+                    tenant_id=tenant_a.id,
+                    settlement_id=s.id,
+                    item_type="运费",
+                    amount=Decimal("12"),
+                    created_by=manager.id,
+                )
+            )
+            s.total_amount = Decimal("512")
+            s.settlement_status = "已付款"
+            await session.flush()
+            history = await SettlementService(session).get_settlement(s.id, manager)
+            assert history.total_amount == Decimal("512")
+            assert [(it.item_type, it.amount) for it in history.extra_items] == [
+                ("运费", Decimal("12"))
+            ]
         finally:
             tenant_id_ctx.reset(token)
 

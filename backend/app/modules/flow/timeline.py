@@ -509,6 +509,7 @@ class LineEventService:
                 negotiator_id=negotiation.pr_id if negotiation is not None else None,
                 items_complete=False,
                 settlement_status=None,
+                freight_status=header.freight_status,
             )
         if negotiation is None:  # 第 1 层已挡住：线上至少有一张单
             raise LineNotFoundError()
