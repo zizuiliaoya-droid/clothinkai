@@ -35,10 +35,11 @@ def test_real_completion_event_and_revoked_group_hide_migration_marker() -> None
         (True, frozenset()),
         (False, frozenset({"field.line_event.promotion:read"})),
     ]:
-        header = LineHeader(promotion, None, False, None, has_completion_event=has_event)
+        header = LineHeader(promotion, None, False, None)
         points = legacy_points(
             header,
             first_event_at=None,
+            has_completion_event=has_event,
             ctx=FieldPermissionContext(
                 role_codes=frozenset({"pr_manager"}), grants=frozenset(), revokes=revokes
             ),

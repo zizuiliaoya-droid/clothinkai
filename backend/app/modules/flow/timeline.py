@@ -107,13 +107,14 @@ def legacy_points(
     first_event_at: datetime | None,
     ctx: FieldPermissionContext,
     sees_negotiation: bool,
+    has_completion_event: bool = False,
 ) -> list[LegacyPoint]:
     """上线前记录（6.5）：第一条事件之前的字段时间点（没有事件 = 全部），最新在上。
 
     同样过第 2 层：按点所属的事件分组 ``can_read_field("line_event", 组)``，谈款的点还要看得到这张谈款（行级）；
     看不到的直接不出（不计入 ``hidden_segments``：那里数的是事件）。只出动作与原因，金额、收件不进文案。
     发货两点（推送、发货）是计划 D7 加的：PR-2 ~ PR-4 之间的推送 / 回填没有事件；
-    M5迁移完结标记独立于首事件截止点；是否有真实完结事件由头查询判断，不受500条截断影响。
+    M5迁移完结标记独立于首事件截止点；是否有真实完结事件随事件查询返回，不受500条截断影响。
     """
     # (分组, 时间, 文案, 来源字段)，按业务先后排列：同一时刻的几点，后发生的排在上面
     points: list[tuple[str, datetime | date | None, str, str]] = []
@@ -181,7 +182,7 @@ def legacy_points(
     if (
         promo is not None
         and promo.completed_at is not None
-        and not header.has_completion_event
+        and not has_completion_event
         and can_read_field("line_event", "promotion", ctx)
     ):
         out.append(
@@ -364,11 +365,12 @@ class LineEventService:
         tenant_id = user.tenant_id
         promotion, negotiation = header.promotion, header.negotiation
 
-        rows = await self._events.list_by_line(
+        batch = await self._events.list_by_line(
             tenant_id=tenant_id, line_id=line_id, newest_first=True, limit=TIMELINE_LIMIT + 1
         )
-        truncated = len(rows) > TIMELINE_LIMIT
-        rows = rows[:TIMELINE_LIMIT]
+        has_completion_event = batch.has_completion_event
+        truncated = len(batch) > TIMELINE_LIMIT
+        rows = batch[:TIMELINE_LIMIT]
         # legacy 的截止点：倒序取的，最后一条就是第一条事件；截断了才另查
         if truncated:
             first_event_at = await self._lines.first_event_at(tenant_id=tenant_id, line_id=line_id)
@@ -469,6 +471,7 @@ class LineEventService:
                 first_event_at=first_event_at,
                 ctx=ctx,
                 sees_negotiation=sees_negotiation,
+                has_completion_event=has_completion_event,
             ),
             truncated=truncated,
             ui={"actions": {"comment": comment.to_dict()} if comment is not None else {}},

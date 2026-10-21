@@ -13,12 +13,12 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from enum import Enum
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security.field_permissions import FieldPermissionContext, can_read_field
@@ -328,6 +328,14 @@ def payload_size(payload: dict[str, Any]) -> int:
     return len(json.dumps(payload, ensure_ascii=False, separators=(", ", ": ")).encode("utf-8"))
 
 
+class LineEventRows(list[LineEvent]):
+    """事件列表与LIMIT前完整历史的完结标志；保持既有list调用语义。"""
+
+    def __init__(self, events: Iterable[LineEvent], *, has_completion_event: bool) -> None:
+        super().__init__(events)
+        self.has_completion_event = has_completion_event
+
+
 class LineEventRepository:
     """只追加：公开方法只有 ``append`` 与 ``list_by_line``（单测断言没有别的）。"""
 
@@ -385,21 +393,30 @@ class LineEventRepository:
         line_id: UUID,
         newest_first: bool = False,
         limit: int | None = None,
-    ) -> list[LineEvent]:
+    ) -> LineEventRows:
         """一条主线的事件，按 ``seq`` 排（同一事务的几条 ``created_at`` 可能相同，6.4）。
 
         读接口用 ``newest_first=True``（最新在上）+ ``limit``（上限 + 1，多出来那条只用来判 ``truncated``），
         走 ``idx_line_event_line (tenant_id, line_id, seq)``。
+        同一查询用窗口聚合在LIMIT前取完整历史完结标志，避免头查询再访问事件表。
         """
         order = LineEvent.seq.desc() if newest_first else LineEvent.seq
         stmt = (
-            select(LineEvent)
+            select(
+                LineEvent,
+                func.bool_or(
+                    LineEvent.event_type == LineEventType.PROMOTION_COMPLETED.value
+                ).over(),
+            )
             .where(LineEvent.tenant_id == tenant_id, LineEvent.line_id == line_id)
             .order_by(order)
         )
         if limit is not None:
             stmt = stmt.limit(limit)
-        return list((await self._session.execute(stmt)).scalars().all())
+        rows = (await self._session.execute(stmt)).all()
+        return LineEventRows(
+            (row[0] for row in rows), has_completion_event=bool(rows and rows[0][1])
+        )
 
 
 __all__ = [

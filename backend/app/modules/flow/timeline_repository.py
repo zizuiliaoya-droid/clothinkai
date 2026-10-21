@@ -17,7 +17,7 @@ from datetime import date, datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, exists, func, literal, select
+from sqlalchemy import and_, func, literal, select
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -36,7 +36,6 @@ class LineHeader:
     negotiation: Negotiation | None
     has_settlement: bool
     settlement_payment_date: date | None
-    has_completion_event: bool = False
 
 
 @dataclass(frozen=True)
@@ -65,11 +64,6 @@ class LineReadRepository:
                 Negotiation,
                 Settlement.id,
                 Settlement.payment_date,
-                exists().where(
-                    LineEvent.tenant_id == tenant_id,
-                    LineEvent.line_id == line_id,
-                    LineEvent.event_type == LineEventType.PROMOTION_COMPLETED.value,
-                ),
             )
             .select_from(anchor)
             .outerjoin(
@@ -91,7 +85,6 @@ class LineReadRepository:
             negotiation=row[1],
             has_settlement=row[2] is not None,
             settlement_payment_date=row[3],
-            has_completion_event=bool(row[4]),
         )
 
     async def first_event_at(self, *, tenant_id: UUID, line_id: UUID) -> datetime | None:
