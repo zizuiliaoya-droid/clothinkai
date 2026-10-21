@@ -4,9 +4,12 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from app.core.attachment import check_image_payload
+from app.core.exceptions import FieldPermissionDenied
 from app.core.metrics import (
     promotion_state_transitions_total,
 )
+from app.core.security.field_permissions import can_write_field
 from app.modules.auth.models import User
 from app.modules.flow.line_events import LineEventRepository, LineEventType
 from app.modules.promotion.enums import (
@@ -14,8 +17,19 @@ from app.modules.promotion.enums import (
     RecallStatus,
 )
 from app.modules.promotion.exceptions import (
+    PromotionCompletedReadonlyError,
     PromotionNotFoundError,
     StateTransitionConflictError,
+)
+from app.modules.promotion.freight_rules import (
+    FreightStateConflictError,
+    continuing_published_recall,
+)
+from app.modules.promotion.freight_service import (
+    FreightWriteContext,
+    ensure_active,
+    ensure_scope,
+    lock_freight_context,
 )
 from app.modules.promotion.schemas import (
     PromotionRecallStartRequest,
@@ -31,6 +45,109 @@ from app.modules.promotion.state_machines import (
 
 class PromotionRecallMixin(PromotionServiceBase):
     """召回：发起 / 成功 / 失败。"""
+
+    async def _recall_context(
+        self, promotion_id: UUID, user: User, *, waybill: bool = False
+    ) -> FreightWriteContext:
+        context = await lock_freight_context(self._session, promotion_id, user)
+        promotion, freight = context.promotion, context.freight
+        actor = await self._flow_actor(user)
+        ensure_scope(actor, "promotion", "write")
+        ensure_active(promotion)
+        status = freight.status if freight else None
+        if waybill:
+            if promotion.recall_status not in ("召回中", "召回成功"):
+                raise StateTransitionConflictError("召回中或召回成功后才能传寄回截图")
+            if status in ("待审核", "待付款", "已付款"):
+                raise FreightStateConflictError("寄回截图已快照到付款单，驳回后才可更新")
+            if not can_write_field("promotion", "payment_qr", actor.field_ctx):
+                raise FieldPermissionDenied(field="payment_qr", entity="promotion")
+        elif promotion.recall_status != "召回中":
+            raise StateTransitionConflictError("只有召回中才能登记召回结果")
+        if promotion.completed_at is not None and not actor.is_star:
+            continuing = continuing_published_recall(
+                publish_status=promotion.publish_status,
+                recall_status=promotion.recall_status,
+                is_active=promotion.is_active,
+            )
+            if not continuing and not (waybill and status == "已驳回"):
+                raise PromotionCompletedReadonlyError("已完结，只读")
+        return context
+
+    async def upload_recall_waybill(
+        self,
+        promotion_id: UUID,
+        *,
+        filename: str | None,
+        mime_type: str | None,
+        data: bytes,
+        user: User,
+    ) -> PromotionResponse:
+        from fastapi.concurrency import run_in_threadpool
+
+        from app.modules.promotion.freight_rules import FreightValidationError
+        from app.modules.promotion.service_parts.base import log
+
+        context = await self._recall_context(promotion_id, user, waybill=True)
+        promotion = context.promotion
+        problem = check_image_payload(
+            data=data,
+            mime_type=mime_type,
+            filename=filename,
+            max_bytes=10 * 1024 * 1024,
+            label="寄回单号截图",
+        )
+        if problem:
+            raise FreightValidationError(problem)
+        key: str | None = None
+        try:
+            attachment, _ = await self._attachment_service.create_upload_record(
+                session=self._session,
+                tenant_id=user.tenant_id,
+                created_by=user.id,
+                bucket="private",
+                purpose="recall_waybill_screenshot",
+                filename=filename,
+                mime_type=str(mime_type),
+                size_bytes=len(data),
+            )
+            key = attachment.r2_key
+            await run_in_threadpool(
+                self._attachment_service.upload_bytes,
+                data,
+                bucket="private",
+                key=key,
+                content_type=str(mime_type),
+            )
+            await self._attachment_service.mark_uploaded(
+                session=self._session, attachment_id=attachment.id, tenant_id=user.tenant_id
+            )
+            promotion.recall_waybill_attachment_id = attachment.id
+            await LineEventRepository(self._session).append(
+                tenant_id=promotion.tenant_id,
+                line_id=promotion.line_id,
+                event_type=LineEventType.RECALL_WAYBILL_UPLOADED,
+                actor_id=user.id,
+                promotion_id=promotion.id,
+                attachment_id=attachment.id,
+            )
+            await self._audit.log(
+                action="recall.waybill_uploaded",
+                resource="promotion",
+                resource_id=promotion.id,
+                user_id=user.id,
+                after={"attachment_changed": True},
+            )
+            await self._session.commit()
+        except Exception:
+            await self._session.rollback()
+            if key is not None:
+                try:
+                    await run_in_threadpool(self._attachment_service.delete, "private", key)
+                except Exception:
+                    log.warning("recall_waybill_compensation_delete_failed")
+            raise
+        return await self._to_response(promotion, user)
 
     async def start_recall(
         self,

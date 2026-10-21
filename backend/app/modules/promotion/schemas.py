@@ -154,6 +154,7 @@ class PromotionUpdate(BaseModel):
     goods_main_id: UUID | None = None
     cooperation_mode: CooperationMode | None = None
     return_shipping_fee: _FeeField | None = None
+    return_shipping_payer: Literal["博主垫付", "到付"] | None = None
     platform: str | None = Field(default=None, min_length=1, max_length=16)
     scheduled_publish_date: date | None = None
     quote_amount: _QuoteField | None = None

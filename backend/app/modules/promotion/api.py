@@ -331,6 +331,26 @@ async def start_recall_promotion(
 
 
 @router.post(
+    "/promotions/{promotion_id}/recall/waybill",
+    response_model=PromotionResponse,
+    dependencies=[require_permission("promotion", "write")],
+)
+async def upload_recall_waybill(
+    promotion_id: UUID,
+    user: CurrentActiveUser,
+    service: PromotionServiceDep,
+    file: Annotated[UploadFile, File()],
+) -> PromotionResponse:
+    try:
+        data = await file.read(10 * 1024 * 1024 + 1)
+    finally:
+        await file.close()
+    return await service.upload_recall_waybill(
+        promotion_id, user=user, filename=file.filename, mime_type=file.content_type, data=data
+    )
+
+
+@router.post(
     "/promotions/{promotion_id}/recall/success",
     response_model=PromotionResponse,
     dependencies=[require_permission("promotion", "write")],

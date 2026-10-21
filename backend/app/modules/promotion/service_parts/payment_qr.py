@@ -4,16 +4,19 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from app.core.exceptions import IllegalStateTransitionError
+from app.core.exceptions import FieldPermissionDenied, IllegalStateTransitionError
+from app.core.security.field_permissions import can_write_field
 from app.modules.auth.models import User
 from app.modules.flow.line_events import LineEventRepository, LineEventType
 from app.modules.promotion.enums import PublishStatus, RecallStatus, SettlementStatus
 from app.modules.promotion.exceptions import (
     InvalidPaymentQrAttachmentError,
     PaymentQrLockedError,
+    PromotionCompletedReadonlyError,
     PromotionNotFoundError,
 )
 from app.modules.promotion.flow_matrix import PAYMENT_QR_GREY_HINT
+from app.modules.promotion.freight_repository import ReturnFreightRepository
 from app.modules.promotion.models import Promotion
 from app.modules.promotion.schemas import (
     PromotionPaymentQrBindRequest,
@@ -54,9 +57,15 @@ class PromotionPaymentQrMixin(PromotionServiceBase):
 
         返回推广单与它结款单的状态（没有结款单为 None，DELETE 要用）。
         """
-        promotion = await self._writable_promotion(promotion_id, user, include_inactive=True)
+        # 专用入口在同一推广行锁内按7.3判完结；不放宽普通_writable_promotion。
+        promotion = await self._repo.get_for_write(
+            promotion_id, tenant_id=user.tenant_id, include_inactive=True
+        )
         if promotion is None:
             raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
+        actor = await self._flow_actor(user)
+        if not can_write_field("promotion", "payment_qr", actor.field_ctx):
+            raise FieldPermissionDenied(field="payment_qr", entity="promotion")
         settlement_status = await self._assert_payment_qr_changeable(promotion, user)
         return promotion, settlement_status
 
@@ -85,19 +94,29 @@ class PromotionPaymentQrMixin(PromotionServiceBase):
         if (await self._flow_actor(user)).is_star:
             return settlement_status
         stage = await self._compute_stage(promotion)
-        if stage in _READONLY_STAGES:
+        freight_status = await ReturnFreightRepository(self._session).status_for_promotion(
+            promotion.id, tenant_id=promotion.tenant_id
+        )
+        exception = promotion.recall_status == "召回中" or freight_status == "已驳回"
+        if (
+            not promotion.is_active
+            or promotion.publish_status == "已删除"
+            or stage in (_READONLY_STAGES - {"已完结 · 召回"})
+        ):
             raise IllegalStateTransitionError(_READONLY_REASON, details={"stage": stage})
         if settlement_status == _SETTLEMENT_PAYING:
             raise PaymentQrLockedError(
                 "财务付款中，收款码已锁定；码不对请让财务驳回后重传",
                 details={"lock": "settlement_paying"},
             )
-        if promotion.settlement_status in _SETTLED:
+        if promotion.completed_at is not None and not exception:
+            raise PromotionCompletedReadonlyError("已完结，只读")
+        if promotion.settlement_status in _SETTLED and not exception:
             raise PaymentQrLockedError(
                 "已结款，收款码已锁定",
                 details={"lock": "settled", "settlement_status": promotion.settlement_status},
             )
-        if stage not in _OPEN_STAGES:
+        if stage not in _OPEN_STAGES and not exception:
             raise IllegalStateTransitionError(_READONLY_REASON, details={"stage": stage})
         return settlement_status
 
