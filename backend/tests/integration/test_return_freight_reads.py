@@ -200,7 +200,7 @@ async def test_default_manager_finance_list_is_read_only(session, freight_promot
     page = await _call(session, flow_users.pr_manager, "GET", "/api/return-freight-payments/")
     assert page.status_code == 200, page.text
     item = next(item for item in page.json()["items"] if item["id"] == str(f.id))
-    assert item["ui"]["actions"]["freight_review"]["state"] == "edit"
+    assert item["ui"]["actions"]["freight_review"]["state"] == "enabled"
     assert "freight_pay" not in item["ui"]["actions"]
     for suffix, body in (("pay", None), ("reject-payment", {"reason": "无付款权限"})):
         denied = await _call(
@@ -213,8 +213,28 @@ async def test_default_manager_finance_list_is_read_only(session, freight_promot
         assert denied.status_code == 403, denied.text
 
 
+@pytest.mark.parametrize("who", ["pr_manager", "admin"])
+async def test_missing_owner_can_be_read_but_never_reviewed(
+    session, freight_promotion, flow_users, who
+):
+    p = freight_promotion
+    p.pr_id = None
+    await session.flush()
+    f = await ReturnFreightService(session).submit(p.id, FreightSubmitRequest(), flow_users.pr)
+    user = getattr(flow_users, who)
+    read = await _call(session, user, "GET", f"/api/return-freight-payments/{f.id}")
+    assert read.status_code == 200, read.text
+    assert read.json()["ui"]["actions"]["freight_review"]["state"] == "disabled"
+    rejected = await _call(
+        session, user, "POST", f"/api/return-freight-payments/{f.id}/review", {"action": "approve"}
+    )
+    assert (
+        rejected.status_code == 403 and rejected.json()["details"]["rule"] == "review_owner_missing"
+    ), rejected.text
+
+
 async def test_freight_list_filters_and_tenant_hidden(
-    session, freight_promotion, flow_users, tenant_b
+    session, freight_promotion, flow_users, tenant_b, factory, pr_role
 ):
     p = freight_promotion
     service = ReturnFreightService(session)
@@ -233,10 +253,52 @@ async def test_freight_list_filters_and_tenant_hidden(
     assert not paid.items
     token = tenant_id_ctx.set(tenant_b.id)
     try:
-        # 应用连接RLS + 显式tenant双保险；身份权限不伪造。
+        # 显式tenant与实际HTTP身份各自拒绝；真正应用角色RLS另由专用文件验证。
         assert await service.freights.get(f.id, tenant_id=tenant_b.id) is None
+        other = await factory.user(tenant_b, roles=[pr_role])
+        hidden = await _call(session, other, "GET", f"/api/return-freight-payments/{f.id}")
+        assert hidden.status_code == 404, hidden.text
     finally:
         tenant_id_ctx.reset(token)
+
+
+async def test_promotion_list_freight_summary_is_batched_and_clipped(
+    session, freight_promotion, flow_users, product_factory, blogger_factory, promotion_factory
+):
+    from sqlalchemy import event
+
+    p = freight_promotion
+    await ReturnFreightService(session).submit(p.id, FreightSubmitRequest(), flow_users.pr)
+    style, blogger = await product_factory.style(), await blogger_factory.blogger()
+    await promotion_factory.promotion(style=style, blogger=blogger, pr=flow_users.pr)
+    engine = session.get_bind().engine
+    queries = []
+
+    def capture(conn, cursor, statement, parameters, context, executemany):
+        if (
+            statement.lstrip().lower().startswith("select")
+            and "return_freight_payment" in statement
+        ):
+            queries.append(statement)
+
+    event.listen(engine, "before_cursor_execute", capture)
+    try:
+        response = await _call(session, flow_users.operations, "GET", "/api/promotions/")
+    finally:
+        event.remove(engine, "before_cursor_execute", capture)
+    assert response.status_code == 200, response.text
+    rows = response.json()["items"]
+    assert len(rows) >= 2
+    result = next(row for row in rows if row["id"] == str(p.id))
+    assert (
+        result["freight_payment"]["status"] == "待审核"
+        and result["freight_payment"]["amount"] is None
+    )
+    assert (
+        result["recall_waybill_attachment_id"] is None
+        and result["recall_waybill_signed_url"] is None
+    )
+    assert len(queries) == 1, "每页只批量读取一次R33，不按推广逐行查询"
 
 
 async def test_review_reject_and_finance_reject_require_reason_and_keep_id(

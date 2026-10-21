@@ -45,7 +45,7 @@ from app.modules.flow.matrix import (
 )
 from app.modules.promotion.enums import CooperationMode, PublishStatus, RecallStatus
 from app.modules.promotion.exceptions import InvalidReceiverPhoneError
-from app.modules.promotion.recall_ui_rules import PaymentQrEditable, RecallEditable
+from app.modules.promotion.recall_ui_rules import NoOpenFreight, PaymentQrEditable, RecallEditable
 from app.modules.promotion.receiver import RECEIVER_FIELDS, normalize_receiver_phone
 from app.modules.promotion.stage_calculator import PROMOTION_STAGES, STAGE_COLUMN
 
@@ -357,8 +357,8 @@ _fill(_urge, "ABC", Cell(edit=(_URGE_WRITE,)))
 
 # 停用推广单（PR-5，11-15）：A ~ D、G 隐/改/改/隐/隐/隐；结款单生成后（E、F）与 H 只有管理员
 _deactivate: dict[str, Cell | tuple[Cell, ...]] = {}
-_fill(_deactivate, "ABCDG", Cell(edit=(_CREATE,)))
-_fill(_deactivate, "EFH", Cell(edit=(_STAR,)))
+_fill(_deactivate, "ABCDG", Cell(edit=(_CREATE, NoOpenFreight()), read=(_CREATE,)))
+_fill(_deactivate, "EFH", Cell(edit=(_STAR, NoOpenFreight()), read=(_STAR,)))
 
 # 推广审核通过 / 驳回（PR-6，★¹⁵）：D 读/改★/改/隐/隐/隐，审核人 ≠ 谈款人；PR 读「需 PR 主管审核」。
 # 只在待主管审核时状态机允许（推广驳回时隐）
