@@ -273,6 +273,24 @@ jobs:
         run: python -m scripts.ci_flow7_faults
       - name: Verify mandatory phases, test selection and zero skips
         run: python -m scripts.ci_flow7_pg18 verify-results --ci --output ci-artifacts/flow7-pg18-result.json
+      - name: PR8 recall and freight services, ACL, rollback and independent connection races
+        run: |
+          pytest -q --junitxml=ci-artifacts/flow8-pg18-tests.xml \
+            tests/integration/test_return_freight.py \
+            tests/integration/test_return_freight_reads.py \
+            tests/integration/test_return_freight_guards.py \
+            tests/integration/test_return_freight_atomicity.py \
+            tests/integration/test_return_freight_concurrency.py \
+            tests/integration/test_return_freight_payment_rls.py \
+            tests/integration/test_recall_closure.py \
+            tests/integration/test_promotion_cancel_recall.py \
+            tests/integration/test_payment_qr_lock.py \
+            tests/integration/test_settlement_flow.py \
+            tests/integration/test_line_event_writes.py
+      - name: PR8 exact business fault assertions and source restoration
+        run: python -m scripts.ci_flow8_faults
+      - name: Verify PR8 mandatory evidence and zero skips
+        run: python -m scripts.ci_flow8_verify
       - name: Retain synthetic validation evidence
         if: always()
         uses: actions/upload-artifact@v4
