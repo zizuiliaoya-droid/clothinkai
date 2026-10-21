@@ -55,8 +55,8 @@ const statusColor: Record<string, string> = {
   已付款: "green",
   已驳回: "red",
 };
-// 「运费」过渡期保留：PR-8 与 R33 同时停用（流程线 10.3 PR-6「过渡期」）
-const EXTRA_ITEM_TYPES: ExtraItemType[] = ["运费", "赞奖", "其他"];
+// 召回寄回运费走 R33；历史运费类型保留在响应中，新增不再提供。
+const EXTRA_ITEM_TYPES: ExtraItemType[] = ["赞奖", "其他"];
 
 /**
  * 财务结款（流程线 8.6）。列对齐 final.xlsx「站外结款表」，另加推广编号（点开主线抽屉）、合作模式、应付、实付、
@@ -421,7 +421,7 @@ export function SettlementListPage() {
         <Form
           form={extraForm}
           layout="vertical"
-          initialValues={{ item_type: "运费" }}
+          initialValues={{ item_type: "其他" }}
           onFinish={(v) =>
             target &&
             extraMutation.mutate({
