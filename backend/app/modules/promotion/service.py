@@ -385,6 +385,21 @@ class PromotionService(
         # 顺序（流程线 7.1）：404 → 退役键 422 → 合作模式改成另一个值 409 → 已入矩阵的字段（越权全列 403）
         # → 字段写权限 → 其余校验
         self._reject_retired_source_extra_keys(payload)
+        if {"return_shipping_fee", "return_shipping_payer"} & payload.model_fields_set:
+            from app.modules.promotion.freight_repository import ReturnFreightRepository
+            from app.modules.promotion.freight_rules import FreightStateConflictError
+            from app.modules.promotion.freight_service import ensure_freight_amount_write
+
+            if (
+                await ReturnFreightRepository(self._session).status_for_promotion(
+                    promotion_id, tenant_id=user.tenant_id
+                )
+                is not None
+            ):
+                raise FreightStateConflictError(
+                    "已有寄回运费单，金额仅能在驳回后重提时修改，承担方固定"
+                )
+            ensure_freight_amount_write(await self._flow_actor(user))
         managed = PROMOTION_MATRIX.patch_groups.keys() & payload.model_fields_set
         if "cooperation_mode" in managed:
             attempted = payload.cooperation_mode.value if payload.cooperation_mode else None

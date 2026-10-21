@@ -640,6 +640,8 @@ async def promotion_factory(session: AsyncSession, tenant_a: Any) -> Any:
                     "source_extra",
                     "cooperation_mode",
                     "return_shipping_fee",
+                    "return_shipping_payer",
+                    "recall_waybill_attachment_id",
                     "return_waybill",
                     "collect_count",
                     "comment_count",
@@ -734,6 +736,8 @@ async def promotion_factory(session: AsyncSession, tenant_a: Any) -> Any:
                     # 不在这里列出来的 kwarg 会被静默忽略（这个坑真实踩过）。
                     cooperation_mode=kw.get("cooperation_mode"),
                     return_shipping_fee=kw.get("return_shipping_fee"),
+                    return_shipping_payer=kw.get("return_shipping_payer"),
+                    recall_waybill_attachment_id=kw.get("recall_waybill_attachment_id"),
                     return_waybill=kw.get("return_waybill"),
                     collect_count=kw.get("collect_count"),
                     comment_count=kw.get("comment_count"),
