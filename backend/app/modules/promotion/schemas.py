@@ -311,7 +311,7 @@ class PromotionRecallStartRequest(BaseModel):
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
-    recall_reason: str | None = Field(default=None, max_length=2000)
+    recall_reason: str = Field(min_length=1, max_length=2000)
 
 
 class PromotionRecallResultRequest(BaseModel):
@@ -320,6 +320,13 @@ class PromotionRecallResultRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
     remark: str | None = Field(default=None, max_length=2000)
+
+
+class PromotionRecallSuccessRequest(PromotionRecallResultRequest):
+    """C4：运费与承担方必填；是否需要收款码由锁内状态判断。"""
+
+    return_shipping_fee: _FeeField
+    return_shipping_payer: Literal["博主垫付", "到付"]
 
 
 class PromotionReviewRequest(BaseModel):
