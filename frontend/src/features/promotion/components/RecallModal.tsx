@@ -1,137 +1,32 @@
-import { LINE_EVENTS_ALL } from "@/features/flow/api";
-import { useEffect } from "react";
-import { Button, Form, Input, Modal, Space, Tag, Typography, message } from "antd";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import {
-  recallFailurePromotion,
-  recallSuccessPromotion,
-  startRecallPromotion,
-} from "@/features/promotion/api";
-import type { Promotion } from "@/features/promotion/types";
-import { recallColor } from "@/features/promotion/listConstants";
-import { extractErrorMessage } from "@/services/apiClient";
+import { Alert, Form, Input, Modal, Spin, message } from "antd";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { getPromotion, promotionDetailKey, startRecallPromotion } from "../api";
+import type { Promotion } from "../types";
+import { useRecallFreightFeedback } from "./useRecallFreightFeedback";
 
-type Props = {
-  /** 要召回的推广单；null = 弹窗关着。 */
-  target: Promotion | null;
-  onClose: () => void;
-};
-
-/** 召回：发起 / 成功 / 失败。 */
-export function RecallModal({ target, onClose }: Props) {
-  const qc = useQueryClient();
-  const [form] = Form.useForm();
-
-  useEffect(() => {
-    if (target) form.resetFields();
-  }, [target, form]);
-
-  const recallMutation = useMutation({
-    mutationFn: ({
-      id,
-      step,
-      reason,
-    }: {
-      id: string;
-      step: "start" | "success" | "failure";
-      reason?: string;
-    }) => {
-      if (step === "start") {
-        return startRecallPromotion(id, { recall_reason: reason ?? null });
-      }
-      if (step === "success") {
-        return recallSuccessPromotion(id);
-      }
-      return recallFailurePromotion(id);
-    },
-    onSuccess: () => {
-      message.success("召回状态已更新");
-      onClose();
-      form.resetFields();
-      void qc.invalidateQueries({ queryKey: ["promotions"] });
-      void qc.invalidateQueries({ queryKey: LINE_EVENTS_ALL });
-    },
-    onError: (err) => message.error(extractErrorMessage(err)),
+export function RecallModal({ target, onClose }: { target: Promotion | null; onClose: () => void }) {
+  return target ? <RecallForm key={target.id} target={target} onClose={onClose} /> : null;
+}
+function RecallForm({ target, onClose }: { target: Promotion; onClose: () => void }) {
+  const [form] = Form.useForm<{ recall_reason: string }>();
+  const { data, isLoading, error } = useQuery({ queryKey: promotionDetailKey(target.id), queryFn: () => getPromotion(target.id) });
+  const feedback = useRecallFreightFeedback(target.line_id);
+  const action = data?.ui?.actions?.recall_start;
+  const enabled = action?.state === "enabled";
+  const mutation = useMutation({
+    mutationFn: (reason: string) => startRecallPromotion(target.id, { recall_reason: reason.trim() }),
+    onSuccess: () => { message.success("已发起召回"); feedback.refresh(); onClose(); },
+    onError: feedback.handleError,
   });
-
-  return (
-    <Modal
-      title={target ? `召回 · ${target.internal_code}` : "召回"}
-      open={!!target}
-      onCancel={onClose}
-      footer={null}
-      destroyOnHidden
-    >
-      {target && (
-        <div style={{ marginTop: 16 }}>
-          <Typography.Paragraph type="secondary">
-            当前召回状态：<Tag color={recallColor[target.recall_status]}>
-              {target.recall_status}
-            </Tag>
-            衣服损坏或要寄回都走召回流程，与合作模式无关。
-          </Typography.Paragraph>
-          {["未召回", "召回失败"].includes(target.recall_status) && (
-            <Form
-              form={form}
-              layout="vertical"
-              onFinish={(v: { recall_reason?: string }) =>
-                recallMutation.mutate({
-                  id: target.id,
-                  step: "start",
-                  reason: v.recall_reason,
-                })
-              }
-            >
-              <Form.Item name="recall_reason" label="召回原因">
-                <Input.TextArea rows={2} placeholder="如：衣服有污损，要求寄回（可选）" />
-              </Form.Item>
-              <Button
-                type="primary"
-                htmlType="submit"
-                loading={recallMutation.isPending}
-              >
-                发起召回
-              </Button>
-            </Form>
-          )}
-          {target.recall_status === "召回中" && (
-            <Space>
-              <Button
-                type="primary"
-                loading={recallMutation.isPending}
-                onClick={() =>
-                  recallMutation.mutate({
-                    id: target.id,
-                    step: "success",
-                  })
-                }
-              >
-                召回成功
-              </Button>
-              <Button
-                danger
-                loading={recallMutation.isPending}
-                onClick={() =>
-                  recallMutation.mutate({
-                    id: target.id,
-                    step: "failure",
-                  })
-                }
-              >
-                召回失败
-              </Button>
-              <Typography.Text type="secondary">
-                失败后还能重新发起
-              </Typography.Text>
-            </Space>
-          )}
-          {target.recall_status === "召回成功" && (
-            <Typography.Text type="secondary">
-              召回已完成，这是终态。寄回运费可以在「录入信息」里补。
-            </Typography.Text>
-          )}
-        </div>
-      )}
-    </Modal>
-  );
+  return <Modal title={`发起召回 · ${target.internal_code}`} open onCancel={onClose} onOk={() => form.submit()} okText="发起召回" okButtonProps={{ disabled: !enabled }} confirmLoading={mutation.isPending} destroyOnHidden>
+    {isLoading && <Spin />}
+    {error && <Alert type="error" message="单据详情加载失败，请关闭后重试" />}
+    {data?.publish_status === "未发布" && <Alert type="warning" showIcon message="这张单还没发布，召回会同时取消推广" />}
+    {data && !enabled && <Alert type="info" message={action?.hint ?? action?.reason ?? "当前单据不可发起召回"} />}
+    <Form form={form} layout="vertical" style={{ marginTop: 16 }} onFinish={(value) => { if (enabled) mutation.mutate(value.recall_reason); }}>
+      <Form.Item name="recall_reason" label="召回原因" rules={[{ required: true, whitespace: true, message: "请填写召回原因" }, { max: 2000, message: "最多 2000 字" }]}>
+        <Input.TextArea rows={3} maxLength={2000} showCount disabled={!enabled || mutation.isPending} />
+      </Form.Item>
+    </Form>
+  </Modal>;
 }

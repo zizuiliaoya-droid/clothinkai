@@ -165,6 +165,9 @@ export function attachmentAlt(eventType: string): string {
 const KEY_LABELS: Record<string, string> = {
   quote_amount: "博主服务费",
   payable: "应付金额",
+  freight_amount: "运费付款金额",
+  return_shipping_fee: "寄回运费",
+  return_shipping_payer: "承担方",
   receiver_name: "收件人",
   receiver_phone: "收件电话",
   receiver_address: "收货地址",
@@ -212,7 +215,7 @@ const KEY_LABELS: Record<string, string> = {
 
 /** 存 id 的键：只说「改了」，不显示值。 */
 const ID_KEYS = new Set(["blogger_id", "style_id", "goods_main_id", "goods_items", "sku_id", "source_extra"]);
-const MONEY_KEYS = new Set(["quote_amount", "payable"]);
+const MONEY_KEYS = new Set(["quote_amount", "payable", "freight_amount", "return_shipping_fee"]);
 const ITEMS_KEYS = new Set(["items", "items_before", "items_after"]);
 const TIME_KEYS = new Set(["shipped_at"]);
 const SYSTEM_LABELS: Record<string, string> = { urge_scan: "自动催发扫描", import: "导入" };

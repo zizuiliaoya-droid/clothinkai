@@ -259,6 +259,34 @@ describe("PromotionListPage 主线抽屉", () => {
 // 「改归属商品」只看行 ui.edits 的 goods，「催发」只看行 ui.actions.urge。
 describe("PromotionListPage 按 ui 出按钮与菜单项", () => {
   const ENABLED = { state: "enabled" as const };
+  it("已完结召回只保留后端精确动作，不出现旧万能召回入口", async () => {
+    const current = promotion({ completed_at: "2026-10-21T01:00:00Z", publish_status: "已发布", recall_status: "召回中", ui: { actions: { recall_waybill: ENABLED, recall_result: ENABLED }, edits: [] } });
+    renderPage([current], current);
+    const labels = await openMenu();
+    expect(labels).toContain("上传召回寄回截图");
+    expect(labels).toContain("登记召回结果");
+    expect(labels).not.toContain("发起召回");
+    expect(labels.some((label) => label.startsWith("召回（"))).toBe(false);
+  });
+  it("R33后续菜单使用摘要自己的ui，不能根据状态猜审核能力", async () => {
+    const current = promotion({ badges: ["freight_open"], freight_payment: { id: "f1", status: "已驳回", amount: "30.00", payment_date: null, reject_reason: "重新核对", ui: { actions: { freight_resubmit: ENABLED } } }, ui: { actions: {}, edits: [] } });
+    renderPage([current], current);
+    const labels = await openMenu();
+    expect(labels).toContain("重提寄回运费");
+    expect(labels).not.toContain("审核寄回运费");
+    expect(screen.getByText("运费单：已驳回")).toBeTruthy();
+  });
+  it("详情召回/R33按字段能力裁剪，召回已上传图按ID显示占位", async () => {
+    const current = promotion({ recall_reason: "尺寸不合", return_shipping_fee: null, recall_waybill_attachment_id: "w1", recall_waybill_signed_url: null, ui: { actions: { recall_result: ENABLED }, fields: { recall_info: { state: "read" } } } });
+    renderPage([current], current, PAGE_UI_NONE);
+    fireEvent.click((await screen.findAllByText("XHS-20261009-001"))[0]);
+    await waitFor(() => expect(drawer()).toBeTruthy());
+    const d = within(drawer());
+    expect(await d.findByText("尺寸不合")).toBeTruthy();
+    expect(d.getByText("已上传寄回截图（暂时无法预览）")).toBeTruthy();
+    expect(d.getByRole("button", { name: "登记召回结果" })).toBeTruthy();
+    expect(d.queryByRole("region", { name: "寄回运费" })).toBeNull();
+  });
 
   it("页级 ui 没有 create / import（PR、运营）：两个按钮都不出", async () => {
     renderPage([promotion()], promotion({ ui: DETAIL_UI }));
