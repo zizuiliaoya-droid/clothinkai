@@ -126,7 +126,7 @@ async def test_freight_self_review_is_forbidden_even_star(
         session, user, "POST", f"/api/return-freight-payments/{f.id}/review", {"action": "approve"}
     )
     assert response.status_code == 403, response.text
-    assert response.json()["error"]["code"] == "FLOW_ACTION_FORBIDDEN"
+    assert response.json()["code"] == "FLOW_ACTION_FORBIDDEN"
     await session.refresh(f)
     assert f.status == "待审核"
 
