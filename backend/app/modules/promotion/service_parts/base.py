@@ -194,6 +194,7 @@ class PromotionServiceBase:
         user: User,
         *,
         include_inactive: bool = False,
+        conflict_fields: tuple[str, ...] = (),
     ) -> Promotion:
         """同事务行锁内读取并判完结，防最后一步与PATCH/上传互相穿透。"""
         from app.modules.promotion.exceptions import (
@@ -205,12 +206,17 @@ class PromotionServiceBase:
         snapshot = await self._repo.get_by_id(promotion_id, include_inactive=True)
         # SELECT FOR UPDATE等待后会原地刷新实体，先复制锁前是否活跃。
         was_active = snapshot is not None and snapshot.is_active
+        before_lock = (
+            {field: getattr(snapshot, field) for field in conflict_fields} if snapshot else {}
+        )
         promotion = await self._repo.get_for_write(
             promotion_id,
             tenant_id=user.tenant_id,
             include_inactive=True,
         )
         if promotion is None:
+            if snapshot is not None:
+                raise StateTransitionConflictError("推广已变更或不可操作，请刷新后重试")
             raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
         if promotion.completed_at is not None and not (await self._flow_actor(user)).is_star:
             raise PromotionCompletedReadonlyError("已完结，只读")
@@ -220,6 +226,10 @@ class PromotionServiceBase:
                     "推广已被停用，请刷新后重试", details={"promotion_id": str(promotion_id)}
                 )
             raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
+        if snapshot is not None and any(
+            getattr(promotion, field) != value for field, value in before_lock.items()
+        ):
+            raise StateTransitionConflictError("推广状态已变更，请刷新后重试")
         return promotion
 
     async def maybe_complete(self, promotion_id: UUID, user: User) -> None:

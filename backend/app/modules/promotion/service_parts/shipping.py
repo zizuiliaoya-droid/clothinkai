@@ -126,7 +126,9 @@ class PromotionShippingMixin(PromotionServiceBase):
 
     async def ship_include(self, promotion_id: UUID, user: User) -> PromotionResponse:
         """S2 纳入发货：历史单（发货为空）→ 待发货。"""
-        promotion = await self._writable_promotion(promotion_id, user)
+        promotion = await self._writable_promotion(
+            promotion_id, user, conflict_fields=("ship_status", "publish_status", "recall_status")
+        )
         actor = await self._flow_actor(user)
         require(actor, await self._promotion_doc(promotion), "ship_include")
 
@@ -156,7 +158,9 @@ class PromotionShippingMixin(PromotionServiceBase):
         → ③ 条件 UPDATE（409）→ ④ 写明细（整组替换，同步 ``promotion.sku_id``）与收件
         → ⑤ 按动作前的阶段重组快照判 ★（422 ``FLOW_GATE_MISSING``），失败连 ③ 一起回滚。
         """
-        promotion = await self._writable_promotion(promotion_id, user)
+        promotion = await self._writable_promotion(
+            promotion_id, user, conflict_fields=("ship_status", "publish_status", "recall_status")
+        )
         actor = await self._flow_actor(user)
         doc = await self._promotion_doc(promotion)
         require(actor, doc, "ship_push", gates=False)
