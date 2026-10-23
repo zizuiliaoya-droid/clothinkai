@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:clothinkai:flow78:phase1:manifest:1",
+  "title": "Clothinkai phase-one public release candidate",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "artifact_kind", "deployable", "missing_deployment_gate", "pins", "compatibility", "files"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "artifact_kind": {"const": "flow78-phase1-candidate"},
+    "deployable": {"const": false},
+    "missing_deployment_gate": {"const": "independently-reviewed-updater-and-user-approval"},
+    "pins": {"$ref": "#/$defs/pins"},
+    "files": {"$ref": "#/$defs/fileMap"},
+    "compatibility": {
+      "type": "object", "additionalProperties": false,
+      "required": ["legacy_root", "preserve_containers", "preserve_certbot_metadata", "preserve_backup_renew", "implicit_migration"],
+      "properties": {
+        "legacy_root": {"const": "/srv/clothinkai/production-20261018"},
+        "preserve_containers": {"const": ["clothinkai-prod-db-20261018", "clothinkai-prod-redis-20261018", "clothinkai-prod-api-20261018", "clothinkai-prod-web-20261018", "clothinkai-prod-worker-20261018", "clothinkai-prod-beat-20261018"]},
+        "preserve_certbot_metadata": {"const": true},
+        "preserve_backup_renew": {"const": true},
+        "implicit_migration": {"const": false}
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "gitId": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "filePin": {
+      "type": "object", "additionalProperties": false,
+      "required": ["bytes", "sha256"],
+      "properties": {"bytes": {"type": "integer", "minimum": 0, "maximum": 67108864}, "sha256": {"$ref": "#/$defs/sha256"}}
+    },
+    "fileMap": {
+      "type": "object", "minProperties": 1, "maxProperties": 10000,
+      "propertyNames": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_./-]*$"},
+      "additionalProperties": {"$ref": "#/$defs/filePin"}
+    },
+    "pins": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "source_commit", "source_tree", "from_revision", "target_revision", "origin", "base_images", "backend_requirements_sha256", "migration_sha256", "dependencies", "frontend", "controls"],
+      "properties": {
+        "schema_version": {"const": 1},
+        "source_commit": {"$ref": "#/$defs/gitId"},
+        "source_tree": {"$ref": "#/$defs/gitId"},
+        "from_revision": {"const": "066_platform_metric_setting"},
+        "target_revision": {"const": "067_retro_completion"},
+        "origin": {"const": "https://47.110.76.9"},
+        "backend_requirements_sha256": {"$ref": "#/$defs/sha256"},
+        "migration_sha256": {"$ref": "#/$defs/sha256"},
+        "base_images": {
+          "type": "object", "additionalProperties": false, "required": ["python", "nginx"],
+          "properties": {
+            "python": {
+              "type": "object", "additionalProperties": false, "required": ["local_tag", "image_id"],
+              "properties": {
+                "local_tag": {"const": "clothinkai-trial-python-base:20261018"},
+                "image_id": {"const": "sha256:2b223ad02f09c7a4c8ea661e9f5e039502427091e1981908bafb3a4db22e6e7e"}
+              }
+            },
+            "nginx": {
+              "type": "object", "additionalProperties": false, "required": ["local_tag", "image_id"],
+              "properties": {
+                "local_tag": {"const": "clothinkai-trial-nginx-base:20261018"},
+                "image_id": {"const": "sha256:bd3cc628e59c8865f88a3bbe99c1029c12a9983b2cb88a9b03913f43d4f5aa79"}
+              }
+            }
+          }
+        },
+        "dependencies": {
+          "type": "object", "additionalProperties": false, "required": ["source_requirements_sha256", "closure_reviewed", "files"],
+          "properties": {
+            "source_requirements_sha256": {"$ref": "#/$defs/sha256"},
+            "closure_reviewed": {"const": true},
+            "files": {"$ref": "#/$defs/fileMap"}
+          }
+        },
+        "frontend": {
+          "type": "object", "additionalProperties": false,
+          "required": ["source_commit", "package_lock_sha256", "node_version", "npm_version", "api_origin", "files"],
+          "properties": {
+            "source_commit": {"$ref": "#/$defs/gitId"},
+            "package_lock_sha256": {"$ref": "#/$defs/sha256"},
+            "node_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+            "npm_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+            "api_origin": {"const": "https://47.110.76.9"},
+            "files": {"$ref": "#/$defs/fileMap"}
+          }
+        },
+        "controls": {
+          "type": "object", "additionalProperties": false,
+          "required": ["runtime_guard.py", "schedule_pickle_guard.py", "start_067.py", "migrate_067.py", "Dockerfile.backend.offline.in", "Dockerfile.frontend.offline.in"],
+          "properties": {
+            "runtime_guard.py": {"$ref": "#/$defs/filePin"},
+            "schedule_pickle_guard.py": {"$ref": "#/$defs/filePin"},
+            "start_067.py": {"$ref": "#/$defs/filePin"},
+            "migrate_067.py": {"$ref": "#/$defs/filePin"},
+            "Dockerfile.backend.offline.in": {"$ref": "#/$defs/filePin"},
+            "Dockerfile.frontend.offline.in": {"$ref": "#/$defs/filePin"}
+          }
+        }
+      }
+    }
+  }
+}

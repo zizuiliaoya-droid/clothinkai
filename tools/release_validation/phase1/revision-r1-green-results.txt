@@ -1,0 +1,20 @@
+test_backup_only_is_rejected_without_creating_main_database (test_revision_r1.BeatRegression.test_backup_only_is_rejected_without_creating_main_database) ... ok
+test_corrupt_database_is_rejected_without_rebuild (test_revision_r1.BeatRegression.test_corrupt_database_is_rejected_without_rebuild) ... ok
+test_corrupt_shelve_stream_is_rejected_without_unpickling (test_revision_r1.BeatRegression.test_corrupt_shelve_stream_is_rejected_without_unpickling) ... ok
+test_missing_dat_is_rejected (test_revision_r1.BeatRegression.test_missing_dat_is_rejected) ... ok
+test_missing_or_mismatched_reviewed_format_is_rejected (test_revision_r1.BeatRegression.test_missing_or_mismatched_reviewed_format_is_rejected) ... ok
+test_start_permit_binds_reviewed_database_format (test_revision_r1.BeatRegression.test_start_permit_binds_reviewed_database_format) ... ok
+test_unrelated_prefix_file_does_not_start_beat (test_revision_r1.BeatRegression.test_unrelated_prefix_file_does_not_start_beat) ... ok
+test_valid_existing_database_is_read_only_and_not_recreated (test_revision_r1.BeatRegression.test_valid_existing_database_is_read_only_and_not_recreated) ... ok
+test_cancel_again_during_timeout_cleanup_still_waits_before_unlock (test_revision_r1.CancellationRegression.test_cancel_again_during_timeout_cleanup_still_waits_before_unlock) ... ok
+test_cancel_during_spawn_retrieves_and_stops_child (test_revision_r1.CancellationRegression.test_cancel_during_spawn_retrieves_and_stops_child) ... ok
+test_cancel_stops_child_before_unlock (test_revision_r1.CancellationRegression.test_cancel_stops_child_before_unlock) ... ok
+test_control_hardlink_is_rejected_before_output (test_revision_r1.HardlinkRegression.test_control_hardlink_is_rejected_before_output) ... ok
+test_dependency_hardlink_is_rejected_before_output (test_revision_r1.HardlinkRegression.test_dependency_hardlink_is_rejected_before_output) ... ok
+test_dist_hardlink_is_rejected_before_output (test_revision_r1.HardlinkRegression.test_dist_hardlink_is_rejected_before_output) ... ok
+test_hardlink_created_after_lstat_is_rejected_by_fstat (test_revision_r1.HardlinkRegression.test_hardlink_created_after_lstat_is_rejected_by_fstat) ... ok
+
+----------------------------------------------------------------------
+Ran 15 tests in 2.106s
+
+OK

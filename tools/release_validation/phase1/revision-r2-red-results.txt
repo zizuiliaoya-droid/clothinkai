@@ -1,0 +1,53 @@
+test_empty_stack_stop (test_revision_r2.CorruptPickleRegression.test_empty_stack_stop) ... FAIL
+test_frame_overrun (test_revision_r2.CorruptPickleRegression.test_frame_overrun) ... FAIL
+test_illegal_protocol (test_revision_r2.CorruptPickleRegression.test_illegal_protocol) ... FAIL
+test_undefined_memo (test_revision_r2.CorruptPickleRegression.test_undefined_memo) ... FAIL
+
+======================================================================
+FAIL: test_empty_stack_stop (test_revision_r2.CorruptPickleRegression.test_empty_stack_stop)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "E:\work\Pycharm_Projection\eCommerce_v4\.agents\tasks\20261008-wave2\release-flow78-1021\test_revision_r2.py", line 28, in test_empty_stack_stop
+    self.rejected_before_celery(b".")
+  File "E:\work\Pycharm_Projection\eCommerce_v4\.agents\tasks\20261008-wave2\release-flow78-1021\test_revision_r2.py", line 22, in rejected_before_celery
+    with self.assertRaises(guard.GuardError):
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: GuardError not raised
+
+======================================================================
+FAIL: test_frame_overrun (test_revision_r2.CorruptPickleRegression.test_frame_overrun)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "E:\work\Pycharm_Projection\eCommerce_v4\.agents\tasks\20261008-wave2\release-flow78-1021\test_revision_r2.py", line 34, in test_frame_overrun
+    self.rejected_before_celery(b"\x80\x04\x95" + (1000).to_bytes(8, "little") + b"N.")
+  File "E:\work\Pycharm_Projection\eCommerce_v4\.agents\tasks\20261008-wave2\release-flow78-1021\test_revision_r2.py", line 22, in rejected_before_celery
+    with self.assertRaises(guard.GuardError):
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: GuardError not raised
+
+======================================================================
+FAIL: test_illegal_protocol (test_revision_r2.CorruptPickleRegression.test_illegal_protocol)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "E:\work\Pycharm_Projection\eCommerce_v4\.agents\tasks\20261008-wave2\release-flow78-1021\test_revision_r2.py", line 37, in test_illegal_protocol
+    self.rejected_before_celery(b"\x80\xffN.")
+  File "E:\work\Pycharm_Projection\eCommerce_v4\.agents\tasks\20261008-wave2\release-flow78-1021\test_revision_r2.py", line 22, in rejected_before_celery
+    with self.assertRaises(guard.GuardError):
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: GuardError not raised
+
+======================================================================
+FAIL: test_undefined_memo (test_revision_r2.CorruptPickleRegression.test_undefined_memo)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "E:\work\Pycharm_Projection\eCommerce_v4\.agents\tasks\20261008-wave2\release-flow78-1021\test_revision_r2.py", line 31, in test_undefined_memo
+    self.rejected_before_celery(b"g999\n.")
+  File "E:\work\Pycharm_Projection\eCommerce_v4\.agents\tasks\20261008-wave2\release-flow78-1021\test_revision_r2.py", line 22, in rejected_before_celery
+    with self.assertRaises(guard.GuardError):
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: GuardError not raised
+
+----------------------------------------------------------------------
+Ran 4 tests in 0.056s
+
+FAILED (failures=4)

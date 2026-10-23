@@ -1,0 +1,4 @@
+# Preserve the independently frozen validation bytes across Windows/Linux checkout.
+tools/release_validation/phase1/** -text whitespace=cr-at-eol
+tools/release_validation/phase2/** -text whitespace=cr-at-eol
+tools/release_validation/ci-transfer-pins-1023.json -text whitespace=cr-at-eol

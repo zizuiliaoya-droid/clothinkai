@@ -1,0 +1,138 @@
+name: Disposable release Linux validation
+
+on:
+  push:
+    branches: [codex/release-linux-ci-1023]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-linux-validation-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+  SOURCE_COMMIT: 94d2044284785c0e9e4719c54e0ef12548b95fb7
+  SOURCE_TREE: dce6b81e9a89aed12bb9eba9047904e3971cd6e1
+
+jobs:
+  linux-os:
+    name: Linux pidfd, flock, fsync and no-follow
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: validation
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Verify frozen tool bytes and record provenance
+        run: >-
+          python -B validation/tools/release_validation/verify_bundle.py
+          --expected-tool-commit "$GITHUB_SHA"
+          --output "$RUNNER_TEMP/release-validation"
+      - name: Exercise actual Linux kernel boundaries
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=10s 120s \
+            python -B validation/tools/release_validation/phase2/ci_tests/run_linux_os.py \
+            > "$RUNNER_TEMP/release-validation/result.json" \
+            2> "$RUNNER_TEMP/release-validation/output.log"
+          cat "$RUNNER_TEMP/release-validation/result.json"
+      - name: Retain only synthetic results and provenance
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-linux-os-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/release-validation/provenance.json
+            ${{ runner.temp }}/release-validation/result.json
+            ${{ runner.temp }}/release-validation/output.log
+
+  postgres:
+    name: PG18.6 / ${{ matrix.scenario }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        scenario: [success, lock_timeout, cancel, advisory_busy]
+    services:
+      postgres:
+        image: postgres:18.6
+        env:
+          POSTGRES_DB: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: flow78-disposable-admin-only
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: validation
+          persist-credentials: false
+      - name: Check out the exact product source, independent of CI commit
+        uses: actions/checkout@v4
+        with:
+          ref: 94d2044284785c0e9e4719c54e0ef12548b95fb7
+          path: product-source
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Verify frozen tools and original source identity
+        run: >-
+          python -B validation/tools/release_validation/verify_bundle.py
+          --expected-tool-commit "$GITHUB_SHA"
+          --source "$GITHUB_WORKSPACE/product-source"
+          --output "$RUNNER_TEMP/release-validation"
+      - name: Install the exact source's pinned dependency declarations
+        timeout-minutes: 10
+        working-directory: product-source/backend
+        run: >-
+          python -m pip --isolated install --disable-pip-version-check
+          --index-url https://pypi.org/simple -r requirements-dev.txt
+      - name: Bind the fixture-only hostname to loopback
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '127.0.0.1 prod-db\n' | sudo tee -a /etc/hosts > /dev/null
+      - name: Run the original Alembic chain and real scenario
+        timeout-minutes: 10
+        shell: bash
+        env:
+          SCENARIO: ${{ matrix.scenario }}
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=10s 540s \
+            python -B validation/tools/release_validation/phase2/ci_tests/run_linux.py \
+            --repository "$GITHUB_WORKSPACE/product-source" \
+            --commit "$SOURCE_COMMIT" --tree "$SOURCE_TREE" --scenario "$SCENARIO" \
+            > "$RUNNER_TEMP/release-validation/result.json" \
+            2> "$RUNNER_TEMP/release-validation/output.log"
+          cat "$RUNNER_TEMP/release-validation/result.json"
+      - name: Retain only synthetic results and provenance
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-linux-pg-${{ matrix.scenario }}-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/release-validation/provenance.json
+            ${{ runner.temp }}/release-validation/result.json
+            ${{ runner.temp }}/release-validation/output.log

@@ -1,0 +1,6 @@
+FROM clothinkai-trial-nginx-base:20261018
+COPY frontend-dist/ /usr/share/nginx/html/
+COPY release.json /opt/release/release.json
+LABEL org.opencontainers.image.revision="@SOURCE_COMMIT@" clothinkai.production.origin="https://47.110.76.9"
+# Future updater supplies the audited legacy-compatible HTTPS configuration explicitly.
+ENTRYPOINT ["/bin/sh", "-c", "echo PHASE1_CANDIDATE_REQUIRES_REVIEWED_UPDATER >&2; exit 1"]

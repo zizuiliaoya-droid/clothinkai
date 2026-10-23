@@ -1,0 +1,40 @@
+test_cancel_stops_child_before_unlock (test_revision_r1.CancellationRegression.test_cancel_stops_child_before_unlock) ... FAIL
+test_dist_hardlink_is_rejected_before_output (test_revision_r1.HardlinkRegression.test_dist_hardlink_is_rejected_before_output) ... FAIL
+test_unrelated_prefix_file_does_not_start_beat (test_revision_r1.BeatRegression.test_unrelated_prefix_file_does_not_start_beat) ... FAIL
+
+======================================================================
+FAIL: test_cancel_stops_child_before_unlock (test_revision_r1.CancellationRegression.test_cancel_stops_child_before_unlock)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\54566\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\54566\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\asyncio\base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "E:\work\Pycharm_Projection\eCommerce_v4\.agents\tasks\20261008-wave2\release-flow78-1021\test_revision_r1.py", line 67, in test_cancel_stops_child_before_unlock
+    self.assertIn("terminate", events)
+AssertionError: 'terminate' not found in ['lock', 'unlock']
+
+======================================================================
+FAIL: test_dist_hardlink_is_rejected_before_output (test_revision_r1.HardlinkRegression.test_dist_hardlink_is_rejected_before_output)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "E:\work\Pycharm_Projection\eCommerce_v4\.agents\tasks\20261008-wave2\release-flow78-1021\test_revision_r1.py", line 83, in test_dist_hardlink_is_rejected_before_output
+    with self.assertRaisesRegex(builder.Rejected, "local_file"):
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Rejected not raised
+
+======================================================================
+FAIL: test_unrelated_prefix_file_does_not_start_beat (test_revision_r1.BeatRegression.test_unrelated_prefix_file_does_not_start_beat)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "E:\work\Pycharm_Projection\eCommerce_v4\.agents\tasks\20261008-wave2\release-flow78-1021\test_revision_r1.py", line 113, in test_unrelated_prefix_file_does_not_start_beat
+    with self.assertRaises(guard.GuardError):
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: GuardError not raised
+
+----------------------------------------------------------------------
+Ran 3 tests in 0.753s
+
+FAILED (failures=3)
