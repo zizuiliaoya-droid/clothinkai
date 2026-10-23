@@ -59,11 +59,12 @@ class ReturnFreightRepository:
     ) -> dict[UUID, Freight]:
         if not promotion_ids:
             return {}
+        # 写入口拿到推广锁后也通过摘要构造权限矩阵；刷新锁前已缓存的运费状态。
         rows = (
             await self._session.execute(
-                select(Freight).where(
-                    Freight.tenant_id == tenant_id, Freight.promotion_id.in_(promotion_ids)
-                )
+                select(Freight)
+                .where(Freight.tenant_id == tenant_id, Freight.promotion_id.in_(promotion_ids))
+                .execution_options(populate_existing=True)
             )
         ).scalars()
         return {row.promotion_id: row for row in rows}

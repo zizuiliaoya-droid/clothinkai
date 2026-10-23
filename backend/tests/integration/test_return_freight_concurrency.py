@@ -44,6 +44,7 @@ r2 = storage_fixtures.r2
         "submit_deactivate",
         "deactivate_submit",
         "pay_deactivate",
+        "pay_delete",
     ],
 )
 async def test_two_connections_serialize_freight_actions(
@@ -72,6 +73,8 @@ async def test_two_connections_serialize_freight_actions(
         # 显式缓存旧付款单，让锁后必须刷新，而不是刚好没有identity-map缓存。
         cached = await b.get(ReturnFreightPayment, fid) if fid else None
         assert cached is None or cached.id == fid
+        if first == "pay":
+            assert cached is not None and cached.status == "待付款"
         original = PromotionRepository.get_for_write
 
         async def pause_after_lock(repo, *args, **kwargs):
@@ -90,7 +93,7 @@ async def test_two_connections_serialize_freight_actions(
                 else "pr_manager"
                 if action == "review"
                 else "admin"
-                if action == "deactivate"
+                if action in ("deactivate", "delete")
                 else "pr"
             )
             user = await s.get(User, getattr(flow_users, who).id)
@@ -133,6 +136,8 @@ async def test_two_connections_serialize_freight_actions(
                         data=storage_fixtures._PNG,
                         user=user,
                     )
+                if action == "delete":
+                    return await promotion.soft_delete_promotion(pid, user)
                 return await promotion.update_promotion(pid, PromotionUpdate(is_active=False), user)
 
             return await committed._attempt(s, call)
@@ -153,7 +158,7 @@ async def test_two_connections_serialize_freight_actions(
                     task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
     assert not isinstance(lead, AppException)
-    both_succeed = pair in ("resubmit_review", "pay_deactivate")
+    both_succeed = pair in ("resubmit_review", "pay_deactivate", "pay_delete")
     assert isinstance(follow, AppException) is not both_succeed
     if isinstance(follow, AppException):
         assert follow.status_code in (403, 409, 422), follow
@@ -181,6 +186,6 @@ async def test_two_connections_serialize_freight_actions(
                 == rows[0].amount
                 == Decimal("35" if first == "resubmit" else "30")
             )
-            assert current.is_active is (pair != "pay_deactivate")
+            assert current.is_active is (pair not in ("pay_deactivate", "pay_delete"))
         if first == "pay":
             assert len(r2.puts) == 1
