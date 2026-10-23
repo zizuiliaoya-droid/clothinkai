@@ -35,13 +35,18 @@ used. A separate OS job runs real pidfd, flock, fsync, symlink and hardlink
 checks without PostgreSQL or installed packages.
 
 Dependencies are installed on the runner from this exact source's pinned
-`backend/requirements-dev.txt` and its `requirements.txt` include using PyPI.
+`backend/requirements-dev.txt` and its `requirements.txt` include, preferring
+the Tsinghua PyPI mirror. A bounded network/HTTP probe selects official PyPI
+only if that mirror is unavailable and records the choice and probe outcome
+in `dependency-source.json`. An installation/dependency error fails the job;
+it does not trigger another index or mixed `extra-index` resolution.
 These source declarations are not a complete transitive hash lock; this CI does
 not establish offline wheel/package semantics. No dependencies are installed
 locally during preparation.
 
 Artifacts contain only explicit synthetic result JSON, tool/source provenance
-JSON, and the test entry's stderr output. No checkout, temporary fixture tree,
+JSON, dependency-source selection JSON, and the test entry's stderr output.
+No checkout, temporary fixture tree,
 backup, credentials, environment dump, or `.agents` directory is uploaded.
 Job/step/process timeouts are bounded and matrix fail-fast is disabled so all
 four independent scenarios can report their own outcomes.

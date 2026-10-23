@@ -103,9 +103,40 @@ jobs:
       - name: Install the exact source's pinned dependency declarations
         timeout-minutes: 10
         working-directory: product-source/backend
-        run: >-
-          python -m pip --isolated install --disable-pip-version-check
-          --index-url https://pypi.org/simple -r requirements-dev.txt
+        shell: bash
+        run: |
+          set -euo pipefail
+          mirror=https://pypi.tuna.tsinghua.edu.cn/simple
+          index="$mirror"
+          probe_exit=0
+          if probe_http=$(curl --fail --silent --show-error \
+            --connect-timeout 5 --max-time 15 --retry 1 --retry-max-time 25 \
+            --output /dev/null --write-out '%{http_code}' "$mirror/asyncpg/"); then
+            echo "Dependency mirror probe succeeded; using Tsinghua mirror."
+          else
+            probe_exit=$?
+            index=https://pypi.org/simple
+            echo "::notice::Mirror unavailable (curl=$probe_exit HTTP=$probe_http); bounded fallback to official PyPI."
+          fi
+          python - "$mirror" "$index" "$probe_http" "$probe_exit" <<'PY'
+          import json, os, sys
+          from pathlib import Path
+          result = {
+              "data_kind": "synthetic_dependency_source_selection",
+              "primary_index": sys.argv[1],
+              "selected_index": sys.argv[2],
+              "mirror_probe_http_status": sys.argv[3],
+              "mirror_probe_exit_code": int(sys.argv[4]),
+              "fallback_due_to_probe_failure": sys.argv[1] != sys.argv[2],
+              "fallback_after_dependency_error": False,
+          }
+          output = Path(os.environ["RUNNER_TEMP"]) / "release-validation/dependency-source.json"
+          output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          print(json.dumps(result, sort_keys=True))
+          PY
+          # Installation errors fail this job; they never trigger another index.
+          python -m pip --isolated install --disable-pip-version-check \
+            --timeout 30 --retries 1 --index-url "$index" -r requirements-dev.txt
       - name: Bind the fixture-only hostname to loopback
         shell: bash
         run: |
@@ -136,3 +167,4 @@ jobs:
             ${{ runner.temp }}/release-validation/provenance.json
             ${{ runner.temp }}/release-validation/result.json
             ${{ runner.temp }}/release-validation/output.log
+            ${{ runner.temp }}/release-validation/dependency-source.json
