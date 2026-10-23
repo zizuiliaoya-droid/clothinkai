@@ -23,6 +23,8 @@ FLOW_RULES: tuple[str, ...] = (
     "same_reviewer",
     "star_create",
     "admin_only",
+    "review_owner_missing",
+    "freight_in_progress",
 )
 
 
