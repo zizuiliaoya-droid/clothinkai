@@ -185,10 +185,12 @@ async def test_unpaid_freight_prevents_both_deactivation_entries_even_star(
     p = freight_promotion
     if status:
         f = await ReturnFreightService(session).submit(p.id, FreightSubmitRequest(), flow_users.pr)
-        f.status = status
         if status == "已付款":
             proof = await attachment_factory.attachment(purpose="settlement_proof")
             f.payment_proof_attachment_id, f.payment_date = proof.id, get_today()
+            f.paid_by, f.paid_at = flow_users.finance.id, datetime.now(UTC)
+        # attachment_factory 会 flush；付款必填字段齐全后才能切到已付款。
+        f.status = status
     await session.flush()
     response = await _call(
         session,
