@@ -5,7 +5,8 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.modules.flow.matrix import ui_for
+from app.modules.flow.exceptions import FlowActionForbiddenError
+from app.modules.flow.matrix import require, ui_for
 from tests.unit.fixtures.flow_matrix_expected import DOCS
 from tests.unit.test_flow_matrix import PERSONAS
 
@@ -89,12 +90,27 @@ def test_open_freight_makes_deactivate_readonly_even_star(status):
     action = ui_for(PERSONAS["admin"], doc).actions["deactivate"]
     assert action.state == "disabled"
     assert action.reason == "寄回运费尚未付款，不能停用"
+    with pytest.raises(FlowActionForbiddenError) as denied:
+        require(PERSONAS["admin"], doc, "deactivate")
+    assert denied.value.status_code == 403
+    assert denied.value.details == {
+        "rule": "freight_in_progress",
+        "reason": action.reason,
+    }
 
 
 @pytest.mark.parametrize("who", ["pr_manager", "admin"])
 def test_missing_negotiator_disables_review_without_breaking_read(who):
     from app.modules.promotion.freight_flow import freight_doc
 
-    action = ui_for(PERSONAS[who], freight_doc("待审核", None)).actions["freight_review"]
+    doc = freight_doc("待审核", None)
+    action = ui_for(PERSONAS[who], doc).actions["freight_review"]
     assert action.state == "disabled"
     assert action.reason == "缺少谈款人/负责PR，无法核对审核回避"
+    with pytest.raises(FlowActionForbiddenError) as denied:
+        require(PERSONAS[who], doc, "freight_review")
+    assert denied.value.status_code == 403
+    assert denied.value.details == {
+        "rule": "review_owner_missing",
+        "reason": action.reason,
+    }
