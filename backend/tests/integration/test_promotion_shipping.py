@@ -1058,6 +1058,7 @@ class TestFlowUi:
             "column": "A",
             "actions": {
                 "ship_push": {"state": "disabled", "reason": "需管理员或 PR 主管确认"},
+                "recall_start": {"state": "grey", "hint": "尚未发货，直接取消即可"},
                 "urge": {"state": "enabled"},
                 "comment": {"state": "enabled"},
             },
@@ -1072,6 +1073,8 @@ class TestFlowUi:
                 # PR-6：7 天数据与收款码入矩阵，没发布时都灰
                 "metrics": {"state": "grey", "hint": "已结款后可录"},
                 "payment_qr": {"state": "grey", "hint": "发布后上传"},
+                "recall_info": {"state": "read"},
+                "freight_payment": {"state": "read"},
                 "timeline": {"state": "read"},
             },
         }
@@ -1080,11 +1083,12 @@ class TestFlowUi:
         assert manager is not None
         assert manager["actions"] == {
             "ship_push": {"state": "enabled", "missing": _ALL_GATES},
+            "recall_start": {"state": "grey", "hint": "尚未发货，直接取消即可"},
             "urge": {"state": "enabled"},
             "comment": {"state": "enabled"},
             "deactivate": {"state": "enabled"},
         }
-        # 运营只读、财务什么都没有
+        # 运营只读摘要（金额/截图仍由字段权限裁剪）；财务只有独立运费摘要
         ops = (await svc.get_promotion(promo.id, flow_users.operations)).ui
         assert ops is not None
         assert ops["actions"] == {}
@@ -1096,12 +1100,14 @@ class TestFlowUi:
             "shipping": {"state": "grey", "hint": "推送后由仓库回填"},
             # 运营看得到 7 天数据（灰），看不到收款码（字段规则 promotion.payment_qr）
             "metrics": {"state": "grey", "hint": "已结款后可录"},
+            "recall_info": {"state": "read"},
+            "freight_payment": {"state": "read"},
             "timeline": {"state": "read"},
         }
         assert (await svc.get_promotion(promo.id, flow_users.finance)).ui == {
             "column": "A",
             "actions": {},
-            "fields": {},
+            "fields": {"freight_payment": {"state": "read"}},
         }
 
     async def test_missing_follows_receiver_and_suit_members(
@@ -1153,6 +1159,7 @@ class TestFlowUi:
         assert rows[partial.id]["actions"] == got["actions"]
         assert rows[full.id]["actions"] == {
             "ship_push": {"state": "enabled"},
+            "recall_start": {"state": "grey", "hint": "尚未发货，直接取消即可"},
             "urge": {"state": "enabled"},
             "comment": {"state": "enabled"},
             "deactivate": {"state": "enabled"},
@@ -1174,8 +1181,12 @@ class TestFlowUi:
             filters=PromotionListFilters(), page=1, page_size=100, user=flow_users.pr
         )
         rows = {p.id: p.ui for p in page.items}
-        # 历史单（发货为空）按 A 列：PR 能改收件；已发货的 C 列只读
-        actions = {"urge": {"state": "enabled"}, "comment": {"state": "enabled"}}
+        # 两者都在 C 列且可召回；旧 NULL 发货单保留收件编辑例外，已发货单只读
+        actions = {
+            "recall_start": {"state": "enabled"},
+            "urge": {"state": "enabled"},
+            "comment": {"state": "enabled"},
+        }
         assert rows[history.id] == {"column": "C", "actions": actions, "edits": ["receiver"]}
         assert rows[shipped.id] == {"column": "C", "actions": actions, "edits": []}
         manager = await PromotionService(session).list_promotions(
@@ -1186,6 +1197,7 @@ class TestFlowUi:
             "column": "C",
             "actions": {
                 "ship_include": {"state": "enabled"},
+                "recall_start": {"state": "enabled"},
                 "urge": {"state": "enabled"},
                 "comment": {"state": "enabled"},
                 "deactivate": {"state": "enabled"},
@@ -1815,6 +1827,7 @@ class TestShipPush:
         assert resp.ui["column"] == "B"
         assert resp.ui["actions"] == {
             "ship_withdraw": {"state": "enabled"},
+            "recall_start": {"state": "grey", "hint": "尚未发货，直接取消即可"},
             "urge": {"state": "enabled"},
             "comment": {"state": "enabled"},
             "deactivate": {"state": "enabled"},
