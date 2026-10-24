@@ -35,7 +35,7 @@ export function ReturnFreightTab() {
   return <>
     <Space wrap style={{ marginBottom: 16 }}>
       <Select aria-label="运费状态" placeholder="运费状态" allowClear style={{ width: 140 }} value={filters.status} options={["待审核", "待付款", "已付款", "已驳回"].map((value) => ({ value, label: value }))} onChange={(status) => editFilter({ status })} />
-      <Input aria-label="运费关键词" placeholder="推广编号、博主、商品" maxLength={64} style={{ width: 220 }} value={filters.keyword ?? ""} onChange={(event) => editFilter({ keyword: event.target.value || undefined })} />
+      <Input aria-label="运费关键词" placeholder="推广编号、博主" maxLength={64} style={{ width: 220 }} value={filters.keyword ?? ""} onChange={(event) => editFilter({ keyword: event.target.value || undefined })} />
       <label>付款日期 <Input type="date" aria-label="付款开始日期" style={{ width: 150 }} value={filters.payment_date_from ?? ""} onChange={(event) => editFilter({ payment_date_from: event.target.value || undefined })} /></label>
       <label>至 <Input type="date" aria-label="付款结束日期" style={{ width: 150 }} value={filters.payment_date_to ?? ""} onChange={(event) => editFilter({ payment_date_to: event.target.value || undefined })} /></label>
     </Space>
