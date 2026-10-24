@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 
 from contracts import STEPS, TARGET, Rejected, require
+from dashboard_contract import BOARD_ID, NETWORK_ID
 
 ROOT = "/srv/clothinkai/production-20261018"
 ROLES = ("api", "web", "worker", "beat", "db", "redis")
@@ -41,6 +42,60 @@ INSPECT = (
 
 def command(operation, subject):
     require(type(operation) is str and type(subject) is str, "operation_type")
+    if operation == "dashboard_network" and subject == "web":
+        projection = (
+            '{"id":{{json .Id}},"name":{{json .Name}},"internal":{{json .Internal}},'
+            '"driver":{{json .Driver}},"scope":{{json .Scope}},"members":{ '
+            "{{$first := true}}{{range $k,$v := .Containers}}{{if not $first}},{{end}}"
+            "{{json $k}}:{{json $v.Name}}{{$first = false}}{{end}} }}"
+        )
+        return DOCKER + ("network", "inspect", "--format", projection, NETWORK_ID)
+    if operation == "dashboard_board" and subject == "web":
+        projection = (
+            '{"id":{{json .Id}},"image":{{json .Image}},"networks":{ '
+            "{{$first := true}}{{range $k,$v := .NetworkSettings.Networks}}{{if not $first}},{{end}}"
+            "{{json $k}}:{{json $v.NetworkID}}{{$first = false}}{{end}} },"
+            '"aliases":{{json (index .NetworkSettings.Networks "clothinkai-progress-internal-20261024").Aliases}}}'
+        )
+        return DOCKER + (
+            "inspect",
+            "--type",
+            "container",
+            "--format",
+            projection,
+            BOARD_ID,
+        )
+    if operation == "web_control_show" and subject == "web":
+        projection = (
+            '{"id":{{json .Id}},"name":{{json .Name}},"image":{{json .Image}},"mounts":['
+            '{{$first := true}}{{range .Mounts}}{{if eq .Destination "/opt/production"}}'
+            '{{if not $first}},{{end}}{"source":{{json .Source}},"destination":{{json .Destination}},"rw":{{json .RW}}}'
+            "{{$first = false}}{{end}}{{end}}]}"
+        )
+        return DOCKER + (
+            "inspect",
+            "--type",
+            "container",
+            "--format",
+            projection,
+            "clothinkai-prod-web-20261018",
+        )
+    if operation == "unit_source_show" and subject in {
+        "backup",
+        "renew",
+        "backup-service",
+        "renew-service",
+    }:
+        service = subject.endswith("-service")
+        timer = subject.removesuffix("-service")
+        unit = "clothinkai-production-" + timer + (".service" if service else ".timer")
+        return (
+            "/usr/bin/systemctl",
+            "show",
+            "--no-pager",
+            "--property=Id,FragmentPath,DropInPaths",
+            unit,
+        )
     if operation == "inspect" and subject in ROLES:
         return DOCKER + (
             "inspect",
@@ -113,7 +168,17 @@ def command(operation, subject):
 def validate_readonly(operation, subject):
     command(operation, subject)
     require(
-        operation in {"inspect", "timer_show", "service_show", "api_observe"},
+        operation
+        in {
+            "inspect",
+            "timer_show",
+            "service_show",
+            "api_observe",
+            "dashboard_network",
+            "dashboard_board",
+            "unit_source_show",
+            "web_control_show",
+        },
         "production_authority_unbound",
     )
 
@@ -267,9 +332,35 @@ async def collect(operation, subject):
     if operation == "inspect":
         facts = container_projection(raw, subject)
     elif operation == "timer_show":
-        facts = timer_projection(raw, subject)
+        from host_collectors import collect_unit_metadata
+
+        facts = {
+            **timer_projection(raw, subject),
+            "unit_metadata": collect_unit_metadata(subject),
+        }
     elif operation == "service_show":
-        facts = service_projection(raw, subject)
+        from host_collectors import collect_unit_metadata
+
+        facts = {
+            **service_projection(raw, subject),
+            "unit_metadata": collect_unit_metadata(subject, True),
+        }
+    elif operation == "web_control_show":
+        from host_collectors import web_control_projection
+
+        facts = web_control_projection(raw)
+    elif operation == "unit_source_show":
+        from host_collectors import unit_source_projection
+
+        facts = unit_source_projection(raw, subject)
+    elif operation == "dashboard_network":
+        from dashboard_contract import network_projection
+
+        facts = network_projection(raw)
+    elif operation == "dashboard_board":
+        from host_collectors import dashboard_board_projection
+
+        facts = dashboard_board_projection(raw)
     else:
         facts = queue_projection(parse(raw))
     return {
@@ -291,7 +382,8 @@ def step_operations():
         "BUILD_BACKEND": ((), "frozen_wheels_base_images_and_build_receipt"),
         "BUILD_FRONTEND": ((), "frozen_assets_and_build_receipt"),
         "PREFLIGHT": (
-            tuple(("inspect", r) for r in ROLES),
+            tuple(("inspect", r) for r in ROLES)
+            + (("dashboard_network", "web"), ("dashboard_board", "web")),
             "identity_roles_network_mounts_tls_and_baseline",
         ),
         "FREEZE_TIMERS": (
@@ -359,7 +451,8 @@ def step_operations():
             "exact_original_enabled_active_masked_state_and_idle_children",
         ),
         "VERIFY_COMPLETE": (
-            tuple(("inspect", r) for r in ROLES),
+            tuple(("inspect", r) for r in ROLES)
+            + (("dashboard_network", "web"), ("dashboard_board", "web")),
             "complete_signed_action_receipts_and_post_open_observations",
         ),
     }

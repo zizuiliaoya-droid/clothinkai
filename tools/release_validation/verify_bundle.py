@@ -9,8 +9,8 @@ import subprocess
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-SOURCE_COMMIT = "94d2044284785c0e9e4719c54e0ef12548b95fb7"
-SOURCE_TREE = "dce6b81e9a89aed12bb9eba9047904e3971cd6e1"
+SOURCE_COMMIT = "55477c44f09bb1a25169bfb44ff6c90bc4f9cedb"
+SOURCE_TREE = "28c0cac9a15cc48a5dfa5c7d3ed732cd6a59abdc"
 
 
 def require(condition, message):
@@ -29,13 +29,13 @@ def git(repository, *args):
 
 
 def verify():
-    raw = (HERE / "host-bundle-manifest-1024.json").read_bytes()
+    raw = (HERE / "checkpoint-bundle-manifest-1024.json").read_bytes()
     manifest = json.loads(raw)
     require(manifest["schema_version"] == 1, "manifest schema")
     require(manifest["frozen"] is True, "root has not frozen the candidate bundle")
     require(manifest["source_commit"] == SOURCE_COMMIT, "source commit drift")
     require(manifest["source_tree"] == SOURCE_TREE, "source tree drift")
-    transfer_raw = (HERE / "host-ci-transfer-pins-1023.json").read_bytes()
+    transfer_raw = (HERE / "checkpoint-ci-transfer-pins-1024.json").read_bytes()
     require(
         sha256(transfer_raw) == manifest["pins"]["ci_transfer"], "transfer pins drift"
     )
@@ -46,7 +46,7 @@ def verify():
         "transfer source binding",
     )
     require(manifest["fixture_only"] is True, "product source must remain fixture only")
-    historical_raw = (HERE / "ci-transfer-pins-1023.json").read_bytes()
+    historical_raw = (HERE / "host-ci-transfer-pins-1023.json").read_bytes()
     require(
         sha256(historical_raw)
         == manifest["base_ci_transfer"]
@@ -78,19 +78,42 @@ def verify():
         content = (HERE / name).read_bytes()
         require(pin == {"bytes": len(content), "sha256": sha256(content)}, name)
     require(
-        set(manifest["pins"]) == {"phase1", "ci_transfer", "phase2_full_audit"},
+        set(manifest["pins"]) == {"phase1_package", "phase1_sql_guard", "ci_transfer"},
         "exact pin identities required",
     )
-    raw_pins = (HERE / "phase1/implementation-pins.json").read_bytes()
-    require(sha256(raw_pins) == manifest["pins"]["phase1"], "phase1 pins drift")
+    raw_pins = (HERE / "phase1/implementation-pins-origin-1024.json").read_bytes()
+    require(
+        sha256(raw_pins)
+        == manifest["pins"]["phase1_package"]
+        == transfer["phase1_package_pins_sha256"],
+        "phase1 package pins drift",
+    )
+    guard_raw = (HERE / "phase1/implementation-pins.json").read_bytes()
+    require(
+        sha256(guard_raw)
+        == manifest["pins"]["phase1_sql_guard"]
+        == transfer["phase1_sql_guard_pins_sha256"],
+        "phase1 SQL guard pins drift",
+    )
     phase_files = json.loads(raw_pins)["files"]
     for name, pin in files.items():
         if name.startswith("phase1/"):
             relative = name.removeprefix("phase1/")
-            if relative != "implementation-pins.json":
+            if relative not in {
+                "implementation-pins.json",
+                "implementation-pins-origin-1024.json",
+            }:
                 require(
                     phase_files.get(relative) == pin, "unbound phase1 file: " + name
                 )
+    require(
+        manifest["deployable"] is False
+        and manifest["live_enabled"] is False
+        and manifest["production_29_actions_verified"] is False
+        and manifest["backup_module_included"] is False,
+        "candidate boundary",
+    )
+    require("phase2/host_backup_control.py" not in files, "unfrozen backup module")
     return manifest, sha256(raw)
 
 
@@ -129,6 +152,7 @@ def main():
         "source_tree": SOURCE_TREE,
         "source_checkout_verified": args.source is not None,
         "source_fixture_only": True,
+        "source_kind": "unmerged_candidate_not_final_main",
         "historical_tool_commit": manifest["historical_tool_commit"],
         "historical_transfer_sha256": manifest["base_ci_transfer"],
         "tool_commit": tool_commit,

@@ -1,10 +1,10 @@
 """Maintenance descriptions and a sandbox-only atomic file-switch model."""
 
-from copy import deepcopy
 import hashlib
 import os
 import posixpath
 import re
+from copy import deepcopy
 from urllib.parse import unquote
 
 from contracts import Rejected, exact, require, sha
@@ -75,6 +75,10 @@ def freeze_plan(state):
 
 def expected_status(path):
     path = posixpath.normpath(unquote(path.split("?", 1)[0]))
+    require(
+        path != "/progress" and not path.startswith("/progress/"),
+        "dashboard_separate_probe",
+    )
     return (
         200
         if re.fullmatch(r"/\.well-known/acme-challenge/[A-Za-z0-9_-]{1,128}", path)
@@ -169,3 +173,19 @@ def close_fixture(journal, old_sha, closed, fault=None):
     finally:
         if acquired:
             journal.release()
+
+
+def close_dashboard_fixture(journal, original, closed, fault=None):
+    """Exercise the board-preserving file boundary without claiming a live reload."""
+    from dashboard_contract import original_active, validate_routes
+
+    original_active(original)
+    validate_routes(closed)
+    return close_fixture(journal, hashlib.sha256(original).hexdigest(), closed, fault)
+
+
+def restore_dashboard_bytes(original):
+    """Recovery must use the exact pre-upgrade, already-board-enabled active."""
+    from dashboard_contract import original_active
+
+    return original_active(original)

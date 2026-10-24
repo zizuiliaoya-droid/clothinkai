@@ -469,6 +469,86 @@ def validate_html_assets(files):
     References().feed(files["index.html"].decode("utf-8"))
 
 
+# Exact non-request contexts: candidate 55477c44/index-JRFSXLaN.js SHA256
+# 4549c43d3081a651dfe5664a6e19c0d978cadbe05f8e364370ad82b0acfa50e5.
+# async-validator 5.1.2 es/rule/url.js SHA256
+# 67b88ae8debf8b3045bad20b07c5bb7f43161f99580148ae2e3b46b2174c837d;
+# Axios 1.17.0 lib/platform/common/utils.js SHA256
+# b744eee57f03928fbde9a9c8813dfa00a0f5b7f8803840d34ad9449561174ae3;
+# NetworkDiagnosticsPanel.tsx blob 2fa8760d581d357a73cff504b2e36b35020c61cd.
+_FRONTEND_LOCK_SHA = "e33da2834080a1c217b8a880daf2a356a033c8f0ba12ef3fe4fde259244f9b72"
+_FRONTEND_DENIED = re.compile(rb"localhost|127\.0\.0\.1|trial-web|zeabur\.app", re.I)
+_FRONTEND_NONREQUEST_CONTEXTS = (
+    (
+        'async-validator-url-grammar',
+        (
+            'var m="(?:(?:[a-z]+:)?//)",p="(?:\\\\S+(?::\\\\S*)?@)?",h=d.v4().source,g='
+            'd.v6().source,y="(?:(?:[a-z\\\\u00a1-\\\\uffff0-9][-_]*)*[a-z\\\\u00a1-\\\\uff'
+            'ff0-9]+)",v="(?:\\\\.(?:[a-z\\\\u00a1-\\\\uffff0-9]-*)*[a-z\\\\u00a1-\\\\uffff0-'
+            '9]+)*",b="(?:\\\\.(?:[a-z\\\\u00a1-\\\\uffff]{2,}))",x="(?::\\\\d{2,5})?",C=\'('
+            '?:[/?#][^\\\\s"]*)?\',S="(?:".concat(m,"|www\\\\.)").concat(p,"(?:localhost'
+            '|").concat(h,"|").concat(g,"|").concat(y).concat(v).concat(b,")").conc'
+            'at(x).concat(C);return Kp=new RegExp("(?:^".concat(S,"$)"),"i"),Kp}'
+        ).encode("utf-8"),
+    ),
+    (
+        'axios-browser-origin',
+        (
+            'F$=typeof window<"u"&&typeof document<"u",EC=typeof navigator=="object'
+            '"&&navigator||void 0,dve=F$&&(!EC||["ReactNative","NativeScript","NS"]'
+            '.indexOf(EC.product)<0),fve=typeof WorkerGlobalScope<"u"&&self instanc'
+            'eof WorkerGlobalScope&&typeof self.importScripts=="function",mve=F$&&w'
+            'indow.location.href||"http://localhost",pve=Object.freeze(Object.defin'
+            'eProperty({__proto__:null,hasBrowserEnv:F$,hasStandardBrowserEnv:dve,h'
+            'asStandardBrowserWebWorkerEnv:fve,navigator:EC,origin:mve},Symbol.toSt'
+            'ringTag,{value:"Module"})),Xr={...pve,...uve};'
+        ).encode("utf-8"),
+    ),
+    (
+        'trusted-proxy-explanation',
+        (
+            '{key:"forwarded_allow_ips",label:a("FORWARDED_ALLOW_IPS"),children:e.f'
+            'orwarded_allow_ips_set?f.jsx("span",{style:Kc,children:qF(e)}):"未设置（uv'
+            'icorn 默认只信任 127.0.0.1）"}];return f.jsxs(f.Fragment,'
+        ).encode("utf-8"),
+    ),
+)
+
+
+def validate_frontend_origin(front, verified_source_lock):
+    """Residual scan after build() verifies the real Git source lock.
+
+    Only one exact token span per known JS context is exempted. No caller
+    patterns, asset edits, file exemptions or JavaScript network-behavior proof.
+    Dependency/minifier/context drift remains fail closed.
+    """
+    require(type(verified_source_lock) is bytes, "frontend_source_lock")
+    assets = {
+        name: raw for name, raw in front.items()
+        if PurePosixPath(name).suffix in (".html", ".js", ".css")
+    }
+    require(any(ORIGIN.encode() in raw for raw in assets.values()), "frontend_origin_mismatch")
+    allowed = set()
+    if digest(verified_source_lock) == _FRONTEND_LOCK_SHA:
+        for _label, context in _FRONTEND_NONREQUEST_CONTEXTS:
+            tokens = list(_FRONTEND_DENIED.finditer(context))
+            require(len(tokens) == 1, "frontend_origin_context")
+            token = tokens[0]
+            found = []
+            for name, raw in assets.items():
+                if PurePosixPath(name).suffix != ".js":
+                    continue
+                offset = 0
+                while (at := raw.find(context, offset)) >= 0:
+                    found.append((name, at + token.start(), at + token.end()))
+                    offset = at + 1
+            require(len(found) <= 1, "frontend_origin_mismatch")
+            allowed.update(found)
+    for name, raw in assets.items():
+        for hit in _FRONTEND_DENIED.finditer(raw):
+            require((name, hit.start(), hit.end()) in allowed, "frontend_origin_mismatch")
+
+
 def build(repo, commit, pins, dist, dependencies, output):
     validate_pins(pins)
     require(commit == pins["source_commit"], "commit_argument_mismatch")
@@ -477,8 +557,9 @@ def build(repo, commit, pins, dist, dependencies, output):
         digest(files["backend/requirements.txt"]) == pins["backend_requirements_sha256"],
         "requirements_mismatch",
     )
+    verified_source_lock = files.pop("frontend/package-lock.json")
     require(
-        digest(files.pop("frontend/package-lock.json")) == pins["frontend"]["package_lock_sha256"],
+        digest(verified_source_lock) == pins["frontend"]["package_lock_sha256"],
         "frontend_lock_mismatch",
     )
     migration_path = migrations(files)
@@ -510,14 +591,7 @@ def build(repo, commit, pins, dist, dependencies, output):
         == {digest(raw) for name, raw in dep.items() if name.endswith(".whl")},
         "wheel_hash_closure",
     )
-    text_assets = b"\n".join(
-        raw for name, raw in front.items() if PurePosixPath(name).suffix in (".html", ".js", ".css")
-    )
-    require(
-        ORIGIN.encode() in text_assets
-        and not re.search(rb"localhost|127\.0\.0\.1|trial-web|zeabur\.app", text_assets, re.I),
-        "frontend_origin_mismatch",
-    )
+    validate_frontend_origin(front, verified_source_lock)
     for name, raw in front.items():
         files["frontend-dist/" + name] = raw
     files.update(dep)

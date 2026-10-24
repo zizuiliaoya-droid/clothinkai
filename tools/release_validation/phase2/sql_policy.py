@@ -130,6 +130,12 @@ class MigrationSpec:
 
 
 def prepare_policy(data, artifacts):
+    return _prepare_policy(data, artifacts, MigrationSpec)
+
+
+def _prepare_policy(data, artifacts, spec_type):
+    host = spec_type is HostMigrationSpec
+    need(spec_type in (MigrationSpec, HostMigrationSpec), "policy_type")
     fields(
         data,
         {
@@ -154,7 +160,7 @@ def prepare_policy(data, artifacts):
         "policy_schema",
     )
     need(
-        data["mode"] == "synthetic"
+        data["mode"] == ("host_candidate" if host else "synthetic")
         and data["live_enabled"] is False
         and data["deployable"] is False,
         "live_disabled",
@@ -202,29 +208,64 @@ def prepare_policy(data, artifacts):
     except (ValueError, KeyError, TypeError):
         raise SqlRejected("phase1_validation") from None
     need(release["source_tree"] == data["source_tree"], "release_tree")
-    # Refuse real config/permits accidentally supplied to this synthetic candidate.
-    need(permit["approval_ref"].startswith("fixture-"), "synthetic_permit_only")
-    for key in (
-        "CREDENTIAL_MASTER_KEY",
-        "JWT_SECRET",
-        "R2_ACCESS_KEY_ID",
-        "R2_SECRET_ACCESS_KEY",
-    ):
-        need(config[key].startswith("fixture-"), "synthetic_config_only")
-    need(
-        urlsplit(config["R2_ENDPOINT_URL"]).hostname == "fixture.invalid",
-        "synthetic_config_only",
-    )
-    for key in (
-        "DATABASE_URL_APP",
-        "DATABASE_URL_BYPASS",
-        "DATABASE_URL_SYNC",
-        "DATABASE_URL_ARCHIVER",
-    ):
+    if host:
+        # A descriptive production policy is not an authority to execute. It cannot
+        # reuse CI identities, fixture approvals, or claim synthetic backup proof.
         need(
-            urlsplit(config[key]).password == "fixture-password",
+            not permit["approval_ref"].startswith("fixture-"), "host_approval_reference"
+        )
+        need(
+            urlsplit(config["R2_ENDPOINT_URL"]).hostname != "fixture.invalid",
+            "host_config_not_ci",
+        )
+        need(
+            all(
+                not config[key].startswith("fixture-")
+                for key in (
+                    "CREDENTIAL_MASTER_KEY",
+                    "JWT_SECRET",
+                    "R2_ACCESS_KEY_ID",
+                    "R2_SECRET_ACCESS_KEY",
+                )
+            ),
+            "host_config_not_fixture",
+        )
+        need(
+            all(
+                urlsplit(config[key]).password != "fixture-password"
+                for key in (
+                    "DATABASE_URL_APP",
+                    "DATABASE_URL_BYPASS",
+                    "DATABASE_URL_SYNC",
+                    "DATABASE_URL_ARCHIVER",
+                )
+            ),
+            "host_database_not_ci",
+        )
+    else:
+        # Refuse real config/permits accidentally supplied to this synthetic candidate.
+        need(permit["approval_ref"].startswith("fixture-"), "synthetic_permit_only")
+        for key in (
+            "CREDENTIAL_MASTER_KEY",
+            "JWT_SECRET",
+            "R2_ACCESS_KEY_ID",
+            "R2_SECRET_ACCESS_KEY",
+        ):
+            need(config[key].startswith("fixture-"), "synthetic_config_only")
+        need(
+            urlsplit(config["R2_ENDPOINT_URL"]).hostname == "fixture.invalid",
             "synthetic_config_only",
         )
+        for key in (
+            "DATABASE_URL_APP",
+            "DATABASE_URL_BYPASS",
+            "DATABASE_URL_SYNC",
+            "DATABASE_URL_ARCHIVER",
+        ):
+            need(
+                urlsplit(config[key]).password == "fixture-password",
+                "synthetic_config_only",
+            )
     for name, purpose in (("backup_receipt", "backup"), ("restore_receipt", "restore")):
         receipt = parse(artifacts[name])
         fields(
@@ -244,7 +285,7 @@ def prepare_policy(data, artifacts):
         need(
             type(receipt["schema_version"]) is int
             and receipt["schema_version"] == 1
-            and receipt["mode"] == "synthetic"
+            and receipt["mode"] == ("host_observed" if host else "synthetic")
             and receipt["purpose"] == purpose
             and receipt["verified"] is True
             and receipt["writes_paused"] is True
@@ -275,10 +316,12 @@ def prepare_policy(data, artifacts):
         need(node["revision"] not in revisions, "tree_duplicate")
         revisions.append(node["revision"])
     need(revisions[-2:] == [BEFORE, AFTER], "tree_head")
-    return MigrationSpec(canonical(data), tuple(sorted(artifacts.items())))
+    return spec_type(canonical(data), tuple(sorted(artifacts.items())))
 
 
 def validate_spec(spec):
+    if type(spec) is HostMigrationSpec:
+        return validate_host_policy(spec)
     if type(spec) is LinuxCISpec:
         return validate_linux_ci(spec)
     need(type(spec) is MigrationSpec, "spec_type")
@@ -288,6 +331,208 @@ def validate_spec(spec):
         "spec_binding",
     )
     return checked
+
+
+@dataclass(frozen=True)
+class HostMigrationSpec(MigrationSpec):
+    """Production-only semantic policy; never an executable permit or CI subtype."""
+
+    _binding: bytes = field(default=b"", repr=False)
+    _authority: bytes = field(default=b"", repr=False)
+
+    @property
+    def sha256(self):
+        return sha(
+            self.encoded
+            + b"\0"
+            + self._binding
+            + (b"\0" + self._authority if self._authority else b"")
+        )
+
+
+def prepare_host_policy(data, artifacts, package, host_binding, release_spec=None):
+    from contracts import TARGET
+    from phase1_package_binding import BoundPackage
+
+    need(
+        type(package) is BoundPackage
+        and package.get("semantic_verified") is True
+        and package.get("mode") == "candidate_review",
+        "host_full_package_required",
+    )
+    fields(
+        host_binding,
+        {
+            "target",
+            "package_sha256",
+            "package_evidence_sha256",
+            "source_commit",
+            "source_tree",
+            "backend_image",
+            "container_id",
+            "network_id",
+            "approval_sha256",
+            "baseline_sha256",
+            "manual_freeze_sha256",
+            "frontend_image",
+            "boot_id",
+        },
+        "host_binding_fields",
+    )
+    need(host_binding["target"] == TARGET, "host_target")
+    need(
+        host_binding["package_sha256"] == package.get("archive_sha256")
+        and is_sha(host_binding["package_sha256"])
+        and host_binding["package_evidence_sha256"] == package.sha256,
+        "host_package_binding",
+    )
+    need(
+        all(
+            host_binding[k] == package.get(k) == data[k]
+            for k in ("source_commit", "source_tree")
+        ),
+        "host_source_binding",
+    )
+    need(
+        artifacts["env_py"] == package.member("backend/alembic/env.py"),
+        "host_original_env",
+    )
+    migration_pins = {
+        pin["sha256"]
+        for name, pin in package.get("source_members").items()
+        if name.startswith("backend/alembic/versions/")
+        and name.endswith(".py")
+        and not name.endswith("/__init__.py")
+    }
+    need(
+        {node["sha256"] for node in parse(artifacts["migration_tree"])["nodes"]}
+        == migration_pins,
+        "host_migration_source_hashes",
+    )
+    spec = _prepare_policy(data, artifacts, HostMigrationSpec)
+    authority = b""
+    if release_spec is not None:
+        from host_release_input import validate_release
+
+        validate_release(release_spec)
+        need(release_spec.package == package, "migration_release_package")
+        authority = canonical(
+            {"data": release_spec.data, "binding": parse(release_spec._binding)}
+        )
+    return validate_host_policy(
+        HostMigrationSpec(
+            spec.encoded, spec._artifacts, canonical(host_binding), authority
+        )
+    )
+
+
+def validate_host_policy(spec):
+    from contracts import TARGET
+
+    need(type(spec) is HostMigrationSpec, "host_spec_type")
+    checked = _prepare_policy(spec.data, dict(spec._artifacts), HostMigrationSpec)
+    need(
+        checked.encoded == spec.encoded and checked._artifacts == spec._artifacts,
+        "host_policy_binding",
+    )
+    binding = parse(spec._binding)
+    if spec._authority:
+        authority = parse(spec._authority)
+        fields(authority, {"data", "binding"}, "migration_release_authority")
+        origin, original_binding = authority["data"], authority["binding"]
+        need(
+            origin["mode"] == "host_release_candidate"
+            and origin["live_enabled"] is False
+            and origin["deployable"] is False
+            and origin["config_sha256"] == spec.data["hashes"]["config"]
+            and origin["approval_ref"] == parse(spec.artifact("permit"))["approval_ref"]
+            and all(
+                origin[k] == spec.data[k]
+                for k in (
+                    "source_commit",
+                    "source_tree",
+                    "release_id",
+                    "from_revision",
+                    "target_revision",
+                )
+            ),
+            "migration_release_data",
+        )
+        need(
+            all(
+                original_binding[k] == binding[k]
+                for k in (
+                    "target",
+                    "package_sha256",
+                    "package_evidence_sha256",
+                    "baseline_sha256",
+                    "approval_sha256",
+                    "manual_freeze_sha256",
+                    "boot_id",
+                    "network_id",
+                )
+            ),
+            "migration_release_binding",
+        )
+    fields(
+        binding,
+        {
+            "target",
+            "package_sha256",
+            "package_evidence_sha256",
+            "source_commit",
+            "source_tree",
+            "backend_image",
+            "container_id",
+            "network_id",
+            "approval_sha256",
+            "baseline_sha256",
+            "manual_freeze_sha256",
+            "frontend_image",
+            "boot_id",
+        },
+        "host_binding_fields",
+    )
+    need(
+        binding["target"] == TARGET
+        and all(binding[k] == spec.data[k] for k in ("source_commit", "source_tree")),
+        "host_target_binding",
+    )
+    for key in (
+        "package_sha256",
+        "package_evidence_sha256",
+        "container_id",
+        "network_id",
+        "approval_sha256",
+        "baseline_sha256",
+        "manual_freeze_sha256",
+    ):
+        need(is_sha(binding[key]), "host_binding_hash")
+    for image_key in ("backend_image", "frontend_image"):
+        need(
+            type(binding[image_key]) is str
+            and binding[image_key].startswith("sha256:")
+            and is_sha(binding[image_key][7:]),
+            "host_image",
+        )
+    need(
+        type(binding["boot_id"]) is str
+        and re.fullmatch(
+            r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", binding["boot_id"]
+        ),
+        "host_boot_id",
+    )
+    return spec
+
+
+def require_host_authority(spec):
+    # IO is isolated in the fixed host adapter; pure spec validation grants no IO.
+    from host_release_input import validate_host_input
+
+    validate_host_input(spec)
+    from host_authority import verify_authority
+
+    return verify_authority(spec)
 
 
 @dataclass(frozen=True)

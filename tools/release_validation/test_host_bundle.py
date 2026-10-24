@@ -20,12 +20,14 @@ class HostBundleTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        transfer = json.loads((HERE / "host-ci-transfer-pins-1023.json").read_bytes())
+        transfer = json.loads(
+            (HERE / "checkpoint-ci-transfer-pins-1024.json").read_bytes()
+        )
         names = list(transfer["files"]) + [
-            "host-ci-transfer-pins-1023.json",
-            "host-bundle-manifest-1024.json",
+            "checkpoint-ci-transfer-pins-1024.json",
+            "checkpoint-bundle-manifest-1024.json",
             "bundle-manifest.json",
-            "ci-transfer-pins-1023.json",
+            "host-ci-transfer-pins-1023.json",
         ]
         for name in names:
             target = self.root / name
@@ -35,9 +37,9 @@ class HostBundleTests(unittest.TestCase):
         context.start()
         self.addCleanup(context.stop)
 
-    def test_exact_68_member_successor(self):
+    def test_exact_101_member_checkpoint(self):
         manifest, _ = verifier.verify()
-        self.assertEqual(len(manifest["files"]), 68)
+        self.assertEqual(len(manifest["files"]), 101)
         self.assertTrue(manifest["fixture_only"])
 
     def test_frozen_member_tamper_rejected(self):
@@ -52,7 +54,7 @@ class HostBundleTests(unittest.TestCase):
             verifier.verify()
 
     def test_unfrozen_manifest_rejected(self):
-        path = self.root / "host-bundle-manifest-1024.json"
+        path = self.root / "checkpoint-bundle-manifest-1024.json"
         manifest = json.loads(path.read_bytes())
         manifest["frozen"] = False
         path.write_text(json.dumps(manifest))
@@ -60,19 +62,19 @@ class HostBundleTests(unittest.TestCase):
             verifier.verify()
 
     def test_changed_successor_transfer_rejected(self):
-        path = self.root / "host-ci-transfer-pins-1023.json"
+        path = self.root / "checkpoint-ci-transfer-pins-1024.json"
         path.write_bytes(path.read_bytes() + b" ")
         with self.assertRaisesRegex(ValueError, "transfer pins drift"):
             verifier.verify()
 
     def test_changed_historical_transfer_rejected(self):
-        path = self.root / "ci-transfer-pins-1023.json"
+        path = self.root / "host-ci-transfer-pins-1023.json"
         path.write_bytes(path.read_bytes() + b" ")
         with self.assertRaisesRegex(ValueError, "historical transfer"):
             verifier.verify()
 
     def test_fixture_label_cannot_be_removed(self):
-        path = self.root / "host-bundle-manifest-1024.json"
+        path = self.root / "checkpoint-bundle-manifest-1024.json"
         manifest = json.loads(path.read_bytes())
         manifest["fixture_only"] = False
         path.write_text(json.dumps(manifest))

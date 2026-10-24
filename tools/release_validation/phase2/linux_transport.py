@@ -186,6 +186,8 @@ class PrivateDirectory:
 class LinuxJournal:
     """Same intent/result chain as the existing journal, on protected Linux dirfds."""
 
+    mode = "linux_ci"
+
     def __init__(self, nonce):
         self.directory = PrivateDirectory(nonce)
         self.root = self.directory.root
@@ -226,7 +228,7 @@ class LinuxJournal:
                 row.get("sequence") == len(rows) + 1
                 and type(row["sequence"]) is int
                 and row.get("previous") == previous
-                and row.get("mode") == "linux_ci"
+                and row.get("mode") == self.mode
                 and row.get("kind") in ("intent", "result", "hold")
                 and row.get("sha256")
                 == sha(canonical({k: v for k, v in row.items() if k != "sha256"})),
@@ -247,7 +249,7 @@ class LinuxJournal:
             "previous": rows[-1]["sha256"] if rows else "0" * 64,
             "kind": kind,
             "payload": payload,
-            "mode": "linux_ci",
+            "mode": self.mode,
             "utc": datetime.now(timezone.utc).isoformat(),
         }
         row["sha256"] = sha(canonical(row))

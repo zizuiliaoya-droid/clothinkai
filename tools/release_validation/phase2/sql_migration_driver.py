@@ -187,6 +187,10 @@ class SqlMigrationDriver:
         }
 
     def prepare_connect(self, dialect, cparams):
+        if self.spec.data["mode"] == "host_candidate":
+            from sql_policy import require_host_authority
+
+            require_host_authority(self.spec)
         self.attempts += 1
         self.proof["connect_attempts"] = self.attempts
         try:

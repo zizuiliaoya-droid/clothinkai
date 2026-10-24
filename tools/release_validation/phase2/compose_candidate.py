@@ -1,7 +1,9 @@
 """Pure four-application compose transformation with an exact allowed difference set."""
 
 from copy import deepcopy
+
 from contracts import require, sha
+from dashboard_contract import with_external_network
 
 R = "/srv/clothinkai/production-20261018"
 APPS = ("api", "web", "worker", "beat")
@@ -20,12 +22,16 @@ def generate(base, commit, backend, frontend, beat_format):
         require(image.startswith("sha256:"), "image_id")
         sha(image[7:])
     release = R + "/releases/flow78-" + commit[:12]
-    result = deepcopy(base)
+    result = with_external_network(base)
     for role in APPS:
         service = result["services"]["prod-" + role]
         service["image"] = frontend if role == "web" else backend
         service["restart"] = "no"
         if role == "web":
+            require(
+                service["volumes"].count(R + "/build/control:/opt/production:ro") == 1,
+                "web_original_control_mount",
+            )
             service["volumes"] = [
                 release + "/web-control:/opt/production:ro"
                 if value == R + "/build/control:/opt/production:ro"
@@ -57,7 +63,7 @@ def validate(candidate, base, commit):
     require(
         set(candidate) == set(base)
         and candidate["name"] == "clothinkai-production-20261018"
-        and candidate["networks"] == base["networks"],
+        and candidate["networks"] == with_external_network(base)["networks"],
         "compose_identity",
     )
     require(
@@ -82,7 +88,7 @@ def validate(candidate, base, commit):
             all(
                 old.get(k) == new.get(k)
                 for k in set(old) | set(new)
-                if k not in allowed
+                if k not in allowed and not (role == "web" and k == "networks")
             ),
             "compose_unauthorized_difference",
         )
@@ -118,6 +124,11 @@ def validate(candidate, base, commit):
                 command += ["--beat-db-format", new["command"][-1]]
             require(new["command"] == command, "start_entry")
         else:
+            require(
+                new["networks"]
+                == with_external_network(base)["services"]["prod-web"]["networks"],
+                "dashboard_web_network",
+            )
             require(
                 new.get("command") == old.get("command")
                 and new["healthcheck"] == old["healthcheck"],
@@ -186,3 +197,16 @@ def up_plan(commit, roles):
         "never",
         *roles,
     )
+
+
+def recovery_compose(base):
+    """Recover the old web image/control while retaining the deployed board network."""
+    result = with_external_network(base)
+    require(
+        result["services"]["prod-web"]["volumes"].count(
+            R + "/build/control:/opt/production:ro"
+        )
+        == 1,
+        "web_original_control_mount",
+    )
+    return result

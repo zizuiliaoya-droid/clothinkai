@@ -1,11 +1,13 @@
 {
-  "mode": "phase2-unreviewed-dependency-delta",
-  "pins_sha256": "bdee6b80fb53c83dda5ed69b6082ada68290c667c33631a120559608cf90f5ba",
-  "historical_pins_sha256": "75875972f393f70ae828db7091e474de61e0687ebff7e6d5f8d4a40a5205fece",
+  "mode": "phase2-unreviewed-origin-scan-dependency-delta-1024",
+  "pins_file": "implementation-pins-origin-1024.json",
+  "pins_sha256": "0cc34f4847dce14a3ffc7868f20b37a32500144a5895563228b9d84a66bbc0c0",
+  "historical_guard_pins_sha256": "bdee6b80fb53c83dda5ed69b6082ada68290c667c33631a120559608cf90f5ba",
+  "review_status": "pending_independent_review",
   "files": {
     "release_builder.py": {
-      "bytes": 22517,
-      "sha256": "13d010089d2884aaee1b71a7ea42b12b2088b6bbac43631b6eb1e65765861b03"
+      "bytes": 26350,
+      "sha256": "d728bdd2ce2ce93559ded9a9a13fe60bf94748935c7119cf02694e6a0cd9783f"
     },
     "runtime_guard.py": {
       "bytes": 9294,
@@ -82,6 +84,22 @@
     "test_phase2_credential_paths.py": {
       "bytes": 2903,
       "sha256": "49ccefe17a8cd53a9969b1ecb1fcd4e361cb22879e1e12187b7109b4f9fda026"
+    },
+    "test_origin_scan_contexts.py": {
+      "bytes": 6465,
+      "sha256": "3898f08e34907f2dcb259f4d7c3b6eb69fb957f58843f2433644fff3afd79b9c"
+    },
+    "origin-scan-contexts-1024.json": {
+      "bytes": 2505,
+      "sha256": "1ed2516ccb5f1a5d1b7acc9654e7932b7ef57d7c2e28a5372423300c946368d8"
+    },
+    "origin-scan-delta-1024.patch": {
+      "bytes": 5596,
+      "sha256": "ab8567b3f052de982b9226ec1920dc949c3a39fd506fcc248a591774357c7002"
+    },
+    "origin-scan-fix-1024.md": {
+      "bytes": 2918,
+      "sha256": "d8071c4acecce709713c4c27b7e949115cdd617a8b86c8ef877d5262023b4048"
     }
   }
 }

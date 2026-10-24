@@ -10,8 +10,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from types import ModuleType
 
-PHASE1_PINS = "bdee6b80fb53c83dda5ed69b6082ada68290c667c33631a120559608cf90f5ba"
-BUILDER_SHA = "13d010089d2884aaee1b71a7ea42b12b2088b6bbac43631b6eb1e65765861b03"
+PHASE1_PINS = "0cc34f4847dce14a3ffc7868f20b37a32500144a5895563228b9d84a66bbc0c0"
+BUILDER_SHA = "d728bdd2ce2ce93559ded9a9a13fe60bf94748935c7119cf02694e6a0cd9783f"
+PACKAGE_PINS_FILE = "implementation-pins-origin-1024.json"
 
 
 class PackageRejected(ValueError):
@@ -56,7 +57,7 @@ def tool_bundle():
                         need((root / (local + ".py")).is_file(), "tool_import_missing")
         result[name] = raw
     builder = frozen_contract()
-    raw_pins = (builder.HERE / "implementation-pins.json").read_bytes()
+    raw_pins = (builder.HERE / PACKAGE_PINS_FILE).read_bytes()
     for name, pin in builder.json_bytes(raw_pins)["files"].items():
         path = builder.HERE / name
         need(
@@ -68,7 +69,11 @@ def tool_bundle():
         raw = path.read_bytes()
         need(pin == {"bytes": len(raw), "sha256": digest(raw)}, "frozen_file_drift")
         result["frozen_phase1/" + name] = raw
-    result["frozen_phase1/implementation-pins.json"] = raw_pins
+    result["frozen_phase1/" + PACKAGE_PINS_FILE] = raw_pins
+    # SQL guard/control bytes are unchanged and retain their historical pinfile.
+    result["frozen_phase1/implementation-pins.json"] = (
+        builder.HERE / "implementation-pins.json"
+    ).read_bytes()
     return result
 
 
@@ -89,7 +94,7 @@ def frozen_contract():
     need(root is not None, "phase1_contract_missing")
     for path in (root, *root.parents):
         need(not path.is_symlink() and not path.is_junction(), "phase1_link")
-    raw_pins = (root / "implementation-pins.json").read_bytes()
+    raw_pins = (root / PACKAGE_PINS_FILE).read_bytes()
     need(digest(raw_pins) == PHASE1_PINS, "phase1_pins")
     raw = (root / "release_builder.py").read_bytes()
     need(digest(raw) == BUILDER_SHA, "phase1_builder")
@@ -257,9 +262,9 @@ def verify_package(archive_bytes, repository, freeze):
         source = builder.source_files(
             repository, freeze["source_commit"], freeze["source_tree"]
         )
+        verified_source_lock = source.pop("frontend/package-lock.json")
         need(
-            digest(source.pop("frontend/package-lock.json"))
-            == pins["frontend"]["package_lock_sha256"],
+            digest(verified_source_lock) == pins["frontend"]["package_lock_sha256"],
             "frontend_git_lock",
         )
         need(
@@ -285,18 +290,7 @@ def verify_package(archive_bytes, repository, freeze):
                 expected[prefix + name] = raw
             if section == "frontend":
                 builder.validate_html_assets(subset)
-                text = b"\n".join(
-                    b
-                    for n, b in subset.items()
-                    if Path(n).suffix in {".html", ".js", ".css"}
-                )
-                need(
-                    builder.ORIGIN.encode() in text
-                    and not re.search(
-                        rb"localhost|127\.0\.0\.1|trial-web|zeabur\.app", text, re.I
-                    ),
-                    "frontend_origin",
-                )
+                builder.validate_frontend_origin(subset, verified_source_lock)
             else:
                 lines = [
                     v.strip()

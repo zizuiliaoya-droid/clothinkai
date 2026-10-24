@@ -1,88 +1,26 @@
 # Disposable Linux release validation
 
-This branch adds an isolated validation workflow. It never deploys a release.
-Only pushes to `codex/release-linux-ci-1023` trigger the new workflow; root owns
-the push. Existing product workflows and source remain unchanged.
+This branch only prepares validation. Root owns pushing its exact commit and auditing the resulting artifacts. It does not deploy or complete the 29-action host release.
 
-The tool checkout uses the CI commit. The separately checked out product uses
-commit `94d2044284785c0e9e4719c54e0ef12548b95fb7`, tree
-`dce6b81e9a89aed12bb9eba9047904e3971cd6e1`. These identities must never be replaced
-by the later CI-only commit. `verify_bundle.py` checks the exact public file
-allowlist and byte hashes before importing the candidate tools.
+The current input is the 101-file public checkpoint captured by root before A resumed editing. Only .agents/tasks/20261008-wave2/release-host-ci-capture-1024/ was read for this capture, never the later mutable source. checkpoint-ci-transfer-pins-1024.json has SHA256 4b9c0ccb2ff0e469ebb63864333060bd84611f7394fa3a1a1185417f084cb909; checkpoint-bundle-manifest-1024.json freezes its exact allowlist/lengths/hashes. Both new manifests and all phase members use Git -text attributes, so local bytes and Git/Linux bytes must agree. The verifier uses only adjacent phase1/phase2 paths, never the manifest's historical source_roots.
 
-Root authorized capture of the exact 68-file host successor on 2026-10-24.
-`host-bundle-manifest-1024.json` freezes only this disposable validation input.
-The original `bundle-manifest.json` and `ci-transfer-pins-1023.json` remain
-unchanged historical identities; the complete original 62-file snapshot and
-workflow remain recoverable at commit `8817f9a3dac979955729dab4517151f123bdc4eb`.
-No previous CI outcome applies automatically to this successor.
+Current product fixture source is 55477c44f09bb1a25169bfb44ff6c90bc4f9cedb, tree 28c0cac9a15cc48a5dfa5c7d3ed732cd6a59abdc. It is checked out independently of the CI tool commit. This is an unmerged candidate fixture, not final main, production identity or full release-package acceptance. Phase1 package pins are 0cc34f4847dce14a3ffc7868f20b37a32500144a5895563228b9d84a66bbc0c0; original SQL guard pins remain bdee6b80fb53c83dda5ed69b6082ada68290c667c33631a120559608cf90f5ba. The package/scanner successor does not relabel prior phase1 reviews.
 
-Current validation identities:
+Historical evidence remains unchanged: original 62-file bundle/transfer at 8817f9a3dac979955729dab4517151f123bdc4eb; host 68-file transfer c4de17a5086542d0801507fcd4b6f1417b30d3d283b1db95b98a60f1b469385a at c940fc471f7de4c4063c8899dd5f02e733da47ea. The old host-bundle-manifest-1024.json local Windows SHA was fe7d4357ad4793d800671b5b3b9df39749a5e2f977949549375e250278d359b2; its committed Git/Linux LF identity is 72dd7ff71895a9f61d10f1b0d8738f6861b00ffc4fcf9fa7b47e7ca4e7e348ba. Root established the difference is solely CRLF/LF. Those old manifests are retained, and the complete prior source/workflow remains at the prior commits. Old CI green results never automatically cover new source.
 
-- Phase1 pins: `bdee6b80fb53c83dda5ed69b6082ada68290c667c33631a120559608cf90f5ba`.
-- Exact CI transfer manifest: `c4de17a5086542d0801507fcd4b6f1417b30d3d283b1db95b98a60f1b469385a`.
-- Full phase2 audit identity: `2e8dd7e2922c318b31d0d3e664a99585d654f9636d003a064256aced11cf34cb`.
+Nine jobs run on separate GitHub-hosted Ubuntu runners:
 
-Only the successor transfer manifest's 68 explicitly named members and that
-manifest itself were captured, with exact lengths and SHA256 verified before
-A-lane source edits. The full audit/history collection is not included. Phase2's historical
-`implementation-pins.json` does not describe this snapshot and is not copied.
-The original transfer manifest contains local `source_roots` provenance paths;
-the CI verifier never uses those paths to locate files. It reads only the
-adjacent `phase1/` and `phase2/` directories. Git attributes preserve exact
-frozen bytes on Windows and Linux. This snapshot remains pending independent
-phase2 review and is not a deployment approval.
+- Original Linux OS kernel: pidfd/flock/fsync and link checks in temporary paths.
+- Original host capture kernel: bounded fixed helper stdout, 100000-byte overflow, timeout/cancellation and waitpid child reaping. No host collectors.
+- Web kernel: temporary nginx-active file atomic replacement/fsync, stale original rejection, pending/active symlink and hardlink denial. It does not reload real nginx or access host paths.
+- Build kernel: temporary nested staging bytes/modes/fsync, exclusive no-overwrite and symlink target denial. It does not invoke Docker or build an image.
+- Checkpoint contracts: 40 ci_tests using synthetic source Git fixtures, then 22 host policy/journal/finite operations/build/migration tests in a separate process. The host suite uses the existing real-process/socket denial guards and NoSocketAsyncCase. Green here proves the finite checkpoint contracts, not actual Docker migration/build or production readiness.
+- Four isolated PostgreSQL 18.6 scenarios: success, lock_timeout, cancel and advisory_busy. Each uses a fresh service and unchanged original source Alembic chain through 066, then guarded 067. The fixed fixture password/database and prod-db -> 127.0.0.1 mapping are runner-local. No repository secrets/production DSNs are used.
 
-Each PG matrix entry has its own fresh GitHub-hosted Ubuntu runner and PG18.6
-service. The four scenarios are `success`, `lock_timeout`, `cancel`, and
-`advisory_busy`; they run the unchanged source Alembic chain through 066, then
-the guarded original 067. The fixed password and database name belong only to
-the disposable loopback fixture. No repository secrets or production DSNs are
-used. A separate OS job runs real pidfd, flock, fsync, symlink and hardlink
-checks without PostgreSQL or installed packages. A second independent OS job
-runs `ci_tests/run_host_capture_os.py`: actual fixed helper stdout readback,
-100,000-byte oversize rejection against the 65,536-byte cap, timeout and caller
-cancellation, followed by `waitpid` checks that no owned child remains. It never
-calls host collectors, Docker, systemctl, network, or product code. There are
-six jobs in total: two OS jobs plus the four fresh PG scenarios.
+The busy case still requires the exact child callback diagnostic after real pg_try_advisory_lock returns false, with policy/backend/lock/head binding, HOLD, no accepted proof/post-head, exited child and unreleased host lock. Generic HOLD does not pass. Cancellation occurs after connection/advisory checkpoint, not proven in-flight DDL; process-only exit is not Docker container cleanup. Same-process replay tests do not establish restart/recovery.
 
-The captured busy correction writes a fixed child-side diagnostic only after
-actual `pg_try_advisory_lock` returns strictly false. The PG entry requires its
-policy/backend/lock/head binding and retains it in `result.json`, along with
-`unknown/HOLD`, no accepted proof/post-head, exited child and unreleased host
-lock. Generic HOLD alone cannot pass the busy case. The other PG boundaries
-remain success to 067, actual 55P03 lock timeout, and cancellation after the
-connection/advisory checkpoint. Cancellation does not claim in-flight DDL;
-process-only container exit does not claim Docker container cleanup. Replay is
-same-process re-entry, not a demonstrated restart/recovery experiment.
+PG dependencies are installed only on the runner from the exact fixture source declarations. A bounded probe selects Tsinghua PyPI first, official PyPI only if the probe fails, and records the choice. Dependency/installation errors never trigger another index or mixed extra-index resolution. These declarations are not a transitive hash lock, and CI does not establish offline package semantics. No local installation is part of preparation.
 
-Dependencies are installed on the runner from this exact source's pinned
-`backend/requirements-dev.txt` and its `requirements.txt` include, preferring
-the Tsinghua PyPI mirror. A bounded network/HTTP probe selects official PyPI
-only if that mirror is unavailable and records the choice and probe outcome
-in `dependency-source.json`. An installation/dependency error fails the job;
-it does not trigger another index or mixed `extra-index` resolution.
-These source declarations are not a complete transitive hash lock; this CI does
-not establish offline wheel/package semantics. No dependencies are installed
-locally during preparation.
+Only explicit result/provenance/dependency-selection JSON and synthetic test logs are uploaded, never checkouts, fixture trees, secrets, config, backups or .agents. Per-job/step/process timeouts remain bounded. Matrix fail-fast is false. deployable=false, live_enabled=false and production_29_actions_verified=false are recorded. The current BACKUP/RESTORE implementation is deliberately absent from this frozen input. Later A/B edits need another capture and new evidence.
 
-Artifacts contain only explicit synthetic result JSON, tool/source provenance
-JSON, dependency-source selection JSON, and the test entry's stderr output.
-No checkout, temporary fixture tree,
-backup, credentials, environment dump, or `.agents` directory is uploaded.
-Job/step/process timeouts are bounded and matrix fail-fast is disabled so all
-four independent scenarios can report their own outcomes.
-
-Successful CI would establish only the covered Linux kernel and PG behavior.
-Full production 29-action execution, Docker transport, real backup/R2/restore,
-production ACL/RLS/data comparison and deployment readiness remain unverified.
-`deployable=false` and `live_enabled=false` remain mandatory.
-The pinned product source is solely this executor probe's fixture source; it
-is not the final release commit and does not include later PR8 fixes.
-
-Local preparation checks use `python -B tools/release_validation/test_host_bundle.py`
-plus Python AST, YAML contract and Git blob checks. They do not run the Linux
-or PG cases on Windows. Root owns pushing this exact head, downloading the new
-artifacts and independently auditing them. The newly captured host source is
-already stale relative to any subsequent A-lane edits: those require a new
-allowlist/capture and distinct validation, never inheritance of these results.
+Local checks: python -B tools/release_validation/test_host_bundle.py; from phase2, the two contract commands listed by the transfer manifest. Python AST, YAML invariants and exact Git blob checks complement them. Actual Linux kernel and PG cases are not run on Windows. Real 29-action host closure, real Docker builds/migration, backup/R2/restore, production comparison/approvals and release readiness remain pending.

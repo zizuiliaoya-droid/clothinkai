@@ -1,0 +1,134 @@
+{
+  "scope": "phase2-new-origin-scan-dependency-delta-1024",
+  "production_artifact": false,
+  "review_status": "pending_independent_review",
+  "historical_pins": {
+    "bytes": 3479,
+    "sha256": "bdee6b80fb53c83dda5ed69b6082ada68290c667c33631a120559608cf90f5ba"
+  },
+  "files": {
+    "release_builder.py": {
+      "bytes": 26350,
+      "sha256": "d728bdd2ce2ce93559ded9a9a13fe60bf94748935c7119cf02694e6a0cd9783f"
+    },
+    "runtime_guard.py": {
+      "bytes": 9294,
+      "sha256": "da3e0ed4e331cc6a3a41dba709a5c39bf4f6610fa565afcb4097423e59826201"
+    },
+    "start_067.py": {
+      "bytes": 7117,
+      "sha256": "9cd45878e03232cd07ecb214090c6642429d8ffc4f6d3fd89a7e1e2544326444"
+    },
+    "migrate_067.py": {
+      "bytes": 4708,
+      "sha256": "d3a7c60436511fa382acad6f27d008cbd52bdd1ff9c54b49a5b3f1d06041f9a2"
+    },
+    "schedule_pickle_guard.py": {
+      "bytes": 11040,
+      "sha256": "e7c9692981ee8a64afc0bfce22273f96a406f36b3c8bfa13c0fc16eee0930dbc"
+    },
+    "schedule_test_fixture.py": {
+      "bytes": 1154,
+      "sha256": "2efb1647f7e48d4292c6c0da2c6ac7d34f07080f4db1e687dc179f2325952c86"
+    },
+    "test_release_tools.py": {
+      "bytes": 25304,
+      "sha256": "d317bd02ae8b3a53e5267c370640e85ab3f0b2044b9027597eec717848a60c11"
+    },
+    "test_revision_r1.py": {
+      "bytes": 13335,
+      "sha256": "c5d2fc38b6f20802a5032d1ed076a7a1a20390318ac5f2b57765aad7b9640a94"
+    },
+    "test_revision_r2.py": {
+      "bytes": 9880,
+      "sha256": "75c80e7569cf9c188ddc066e17636cd82de56231f4e024708c4f27bb588ba964"
+    },
+    "Dockerfile.backend.offline.in": {
+      "bytes": 1151,
+      "sha256": "fba1e2f110964be5b755b6a3a104ac494421ba4d0b3fb3054d8a99361a0b4eb4"
+    },
+    "Dockerfile.frontend.offline.in": {
+      "bytes": 418,
+      "sha256": "a063de4dca1822ad8d54929c43678a94792606d0373b403bd26d5a179f408d2b"
+    },
+    "release-manifest.schema.json": {
+      "bytes": 5440,
+      "sha256": "fc36c1ba839ba80cb71583943f83a67bfab5a18ba321e6deccc4809740d499fd"
+    },
+    "README.md": {
+      "bytes": 13025,
+      "sha256": "5a3954db57b97985825e5a446940d6d6665389a2a7c9480d031a49585d1c808b"
+    },
+    "implementation-report.md": {
+      "bytes": 12120,
+      "sha256": "b59f81a9e8027d9b9226eaae187bb97bd6dfa659f838952cf85e210277c0b439"
+    },
+    "test-results.txt": {
+      "bytes": 10787,
+      "sha256": "a0af690753e52f228e0a4098a656eef2f2cc8e735b29e25376573131ccd56d17"
+    },
+    "revision-r1-red-results.txt": {
+      "bytes": 2814,
+      "sha256": "fedeada69e3781a1bfad34724adda1397c619ead87d7eb8e9d23017f8ed9012f"
+    },
+    "revision-r1-green-results.txt": {
+      "bytes": 2300,
+      "sha256": "79cba6b98b6a5cfd50d855f401c4974413c8cb97d9b069bab5ffc59bc5456d1b"
+    },
+    "revision-r2-red-results.txt": {
+      "bytes": 3572,
+      "sha256": "94bedc792d5dc8434f9e1c99127b42f85d77f5a4519b3f1ca5aca25b556aecaa"
+    },
+    "revision-r2-green-results.txt": {
+      "bytes": 3490,
+      "sha256": "5f005ca73188b900a30fa4b2a81dd940c2d330c1044b08e0ef3a3e4e8a1a5234"
+    },
+    "test_phase2_credential_paths.py": {
+      "bytes": 2903,
+      "sha256": "49ccefe17a8cd53a9969b1ecb1fcd4e361cb22879e1e12187b7109b4f9fda026"
+    },
+    "test_origin_scan_contexts.py": {
+      "bytes": 6465,
+      "sha256": "3898f08e34907f2dcb259f4d7c3b6eb69fb957f58843f2433644fff3afd79b9c"
+    },
+    "origin-scan-contexts-1024.json": {
+      "bytes": 2505,
+      "sha256": "1ed2516ccb5f1a5d1b7acc9654e7932b7ef57d7c2e28a5372423300c946368d8"
+    },
+    "origin-scan-delta-1024.patch": {
+      "bytes": 5596,
+      "sha256": "ab8567b3f052de982b9226ec1920dc949c3a39fd506fcc248a591774357c7002"
+    },
+    "origin-scan-fix-1024.md": {
+      "bytes": 2918,
+      "sha256": "d8071c4acecce709713c4c27b7e949115cdd617a8b86c8ef877d5262023b4048"
+    }
+  },
+  "tests": {
+    "targeted": 12,
+    "regression": 34,
+    "skipped": 0
+  },
+  "candidate": {
+    "status": "PHASE1_CANDIDATE_VERIFIED",
+    "deployable": false,
+    "source_commit": "55477c44f09bb1a25169bfb44ff6c90bc4f9cedb",
+    "bytes": 44317924,
+    "sha256": "31169d1636b7f844fba96df74650bac561c4cb3e653521497cb69438782f8021",
+    "manifest_sha256": "2f3270538b317f910aa8aecb56f590b48e1e2076862883c687b6f9019e626cd4",
+    "files": 517,
+    "output_directory": "C:\\Users\\54566\\AppData\\Local\\Temp\\release-candidate-55477c4-originfix-1024",
+    "archive_path": "C:\\Users\\54566\\AppData\\Local\\Temp\\release-candidate-55477c4-originfix-1024\\clothinkai-55477c4-candidate-only.tar.gz",
+    "input_pins_path": "C:\\Users\\54566\\AppData\\Local\\Temp\\release-candidate-55477c4-originfix-1024\\candidate-input-pins.json",
+    "input_pins": {
+      "bytes": 12974,
+      "sha256": "d4bebe8d0c86bbc04369eee6d40582dfde66ae5b28e341549c0f3ed3d6712a65"
+    },
+    "archive_member_count": 518,
+    "builder_sha256": "d728bdd2ce2ce93559ded9a9a13fe60bf94748935c7119cf02694e6a0cd9783f",
+    "product_source_kind": "unmerged_candidate_not_final_main",
+    "linux_install_or_build_verified_this_turn": false,
+    "phase2_updater_included": false,
+    "live_enabled": false
+  }
+}

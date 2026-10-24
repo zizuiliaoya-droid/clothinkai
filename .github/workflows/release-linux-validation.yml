@@ -13,8 +13,8 @@ concurrency:
 
 env:
   PYTHONDONTWRITEBYTECODE: "1"
-  SOURCE_COMMIT: 94d2044284785c0e9e4719c54e0ef12548b95fb7
-  SOURCE_TREE: dce6b81e9a89aed12bb9eba9047904e3971cd6e1
+  SOURCE_COMMIT: 55477c44f09bb1a25169bfb44ff6c90bc4f9cedb
+  SOURCE_TREE: 28c0cac9a15cc48a5dfa5c7d3ed732cd6a59abdc
 
 jobs:
   linux-os:
@@ -97,6 +97,108 @@ jobs:
             ${{ runner.temp }}/release-validation/result.json
             ${{ runner.temp }}/release-validation/output.log
 
+  linux-control-kernels:
+    name: Linux ${{ matrix.control }} control kernel
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        control: [web, build]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: validation
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Verify exact frozen checkpoint bytes
+        run: >-
+          python -B validation/tools/release_validation/verify_bundle.py
+          --expected-tool-commit "$GITHUB_SHA"
+          --output "$RUNNER_TEMP/release-validation"
+      - name: Exercise temporary dirfd kernel only
+        timeout-minutes: 3
+        shell: bash
+        env:
+          CONTROL: ${{ matrix.control }}
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=10s 120s \
+            python -B "validation/tools/release_validation/phase2/ci_tests/run_${CONTROL}_control_os.py" \
+            > "$RUNNER_TEMP/release-validation/result.json" \
+            2> "$RUNNER_TEMP/release-validation/output.log"
+          cat "$RUNNER_TEMP/release-validation/result.json"
+      - name: Retain only kernel results and provenance
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-linux-${{ matrix.control }}-control-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/release-validation/provenance.json
+            ${{ runner.temp }}/release-validation/result.json
+            ${{ runner.temp }}/release-validation/output.log
+
+  checkpoint-contracts:
+    name: Synthetic host checkpoint and source contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: validation
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Verify exact frozen checkpoint bytes
+        run: >-
+          python -B validation/tools/release_validation/verify_bundle.py
+          --expected-tool-commit "$GITHUB_SHA"
+          --output "$RUNNER_TEMP/release-validation"
+      - name: Run source fixtures and finite host contracts in separate processes
+        timeout-minutes: 5
+        working-directory: validation/tools/release_validation/phase2
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=10s 180s \
+            python -B -m unittest discover -s ci_tests -p 'test_*.py' -v \
+            > "$RUNNER_TEMP/release-validation/source-contracts.log" 2>&1
+          timeout --signal=TERM --kill-after=10s 90s \
+            python -B -m unittest tests.test_host_policy tests.test_host_journal_connection \
+            tests.test_host_finite_operations tests.test_host_build_control \
+            tests.test_host_migration_control -v \
+            > "$RUNNER_TEMP/release-validation/checkpoint-contracts.log" 2>&1
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          result = {"mode": "synthetic_checkpoint_contracts", "source_fixture_contracts_passed": True,
+                    "host_checkpoint_contracts_passed": True, "production_access": False,
+                    "production_29_actions_verified": False, "real_docker_build_verified": False,
+                    "real_backup_restore_verified": False, "deployable": False, "live_enabled": False}
+          (Path(os.environ["RUNNER_TEMP"]) / "release-validation/result.json").write_text(
+              json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          print(json.dumps(result, sort_keys=True))
+          PY
+      - name: Retain only synthetic contracts and provenance
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-checkpoint-contracts-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/release-validation/provenance.json
+            ${{ runner.temp }}/release-validation/result.json
+            ${{ runner.temp }}/release-validation/source-contracts.log
+            ${{ runner.temp }}/release-validation/checkpoint-contracts.log
+
   postgres:
     name: PG18.6 / ${{ matrix.scenario }}
     runs-on: ubuntu-24.04
@@ -128,7 +230,7 @@ jobs:
       - name: Check out the exact product source, independent of CI commit
         uses: actions/checkout@v4
         with:
-          ref: 94d2044284785c0e9e4719c54e0ef12548b95fb7
+          ref: 55477c44f09bb1a25169bfb44ff6c90bc4f9cedb
           path: product-source
           persist-credentials: false
       - uses: actions/setup-python@v5

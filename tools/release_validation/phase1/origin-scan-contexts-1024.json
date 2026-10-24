@@ -1,0 +1,29 @@
+[
+  {
+    "id": "async-validator-url-grammar",
+    "bytes": 487,
+    "sha256": "718643a294d7500c573b2e5cc9ba749711d26f1ec670e9c557e8db652087a37f",
+    "text": "var m=\"(?:(?:[a-z]+:)?//)\",p=\"(?:\\\\S+(?::\\\\S*)?@)?\",h=d.v4().source,g=d.v6().source,y=\"(?:(?:[a-z\\\\u00a1-\\\\uffff0-9][-_]*)*[a-z\\\\u00a1-\\\\uffff0-9]+)\",v=\"(?:\\\\.(?:[a-z\\\\u00a1-\\\\uffff0-9]-*)*[a-z\\\\u00a1-\\\\uffff0-9]+)*\",b=\"(?:\\\\.(?:[a-z\\\\u00a1-\\\\uffff]{2,}))\",x=\"(?::\\\\d{2,5})?\",C='(?:[/?#][^\\\\s\"]*)?',S=\"(?:\".concat(m,\"|www\\\\.)\").concat(p,\"(?:localhost|\").concat(h,\"|\").concat(g,\"|\").concat(y).concat(v).concat(b,\")\").concat(x).concat(C);return Kp=new RegExp(\"(?:^\".concat(S,\"$)\"),\"i\"),Kp}",
+    "source_path": "frontend/node_modules/@rc-component/async-validator/es/rule/url.js",
+    "source_sha256": "67b88ae8debf8b3045bad20b07c5bb7f43161f99580148ae2e3b46b2174c837d",
+    "provenance": "@rc-component/async-validator 5.1.2"
+  },
+  {
+    "id": "axios-browser-origin",
+    "bytes": 536,
+    "sha256": "e67ef5b9afb48938c59c6a8b197b2cda78c9d8999ac7fb1eb5ea22e53ce80530",
+    "text": "F$=typeof window<\"u\"&&typeof document<\"u\",EC=typeof navigator==\"object\"&&navigator||void 0,dve=F$&&(!EC||[\"ReactNative\",\"NativeScript\",\"NS\"].indexOf(EC.product)<0),fve=typeof WorkerGlobalScope<\"u\"&&self instanceof WorkerGlobalScope&&typeof self.importScripts==\"function\",mve=F$&&window.location.href||\"http://localhost\",pve=Object.freeze(Object.defineProperty({__proto__:null,hasBrowserEnv:F$,hasStandardBrowserEnv:dve,hasStandardBrowserWebWorkerEnv:fve,navigator:EC,origin:mve},Symbol.toStringTag,{value:\"Module\"})),Xr={...pve,...uve};",
+    "source_path": "frontend/node_modules/axios/lib/platform/common/utils.js",
+    "source_sha256": "b744eee57f03928fbde9a9c8813dfa00a0f5b7f8803840d34ad9449561174ae3",
+    "provenance": "axios 1.17.0"
+  },
+  {
+    "id": "trusted-proxy-explanation",
+    "bytes": 211,
+    "sha256": "5342f51d5a530d92212e6bdd46eec26fa0dd3a2a59e323f50235997bd478e274",
+    "text": "{key:\"forwarded_allow_ips\",label:a(\"FORWARDED_ALLOW_IPS\"),children:e.forwarded_allow_ips_set?f.jsx(\"span\",{style:Kc,children:qF(e)}):\"未设置（uvicorn 默认只信任 127.0.0.1）\"}];return f.jsxs(f.Fragment,",
+    "source_path": "frontend/src/features/security/components/NetworkDiagnosticsPanel.tsx",
+    "source_sha256": "f4facf20fed3116948f98700cffa812960313e33b3d98ce85d28a441a18e842e",
+    "provenance": "Git blob 2fa8760d581d357a73cff504b2e36b35020c61cd"
+  }
+]
