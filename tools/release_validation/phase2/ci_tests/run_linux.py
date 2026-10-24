@@ -240,6 +240,7 @@ async def exercise(spec, scenario):
         if blocker:
             await blocker.close()
     head = await schema_head(spec)
+    busy_diagnostic = None
     if scenario == "success":
         need(
             result["outcome"] == "verified"
@@ -265,6 +266,19 @@ async def exercise(spec, scenario):
                 and result["failure"]["sqlstate"] == "55P03",
                 "real_lock_timeout_sqlstate_required",
             )
+        if scenario == "advisory_busy":
+            from sql_policy import parse
+
+            directory = PrivateDirectory(spec.data["nonce"])
+            try:
+                busy_diagnostic = assert_advisory_busy(
+                    result,
+                    head,
+                    parse(directory.read("advisory-busy.json", 4096)),
+                    spec,
+                )
+            finally:
+                directory.close()
     # A second fresh coordinator must not issue a second child after any journal.
     again = await run_guarded_migration(
         spec, LinuxCITransport(spec, LinuxJournal(spec.data["nonce"]))
@@ -278,10 +292,29 @@ async def exercise(spec, scenario):
         "head": head,
         "result": result,
         "replay": "HOLD",
+        "advisory_busy_diagnostic": busy_diagnostic,
         "linux_executed": True,
         "package_semantics_verified": False,
         "live_verified": False,
     }
+
+
+def assert_advisory_busy(result, head, diagnostic, spec):
+    from sql_migration_driver import validate_busy_diagnostic
+
+    diagnostic = validate_busy_diagnostic(diagnostic, spec)
+    need(
+        result["policy_sha256"] == spec.sha256
+        and result["action"] == "HOLD"
+        and head == BEFORE
+        and result["outcome"] == "unknown"
+        and result["host_lock_released"] is False
+        and result["proof"] is None
+        and result["post_head"] is None
+        and result["owned_exit"]["process"] is True,
+        "busy_must_preserve_unknown_and_host_lock",
+    )
+    return diagnostic
 
 
 def main():

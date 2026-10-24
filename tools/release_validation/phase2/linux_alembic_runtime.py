@@ -68,7 +68,11 @@ def run_original(spec, directory):
     from sqlalchemy.engine import Engine
 
     driver = SqlMigrationDriver(
-        spec, lambda proof: directory.create("connected.json", canonical(proof))
+        spec,
+        lambda proof: directory.create("connected.json", canonical(proof)),
+        lambda diagnostic: directory.create(
+            "advisory-busy.json", canonical(diagnostic)
+        ),
     )
     failure = None
     try:

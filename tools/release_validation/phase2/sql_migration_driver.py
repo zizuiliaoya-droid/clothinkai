@@ -130,8 +130,39 @@ def validate_evidence(proof, spec, *, complete=True):
     return deepcopy(proof)
 
 
+def validate_busy_diagnostic(value, spec):
+    """Contention diagnostic only, never a successful migration/cleanup proof."""
+    fields(
+        value,
+        {
+            "policy_sha256",
+            "identity",
+            "advisory_acquire",
+            "lock_key",
+            "pre_head",
+            "connect_attempts",
+            "connections",
+            "statements",
+        },
+        "busy_diagnostic_fields",
+    )
+    identity = validate_identity(value["identity"], spec)
+    expected = {
+        "policy_sha256": spec.sha256,
+        "identity": identity,
+        "advisory_acquire": "busy",
+        "lock_key": LOCK_KEY,
+        "pre_head": BEFORE,
+        "connect_attempts": 1,
+        "connections": 1,
+        "statements": 0,
+    }
+    need(canonical(value) == canonical(expected), "busy_diagnostic_binding")
+    return deepcopy(value)
+
+
 class SqlMigrationDriver:
-    def __init__(self, spec, checkpoint=None):
+    def __init__(self, spec, checkpoint=None, diagnostic=None):
         self.spec = validate_spec(spec)
         self.guard = pinned_guard(dict(spec._artifacts))
         self.attempts = 0
@@ -140,6 +171,7 @@ class SqlMigrationDriver:
         self.record = None
         self.invalid = False
         self.checkpoint = checkpoint
+        self.diagnostic = diagnostic
         self.proof = {
             "policy_sha256": spec.sha256,
             "connect_attempts": 0,
@@ -248,10 +280,26 @@ class SqlMigrationDriver:
             self.proof["identity"], self.proof["gucs"] = identity, gucs
             await self.guard.verify_connection(raw, "clothing_bypass", True, BEFORE)
             self.proof["database"] = dict(DATABASE_FACTS)
-            need(
-                await raw.fetchval("SELECT pg_try_advisory_lock($1)", LOCK_KEY) is True,
-                "migration_busy",
-            )
+            acquired = await raw.fetchval("SELECT pg_try_advisory_lock($1)", LOCK_KEY)
+            if acquired is False and self.diagnostic is not None:
+                # Only the actual false return reaches this callback. Earlier
+                # marker/role/head/GUC failures cannot manufacture contention.
+                self.diagnostic(
+                    validate_busy_diagnostic(
+                        {
+                            "policy_sha256": self.spec.sha256,
+                            "identity": identity,
+                            "advisory_acquire": "busy",
+                            "lock_key": LOCK_KEY,
+                            "pre_head": BEFORE,
+                            "connect_attempts": self.attempts,
+                            "connections": self.connections,
+                            "statements": self.proof["statements"],
+                        },
+                        self.spec,
+                    )
+                )
+            need(acquired is True, "migration_busy")
             await self.guard.verify_connection(raw, "clothing_bypass", True, BEFORE)
             need(
                 await raw.fetchval(LOCK_READBACK_SQL, LOCK_KEY) is True,

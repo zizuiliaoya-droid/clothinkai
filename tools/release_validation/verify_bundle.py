@@ -29,13 +29,13 @@ def git(repository, *args):
 
 
 def verify():
-    raw = (HERE / "bundle-manifest.json").read_bytes()
+    raw = (HERE / "host-bundle-manifest-1024.json").read_bytes()
     manifest = json.loads(raw)
     require(manifest["schema_version"] == 1, "manifest schema")
     require(manifest["frozen"] is True, "root has not frozen the candidate bundle")
     require(manifest["source_commit"] == SOURCE_COMMIT, "source commit drift")
     require(manifest["source_tree"] == SOURCE_TREE, "source tree drift")
-    transfer_raw = (HERE / "ci-transfer-pins-1023.json").read_bytes()
+    transfer_raw = (HERE / "host-ci-transfer-pins-1023.json").read_bytes()
     require(
         sha256(transfer_raw) == manifest["pins"]["ci_transfer"], "transfer pins drift"
     )
@@ -44,6 +44,14 @@ def verify():
         transfer["source_commit"] == SOURCE_COMMIT
         and transfer["source_tree"] == SOURCE_TREE,
         "transfer source binding",
+    )
+    require(manifest["fixture_only"] is True, "product source must remain fixture only")
+    historical_raw = (HERE / "ci-transfer-pins-1023.json").read_bytes()
+    require(
+        sha256(historical_raw)
+        == manifest["base_ci_transfer"]
+        == transfer["base_transfer_pins_sha256"],
+        "historical transfer pins drift",
     )
     files = manifest["files"]
     require(bool(files), "empty bundle")
@@ -120,6 +128,9 @@ def main():
         "source_commit": SOURCE_COMMIT,
         "source_tree": SOURCE_TREE,
         "source_checkout_verified": args.source is not None,
+        "source_fixture_only": True,
+        "historical_tool_commit": manifest["historical_tool_commit"],
+        "historical_transfer_sha256": manifest["base_ci_transfer"],
         "tool_commit": tool_commit,
         "tool_pins": manifest["pins"],
         "bundle_manifest_sha256": manifest_hash,
