@@ -7,7 +7,7 @@ import logging
 from collections.abc import Mapping
 from datetime import UTC, date, datetime
 from decimal import Decimal
-from typing import Any, TypeVar
+from typing import Any, Literal, TypeVar, cast
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
@@ -64,6 +64,10 @@ from app.modules.promotion.flow_doc import (
     build_promotion_doc,
     goods_items_complete,
 )
+from app.modules.promotion.freight_flow import freight_doc
+from app.modules.promotion.freight_models import ReturnFreightPayment
+from app.modules.promotion.freight_repository import ReturnFreightRepository
+from app.modules.promotion.freight_schemas import FreightStatus, ReturnFreightPaymentBrief
 from app.modules.promotion.metrics_calculator import (
     calculate_cpl,
     calculate_effective_like_count,
@@ -187,6 +191,78 @@ class PromotionServiceBase:
     # ============================================================
     # Private helpers
     # ============================================================
+
+    async def _writable_promotion(
+        self,
+        promotion_id: UUID,
+        user: User,
+        *,
+        include_inactive: bool = False,
+        conflict_fields: tuple[str, ...] = (),
+    ) -> Promotion:
+        """同事务行锁内读取并判完结，防最后一步与PATCH/上传互相穿透。"""
+        from app.modules.promotion.exceptions import (
+            PromotionCompletedReadonlyError,
+            PromotionNotFoundError,
+            StateTransitionConflictError,
+        )
+
+        snapshot = await self._repo.get_by_id(promotion_id, include_inactive=True)
+        # SELECT FOR UPDATE等待后会原地刷新实体，先复制锁前是否活跃。
+        was_active = snapshot is not None and snapshot.is_active
+        before_lock = (
+            {field: getattr(snapshot, field) for field in conflict_fields} if snapshot else {}
+        )
+        promotion = await self._repo.get_for_write(
+            promotion_id,
+            tenant_id=user.tenant_id,
+            include_inactive=True,
+        )
+        if promotion is None:
+            if snapshot is not None:
+                raise StateTransitionConflictError("推广已变更或不可操作，请刷新后重试")
+            raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
+        if promotion.completed_at is not None and not (await self._flow_actor(user)).is_star:
+            raise PromotionCompletedReadonlyError("已完结，只读")
+        if not promotion.is_active and not include_inactive:
+            if was_active:
+                raise StateTransitionConflictError(
+                    "推广已被停用，请刷新后重试", details={"promotion_id": str(promotion_id)}
+                )
+            raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
+        if snapshot is not None and any(
+            getattr(promotion, field) != value for field, value in before_lock.items()
+        ):
+            raise StateTransitionConflictError("推广状态已变更，请刷新后重试")
+        return promotion
+
+    async def maybe_complete(self, promotion_id: UUID, user: User) -> None:
+        """五条写路径提交前调用；只有条件UPDATE首次命中才写完结时间线。"""
+        completed = await self._repo.maybe_complete(
+            promotion_id=promotion_id, tenant_id=user.tenant_id
+        )
+        if completed is None:
+            return
+        completed_at = completed.completed_at
+        assert completed_at is not None
+        await LineEventRepository(self._session).append(
+            tenant_id=completed.tenant_id,
+            line_id=completed.line_id,
+            event_type=LineEventType.PROMOTION_COMPLETED,
+            actor_id=user.id,
+            promotion_id=promotion_id,
+            payload={
+                "completed_at": completed_at.isoformat(),
+                "completion_kind": "召回" if completed.publish_status == "已取消" else "正常",
+            },
+        )
+        await self._audit.log(
+            action="promotion.complete",
+            resource="promotion",
+            resource_id=promotion_id,
+            user_id=user.id,
+            after={"completed_at": completed_at.isoformat()},
+        )
 
     async def _resolve_mode_costs(
         self,
@@ -663,6 +739,7 @@ class PromotionServiceBase:
             is_active=promotion.is_active,
             retro_status=promotion.retro_status,
             metrics_recorded_at=promotion.metrics_recorded_at,
+            completed_at=promotion.completed_at,
             actual_publish_date=promotion.actual_publish_date,
             scheduled_publish_date=promotion.scheduled_publish_date,
             today=today or get_today(),
@@ -679,6 +756,7 @@ class PromotionServiceBase:
         members_by_goods: Mapping[UUID, builtins.list[UUID]] | None = None,
         members: builtins.list[UUID] | None = None,
         attachment_refs: PromotionAttachmentRefs | None = None,
+        freights: Mapping[UUID, ReturnFreightPayment] | None = None,
     ) -> PromotionDoc:
         """组矩阵快照。没透传的（阶段、明细、谈款人、套装成员、结款单状态）按这一张单现查。
 
@@ -701,6 +779,11 @@ class PromotionServiceBase:
                     tenant_id=promotion.tenant_id, promotion_ids=[promotion.id]
                 )
             ).get(promotion.id)
+        if freights is None:
+            freights = await ReturnFreightRepository(self._session).briefs(
+                [promotion.id], tenant_id=promotion.tenant_id
+            )
+        freight = freights.get(promotion.id)
         return build_promotion_doc(
             promotion,
             stage=stage,
@@ -709,6 +792,7 @@ class PromotionServiceBase:
             settlement_status=(
                 attachment_refs.settlement_status if attachment_refs is not None else None
             ),
+            freight_status=freight.status if freight is not None else None,
         )
 
     async def _to_response(
@@ -737,6 +821,7 @@ class PromotionServiceBase:
         user_names: Mapping[UUID, str] | None = None,
         style_names: Mapping[UUID, tuple[str, str | None, str | None]] | None = None,
         metric_settings: PlatformMetricSettings | None = None,
+        freights: Mapping[UUID, ReturnFreightPayment] | None = None,
     ) -> PromotionResponse:
         """组装响应：字段权限过滤 + 衍生字段计算 + 矩阵 ``ui``.
 
@@ -763,6 +848,11 @@ class PromotionServiceBase:
         ctx = actor.field_ctx
         can_see_quote = can_read_field("promotion", "quote_amount", ctx)
         can_see_cost = can_read_field("promotion", "cost_snapshot", ctx)
+        if freights is None:
+            freights = await ReturnFreightRepository(self._session).briefs(
+                [promotion.id], tenant_id=user.tenant_id
+            )
+        freight = freights.get(promotion.id)
         # 收件三项逐项过字段规则（个人授予 / 撤销可以只动其中一项）
         receiver: dict[str, Any] = {
             field: (getattr(promotion, field) if can_read_field("promotion", field, ctx) else None)
@@ -803,10 +893,12 @@ class PromotionServiceBase:
                     log.warning("promotion_payment_attachment_signed_url_failed")
         # 结款聊天截图（R9）：跟收款码同一个可见开关（4.6）；只在详情签，列表不逐行查（7.3）
         settlement_chat_url: str | None = None
+        recall_waybill_url: str | None = None
         if can_see_payment_attachments and view != "list":
             settlement_chat_url = await self._signed_url_for(
                 promotion.settlement_chat_attachment_id
             )
+            recall_waybill_url = await self._signed_url_for(promotion.recall_waybill_attachment_id)
 
         resolved_style_image_key = style_main_image_key
         if not style_main_image_preloaded:
@@ -934,6 +1026,7 @@ class PromotionServiceBase:
             negotiators=negotiators,
             members=members,
             attachment_refs=attachment_refs,
+            freights=freights,
         )
         ui = ui_for(actor, doc).to_dict(view=view)
         settlement_block = (
@@ -957,6 +1050,7 @@ class PromotionServiceBase:
             quote_amount=promotion.quote_amount,
             has_payment_qr=promotion.payment_qr_attachment_id is not None,
             today=today,
+            freight_status=freight.status if freight is not None else None,
         )
 
         pushed_by = promotion.ship_pushed_by
@@ -984,6 +1078,25 @@ class PromotionServiceBase:
             cost_snapshot=(promotion.cost_snapshot if can_see_cost else None),
             cooperation_mode=promotion.cooperation_mode,
             return_shipping_fee=(promotion.return_shipping_fee if can_see_cost else None),
+            return_shipping_payer=cast(
+                Literal["博主垫付", "到付"] | None, promotion.return_shipping_payer
+            ),
+            recall_waybill_attachment_id=promotion.recall_waybill_attachment_id
+            if can_see_payment_attachments
+            else None,
+            recall_waybill_signed_url=recall_waybill_url,
+            freight_payment=ReturnFreightPaymentBrief(
+                id=freight.id,
+                status=cast(FreightStatus, freight.status),
+                amount=freight.amount if can_see_cost else None,
+                payment_date=freight.payment_date,
+                reject_reason=freight.reject_reason,
+                ui=ui_for(actor, freight_doc(freight.status, doc.negotiator_id)).to_dict(
+                    view="detail"
+                ),
+            )
+            if freight is not None
+            else None,
             # 站外推广成本是三项金额之和，能看到它等于能推算金额，所以两个读权限都要有
             total_promo_cost=(
                 promotion.total_promo_cost if (can_see_quote and can_see_cost) else None
@@ -1011,6 +1124,7 @@ class PromotionServiceBase:
             retro_status=promotion.retro_status,
             retro_confirmed_by=promotion.retro_confirmed_by,
             retro_confirmed_at=promotion.retro_confirmed_at,
+            completed_at=promotion.completed_at,
             retro_content=retro_content,
             reviewed_by=promotion.reviewed_by,
             reviewed_at=promotion.reviewed_at,

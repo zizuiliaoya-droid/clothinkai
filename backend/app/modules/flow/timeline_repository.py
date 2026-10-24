@@ -27,6 +27,7 @@ from app.modules.finance.models import Settlement
 from app.modules.flow.line_events import LineEventType
 from app.modules.flow.models import LineEvent
 from app.modules.negotiation.models import Negotiation
+from app.modules.promotion.freight_models import ReturnFreightPayment
 from app.modules.promotion.models import Promotion
 
 
@@ -36,6 +37,8 @@ class LineHeader:
     negotiation: Negotiation | None
     has_settlement: bool
     settlement_payment_date: date | None
+    has_freight: bool = False
+    freight_status: str | None = None
 
 
 @dataclass(frozen=True)
@@ -59,7 +62,14 @@ class LineReadRepository:
         """以 line_id 为锚，左连推广单与谈款（两边都可能没有），再左连推广单的结款单。"""
         anchor = select(literal(line_id, PGUUID(as_uuid=True)).label("line_id")).subquery()
         stmt = (
-            select(Promotion, Negotiation, Settlement.id, Settlement.payment_date)
+            select(
+                Promotion,
+                Negotiation,
+                Settlement.id,
+                Settlement.payment_date,
+                ReturnFreightPayment.id,
+                ReturnFreightPayment.status,
+            )
             .select_from(anchor)
             .outerjoin(
                 Promotion,
@@ -73,6 +83,13 @@ class LineReadRepository:
                 Settlement,
                 and_(Settlement.tenant_id == tenant_id, Settlement.promotion_id == Promotion.id),
             )
+            .outerjoin(
+                ReturnFreightPayment,
+                and_(
+                    ReturnFreightPayment.tenant_id == tenant_id,
+                    ReturnFreightPayment.promotion_id == Promotion.id,
+                ),
+            )
         )
         row = (await self._session.execute(stmt)).one()
         return LineHeader(
@@ -80,6 +97,8 @@ class LineReadRepository:
             negotiation=row[1],
             has_settlement=row[2] is not None,
             settlement_payment_date=row[3],
+            has_freight=row[4] is not None,
+            freight_status=row[5],
         )
 
     async def first_event_at(self, *, tenant_id: UUID, line_id: UUID) -> datetime | None:

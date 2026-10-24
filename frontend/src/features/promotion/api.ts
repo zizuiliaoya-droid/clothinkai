@@ -10,6 +10,7 @@ import type {
   PromotionPage,
   PromotionPublishRequest,
   PromotionRecallStartRequest,
+  PromotionRecallSuccessRequest,
   PromotionAmountLog,
   PromotionResubmitRequest,
   PromotionReviewRequest,
@@ -184,7 +185,7 @@ export async function cancelPromotion(
 
 export async function startRecallPromotion(
   promotionId: string,
-  payload: PromotionRecallStartRequest = {}
+  payload: PromotionRecallStartRequest
 ): Promise<Promotion> {
   const resp = await apiClient.post<Promotion>(
     `/api/promotions/${promotionId}/recall/start`,
@@ -195,7 +196,7 @@ export async function startRecallPromotion(
 
 export async function recallSuccessPromotion(
   promotionId: string,
-  payload: { remark?: string | null } = {}
+  payload: PromotionRecallSuccessRequest
 ): Promise<Promotion> {
   const resp = await apiClient.post<Promotion>(
     `/api/promotions/${promotionId}/recall/success`,
@@ -213,6 +214,12 @@ export async function recallFailurePromotion(
     payload
   );
   return resp.data;
+}
+
+export async function uploadRecallWaybillFile(promotionId: string, file: File): Promise<Promotion> {
+  const form = new FormData();
+  form.append("file", file, file.name);
+  return (await apiClient.post<Promotion>(`/api/promotions/${promotionId}/recall/waybill`, form, { timeout: 120_000 })).data;
 }
 
 export async function reviewPromotion(
@@ -313,27 +320,14 @@ export async function recordMetrics(
   return resp.data;
 }
 
-/** PR 提交复盘文字，推进到「待确认」。被打回后可以再提交，旧版留在档案里。 */
-export async function submitRetrospective(
+/** 主管写完即完成，管理员可追加修订版本。 */
+export async function writeRetrospective(
   promotionId: string,
   content: string
 ): Promise<Promotion> {
   const resp = await apiClient.post<Promotion>(
     `/api/promotions/${promotionId}/retrospective`,
     { content }
-  );
-  return resp.data;
-}
-
-/** 主管确认复盘（→ 已完成）或打回（→ 待复盘，必须写意见）。不能确认自己写的。 */
-export async function confirmRetrospective(
-  promotionId: string,
-  approve: boolean,
-  opinion?: string
-): Promise<Promotion> {
-  const resp = await apiClient.post<Promotion>(
-    `/api/promotions/${promotionId}/retrospective/confirm`,
-    { approve, opinion: opinion ?? null }
   );
   return resp.data;
 }

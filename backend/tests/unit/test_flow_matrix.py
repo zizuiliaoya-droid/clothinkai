@@ -103,7 +103,7 @@ PERSONAS: dict[str, FlowActor] = {
     "pr": actor("pr", user_id=PR_ID),
     "pr2": actor("pr"),
     "pr_manager": actor("pr_manager", user_id=MANAGER_ID),
-    "admin": actor("admin"),
+    "admin": actor("admin", user_id=UUID(int=4)),
     "finance": actor("finance"),
     "operations": actor("operations"),
     "warehouse": actor("warehouse"),
@@ -387,7 +387,7 @@ def test_expected_table_covers_registered_matrices() -> None:
 
 def test_real_matrices_registered() -> None:
     """PR-2：推广单与仓库行（import ``promotion.flow_doc`` 即登记）；PR-3：谈款（``negotiation.flow_doc``）。"""
-    assert set(MATRICES) == {"promotion", "warehouse", "negotiation", "settlement"}
+    assert set(MATRICES) == {"promotion", "warehouse", "negotiation", "settlement", "freight"}
     for kind in ("promotion", "warehouse"):
         assert MATRICES[kind].stages == PROMOTION_STAGES, kind
     assert MATRICES["negotiation"].stages == NEGOTIATION_STAGES
@@ -624,7 +624,9 @@ def test_actions_follow_constant_order(toy: Matrix) -> None:
     assert len(keys) >= 3
 
 
-def test_unregistered_kind_raises() -> None:
+def test_unregistered_kind_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delitem(MATRICES, "freight")
+
     # 结款单 PR-6 起已登记；R33 付款单随 PR-8
     @dataclass(frozen=True, kw_only=True)
     class FreightDoc(FlowDocBase):
@@ -1016,11 +1018,13 @@ def test_ship_state_machine() -> None:
     history = P_DOCS["催发·历史单"]
     assert _real_ui(pm, history).actions == {
         "ship_include": mx.UiAction("enabled"),
+        "recall_start": mx.UiAction("enabled"),
         "urge": mx.UiAction("enabled"),
         "comment": mx.UiAction("enabled"),
         "deactivate": mx.UiAction("enabled"),
     }
     assert _real_ui("pr", history).actions == {
+        "recall_start": mx.UiAction("enabled"),
         "urge": mx.UiAction("enabled"),
         "comment": mx.UiAction("enabled"),
     }
@@ -1068,6 +1072,7 @@ def test_real_ui_shape() -> None:
         "column": "A",
         "actions": {
             "ship_push": {"state": "enabled"},
+            "recall_start": {"state": "grey", "hint": "尚未发货，直接取消即可"},
             "urge": {"state": "enabled"},
             "comment": {"state": "enabled"},
             "deactivate": {"state": "enabled"},
@@ -1084,6 +1089,8 @@ def test_real_ui_shape() -> None:
         "shipping": {"state": "grey", "hint": "推送后由仓库回填"},
         "metrics": {"state": "grey", "hint": "已结款后可录"},
         "payment_qr": {"state": "grey", "hint": "发布后上传"},
+        "recall_info": {"state": "read"},
+        "freight_payment": {"state": "read"},
         "timeline": {"state": "read"},
     }
     # PR：合作信息、归属商品、服务费都只读（11-16），只能改收件
@@ -1092,7 +1099,7 @@ def test_real_ui_shape() -> None:
     assert _real_ui("finance", P_DOCS["催发"]).to_dict(view="detail") == {
         "column": "C",
         "actions": {},
-        "fields": {},
+        "fields": {"freight_payment": {"state": "read"}},
     }
     assert _real_ui("finance", P_DOCS["待财务付款"]).to_dict(view="detail")["fields"] == {
         "goods": {"state": "read"},
@@ -1103,6 +1110,7 @@ def test_real_ui_shape() -> None:
         "payment_qr": {"state": "read"},
         "settlement": {"state": "edit"},
         "settlement_chat": {"state": "grey", "hint": "财务付款后上传"},
+        "freight_payment": {"state": "read"},
         "timeline": {"state": "read"},
     }
 
@@ -1871,3 +1879,11 @@ def test_settlement_self_review_rule_registered() -> None:
     doc = replace(S_DOCS["待付款"], owner_id=None, negotiator_id=None)
     assert "reject" in _real_ui(PERSONAS["pr_manager"], doc).actions
     assert _real_ui(PERSONAS["pr_manager"], doc).actions["reject"].state == "enabled"
+
+
+def test_flow7_retro_revision_requires_true_star() -> None:
+    doc = DOCS["promotion"]["已完结"]
+    assert (
+        cell_level(PERSONAS["pr"], doc, "action", "retro_revise") is not Level.EDIT
+    ), "FLOW7_FAULT_EXPECTED:matrix_revise"
+    assert cell_level(PERSONAS["admin"], doc, "action", "retro_revise") is Level.EDIT

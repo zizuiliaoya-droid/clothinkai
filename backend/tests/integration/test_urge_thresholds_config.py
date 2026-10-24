@@ -11,11 +11,13 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
+from collections.abc import Iterator
+from datetime import date, timedelta
 from typing import Any
 from uuid import uuid4
 
 import pytest
+from freezegun import freeze_time
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,8 +34,23 @@ from app.modules.urge.repository import UrgeConfigRepository
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
-TODAY = get_today()
-COOP = TODAY - timedelta(days=1)
+
+@pytest.fixture(
+    params=[
+        pytest.param(("2026-10-23 15:59:59", date(2026, 10, 23)), id="before-shanghai-midnight"),
+        pytest.param(("2026-10-23 16:00:00", date(2026, 10, 24)), id="at-shanghai-midnight"),
+    ]
+)
+def urge_today(request: pytest.FixtureRequest) -> Iterator[date]:
+    """造数和四条读取路径共用场景日期，不保留收集时的今天。
+
+    CI 全量可能从北京时间午夜前收集、午夜后执行；冻结整个场景，同时让
+    asyncio 的超时仍使用真实单调时钟。
+    """
+    utc_now, today = request.param
+    with freeze_time(utc_now, real_asyncio=True):
+        assert get_today() == today
+        yield today
 
 
 async def _configure(session: AsyncSession, tenant: Any) -> None:
@@ -59,6 +76,7 @@ async def _seed(
     product_factory: Any,
     blogger_factory: Any,
     promotion_factory: Any,
+    today: date,
 ) -> tuple[Any, dict[str, Any]]:
     await _configure(session, tenant)
     user = await factory.user(tenant, roles=[admin_role])
@@ -71,8 +89,8 @@ async def _seed(
             style=style,
             blogger=blogger,
             internal_code=f"UT{label.upper()}{uuid4().hex[:8].upper()}",
-            cooperation_date=COOP,
-            scheduled_publish_date=TODAY + timedelta(days=days),
+            cooperation_date=today - timedelta(days=1),
+            scheduled_publish_date=today + timedelta(days=days),
         )
     return user, promos
 
@@ -80,6 +98,7 @@ async def _seed(
 class TestPromotionUrgeStatus:
     async def test_list_and_detail_follow_tenant_config(
         self,
+        urge_today: date,
         session: AsyncSession,
         tenant_a: Any,
         factory: Any,
@@ -98,6 +117,7 @@ class TestPromotionUrgeStatus:
                 product_factory,
                 blogger_factory,
                 promotion_factory,
+                urge_today,
             )
             svc = PromotionService(session)
 
@@ -118,6 +138,7 @@ class TestPromotionUrgeStatus:
 class TestWorkProgressUrgeCounts:
     async def test_live_and_summary_follow_tenant_config(
         self,
+        urge_today: date,
         session: AsyncSession,
         tenant_a: Any,
         factory: Any,
@@ -136,13 +157,15 @@ class TestWorkProgressUrgeCounts:
                 product_factory,
                 blogger_factory,
                 promotion_factory,
+                urge_today,
             )
+            coop = urge_today - timedelta(days=1)
             want = {"in_schedule_count": 1, "urge_count": 1, "important_urge_count": 0}
 
             # 实时路径（还没刷新、没有覆盖）
             rows = await WorkProgressService(session).get_for_range(
                 tenant_a.id,
-                *_month_range(f"{COOP:%Y-%m}"),
+                *_month_range(f"{coop:%Y-%m}"),
                 seasons=None,
                 scope=PR_SCOPE_ALL,
                 field_ctx=FieldPermissionContext(
@@ -154,7 +177,7 @@ class TestWorkProgressUrgeCounts:
 
             # 汇总刷新落盘的计数也按同一份配置算
             await SummaryRefreshService(session).refresh(
-                tenant_id=tenant_a.id, date_from=COOP, date_to=COOP
+                tenant_id=tenant_a.id, date_from=coop, date_to=coop
             )
             stored_row = (
                 await session.execute(
@@ -165,7 +188,7 @@ class TestWorkProgressUrgeCounts:
                         )
                     ).where(
                         PrWorkProgressSummary.tenant_id == tenant_a.id,
-                        PrWorkProgressSummary.stat_date == COOP,
+                        PrWorkProgressSummary.stat_date == coop,
                     )
                 )
             ).one()

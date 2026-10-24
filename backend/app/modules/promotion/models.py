@@ -202,7 +202,7 @@ class Promotion(TenantScopedModel):
     retro_status: Mapped[str] = mapped_column(
         String(8), nullable=False, server_default=text("'未开始'")
     )
-    """未开始 / 待复盘 / 待确认 / 已完成。第 4 个并行状态机。
+    """未开始 / 待复盘 / 已完成。主管写完即完成，与结款并行。
 
     不复用 ``settlement_status``：那边 ``已付款`` 是终态，而且全系统有一批查询按
     ``settlement_status = '已付款'`` 过滤，塞进去会让它们漏掉进入复盘的单子。
@@ -216,6 +216,8 @@ class Promotion(TenantScopedModel):
     retro_confirmed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    """完结唯一标记；系统条件更新写入，管理员编辑也不重开。"""
 
     note_title: Mapped[str | None] = mapped_column(String(255), nullable=True)
     remark: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -394,10 +396,16 @@ class Promotion(TenantScopedModel):
             name="ck_promotion_comment_count_nonneg",
         ),
         CheckConstraint(
-            "retro_status IN ('未开始', '待复盘', '待确认', '已完成')",
+            "retro_status IN ('未开始', '待复盘', '已完成')",
             name="ck_promotion_retro_status",
         ),
         Index("idx_promotion_retro_status", "tenant_id", "retro_status"),
+        Index(
+            "idx_promotion_completed",
+            "tenant_id",
+            completed_at.desc(),
+            postgresql_where=text("completed_at IS NOT NULL"),
+        ),
         CheckConstraint(
             "quote_amount >= 0",
             name="ck_promotion_quote_amount_nonneg",

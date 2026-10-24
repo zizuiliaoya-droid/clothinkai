@@ -40,6 +40,7 @@ def _stage(**kw: Any) -> str:
         "is_active": True,
         "retro_status": "未开始",
         "metrics_recorded_at": None,
+        "completed_at": None,
         "actual_publish_date": None,
         "scheduled_publish_date": None,
     }
@@ -79,7 +80,10 @@ class TestOrder:
         assert _stage(is_active=False, recall_status="召回中", ship_status="待发货") == "已停用"
 
     def test_cancelled_recalled_is_recall_closed(self) -> None:
-        assert _stage(publish_status="已取消", recall_status="召回成功") == "已完结 · 召回"
+        assert (
+            _stage(publish_status="已取消", recall_status="召回成功", completed_at=RECORDED)
+            == "已完结 · 召回"
+        )
 
     def test_recalling(self) -> None:
         assert _stage(publish_status="已发布", recall_status="召回中") == "召回中"
@@ -170,12 +174,16 @@ class TestSettledStages:
             == "待复盘"
         )
 
-    @pytest.mark.parametrize("retro", ["未开始", "待复盘", "待确认"])
+    @pytest.mark.parametrize("retro", ["未开始", "待复盘"])
     def test_retro_not_completed_is_pending_retro(self, retro: str) -> None:
         assert _settled(metrics_recorded_at=RECORDED, retro_status=retro) == "待复盘"
 
     def test_recorded_and_retro_completed_is_closed(self) -> None:
-        assert _settled(metrics_recorded_at=RECORDED, retro_status="已完成") == "已完结"
+        assert _settled(metrics_recorded_at=RECORDED, retro_status="已完成") == "状态异常"
+        assert (
+            _settled(metrics_recorded_at=RECORDED, retro_status="已完成", completed_at=RECORDED)
+            == "已完结"
+        )
 
     def test_retro_completed_but_not_recorded_still_needs_metrics(self) -> None:
         assert _settled(retro_status="已完成") == "待录 7 天数据"
@@ -216,7 +224,19 @@ class TestBadges:
     """角标（7.3 badge 行）：缺收款码、满 7 天可录、满 7 天待结款、复盘待写。"""
 
     def test_names_and_order(self) -> None:
-        assert BADGES == ("missing_qr", "metrics_due", "metrics_wait_settle", "retro_due")
+        assert BADGES == (
+            "missing_qr",
+            "metrics_due",
+            "metrics_wait_settle",
+            "retro_due",
+            "freight_open",
+        )
+
+    @pytest.mark.parametrize("status", ["待审核", "待付款", "已驳回", "已付款", None])
+    def test_freight_badge_tracks_unpaid_work(self, status: str | None) -> None:
+        assert ("freight_open" in _badges(freight_status=status)) == (
+            status in {"待审核", "待付款", "已驳回"}
+        )
 
     def test_missing_qr_only_when_reviewing_with_fee(self) -> None:
         assert "missing_qr" in _badges(has_payment_qr=False)
@@ -254,7 +274,7 @@ class TestBadges:
         )
 
     def test_retro_due(self) -> None:
-        assert "retro_due" in _badges(retro_status="待确认")
+        assert "retro_due" in _badges(retro_status="待复盘")
         assert "retro_due" not in _badges(retro_status="已完成")
         assert "retro_due" not in _badges(publish_status="已取消", retro_status="未开始")
 

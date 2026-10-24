@@ -224,9 +224,15 @@ class TestGate:
             promotion_factory,
             actual_publish_date=_BEIJING_TODAY - timedelta(days=7),
         )
-        resp = await PromotionService(session).record_metrics(
-            promo.id, _METRICS, flow_users.pr, screenshot=_SHOT
-        )
+        from app.modules.promotion.exceptions import MetricsNotAvailableYetError
+
+        try:
+            resp = await PromotionService(session).record_metrics(
+                promo.id, _METRICS, flow_users.pr, screenshot=_SHOT
+            )
+        except MetricsNotAvailableYetError as exc:
+            assert exc.details["blocked_by"] == "seven_days"
+            raise AssertionError("FLOW7_FAULT_EXPECTED:beijing") from exc
         assert resp.metrics_recorded_at is not None
         assert (resp.like_count, resp.collect_count, resp.comment_count) == (120, 30, 8)
         assert len(fake_r2.puts) == 1
@@ -273,16 +279,16 @@ class TestGate:
 
         resp = await svc.record_metrics(pid, _METRICS, flow_users.pr, screenshot=_SHOT)
         like, collect, comment, att_id, recorded_at, retro = await _metrics_state(session, pid)
-        assert (like, collect, comment, retro) == (120, 30, 8, "待复盘")
+        assert (like, collect, comment, retro) == (120, 30, 8, "未开始")
         assert att_id is not None and recorded_at is not None
-        assert resp.retro_status == "待复盘"
+        assert resp.retro_status == "未开始"
         assert "metrics_due" not in resp.badges
         assert resp.ui is not None and "metrics" not in resp.ui["actions"]
         recorded = await events_of(
             session, line_id=line_id, event_type=LineEventType.PROMOTION_METRICS_RECORDED
         )
         assert [(e.from_state, e.to_state, e.attachment_id) for e in recorded] == [
-            ("未开始", "待复盘", att_id)
+            ("未开始", "未开始", att_id)
         ]
 
     async def test_recalling_stage_illegal(
@@ -490,7 +496,7 @@ class TestRecordOnceConcurrent:
 
         try:
             results = await run_concurrently(engine, 2, attempt, tenant_id=tenant_id)
-            assert sorted(results) == [False, True], results
+            assert sorted(results) == [False, True], "FLOW7_FAULT_EXPECTED:metrics_once"
             async with committed(engine) as check:
                 like = (
                     await check.execute(

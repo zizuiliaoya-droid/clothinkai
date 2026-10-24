@@ -99,3 +99,28 @@ def test_payload_too_large_error_shape() -> None:
         "size": PAYLOAD_MAX_BYTES + 1,
         "limit": PAYLOAD_MAX_BYTES,
     }
+
+
+@pytest.mark.asyncio
+async def test_event_query_returns_full_history_completion_flag_in_one_statement() -> None:
+    """完整历史标志随原事件查询返回，不能由header另查line_event。真实截断由PG集成验。"""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, Mock
+    from uuid import uuid4
+
+    from sqlalchemy.dialects import postgresql
+
+    item = LineEvent(event_type="line.comment")
+    result = Mock()
+    result.all.return_value = [(item, True)]
+    result.scalars.return_value.all.return_value = [item]
+    session = SimpleNamespace(execute=AsyncMock(return_value=result))
+    rows = await LineEventRepository(session).list_by_line(
+        tenant_id=uuid4(), line_id=uuid4(), newest_first=True, limit=501
+    )
+    assert list(rows) == [item]
+    assert rows.has_completion_event
+    session.execute.assert_awaited_once()
+    sql = str(session.execute.call_args.args[0].compile(dialect=postgresql.dialect()))
+    assert sql.count("FROM line_event") == 1
+    assert "bool_or(" in sql and "OVER ()" in sql and "LIMIT" in sql

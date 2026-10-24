@@ -190,6 +190,9 @@ class SettlementImportAdapter:
         promo = await promotions.get_by_internal_code(parsed["promotion_internal_code"])
         if promo is None:
             raise RowValidationError(f"推广编号 {parsed['promotion_internal_code']} 不存在")
+        promo = await promotions.get_for_write(promo.id, tenant_id=tenant_id, include_inactive=True)
+        if promo is None or promo.completed_at is not None:
+            raise RowValidationError("推广单已完结，只读，不能导入结款单")
         # 行级规则（设计 7.5 ②）：推广单已进系统结款流程的整行报错，免得导入的单占住
         # uq_settlement_promotion、让之后的 SettlementRequested 被监听按幂等跳过
         if promo.settlement_status != _IMPORTABLE_PROMOTION_STATUS:

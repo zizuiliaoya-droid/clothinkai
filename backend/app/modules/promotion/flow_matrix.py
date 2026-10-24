@@ -36,6 +36,7 @@ from app.modules.flow.matrix import (
     NotPrOwner,
     PromotionSettlementIn,
     PublishIn,
+    RetroIn,
     Row,
     Scope,
     SettlementIn,
@@ -44,6 +45,7 @@ from app.modules.flow.matrix import (
 )
 from app.modules.promotion.enums import CooperationMode, PublishStatus, RecallStatus
 from app.modules.promotion.exceptions import InvalidReceiverPhoneError
+from app.modules.promotion.recall_ui_rules import NoOpenFreight, PaymentQrEditable, RecallEditable
 from app.modules.promotion.receiver import RECEIVER_FIELDS, normalize_receiver_phone
 from app.modules.promotion.stage_calculator import PROMOTION_STAGES, STAGE_COLUMN
 
@@ -355,8 +357,8 @@ _fill(_urge, "ABC", Cell(edit=(_URGE_WRITE,)))
 
 # 停用推广单（PR-5，11-15）：A ~ D、G 隐/改/改/隐/隐/隐；结款单生成后（E、F）与 H 只有管理员
 _deactivate: dict[str, Cell | tuple[Cell, ...]] = {}
-_fill(_deactivate, "ABCDG", Cell(edit=(_CREATE,)))
-_fill(_deactivate, "EFH", Cell(edit=(_STAR,)))
+_fill(_deactivate, "ABCDG", Cell(edit=(_CREATE, NoOpenFreight()), read=(_CREATE,)))
+_fill(_deactivate, "EFH", Cell(edit=(_STAR, NoOpenFreight()), read=(_STAR,)))
 
 # 推广审核通过 / 驳回（PR-6，★¹⁵）：D 读/改★/改/隐/隐/隐，审核人 ≠ 谈款人；PR 读「需 PR 主管审核」。
 # 只在待主管审核时状态机允许（推广驳回时隐）
@@ -394,6 +396,75 @@ _metrics_action["待满 7 天"] = Cell(
 _metrics_action["待录 7 天数据"] = Cell(edit=(_METRICS_WRITE,))
 _metrics_action["待复盘"] = Cell(edit=(_METRICS_WRITE,))
 
+# 复盘与结款并行：主管写完即完成，完成版只允许真正*修订。
+_retro: dict[str, Cell | tuple[Cell, ...]] = {}
+
+_fill(
+    _retro,
+    "DEF",
+    (
+        Cell(edit=(Scope("promotion_retro", "write"),), read=(_READ,), when=(RetroIn("待复盘"),)),
+        Cell(edit=(_STAR,), read=(_READ,)),
+    ),
+)
+_fill(_retro, "H", Cell(edit=(_STAR,), read=(_READ,)))
+_fill(
+    _retro,
+    "G",
+    (
+        Cell(
+            edit=(Scope("promotion_retro", "write"),),
+            read=(_READ,),
+            when=(PublishIn("已发布"), RetroIn("待复盘")),
+        ),
+        Cell(edit=(_STAR,), read=(_READ,), when=(PublishIn("已发布"),)),
+    ),
+)
+_retro_write: dict[str, Cell | tuple[Cell, ...]] = {}
+_fill(
+    _retro_write,
+    "DEF",
+    Cell(edit=(Scope("promotion_retro", "write"),), read=(_WRITE,), reason="由主管写复盘"),
+)
+_retro_revise: dict[str, Cell | tuple[Cell, ...]] = {}
+_fill(_retro_revise, "DEFH", Cell(edit=(_STAR,)))
+_fill(
+    _retro_write,
+    "G",
+    Cell(
+        edit=(Scope("promotion_retro", "write"),),
+        read=(_WRITE,),
+        reason="由主管写复盘",
+        when=(PublishIn("已发布"),),
+    ),
+)
+_fill(_retro_revise, "G", Cell(edit=(_STAR,), when=(PublishIn("已发布"),)))
+
+# PR8：二维码的管理员特例不适用于寄回图；专用判断使用完整状态快照。
+for _stage in PROMOTION_STAGES:
+    if STAGE_COLUMN[_stage] not in "ABC":
+        _payment_qr[_stage] = Cell(
+            edit=(_QR_SCOPE, _QR_READ, _QR_WRITE, PaymentQrEditable()),
+            read=(_READ if STAGE_COLUMN[_stage] == "D" else _READ_OR_FINANCE, _QR_READ),
+        )
+
+_recall_start: dict[str, Cell | tuple[Cell, ...]] = {}
+_recall_waybill: dict[str, Cell | tuple[Cell, ...]] = {}
+_recall_result: dict[str, Cell | tuple[Cell, ...]] = {}
+_freight_submit: dict[str, Cell | tuple[Cell, ...]] = {}
+_recall_info: dict[str, Cell | tuple[Cell, ...]] = {}
+_freight_payment: dict[str, Cell | tuple[Cell, ...]] = {}
+for _stage in PROMOTION_STAGES:
+    _recall_start[_stage] = Cell(edit=(_WRITE, RecallEditable("start")))
+    _recall_waybill[_stage] = Cell(edit=(_WRITE, _QR_WRITE, RecallEditable("waybill")))
+    _recall_result[_stage] = Cell(edit=(_WRITE, RecallEditable("result")))
+    _freight_submit[_stage] = Cell(
+        edit=(_WRITE, FieldWrite("promotion", "cost_snapshot"), RecallEditable("submit"))
+    )
+    _recall_info[_stage] = Cell(read=(_READ,))
+    _freight_payment[_stage] = Cell(read=(_READ_OR_FINANCE,))
+_fill(_recall_start, "AB", Cell(grey=(_WRITE,), hint="尚未发货，直接取消即可"))
+
 PROMOTION_MATRIX = Matrix(
     kind="promotion",
     stages=PROMOTION_STAGES,
@@ -401,6 +472,10 @@ PROMOTION_MATRIX = Matrix(
         Row("ship_include", "action", _ship_include),
         Row("ship_push", "action", _ship_push),
         Row("ship_withdraw", "action", _ship_withdraw),
+        Row("recall_start", "action", _recall_start),
+        Row("recall_waybill", "action", _recall_waybill),
+        Row("recall_result", "action", _recall_result),
+        Row("freight_submit", "action", _freight_submit),
         Row("urge", "action", _urge),
         Row("urge_complete", "action", _urge),
         Row("comment", "action", _comment),
@@ -409,6 +484,8 @@ PROMOTION_MATRIX = Matrix(
         Row("settlement_resubmit", "action", _settlement_resubmit),
         Row("settlement_chat", "action", _settlement_chat_action),
         Row("metrics", "action", _metrics_action),
+        Row("retro_write", "action", _retro_write),
+        Row("retro_revise", "action", _retro_revise),
         Row("goods", "field", _goods),
         Row("goods_items", "field", _goods_items),
         Row("cooperation", "field", _cooperation),
@@ -418,9 +495,12 @@ PROMOTION_MATRIX = Matrix(
         Row("shipping", "field", _shipping),
         Row("timeline", "field", _timeline),
         Row("metrics", "field", _metrics),
+        Row("retro", "field", _retro),
         Row("payment_qr", "field", _payment_qr),
         Row("settlement", "field", _settlement),
         Row("settlement_chat", "field", _settlement_chat),
+        Row("recall_info", "field", _recall_info),
+        Row("freight_payment", "field", _freight_payment),
     ),
     # 5.4 PATCH 字段归属：PR-2 入矩阵的收件三项与 sku_id，PR-5 入矩阵的归属商品、合作信息、合作模式、服务费与停用，
     # PR-6 入矩阵的点赞（7 天数据）；其余 PATCH 字段（note_title、source_extra 等）沿用现状。顺序 = 403 里 fields 的顺序

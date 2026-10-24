@@ -56,9 +56,11 @@ import { promotionUrgeRecordsKey } from "@/features/urge/api";
 import { MetricsModal } from "@/features/promotion/components/MetricsModal";
 import { PublishModal } from "@/features/promotion/components/PublishModal";
 import { RecallModal } from "@/features/promotion/components/RecallModal";
+import { RecallWaybillModal } from "@/features/promotion/components/RecallWaybillModal";
+import { RecallResultModal } from "@/features/promotion/components/RecallResultModal";
+import { FreightModal, type FreightModalMode } from "@/features/promotion/components/FreightModal";
 import { RejectModal } from "@/features/promotion/components/RejectModal";
 import { ResubmitModal } from "@/features/promotion/components/ResubmitModal";
-import { RetroConfirmModal } from "@/features/promotion/components/RetroConfirmModal";
 import { RetroModal } from "@/features/promotion/components/RetroModal";
 import { ReturnWaybillModal } from "@/features/promotion/components/ReturnWaybillModal";
 import { SourceExtraModal } from "@/features/promotion/components/SourceExtraModal";
@@ -103,7 +105,6 @@ const cooperationModeColor: Record<string, string> = {
 /** 复盘状态配色（PRD 改动 4）。「未开始」不上色，由渲染逻辑决定显示什么。 */
 const retroColor: Record<string, string> = {
   待复盘: "gold",
-  待确认: "processing",
   已完成: "green",
 };
 
@@ -144,12 +145,12 @@ export function PromotionListPage() {
   const [urgeTarget, setUrgeTarget] = useState<Promotion | null>(null);
   const [metricsTarget, setMetricsTarget] = useState<Promotion | null>(null);
   const [retroTarget, setRetroTarget] = useState<Promotion | null>(null);
-  const [retroConfirmTarget, setRetroConfirmTarget] = useState<Promotion | null>(
-    null
-  );
   // 点一行（或「留言」「金额改动记录」菜单）开主线抽屉；tab = 打开时先显示的页签
   const [lineTarget, setLineTarget] = useState<{ row: Promotion; tab?: LineTab } | null>(null);
   const [recallTarget, setRecallTarget] = useState<Promotion | null>(null);
+  const [recallWaybillTarget, setRecallWaybillTarget] = useState<Promotion | null>(null);
+  const [recallResultTarget, setRecallResultTarget] = useState<Promotion | null>(null);
+  const [freightTarget, setFreightTarget] = useState<{ row: Promotion; mode: FreightModalMode } | null>(null);
   // 发货（流程线 8.4）：按行 ui 出菜单项，弹窗在 features/promotion/components/
   const [shipPushTarget, setShipPushTarget] = useState<ShipPushTarget | null>(null);
   const [shipWithdrawTarget, setShipWithdrawTarget] = useState<Promotion | null>(null);
@@ -174,6 +175,12 @@ export function PromotionListPage() {
           promotionId={row.id}
           onEditReceiver={setReceiverTarget}
           onEditItems={setItemsTarget}
+          onEditRetro={setRetroTarget}
+          onRecallStart={setRecallTarget}
+          onRecallWaybill={setRecallWaybillTarget}
+          onRecallResult={setRecallResultTarget}
+          onPaymentQr={setPaymentQrTarget}
+          onFreight={(row, mode) => setFreightTarget({ row, mode })}
         />
       ),
     },
@@ -237,6 +244,10 @@ export function PromotionListPage() {
   function flowMenuItems(record: Promotion): NonNullable<MenuProps["items"]> {
     const built = buildMenuItems("promotion", record.ui, {
       actions: {
+        recall_start: { label: "发起召回", onClick: () => setRecallTarget(record) },
+        recall_waybill: { label: "上传召回寄回截图", onClick: () => setRecallWaybillTarget(record) },
+        recall_result: { label: "登记召回结果", onClick: () => setRecallResultTarget(record) },
+        freight_submit: { label: "提交寄回运费", onClick: () => setFreightTarget({ row: record, mode: "submit" }) },
         ship_push: {
           label: "确认推送仓库",
           onClick: (action) => setShipPushTarget({ row: record, action }),
@@ -270,6 +281,10 @@ export function PromotionListPage() {
         // 门槛（已结款、满 7 天）以接口为准：灰显时 label 带「YYYY-MM-DD 起可录」「已结款后可录」
         metrics: { label: "录 7 天数据", onClick: () => setMetricsTarget(record) },
         // 留言在抽屉底部（6.6）：菜单项只负责打开抽屉
+        ...(record.ui?.actions?.retro_write?.state === "enabled" ? {
+          retro_write: { label: "写复盘", onClick: () => setRetroTarget(record) },
+        } : {}),
+        retro_revise: { label: "修改复盘", onClick: () => setRetroTarget(record) },
         comment: { label: "留言", onClick: () => openLine(record) },
       },
       edits: {
@@ -281,6 +296,12 @@ export function PromotionListPage() {
       },
     });
     const items = expandReviewItem(built, record.ui?.actions?.review, () => setRejectTarget(record));
+    items.push(...buildMenuItems("freight", record.freight_payment?.ui, { actions: {
+      freight_review: { label: "审核寄回运费", onClick: () => setFreightTarget({ row: record, mode: "review" }) },
+      freight_resubmit: { label: "重提寄回运费", onClick: () => setFreightTarget({ row: record, mode: "resubmit" }) },
+      freight_pay: { label: "支付寄回运费", onClick: () => setFreightTarget({ row: record, mode: "pay" }) },
+      freight_reject_payment: { label: "驳回寄回运费付款", onClick: () => setFreightTarget({ row: record, mode: "reject" }) },
+    } }));
     // 换不了收款码（锁定 / 只读）但看得到、也传过：给一个只看的入口，弹窗里写为什么锁
     if (!record.ui?.edits?.includes("payment_qr") && record.payment_qr_attachment_id) {
       items.push({
@@ -486,13 +507,15 @@ export function PromotionListPage() {
     {
       title: "召回",
       dataIndex: "recall_status",
-      width: 100,
-      render: (v: string) =>
-        v === "未召回" ? (
+      width: 150,
+      render: (v: string, row: Promotion) => <Space direction="vertical" size={4}>
+        {v === "未召回" ? (
           <Typography.Text type="secondary">—</Typography.Text>
         ) : (
           <Tag color={recallColor[v]}>{v}</Tag>
-        ),
+        )}
+        {row.badges?.includes("freight_open") && row.freight_payment && <Tag color="orange">运费单：{row.freight_payment.status}</Tag>}
+      </Space>,
     },
     {
       title: "寄回单号",
@@ -580,15 +603,6 @@ export function PromotionListPage() {
               ]
             : []),
           {
-            key: "recall",
-            label: "召回",
-            // 召回要求已发布或已取消（后端 BR-U04-24），召回成功是终态
-            disabled:
-              !["已发布", "已取消"].includes(record.publish_status) ||
-              record.recall_status === "召回成功",
-            onClick: () => setRecallTarget(record),
-          },
-          {
             // 驳回后 PR 改完重新交给主管（已驳回 → 待核查）。后端还要求「已发布」
             // （否则进了待核查也批不了），这里对齐，免得点了得到 409
             key: "resubmit",
@@ -597,19 +611,6 @@ export function PromotionListPage() {
               record.settlement_status !== "已驳回" ||
               record.publish_status !== "已发布",
             onClick: () => setResubmitTarget(record),
-          },
-          // 复盘（PRD 改动 4，PR-7 改 3 态）。录 7 天数据已改按 ui.actions.metrics 出（见 flowMenuItems）
-          {
-            key: "retro",
-            label: "写复盘",
-            disabled: record.retro_status !== "待复盘",
-            onClick: () => setRetroTarget(record),
-          },
-          {
-            key: "retro-confirm",
-            label: "确认复盘",
-            disabled: record.retro_status !== "待确认",
-            onClick: () => setRetroConfirmTarget(record),
           },
           // 金额改动记录 = 主线抽屉的一个页签（8.4）：打开抽屉并切过去。
           // 页级 ui.actions.amount_log 没有（读不到金额改动接口）就没有这个页签，菜单项也不出
@@ -623,9 +624,14 @@ export function PromotionListPage() {
               ]
             : []),
         ];
+        // 已完结H列只有真正*能编辑合作信息；沿用后端矩阵能力守住尚未纳入PR-10的旧写菜单。
+        const completedReadonly = !!record.completed_at && !record.ui?.edits?.includes("cooperation");
+        const guardedLegacy = legacyItems.map((item) => completedReadonly && item.key !== "amount-log"
+          ? { ...item, label: `${item.label}（已完结，只读）`, disabled: true, onClick: undefined }
+          : item);
         const items: MenuProps["items"] = flowItems.length
-          ? [...flowItems, { type: "divider" as const }, ...legacyItems]
-          : legacyItems;
+          ? [...flowItems, { type: "divider" as const }, ...guardedLegacy]
+          : guardedLegacy;
         return (
           <Dropdown menu={{ items }} trigger={["click"]}>
             <Button type="link" size="small">
@@ -748,12 +754,12 @@ export function PromotionListPage() {
 
       <RetroModal target={retroTarget} onClose={() => setRetroTarget(null)} />
 
-      <RetroConfirmModal
-        target={retroConfirmTarget}
-        onClose={() => setRetroConfirmTarget(null)}
-      />
+
 
       <RecallModal target={recallTarget} onClose={() => setRecallTarget(null)} />
+      <RecallWaybillModal target={recallWaybillTarget} onClose={() => setRecallWaybillTarget(null)} />
+      <RecallResultModal target={recallResultTarget} onClose={() => setRecallResultTarget(null)} />
+      <FreightModal target={freightTarget?.row ?? null} mode={freightTarget?.mode ?? "view"} onClose={() => setFreightTarget(null)} />
 
       <LineDrawer
         lineId={lineTarget?.row.line_id ?? null}

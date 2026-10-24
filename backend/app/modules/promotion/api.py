@@ -47,15 +47,15 @@ from app.modules.promotion.schemas import (
     PromotionPublishRequest,
     PromotionRecallResultRequest,
     PromotionRecallStartRequest,
+    PromotionRecallSuccessRequest,
     PromotionResponse,
     PromotionResubmitRequest,
     PromotionReturnWaybillRequest,
     PromotionReviewRequest,
     PromotionSettlementResubmitRequest,
     PromotionUpdate,
-    RetrospectiveConfirmRequest,
     RetrospectiveResponse,
-    RetrospectiveSubmitRequest,
+    RetrospectiveWriteRequest,
     ShipStatusFilter,
 )
 
@@ -332,18 +332,38 @@ async def start_recall_promotion(
 
 
 @router.post(
+    "/promotions/{promotion_id}/recall/waybill",
+    response_model=PromotionResponse,
+    dependencies=[require_permission("promotion", "write")],
+)
+async def upload_recall_waybill(
+    promotion_id: UUID,
+    user: CurrentActiveUser,
+    service: PromotionServiceDep,
+    file: Annotated[UploadFile, File()],
+) -> PromotionResponse:
+    try:
+        data = await file.read(10 * 1024 * 1024 + 1)
+    finally:
+        await file.close()
+    return await service.upload_recall_waybill(
+        promotion_id, user=user, filename=file.filename, mime_type=file.content_type, data=data
+    )
+
+
+@router.post(
     "/promotions/{promotion_id}/recall/success",
     response_model=PromotionResponse,
     dependencies=[require_permission("promotion", "write")],
 )
 async def recall_success(
     promotion_id: UUID,
-    payload: PromotionRecallResultRequest,
+    payload: PromotionRecallSuccessRequest,
     user: CurrentActiveUser,
     service: PromotionServiceDep,
 ) -> PromotionResponse:
     """EP05-S09 召回成功（终态）."""
-    return await service.recall_success(promotion_id, user)
+    return await service.recall_success(promotion_id, payload, user)
 
 
 @router.post(
@@ -358,7 +378,7 @@ async def recall_failure(
     service: PromotionServiceDep,
 ) -> PromotionResponse:
     """EP05-S09 召回失败（可重新发起）."""
-    return await service.recall_failure(promotion_id, user)
+    return await service.recall_failure(promotion_id, user, remark=payload.remark)
 
 
 @router.post(
@@ -549,7 +569,7 @@ async def record_metrics(
     comment_count: Annotated[int, Form(ge=0)],
     screenshot: Annotated[UploadFile, File(description="7 天数据截图")],
 ) -> PromotionResponse:
-    """录 7 天数据（已结款且发文满 7 天，只录一次；过渡期仍把复盘 未开始 推进到「待复盘」）。
+    """录 7 天数据（已结款且发文满 7 天，只录一次，不推进复盘）。
 
     门槛不满足 → 422 ``METRICS_NOT_AVAILABLE_YET``（带 ``available_from``、``blocked_by``）。走 multipart
     是因为截图必传，三个指标和图得在同一个请求里 —— 分两步会出现「数字录了图没传」
@@ -574,35 +594,16 @@ async def record_metrics(
 @router.post(
     "/promotions/{promotion_id}/retrospective",
     response_model=PromotionResponse,
-    dependencies=[require_permission("promotion.retro", "write")],
+    dependencies=[require_permission("promotion_retro", "write")],
 )
-async def submit_retrospective(
+async def write_retrospective(
     promotion_id: UUID,
-    payload: RetrospectiveSubmitRequest,
+    payload: RetrospectiveWriteRequest,
     user: CurrentActiveUser,
     service: PromotionServiceDep,
 ) -> PromotionResponse:
-    """PR 提交复盘文字，推进到「待确认」。被打回后可以再提交，旧版留在档案里。"""
-    return await service.submit_retrospective(promotion_id, payload, user)
-
-
-@router.post(
-    "/promotions/{promotion_id}/retrospective/confirm",
-    response_model=PromotionResponse,
-    dependencies=[require_permission("promotion.retro", "confirm")],
-)
-async def confirm_retrospective(
-    promotion_id: UUID,
-    payload: RetrospectiveConfirmRequest,
-    user: CurrentActiveUser,
-    service: PromotionServiceDep,
-) -> PromotionResponse:
-    """主管确认复盘（→ 已完成）或打回（→ 待复盘，必须写意见）。
-
-    禁止确认自己写的复盘 —— 这条在 service 层挡，因为 `promotion.retro:confirm`
-    的一级域是 promotion，PR 的 `promotion.*:*` 会被通配命中。
-    """
-    return await service.confirm_retrospective(promotion_id, payload, user)
+    """主管写完即完成；已完成版仅持*者可追加修改，旧版留档。"""
+    return await service.write_retrospective(promotion_id, payload, user)
 
 
 @router.get(

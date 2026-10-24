@@ -541,6 +541,7 @@ _PURGE_PROMOTION_STEPS: tuple[str, ...] = (
     "DELETE FROM settlement_extra_item WHERE settlement_id IN "
     "(SELECT id FROM settlement WHERE promotion_id = ANY(CAST(:ids AS uuid[])))",
     "DELETE FROM settlement WHERE promotion_id = ANY(CAST(:ids AS uuid[]))",
+    "DELETE FROM return_freight_payment WHERE promotion_id = ANY(CAST(:ids AS uuid[]))",
     "DELETE FROM promotion_amount_log WHERE promotion_id = ANY(CAST(:ids AS uuid[]))",
     "DELETE FROM urge_record WHERE promotion_id = ANY(CAST(:ids AS uuid[]))",
     "DELETE FROM urge_task WHERE promotion_id = ANY(CAST(:ids AS uuid[]))",
@@ -635,10 +636,13 @@ async def promotion_factory(session: AsyncSession, tenant_a: Any) -> Any:
                     "settlement_status",
                     "is_active",
                     "like_count",
+                    "completed_at",
                     "metrics_recorded_at",
                     "source_extra",
                     "cooperation_mode",
                     "return_shipping_fee",
+                    "return_shipping_payer",
+                    "recall_waybill_attachment_id",
                     "return_waybill",
                     "collect_count",
                     "comment_count",
@@ -733,6 +737,8 @@ async def promotion_factory(session: AsyncSession, tenant_a: Any) -> Any:
                     # 不在这里列出来的 kwarg 会被静默忽略（这个坑真实踩过）。
                     cooperation_mode=kw.get("cooperation_mode"),
                     return_shipping_fee=kw.get("return_shipping_fee"),
+                    return_shipping_payer=kw.get("return_shipping_payer"),
+                    recall_waybill_attachment_id=kw.get("recall_waybill_attachment_id"),
                     return_waybill=kw.get("return_waybill"),
                     collect_count=kw.get("collect_count"),
                     comment_count=kw.get("comment_count"),
@@ -755,6 +761,7 @@ async def promotion_factory(session: AsyncSession, tenant_a: Any) -> Any:
                     ship_pushed_by=kw.get("ship_pushed_by"),
                     # 显式 None 会插 NULL（NOT NULL）：只在传了时给，否则走库默认
                     **({"line_id": kw["line_id"]} if "line_id" in kw else {}),
+                    **({"completed_at": kw["completed_at"]} if "completed_at" in kw else {}),
                     **({"retro_status": kw["retro_status"]} if "retro_status" in kw else {}),
                 )
                 session.add(p)

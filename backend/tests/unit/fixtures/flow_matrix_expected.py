@@ -33,6 +33,7 @@ from uuid import UUID
 from app.modules.finance.flow_doc import SettlementDoc
 from app.modules.negotiation.flow_doc import NegotiationDoc
 from app.modules.promotion.flow_doc import PromotionDoc, WarehouseDoc
+from app.modules.promotion.freight_flow import freight_doc
 
 PR_ID = UUID(int=1)
 MANAGER_ID = UUID(int=3)  # 期望表里的主管（谈款的本轮主管审核人；「主管自建」的谈款人）
@@ -121,6 +122,7 @@ def _promotion_doc(stage: str, column: str, **override: Any) -> PromotionDoc:
         "receiver_phone": "13812345678",
         "receiver_address": "杭州市某路 1 号",
         "items_complete": True,
+        "retro_status": "待复盘" if column in "DEF" else "已完成",
         "cooperation_mode": "寄拍",
         "promotion_settlement_status": "未核查",
         "settlement_status": None,
@@ -275,6 +277,11 @@ DOCS: dict[str, dict[str, Any]] = {
     "warehouse": _WAREHOUSE_DOCS,
     "negotiation": _NEGOTIATION_DOCS,
     "settlement": _SETTLEMENT_DOCS,
+    "freight": {
+        **{state: freight_doc(state, PR_ID) for state in ("待审核", "待付款", "已付款", "已驳回")},
+        "待审核·主管自谈": freight_doc("待审核", MANAGER_ID),
+        "待审核·管理员自谈": freight_doc("待审核", UUID(int=4)),
+    },
 }
 
 
@@ -283,6 +290,26 @@ DOCS: dict[str, dict[str, Any]] = {
 # ---------------------------------------------------------------------------
 
 _PROMOTION_ROWS: dict[tuple[str, str], list[tuple[list[str], str]]] = {
+    # PR8专用动作逐格能力；具体状态是否显示仍由allowed_actions判。
+    ("action", "recall_start"): [
+        (_labels("AB"), "灰灰灰隐隐隐"),
+        (_labels("CDEFGH") + _labels("CDEF", history=True), "改改改隐隐隐"),
+    ],
+    ("action", "recall_waybill"): [
+        (_labels("ABCDEFGH") + _labels("CDEF", history=True), "改改改隐隐隐")
+    ],
+    ("action", "recall_result"): [
+        (_labels("ABCDEFGH") + _labels("CDEF", history=True), "改改改隐隐隐")
+    ],
+    ("action", "freight_submit"): [
+        (_labels("ABCDEFGH") + _labels("CDEF", history=True), "改改改隐隐隐")
+    ],
+    ("field", "recall_info"): [
+        (_labels("ABCDEFGH") + _labels("CDEF", history=True), "读读读隐读隐")
+    ],
+    ("field", "freight_payment"): [
+        (_labels("ABCDEFGH") + _labels("CDEF", history=True), "读读读读读隐")
+    ],
     # 收件三项：历史单（发货为空）按 A 列
     ("field", "receiver"): [
         (_labels("A") + _labels("CDEF", history=True), "改改改隐隐隐"),
@@ -349,6 +376,20 @@ _PROMOTION_ROWS: dict[tuple[str, str], list[tuple[list[str], str]]] = {
         (_labels("ABCDG") + _labels("CD", history=True), "隐改改隐隐隐"),
         (_labels("EFH") + _labels("EF", history=True), "隐隐改隐隐隐"),
     ],
+    # PR-7：复盘与结款并行；状态机收窄动作，H完成版只有*改。
+    ("field", "retro"): [
+        (_labels("DEF") + _labels("DEF", history=True), "读改改隐读隐"),
+        (_labels("H"), "读读改隐读隐"),
+        ([_v("召回中", v) for v in ("已付款", "已结款", "结款单待财务付款")], "读读改隐读隐"),
+    ],
+    ("action", "retro_write"): [
+        (_labels("DEF") + _labels("DEF", history=True), "读改改隐隐隐"),
+        ([_v("召回中", v) for v in ("已付款", "已结款", "结款单待财务付款")], "读改改隐隐隐"),
+    ],
+    ("action", "retro_revise"): [
+        (_labels("DEFH") + _labels("DEF", history=True), "隐隐改隐隐隐"),
+        ([_v("召回中", v) for v in ("已付款", "已结款", "结款单待财务付款")], "隐隐改隐隐隐"),
+    ],
     # —— PR-6 ——
     # 推广审核（★¹⁵）：PR 读「需 PR 主管审核」；推广驳回时由状态机藏
     ("action", "review"): [(_labels("D") + _labels("D", history=True), "读改改隐隐隐")],
@@ -377,7 +418,8 @@ _PROMOTION_ROWS: dict[tuple[str, str], list[tuple[list[str], str]]] = {
         ([_v("待财务付款", "结款单待财务付款"), *_at("待传结款截图")], "读读改读隐隐"),
         (_labels("F") + _labels("F", history=True), "读读改读隐隐"),
         (_labels("G", variants=False), "改改改读隐隐"),
-        ([_v("召回中", v) for v in ("已付款", "已结款", "结款单待财务付款")], "读读改读隐隐"),
+        ([_v("召回中", v) for v in ("已付款", "已结款")], "改改改读隐隐"),
+        ([_v("召回中", "结款单待财务付款")], "读读改读隐隐"),
         (_labels("H", variants=False), "读读改读隐隐"),
         ([_v("已停用", "未发布")], "读读读读隐隐"),
     ],
@@ -558,4 +600,17 @@ EXPECTED: dict[str, dict[tuple[str, str, str, str], str]] = {
     "warehouse": _expand(_WAREHOUSE_DOCS, _WAREHOUSE_ROWS),
     "negotiation": _expand_negotiation(_NEGOTIATION_DOCS, _NEG_ROWS),
     "settlement": _expand_negotiation(_SETTLEMENT_DOCS, _SETTLE_ROWS),
+    "freight": _expand(
+        DOCS["freight"],
+        {
+            ("action", "freight_review"): [
+                (["待审核"], "隐改改隐隐隐"),
+                (["待审核·主管自谈"], "隐读改隐隐隐"),
+                (["待审核·管理员自谈"], "隐改读隐隐隐"),
+            ],
+            ("action", "freight_pay"): [(["待付款"], "隐隐改改隐隐")],
+            ("action", "freight_reject_payment"): [(["待付款"], "隐隐改改隐隐")],
+            ("action", "freight_resubmit"): [(["已驳回"], "改改改隐隐隐")],
+        },
+    ),
 }

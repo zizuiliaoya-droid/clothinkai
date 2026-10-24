@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import timedelta
 from decimal import Decimal
 from typing import Any
+from uuid import uuid4
 
 import pytest
 
@@ -35,6 +36,7 @@ async def _seed_dataset(product_factory, blogger_factory, promotion_factory, fac
     # 已发布，小红书 like 500（折算 500）
     await promotion_factory.promotion(
         **common,
+        internal_code=f"PP{uuid4().hex}",
         quote_amount=Decimal("1000.00"),
         publish_status="已发布",
         like_count=500,
@@ -43,6 +45,7 @@ async def _seed_dataset(product_factory, blogger_factory, promotion_factory, fac
     # 已发布，抖音 like 100（折算 10）
     await promotion_factory.promotion(
         **common,
+        internal_code=f"PP{uuid4().hex}",
         quote_amount=Decimal("2000.00"),
         publish_status="已发布",
         like_count=100,
@@ -51,6 +54,7 @@ async def _seed_dataset(product_factory, blogger_factory, promotion_factory, fac
     # 未发布 + scheduled 过去 5 天 → 超时
     await promotion_factory.promotion(
         **common,
+        internal_code=f"PP{uuid4().hex}",
         quote_amount=Decimal("500.00"),
         publish_status="未发布",
         scheduled_publish_date=today - timedelta(days=5),
@@ -58,6 +62,7 @@ async def _seed_dataset(product_factory, blogger_factory, promotion_factory, fac
     # 已取消
     await promotion_factory.promotion(
         **common,
+        internal_code=f"PP{uuid4().hex}",
         quote_amount=Decimal("300.00"),
         publish_status="已取消",
     )

@@ -13,12 +13,12 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from enum import Enum
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security.field_permissions import FieldPermissionContext, can_read_field
@@ -247,6 +247,8 @@ PAYLOAD_FIELD_RULES: dict[str, tuple[str, str] | PayloadContainer | None] = {
     "changed_fields": None,
     "publish_url": None,
     "actual_publish_date": None,
+    "completed_at": None,
+    "completion_kind": None,
     "by_cancel": None,
     "like_count": None,
     "collect_count": None,
@@ -269,6 +271,12 @@ PAYLOAD_FIELD_RULES: dict[str, tuple[str, str] | PayloadContainer | None] = {
     "payment_amount": ("settlement", "payment_amount"),
     "payment_adjust_note": ("settlement", "payment_adjust_note"),
     "payment_date": None,
+    # R33金额独立走推广费用规则；图在附件层先裁剪再签名。
+    "freight_payment_id": None,
+    "freight_amount": ("promotion", "cost_snapshot"),
+    "return_shipping_fee": ("promotion", "cost_snapshot"),
+    "return_shipping_payer": None,
+    "snapshot_role": None,
     # 复盘
     "retrospective_id": None,
     # 发货：推送明细、明细前后值、快递信息（收件 diff 走上面的收件规则）
@@ -289,6 +297,13 @@ ATTACHMENT_FIELD_RULES: dict[str, tuple[str, str]] = {
     # 付款凭证、结款聊天截图（PR-6）：与收款码同一拨人可见（运营、仓库看不到）
     LineEventType.SETTLEMENT_PAID.value: ("promotion", "payment_qr"),
     LineEventType.PROMOTION_SETTLED.value: ("promotion", "payment_qr"),
+    LineEventType.RECALL_WAYBILL_UPLOADED.value: ("promotion", "payment_qr"),
+    LineEventType.RECALL_SUCCEEDED.value: ("promotion", "payment_qr"),
+    LineEventType.FREIGHT_SUBMITTED.value: ("promotion", "payment_qr"),
+    LineEventType.FREIGHT_APPROVED.value: ("promotion", "payment_qr"),
+    LineEventType.FREIGHT_REJECTED.value: ("promotion", "payment_qr"),
+    LineEventType.FREIGHT_PAID.value: ("promotion", "payment_qr"),
+    LineEventType.FREIGHT_RESUBMITTED.value: ("promotion", "payment_qr"),
 }
 
 
@@ -324,6 +339,14 @@ def attachment_readable(event_type: str, ctx: FieldPermissionContext) -> bool:
 def payload_size(payload: dict[str, Any]) -> int:
     """按 jsonb 文本口径算 payload 的 UTF-8 字节数。"""
     return len(json.dumps(payload, ensure_ascii=False, separators=(", ", ": ")).encode("utf-8"))
+
+
+class LineEventRows(list[LineEvent]):
+    """事件列表与LIMIT前完整历史的完结标志；保持既有list调用语义。"""
+
+    def __init__(self, events: Iterable[LineEvent], *, has_completion_event: bool) -> None:
+        super().__init__(events)
+        self.has_completion_event = has_completion_event
 
 
 class LineEventRepository:
@@ -383,21 +406,30 @@ class LineEventRepository:
         line_id: UUID,
         newest_first: bool = False,
         limit: int | None = None,
-    ) -> list[LineEvent]:
+    ) -> LineEventRows:
         """一条主线的事件，按 ``seq`` 排（同一事务的几条 ``created_at`` 可能相同，6.4）。
 
         读接口用 ``newest_first=True``（最新在上）+ ``limit``（上限 + 1，多出来那条只用来判 ``truncated``），
         走 ``idx_line_event_line (tenant_id, line_id, seq)``。
+        同一查询用窗口聚合在LIMIT前取完整历史完结标志，避免头查询再访问事件表。
         """
         order = LineEvent.seq.desc() if newest_first else LineEvent.seq
         stmt = (
-            select(LineEvent)
+            select(
+                LineEvent,
+                func.bool_or(
+                    LineEvent.event_type == LineEventType.PROMOTION_COMPLETED.value
+                ).over(),
+            )
             .where(LineEvent.tenant_id == tenant_id, LineEvent.line_id == line_id)
             .order_by(order)
         )
         if limit is not None:
             stmt = stmt.limit(limit)
-        return list((await self._session.execute(stmt)).scalars().all())
+        rows = (await self._session.execute(stmt)).all()
+        return LineEventRows(
+            (row[0] for row in rows), has_completion_event=bool(rows and rows[0][1])
+        )
 
 
 __all__ = [

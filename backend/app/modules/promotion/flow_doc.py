@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from typing import ClassVar
 from uuid import UUID
@@ -67,6 +67,10 @@ class PromotionDoc(FlowDocBase):
     metrics_available_from: date | None
     """7 天数据可以录的第一天（发布日 + 7），灰格提示用；没有发布日为 None。"""
 
+    retro_status: str = "未开始"
+    completed_at: datetime | None = None
+    freight_status: str | None = None
+
     def _open_unpublished(self) -> bool:
         return (
             self.publish_status == _UNPUBLISHED
@@ -82,6 +86,19 @@ class PromotionDoc(FlowDocBase):
         「标记完成」（``urge_complete``）不在这里：它的状态在催发任务上（进行中才能点），按钮只在催发页。
         """
         allowed: set[str] = {"comment"}
+        active = self.is_active and self.publish_status != "已删除"
+        if active:
+            if self.recall_status in ("未召回", "召回失败") and (
+                self.publish_status in ("已发布", "已取消")
+                or (self.publish_status == "未发布" and self.ship_status in ("已发货", None))
+            ):
+                allowed.add("recall_start")
+            if self.recall_status in ("召回中", "召回成功"):
+                allowed.add("recall_waybill")
+            if self.recall_status == "召回中":
+                allowed.add("recall_result")
+            if self.recall_status == "召回成功" and self.freight_status is None:
+                allowed.add("freight_submit")
         if self.is_active and self.publish_status in _URGEABLE:
             allowed.add("urge")
         if self.is_active and self.publish_status != PublishStatus.DELETED.value:
@@ -92,6 +109,11 @@ class PromotionDoc(FlowDocBase):
             allowed.add("ship_withdraw")
         if self.ship_status is None and self._open_unpublished():
             allowed.add("ship_include")
+        if self.publish_status == "已发布":
+            if self.retro_status == "待复盘" and self.completed_at is None:
+                allowed.add("retro_write")
+            if self.retro_status == "已完成":
+                allowed.add("retro_revise")
         stage_action = _STAGE_ACTIONS.get(self.stage)
         if stage_action is not None:
             allowed.add(stage_action)
@@ -124,6 +146,7 @@ def build_promotion_doc(
     negotiator_id: UUID | None,
     items_complete: bool,
     settlement_status: str | None,
+    freight_status: str | None,
 ) -> PromotionDoc:
     """``negotiator_id``：这张单谈款的 PR；没有谈款（导入、主管补录）回落到负责 PR（L1）。
 
@@ -146,8 +169,11 @@ def build_promotion_doc(
         cooperation_mode=promotion.cooperation_mode,
         promotion_settlement_status=promotion.settlement_status,
         settlement_status=settlement_status,
+        freight_status=freight_status,
         quote_amount=promotion.quote_amount,
         has_payment_qr=promotion.payment_qr_attachment_id is not None,
+        retro_status=promotion.retro_status,
+        completed_at=promotion.completed_at,
         return_waybill=promotion.return_waybill,
         has_recall_waybill=promotion.recall_waybill_attachment_id is not None,
         metrics_available_from=metrics_available_from(promotion.actual_publish_date),

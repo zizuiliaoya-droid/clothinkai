@@ -2,7 +2,7 @@ import { LINE_EVENTS_ALL } from "@/features/flow/api";
 import { useEffect } from "react";
 import { Form, Input, Modal, Typography, message } from "antd";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { submitRetrospective } from "@/features/promotion/api";
+import { writeRetrospective } from "@/features/promotion/api";
 import type { Promotion } from "@/features/promotion/types";
 import { extractErrorMessage } from "@/services/apiClient";
 
@@ -24,12 +24,13 @@ export function RetroModal({ target, onClose }: Props) {
 
   const retroMutation = useMutation({
     mutationFn: ({ id, content }: { id: string; content: string }) =>
-      submitRetrospective(id, content),
+      writeRetrospective(id, content),
     onSuccess: () => {
-      message.success("复盘已提交，等主管确认");
+      message.success(target?.retro_status === "已完成" ? "复盘已更新，旧版已留档" : "复盘已完成，已写入博主档案");
       onClose();
       form.resetFields();
       void qc.invalidateQueries({ queryKey: ["promotions"] });
+      void qc.invalidateQueries({ queryKey: ["blogger-retrospectives"] });
       void qc.invalidateQueries({ queryKey: LINE_EVENTS_ALL });
     },
     onError: (err) => message.error(extractErrorMessage(err)),
@@ -37,7 +38,8 @@ export function RetroModal({ target, onClose }: Props) {
 
   return (
     <Modal
-      title={target ? `写复盘 · ${target.internal_code}` : "写复盘"}
+      title={target ? `${target.retro_status === "已完成" ? "修改复盘" : "写复盘"} · ${target.internal_code}` : "写复盘"}
+      okText={target?.retro_status === "已完成" ? "保存新版本" : "完成复盘"}
       open={!!target}
       onCancel={onClose}
       onOk={() => form.submit()}
@@ -56,12 +58,12 @@ export function RetroModal({ target, onClose }: Props) {
       >
         <Typography.Paragraph type="secondary">
           自由描述：数据表现、博主配合度、是否值得二搭、下次合作建议。
-          主管确认后这段文字会永久沉淀到博主档案，下次挑博主时在悬浮卡里直接看到。
+          主管写完即进博主档案；管理员修改会保留旧版，档案展示最新有效版。
         </Typography.Paragraph>
         <Form.Item
           name="content"
           label="复盘内容"
-          rules={[{ required: true, message: "请填写复盘内容" }]}
+          rules={[{ required: true, whitespace: true, message: "请填写复盘内容" }]}
         >
           <Input.TextArea rows={6} maxLength={5000} showCount />
         </Form.Item>

@@ -39,6 +39,7 @@ from app.modules.promotion.enums import (
     SettlementStatus,
     ShipCourier,
 )
+from app.modules.promotion.freight_schemas import ReturnFreightPaymentBrief
 
 _QuoteField = Annotated[
     Decimal,
@@ -154,6 +155,7 @@ class PromotionUpdate(BaseModel):
     goods_main_id: UUID | None = None
     cooperation_mode: CooperationMode | None = None
     return_shipping_fee: _FeeField | None = None
+    return_shipping_payer: Literal["博主垫付", "到付"] | None = None
     platform: str | None = Field(default=None, min_length=1, max_length=16)
     scheduled_publish_date: date | None = None
     quote_amount: _QuoteField | None = None
@@ -311,7 +313,7 @@ class PromotionRecallStartRequest(BaseModel):
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
-    recall_reason: str | None = Field(default=None, max_length=2000)
+    recall_reason: str = Field(min_length=1, max_length=2000)
 
 
 class PromotionRecallResultRequest(BaseModel):
@@ -320,6 +322,13 @@ class PromotionRecallResultRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
     remark: str | None = Field(default=None, max_length=2000)
+
+
+class PromotionRecallSuccessRequest(PromotionRecallResultRequest):
+    """C4：运费与承担方必填；是否需要收款码由锁内状态判断。"""
+
+    return_shipping_fee: _FeeField
+    return_shipping_payer: Literal["博主垫付", "到付"]
 
 
 class PromotionReviewRequest(BaseModel):
@@ -383,8 +392,8 @@ class PromotionMetricsRequest(BaseModel):
     comment_count: int = Field(ge=0)
 
 
-class RetrospectiveSubmitRequest(BaseModel):
-    """PR 提交复盘文字。
+class RetrospectiveWriteRequest(BaseModel):
+    """主管写复盘文字（写完即完成）。
 
     PRD：自由描述（数据表现、博主配合度、是否二搭、下次合作建议），不拆结构化字段。
     """
@@ -392,22 +401,6 @@ class RetrospectiveSubmitRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
     content: str = Field(min_length=1, max_length=5000)
-
-
-class RetrospectiveConfirmRequest(BaseModel):
-    """主管确认或打回复盘。"""
-
-    model_config = ConfigDict(str_strip_whitespace=True)
-
-    approve: bool = True
-    opinion: str | None = Field(default=None, max_length=2000)
-    """打回时的意见。PR 得知道要改什么。"""
-
-    @model_validator(mode="after")
-    def _require_opinion_on_reject(self) -> RetrospectiveConfirmRequest:
-        if not self.approve and not self.opinion:
-            raise ValueError("打回复盘时必须写明意见")
-        return self
 
 
 class PromotionAmountLogResponse(BaseModel):
@@ -571,6 +564,10 @@ class PromotionResponse(BaseModel):
     # 合作模式与成本（PRD V1.4 模块二）
     cooperation_mode: str | None = None
     return_shipping_fee: Decimal | None = None  # 敏感
+    return_shipping_payer: Literal["博主垫付", "到付"] | None = None
+    recall_waybill_attachment_id: UUID | None = None
+    recall_waybill_signed_url: str | None = None
+    freight_payment: ReturnFreightPaymentBrief | None = None
     total_promo_cost: Decimal | None = None  # 敏感
     """站外推广成本 = 博主服务费 + 样品成本 + 寄回运费。数据库生成列，与 quote_amount
     同样受读权限门控 —— 它是三项金额之和，能看到它等于能推算出金额。"""
@@ -609,6 +606,7 @@ class PromotionResponse(BaseModel):
     publish_status: str
     recall_status: str
     settlement_status: str
+    completed_at: datetime | None = None
     retro_status: str = "未开始"
     """未开始 / 待复盘 / 待确认 / 已完成（PRD V1.4 改动 4，第 4 个并行状态机）。"""
 
@@ -823,9 +821,8 @@ __all__ = [
     "PromotionUpdate",
     "PromotionUpdateLikeRequest",
     "PromotionWarehouseWaybillRequest",
-    "RetrospectiveConfirmRequest",
     "RetrospectiveResponse",
-    "RetrospectiveSubmitRequest",
+    "RetrospectiveWriteRequest",
     "WarehouseBucket",
     "WarehouseShipmentItem",
     "WarehouseShipmentPage",

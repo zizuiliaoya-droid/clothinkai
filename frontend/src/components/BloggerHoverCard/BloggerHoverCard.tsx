@@ -196,7 +196,7 @@ export function BloggerHoverCard({
           <Spin style={{ padding: 16 }} />
         ) : (retros?.length ?? 0) === 0 ? (
           <Typography.Text type="secondary">
-            还没有复盘记录（需主管确认后才进档案）
+            还没有复盘记录（主管写完即进档案）
           </Typography.Text>
         ) : (
           <Timeline
