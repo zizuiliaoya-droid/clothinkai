@@ -23,10 +23,40 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: {ref: "${{ github.sha }}", path: validation, persist-credentials: false}
+      - uses: actions/checkout@v4
+        with:
+          ref: 55477c44f09bb1a25169bfb44ff6c90bc4f9cedb
+          path: product-source
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with: {python-version: "3.12"}
       - name: Verify exact frozen bundle
-        run: python -B validation/tools/release_validation/verify_bundle.py --expected-tool-commit "$GITHUB_SHA" --output "$RUNNER_TEMP/release-validation"
+        run: python -B validation/tools/release_validation/verify_bundle.py --expected-tool-commit "$GITHUB_SHA" --source "$GITHUB_WORKSPACE/product-source" --output "$RUNNER_TEMP/release-validation"
+      - name: Complete current phase1 guard and builder contracts
+        working-directory: validation/tools/release_validation/phase1
+        run: |
+          set -euo pipefail
+          python -B - > "$RUNNER_TEMP/release-validation/phase1-guards.log" 2>&1 <<'PY'
+          import os, unittest
+          from pathlib import Path
+          from unittest.mock import patch
+          import release_builder as builder
+          source = Path(os.environ["GITHUB_WORKSPACE"]) / "product-source"
+          assert builder.git(source, "rev-parse", "HEAD").decode().strip() == os.environ["SOURCE_COMMIT"]
+          assert builder.git(source, "rev-parse", "HEAD^{tree}").decode().strip() == os.environ["SOURCE_TREE"]
+          original_git = builder.git
+          # Historical test location assumes .agents/tasks layout. Relocate only
+          # its exact immutable Git blob lookup; no assertion or guard is replaced.
+          def fixed_blob_lookup(repo, *args):
+              if args == ("cat-file", "blob", "6684bbce496513b7b2abb31392c84bf68b650f6f"):
+                  return original_git(source, *args)
+              return original_git(repo, *args)
+          print("All current phase1 test modules; fixed original source Git blob lookup only", flush=True)
+          with patch.object(builder, "git", fixed_blob_lookup):
+              suite = unittest.defaultTestLoader.discover(".", pattern="test_*.py")
+              result = unittest.TextTestRunner(verbosity=2).run(suite)
+          raise SystemExit(0 if result.wasSuccessful() else 1)
+          PY
       - name: Actual cross-candidate flock and durable claims
         run: |
           set -euo pipefail
@@ -43,6 +73,7 @@ jobs:
             tests.test_host_acceptance_private_json tests.test_host_acceptance_control -v \
             > "$RUNNER_TEMP/release-validation/host-contracts.log" 2>&1
           python -B -m unittest discover -s ci_tests -p test_producer_health_policy.py -v > "$RUNNER_TEMP/release-validation/health-policy-contracts.log" 2>&1
+          python -B -m unittest discover -s ci_tests -p test_schedule_zoneinfo.py -v > "$RUNNER_TEMP/release-validation/schedule-zoneinfo-contracts.log" 2>&1
           python -B ../test_host_bundle.py -v > "$RUNNER_TEMP/release-validation/bundle-contracts.log" 2>&1
       - uses: actions/upload-artifact@v4
         if: always()

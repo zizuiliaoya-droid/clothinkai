@@ -1,4 +1,4 @@
-"""Semantic binding to the immutable phase1 contract; no build/extract/install."""
+"""Original phase1 contract plus one pinned schedule recognizer correction; no build/install."""
 
 import ast
 import hashlib
@@ -13,6 +13,14 @@ from types import ModuleType
 PHASE1_PINS = "0cc34f4847dce14a3ffc7868f20b37a32500144a5895563228b9d84a66bbc0c0"
 BUILDER_SHA = "d728bdd2ce2ce93559ded9a9a13fe60bf94748935c7119cf02694e6a0cd9783f"
 PACKAGE_PINS_FILE = "implementation-pins-origin-1024.json"
+SCHEDULE_GUARD_BEFORE = {
+    "bytes": 11040,
+    "sha256": "e7c9692981ee8a64afc0bfce22273f96a406f36b3c8bfa13c0fc16eee0930dbc",
+}
+SCHEDULE_GUARD_AFTER = {
+    "bytes": 12557,
+    "sha256": "c7c5a9d619e8d32dd114004d79d197af47ee029e63d6404365027a81cb612ad9",
+}
 
 
 class PackageRejected(ValueError):
@@ -26,6 +34,14 @@ def need(value, code):
 
 def digest(raw):
     return hashlib.sha256(raw).hexdigest()
+
+
+def schedule_guard_pin(name, original):
+    """Require the historical origin, then bind only the corrected guard bytes."""
+    if name != "schedule_pickle_guard.py":
+        return original
+    need(original == SCHEDULE_GUARD_BEFORE, "schedule_guard_origin")
+    return dict(SCHEDULE_GUARD_AFTER)
 
 
 def tool_bundle():
@@ -67,10 +83,13 @@ def tool_bundle():
             "frozen_file_link",
         )
         raw = path.read_bytes()
-        need(pin == {"bytes": len(raw), "sha256": digest(raw)}, "frozen_file_drift")
+        need(
+            schedule_guard_pin(name, pin) == {"bytes": len(raw), "sha256": digest(raw)},
+            "frozen_file_drift",
+        )
         result["frozen_phase1/" + name] = raw
     result["frozen_phase1/" + PACKAGE_PINS_FILE] = raw_pins
-    # SQL guard/control bytes are unchanged and retain their historical pinfile.
+    # Retain the historical SQL-guard pinfile; only the schedule pin has an exact delta.
     result["frozen_phase1/implementation-pins.json"] = (
         builder.HERE / "implementation-pins.json"
     ).read_bytes()
@@ -112,7 +131,8 @@ def frozen_contract():
         )
         content = path.read_bytes()
         need(
-            pins["files"][name] == {"bytes": len(content), "sha256": digest(content)},
+            schedule_guard_pin(name, pins["files"][name])
+            == {"bytes": len(content), "sha256": digest(content)},
             "phase1_control_drift",
         )
     return module

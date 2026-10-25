@@ -47,7 +47,7 @@ def verify_processes(records, pid, commit, db_format):
 
 
 def _frozen_start():
-    from phase1_package_binding import frozen_contract
+    from phase1_package_binding import frozen_contract, schedule_guard_pin
 
     builder = frozen_contract()
     pins = builder.json_bytes((builder.HERE / "implementation-pins.json").read_bytes())[
@@ -61,7 +61,7 @@ def _frozen_start():
         for name in ("runtime_guard", "schedule_pickle_guard", "start_067"):
             raw = (builder.HERE / (name + ".py")).read_bytes()
             need(
-                pins[name + ".py"]
+                schedule_guard_pin(name + ".py", pins[name + ".py"])
                 == {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()},
                 "beat_frozen_dependency",
             )

@@ -45,6 +45,10 @@
     "phase2/ci_tests/test_producer_health_policy.py": {
       "bytes": 9544,
       "sha256": "2a878c6d20a767dd49006c0871d182261811cae419f68487e2bb28e78c159581"
+    },
+    "phase2/ci_tests/test_schedule_zoneinfo.py": {
+      "bytes": 5438,
+      "sha256": "8962e75ed4cb62e43c4520d0dbb7f65eca759e0ea3fc90d335b6c5441810dc4b"
     }
   },
   "ci_test_deltas": {
@@ -178,8 +182,8 @@
       "sha256": "da3e0ed4e331cc6a3a41dba709a5c39bf4f6610fa565afcb4097423e59826201"
     },
     "phase1/schedule_pickle_guard.py": {
-      "bytes": 11040,
-      "sha256": "e7c9692981ee8a64afc0bfce22273f96a406f36b3c8bfa13c0fc16eee0930dbc"
+      "bytes": 12557,
+      "sha256": "c7c5a9d619e8d32dd114004d79d197af47ee029e63d6404365027a81cb612ad9"
     },
     "phase1/schedule_test_fixture.py": {
       "bytes": 1154,
@@ -234,8 +238,8 @@
       "sha256": "db648368f18ac1966533145cd69920a4bd205c842083a63acc0af20416f61403"
     },
     "phase2/beat_health_candidate.py": {
-      "bytes": 7745,
-      "sha256": "5b0ba7ca7fddc41f7b363fcee1e749d00a39cefd6378cda0cc895957bf47f999"
+      "bytes": 7799,
+      "sha256": "0a8f5bf854428e981aa6abd37d4a99becdfa29df4a8befca5d9c480ab47fc86a"
     },
     "phase2/build_adapter.py": {
       "bytes": 3053,
@@ -348,6 +352,10 @@
     "phase2/ci_tests/test_producer_health_policy.py": {
       "bytes": 9544,
       "sha256": "2a878c6d20a767dd49006c0871d182261811cae419f68487e2bb28e78c159581"
+    },
+    "phase2/ci_tests/test_schedule_zoneinfo.py": {
+      "bytes": 5438,
+      "sha256": "8962e75ed4cb62e43c4520d0dbb7f65eca759e0ea3fc90d335b6c5441810dc4b"
     },
     "phase2/ci_tests/test_source_binding.py": {
       "bytes": 5343,
@@ -558,8 +566,8 @@
       "sha256": "5a36f651dbb45e2900a293f2e626d9f3422a780917a36dc215659133628e86c6"
     },
     "phase2/phase1_package_binding.py": {
-      "bytes": 13527,
-      "sha256": "411014951ffd6b36576bc0fd9c0bb4b26bdccce33df6dcf8251686fdb8324dbc"
+      "bytes": 14206,
+      "sha256": "2c718a7f5221a4202aa0d1676bdc9a2fa5fb8221d8e11ce7023ed1a61942e9db"
     },
     "phase2/pre_migration_recover.py": {
       "bytes": 4497,
@@ -801,6 +809,28 @@
   "frozen": true,
   "historical_tool_commit": "5472ee15abe50f760ae77883e8c3f4b3a0dab37c",
   "host_runtime_deltas": {
+    "phase1/schedule_pickle_guard.py": {
+      "after": {
+        "bytes": 12557,
+        "sha256": "c7c5a9d619e8d32dd114004d79d197af47ee029e63d6404365027a81cb612ad9"
+      },
+      "before": {
+        "bytes": 11040,
+        "sha256": "e7c9692981ee8a64afc0bfce22273f96a406f36b3c8bfa13c0fc16eee0930dbc"
+      },
+      "reason": "Actual Celery 5.4 GNU/dumb schedule evidence requires only inert getattr(ZoneInfo, _unpickle)(UTC, int 1) recognition in datetime timezone position; no encoded callable is executed, other globals/shapes remain rejected."
+    },
+    "phase2/beat_health_candidate.py": {
+      "after": {
+        "bytes": 7799,
+        "sha256": "0a8f5bf854428e981aa6abd37d4a99becdfa29df4a8befca5d9c480ab47fc86a"
+      },
+      "before": {
+        "bytes": 7745,
+        "sha256": "5b0ba7ca7fddc41f7b363fcee1e749d00a39cefd6378cda0cc895957bf47f999"
+      },
+      "reason": "Use the same exact schedule guard successor pin for the existing frozen read-only loader; no historical pin mutation or mixed guard versions."
+    },
     "phase2/host_backup_control.py": {
       "after": {
         "bytes": 44239,
@@ -844,6 +874,17 @@
         "sha256": "98c933f71cc8f3b043b92cb4c92aa1c43ead8ea682f8a82259d732271d5d3af9"
       },
       "reason": "Actual nginx maintenance test failed on readonly /var/cache/nginx. Preserve original readonly root plus only /tmp 64MiB tmpfs; use exact five temp paths from captured 2364-byte active SHA4e9eeec6, update only closed/maintenance template pins. No production config change and no fixture-only extra cache mount."
+    },
+    "phase2/phase1_package_binding.py": {
+      "after": {
+        "bytes": 14206,
+        "sha256": "2c718a7f5221a4202aa0d1676bdc9a2fa5fb8221d8e11ce7023ed1a61942e9db"
+      },
+      "before": {
+        "bytes": 13527,
+        "sha256": "411014951ffd6b36576bc0fd9c0bb4b26bdccce33df6dcf8251686fdb8324dbc"
+      },
+      "reason": "Bind the single schedule guard correction to exact before and after pins, require current after bytes only, retain original phase1 pin documents and all other dependencies unchanged."
     },
     "phase2/restore_drill.py": {
       "after": {

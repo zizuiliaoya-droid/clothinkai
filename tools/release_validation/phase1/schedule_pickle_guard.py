@@ -21,6 +21,8 @@ GLOBALS = {
     ("celery.schedules", "schedule"),
     ("celery.schedules", "crontab"),
 }
+# These are inert tokens for one observed UTC encoding, not constructors.
+ZONEINFO_TOKENS = {("builtins", "getattr"), ("zoneinfo", "ZoneInfo")}
 MARK = object()
 
 
@@ -119,12 +121,42 @@ def parse(raw):
         elif name == "STACK_GLOBAL":
             module, symbol = take(2)
             need(module.kind == symbol.kind == "str", "schedule_pickle_global_args")
-            need((module.value, symbol.value) in GLOBALS, "schedule_pickle_global")
+            need(
+                (module.value, symbol.value) in GLOBALS | ZONEINFO_TOKENS,
+                "schedule_pickle_global",
+            )
             stack.append(Node("global", (module.value, symbol.value)))
         elif name == "REDUCE":
             function, args = take(2)
-            need(function.kind == "global" and args.kind == "tuple", "schedule_pickle_reduce")
-            stack.append(Node("object", (function.value, args)))
+            need(args.kind == "tuple", "schedule_pickle_reduce")
+            if function.kind == "global" and function.value == ("builtins", "getattr"):
+                values = args.value
+                need(
+                    len(values) == 2
+                    and values[0].kind == "global"
+                    and values[0].value == ("zoneinfo", "ZoneInfo")
+                    and values[1].kind == "str"
+                    and values[1].value == "_unpickle",
+                    "schedule_pickle_zoneinfo_attribute",
+                )
+                stack.append(Node("zoneinfo_unpickle_token", None))
+            elif function.kind == "zoneinfo_unpickle_token":
+                values = args.value
+                need(
+                    len(values) == 2
+                    and values[0].kind == "str"
+                    and values[0].value == "UTC"
+                    and values[1].kind == "int"
+                    and values[1].value == 1,
+                    "schedule_pickle_zoneinfo_utc",
+                )
+                stack.append(Node("utc_zoneinfo", None))
+            else:
+                need(
+                    function.kind == "global" and function.value in GLOBALS,
+                    "schedule_pickle_reduce",
+                )
+                stack.append(Node("object", (function.value, args)))
         elif name == "BUILD":
             state = take(1)[0]
             need(stack and isinstance(stack[-1], Node), "schedule_pickle_build_stack")
@@ -184,6 +216,9 @@ def utc_datetime(node):
         and int.from_bytes(data[7:], "big") < 1000000,
         "schedule_shape_datetime",
     )
+    if zone.kind == "utc_zoneinfo":
+        need(zone.value is None and zone.state is None, "schedule_shape_utc")
+        return
     offset = object_args(zone, ("datetime", "timezone"), 1)[0]
     need(timedelta_args(offset) == (0, 0, 0), "schedule_shape_utc")
 

@@ -82,6 +82,9 @@ def verify():
             "phase2/host_backup_control.py",
             "phase2/host_producer_control.py",
             "phase2/restore_drill.py",
+            "phase1/schedule_pickle_guard.py",
+            "phase2/phase1_package_binding.py",
+            "phase2/beat_health_candidate.py",
         },
         "finite authorized host runtime delta required",
     )
@@ -207,9 +210,12 @@ def verify():
                 "implementation-pins.json",
                 "implementation-pins-origin-1024.json",
             }:
-                require(
-                    phase_files.get(relative) == pin, "unbound phase1 file: " + name
-                )
+                expected = phase_files.get(relative)
+                if name == "phase1/schedule_pickle_guard.py":
+                    delta = runtime_deltas[name]
+                    require(delta["before"] == expected, "schedule guard origin drift")
+                    expected = delta["after"]
+                require(expected == pin, "unbound phase1 file: " + name)
     require(
         manifest["deployable"] is False
         and manifest["live_enabled"] is False
