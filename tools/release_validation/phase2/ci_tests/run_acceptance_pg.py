@@ -220,6 +220,15 @@ async def restore(identity, image, temporary, output):
         )
     require(0 < dump.stat().st_size <= 64 * 1024**2, "ci_dump_bound")
     dump_hash = hashlib.sha256(dump.read_bytes()).hexdigest()
+    write(
+        output / "restore-input.json",
+        {
+            "source_snapshot": before,
+            "dump_sha256": dump_hash,
+            "dump_bytes": dump.stat().st_size,
+            "image_id": image,
+        },
+    )
     data = temporary / "data"
     data.mkdir(mode=0o700)
     inode = (data.stat().st_dev, data.stat().st_ino)
@@ -272,6 +281,17 @@ async def restore(identity, image, temporary, output):
         backup._data_identity(data_identity, owner=(postgres_uid, 0))
         projection = '{"id":{{json .Id}},"image":{{json .Image}},"network":{{json .HostConfig.NetworkMode}},"ports":{{json .HostConfig.PortBindings}},"privileged":{{json .HostConfig.Privileged}},"cap_add":{{json .HostConfig.CapAdd}},"cap_drop":{{json .HostConfig.CapDrop}}}'
         isolated = json.loads(call("inspect", "--format", projection, owned))
+        mounts = await backup._mounts(owned)
+        write(
+            output / "restore-isolation-observed.json",
+            {
+                "data_kind": "synthetic_restore_isolation_observation",
+                "isolation": isolated,
+                "mounts": mounts,
+                "expected_image": image,
+                "expected_container_id": owned,
+            },
+        )
         require(
             isolated["id"] == owned
             and isolated["image"] == image
@@ -282,7 +302,6 @@ async def restore(identity, image, temporary, output):
             and isolated["cap_drop"] == ["ALL"],
             "ci_restore_isolation",
         )
-        mounts = await backup._mounts(owned)
         expected_mounts = [
             {
                 "source": str(data),
@@ -342,14 +361,22 @@ async def restore(identity, image, temporary, output):
             {"before": before, "after": after, "isolation": isolated},
         )
         require(before == after, "ci_restore_complete_snapshot")
-        require(
-            await backup._database_snapshot(identity) == before,
-            "ci_source_changed_during_restore",
+        source_after = await backup._database_snapshot(identity)
+        write(
+            output / "restore-source-readback.json",
+            {"before": before, "after": source_after},
         )
-        require(
-            hashlib.sha256(dump.read_bytes()).hexdigest() == dump_hash,
-            "ci_dump_changed",
+        require(source_after == before, "ci_source_changed_during_restore")
+        dump_readback = hashlib.sha256(dump.read_bytes()).hexdigest()
+        write(
+            output / "restore-dump-readback.json",
+            {
+                "expected_sha256": dump_hash,
+                "actual_sha256": dump_readback,
+                "bytes": dump.stat().st_size,
+            },
         )
+        require(dump_readback == dump_hash, "ci_dump_changed")
         return {
             "dump_sha256": dump_hash,
             "dump_bytes": dump.stat().st_size,
@@ -577,6 +604,7 @@ async def exercise(policy, identity, image, output, temporary):
     }
     journal = LinuxJournal(policy.data["nonce"])
     result = await run_guarded_migration(policy, LinuxCITransport(policy, journal))
+    write(output / "original-migration-observed.json", result)
     require(
         result["outcome"] == "verified"
         and result["host_lock_released"] is True
@@ -598,18 +626,32 @@ async def exercise(policy, identity, image, output, temporary):
             acceptance._statements(collector, "acceptance_queries.sql")[:4]
         )
     }
+    write(
+        output / "synthetic-after-validation-input.json",
+        {"base": after, "migration_rows": rows, "counts": counts, "interval": interval},
+    )
     projected = acceptance._after_projection(
         before, after, rows, counts, interval, {"gate_closed": True}
     )
+    write(
+        output / "synthetic-projection-comparison.json",
+        {"before": before["projection"], "after": projected},
+    )
     validated = acceptance.verify_acceptance(before["projection"], projected)
     roles, expected_roles = acceptance._roles(before_rows, after)
+    write(
+        output / "synthetic-roles-comparison.json",
+        {"actual": roles, "expected": expected_roles},
+    )
     require(roles == expected_roles, "ci_actual_role_delta")
     rls = await acceptance._app_rls(identity, after)
+    write(output / "synthetic-rls-observed.json", rls)
     require(
         rls["two_real_tenants"] is True and rls["populated_tenant_count"] == 2,
         "ci_two_fixture_tenants_rls",
     )
     financial = acceptance._financial(before_rows, after)
+    write(output / "synthetic-financial-observed.json", financial)
     require(financial["unpublished_count"] == 2000, "ci_unpublished_history_included")
     after_seconds = time.monotonic() - started
     write(
