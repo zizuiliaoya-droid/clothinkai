@@ -26,6 +26,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    StringConstraints,
     field_validator,
     model_validator,
 )
@@ -712,10 +713,19 @@ ShipStatusFilter = Literal["待发货", "待打单", "已发货", "none"]
 """推广列表「发货」筛选（7.3）：``none`` = 历史单（NULL）；``待发货`` 只回阶段「待推送仓库」那批（被取消的不算）。"""
 
 
+PromotionSeason = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=64)
+]
+
+
 class PromotionListFilters(BaseModel):
     """列表过滤入参（query string 解析后构造）。"""
 
     model_config = ConfigDict(str_strip_whitespace=True)
+
+    goods_main_id: UUID | None = None
+    seasons: list[PromotionSeason] | None = Field(default=None, max_length=20)
+    unassigned_only: bool = False
 
     keyword: str | None = Field(default=None, max_length=64)
     publish_status: PublishStatus | None = None
@@ -795,10 +805,10 @@ class WarehouseShipmentPage(BaseModel):
 
 
 __all__ = [
+    "PromotionAmountLogResponse",
     "PromotionBase",
     "PromotionCancelRequest",
     "PromotionCreate",
-    "PromotionAmountLogResponse",
     "PromotionDuplicateWarning",
     "PromotionListFilters",
     "PromotionMarkAbnormalRequest",

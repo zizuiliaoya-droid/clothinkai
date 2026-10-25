@@ -659,6 +659,9 @@ class PromotionService(
         today = get_today()
 
         repo_filters = RepoPromotionListFilters(
+            goods_main_id=filters.goods_main_id,
+            seasons=filters.seasons,
+            unassigned_only=filters.unassigned_only,
             keyword=filters.keyword,
             publish_status=(filters.publish_status.value if filters.publish_status else None),
             recall_status=(filters.recall_status.value if filters.recall_status else None),
