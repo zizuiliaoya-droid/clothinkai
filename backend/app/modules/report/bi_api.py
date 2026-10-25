@@ -11,7 +11,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Body, Query
 
-from app.modules.auth.deps import CurrentActiveUser, SessionDep, require_permission
+from app.modules.auth.deps import CurrentActiveUser, CurrentPerms, SessionDep, require_permission
 from app.modules.report.advanced_permissions import REPORT_BI_READ, REPORT_BI_READ_OWN
 from app.modules.report.advanced_schemas import (
     BiDashboard,
@@ -102,6 +102,7 @@ async def get_bi_goods_trend(
 )
 async def get_bi_goods_notes(
     user: CurrentActiveUser,
+    perms: CurrentPerms,
     session: SessionDep,
     service: BiServiceDep,
     goods_id: UUID,
@@ -115,6 +116,7 @@ async def get_bi_goods_notes(
         date_from,
         date_to,
         field_ctx=await build_field_perm_context(user.id, session),
+        perms=perms,
     )
 
 

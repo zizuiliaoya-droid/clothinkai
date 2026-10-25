@@ -870,6 +870,8 @@ class TestBiGoods:
         assert (prod.status_code, prod.json()["code"]) == (403, "PERMISSION_DENIED")
         notes = await _call(session, fin, "GET", _notes(s.a.id))
         assert notes.status_code == 200, notes.text
+        assert notes.json()["points"]
+        assert all(p["detail_url"] is None for p in notes.json()["points"])
 
     @pytest.mark.parametrize("role", ["pr", "warehouse"])
     async def test_forbidden(self, session: AsyncSession, flow_users: Any, role: str) -> None:
@@ -926,7 +928,7 @@ class TestBiGoods:
                 "promo_cost": "320.00",
                 "blogger_nickname": s.blogger.nickname,
                 "platform": "小红书",
-                "detail_url": None,
+                "detail_url": f"/promotions?id={p.id}",
             }
             for p, like in ((s.early, 0), (s.late, 120))
         ]
