@@ -545,6 +545,25 @@ class NarrowBoundaryTests(NoSocketAsyncCase):
             with self.assertRaisesRegex(Rejected, "restore_container_isolation"):
                 await control._drill_identity("9" * 64, data, NAME)
 
+    def test_check_normalization_preserves_literal_tokens_and_nullable_column(self):
+        for _, source, target in control.CHECK_FORMS:
+            items = "'ready'::character varying, 'a::character varying'::character varying, 'it''s'::character varying"
+            expected_items = "('ready'::character varying)::text, ('a::character varying'::character varying)::text, ('it''s'::character varying)::text"
+            raw = source.format(column="status", items=items)
+            expected = target.format(column="status", items=expected_items)
+            self.assertEqual(control.canonical_check_definition(raw), expected)
+            self.assertEqual(control.canonical_check_definition(expected), expected)
+            for changed in (raw + "\n", raw.replace("::character varying", "::character varying(9)"), raw.replace(" = ANY ", " <> ALL "), raw + " NOT VALID"):
+                self.assertEqual(control.canonical_check_definition(changed), changed)
+                self.assertNotEqual(control.canonical_check_definition(changed), expected)
+            for changed in (raw.replace("'ready'", "'changed'"), raw.replace("status", "other_column"), raw.replace(" = ANY ", " <> ANY ")):
+                self.assertNotEqual(control.canonical_check_definition(changed), expected)
+        _, source, _ = control.CHECK_FORMS[1]
+        raw = source.format(column="status", items="'ready'::character varying")
+        changed = raw.replace("status IS NULL", "other_column IS NULL")
+        self.assertEqual(control.canonical_check_definition(changed), changed)
+        self.assertNotEqual(control.canonical_check_definition(changed), control.canonical_check_definition(raw))
+
     async def test_ready_requires_final_pid1_and_bound_socket_not_temporary_server(self):
         with (
             patch.object(control, "_capture", AsyncMock(side_effect=[b"initializing", b"starting:1", b"ready:12345"])) as capture,

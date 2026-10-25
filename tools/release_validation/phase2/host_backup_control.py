@@ -550,6 +550,115 @@ CATALOGS = {
 }
 
 
+# Only PG18's observed deparse move: varchar literal array -> per-literal text.
+# These two complete CHECK forms retain every literal, its order, and operator.
+CHECK_LITERAL = r"'(?:[^']|'')*'"
+CHECK_LITERAL_CAST = "(" + CHECK_LITERAL + r")::character varying"
+_CHECK_ITEMS = (
+    "("
+    + CHECK_LITERAL
+    + r"::character varying(?:, "
+    + CHECK_LITERAL
+    + r"::character varying)*)"
+)
+_CHECK_COLUMN = r"([a-z_][a-z0-9_]*)"
+CHECK_FORMS = (
+    (
+        r"^CHECK \(\(\("
+        + _CHECK_COLUMN
+        + r"\)::text = ANY \(\(ARRAY\["
+        + _CHECK_ITEMS
+        + r"\]\)::text\[\]\)\)\)$",
+        "CHECK ((({column})::text = ANY ((ARRAY[{items}])::text[])))",
+        "CHECK ((({column})::text = ANY (ARRAY[{items}])))",
+    ),
+    (
+        r"^CHECK \(\(\("
+        + _CHECK_COLUMN
+        + r" IS NULL\) OR \(\(\1\)::text = ANY \(\(ARRAY\["
+        + _CHECK_ITEMS
+        + r"\]\)::text\[\]\)\)\)\)$",
+        "CHECK ((({column} IS NULL) OR (({column})::text = ANY ((ARRAY[{items}])::text[]))))",
+        "CHECK ((({column} IS NULL) OR (({column})::text = ANY (ARRAY[{items}]))))",
+    ),
+)
+
+
+def canonical_check_definition(value):
+    """Same finite grammar used by SQL; useful for inert evidence/negative checks."""
+    for pattern, source, target in CHECK_FORMS:
+        matched = re.fullmatch(pattern, value)
+        if matched and source.format(column=matched[1], items=matched[2]) == value:
+            items = re.sub(
+                CHECK_LITERAL_CAST, r"(\1::character varying)::text", matched[2]
+            )
+            return target.format(column=matched[1], items=items)
+    return value
+
+
+def canonical_acl_query(query):
+    # Sort complete aclitems, not their permissions; NULL, empty and duplicates
+    # remain distinct. PostgreSQL retains grantee/grantor and grantable markers.
+    return (
+        "SELECT kind,ns,name,CASE WHEN acl IS NULL THEN NULL ELSE "
+        'ARRAY(SELECT item FROM unnest(acl::aclitem[]) item ORDER BY item::text COLLATE "C")::text END acl '
+        "FROM (" + query + ") original_acl"
+    )
+
+
+def _check_sql_template(template, column, items):
+    return " || ".join(
+        {"{column}": column, "{items}": items}.get(
+            part, "'" + part.replace("'", "''") + "'"
+        )
+        for part in re.split(r"(\{column\}|\{items\})", template)
+        if part
+    )
+
+
+def canonical_references_query(query):
+    arms, matches = [], []
+    for index, (pattern, source, target) in enumerate(CHECK_FORMS):
+        field = "m.p" + str(index)
+        matches.append(
+            "regexp_match(definition,$flow78$" + pattern + "$flow78$) p" + str(index)
+        )
+        replacement = (
+            r"regexp_replace("
+            + field
+            + r"[2],$flow78$"
+            + CHECK_LITERAL_CAST
+            + r"$flow78$,$flow78$(\1::character varying)::text$flow78$,'g')"
+        )
+        original = _check_sql_template(source, field + "[1]", field + "[2]")
+        canonical = _check_sql_template(target, field + "[1]", replacement)
+        # Reconstruct the entire source too: regex anchors may not discard even
+        # an extra trailing newline or any syntax outside these exact forms.
+        arms.append(
+            "WHEN kind='constraint' AND "
+            + field
+            + " IS NOT NULL AND definition=("
+            + original
+            + ") THEN "
+            + canonical
+        )
+    return (
+        "SELECT kind,name,sub,CASE "
+        + " ".join(arms)
+        + " ELSE definition END definition "
+        "FROM ("
+        + query
+        + ") original_refs CROSS JOIN LATERAL (SELECT "
+        + ",".join(matches)
+        + ") m"
+    )
+
+
+RAW_CATALOGS = dict(CATALOGS)
+CATALOGS["acl"] = canonical_acl_query(RAW_CATALOGS["acl"])
+CATALOGS["references"] = canonical_references_query(RAW_CATALOGS["references"])
+
+
 def _hash_query(query):
     # SHA256 each canonical JSON row, retain duplicate multiplicities, then sort
     # and hash the complete multiset. statement_timeout and output cap are fixed.

@@ -11,8 +11,8 @@
       "sha256": "fb59825130da06335bf8cd2a9c76d402f9a4951e6c4ad926a6011886f85af383"
     },
     "phase2/ci_tests/run_acceptance_pg.py": {
-      "bytes": 31203,
-      "sha256": "49b392b5af30cbfce659626ca85696ddc7ba16e46eec2fc570a6c7e814907415"
+      "bytes": 34786,
+      "sha256": "5f3ffd17cc31d635d9c4b50e6b7951c20cd6be7a2ad7687d62ddf3e85c780142"
     },
     "phase2/ci_tests/run_celery_docker.py": {
       "bytes": 27630,
@@ -82,14 +82,14 @@
     },
     "phase2/tests/test_host_backup_control.py": {
       "after": {
-        "bytes": 30800,
-        "sha256": "1c00718debdb9e31b02e53887552a1576ae293ebe753683eb6a9ee99359b408b"
+        "bytes": 32496,
+        "sha256": "785de383a736be3a7da5526b28941cdd3ff826f2cf7f2525857533d459976537"
       },
       "before": {
         "bytes": 22565,
         "sha256": "f9bda25f6a929727344fbcd984383c8294e5d5cc17f5fe9e28f11aef1506a191"
       },
-      "reason": "Maintain existing restore/SQL/journal tests with narrow UID observation mock; add exact socket mount/options and private owner-transition negatives. Actual canonical capability and legacy tmpfs projection positive; 19 capability/mount/network/privilege mutation negatives remain HOLD. Temporary-postmaster readiness, unknown probe and bounded timeout regressions."
+      "reason": "Maintain existing restore/SQL/journal tests with narrow UID observation mock; add exact socket mount/options and private owner-transition negatives. Actual canonical capability and legacy tmpfs projection positive; 19 capability/mount/network/privilege mutation negatives remain HOLD. Temporary-postmaster readiness, unknown probe and bounded timeout regressions. Strict finite CHECK grammar and semantic-change negatives; raw unknown definitions preserved."
     },
     "phase2/tests/test_host_freeze_control.py": {
       "after": {
@@ -270,8 +270,8 @@
       "sha256": "acd3479265e346df535d34c818a4128a4179eb641d4baf5c052c09f0b30aea81"
     },
     "phase2/ci_tests/run_acceptance_pg.py": {
-      "bytes": 31203,
-      "sha256": "49b392b5af30cbfce659626ca85696ddc7ba16e46eec2fc570a6c7e814907415"
+      "bytes": 34786,
+      "sha256": "5f3ffd17cc31d635d9c4b50e6b7951c20cd6be7a2ad7687d62ddf3e85c780142"
     },
     "phase2/ci_tests/run_build_control_os.py": {
       "bytes": 2155,
@@ -430,8 +430,8 @@
       "sha256": "88ed4a1319493527b1ce7adb46e90abaf5c2cd921ba832b9dcb2d8f22ce8b19f"
     },
     "phase2/host_backup_control.py": {
-      "bytes": 40439,
-      "sha256": "13719ca8ed3935256b36acebc67a412bf1df5c3f4cbd53bdf0356f5a3274bbd0"
+      "bytes": 44239,
+      "sha256": "a42f49d367d62a075a343cbea9de6e05b84fb6c22ee02e4074083c9bce17ef55"
     },
     "phase2/host_build_control.py": {
       "bytes": 10366,
@@ -690,8 +690,8 @@
       "sha256": "0e73089f65c9bd4877e5f5ae4fee9269f585f93d8ac1ecd5a23f221e4be2914b"
     },
     "phase2/tests/test_host_backup_control.py": {
-      "bytes": 30800,
-      "sha256": "1c00718debdb9e31b02e53887552a1576ae293ebe753683eb6a9ee99359b408b"
+      "bytes": 32496,
+      "sha256": "785de383a736be3a7da5526b28941cdd3ff826f2cf7f2525857533d459976537"
     },
     "phase2/tests/test_host_build_control.py": {
       "bytes": 7371,
@@ -803,14 +803,14 @@
   "host_runtime_deltas": {
     "phase2/host_backup_control.py": {
       "after": {
-        "bytes": 40439,
-        "sha256": "13719ca8ed3935256b36acebc67a412bf1df5c3f4cbd53bdf0356f5a3274bbd0"
+        "bytes": 44239,
+        "sha256": "a42f49d367d62a075a343cbea9de6e05b84fb6c22ee02e4074083c9bce17ef55"
       },
       "before": {
         "bytes": 36677,
         "sha256": "18b45d5a6f0f0d1827fe69838053ae52d5df9c07f693ad481b2ee8fd7abfb8fe"
       },
-      "reason": "Preserve PG18 default ACL text cast; bind exact socket tmpfs and inspect its options. Require new data root0:0/0700 before start, same inode postgres UID:0/0700 after entrypoint, outer drill remains root0:0/0700. PostgreSQL UID comes from original bound DB image; no ownership changes to outer release directories. Actual Docker 31ad033 observation requires canonical CAP_* exact triple, privileged false, two top-level bind mounts and exact legacy socket HostConfig.Tmpfs; shared host/CI validator rejects extra/missing capabilities, mounts and tmpfs. Read-only readiness waits for final PID1 postgres executable, stable start ticks, PGDATA PID1 and socket lock PID1 before pg_isready success; temporary init postmaster cannot authorize first SQL. No SQL is retried."
+      "reason": "Preserve PG18 default ACL text cast; bind exact socket tmpfs and inspect its options. Require new data root0:0/0700 before start, same inode postgres UID:0/0700 after entrypoint, outer drill remains root0:0/0700. PostgreSQL UID comes from original bound DB image; no ownership changes to outer release directories. Actual Docker 31ad033 observation requires canonical CAP_* exact triple, privileged false, two top-level bind mounts and exact legacy socket HostConfig.Tmpfs; shared host/CI validator rejects extra/missing capabilities, mounts and tmpfs. Read-only readiness waits for final PID1 postgres executable, stable start ticks, PGDATA PID1 and socket lock PID1 before pg_isready success; temporary init postmaster cannot authorize first SQL. No SQL is retried. Actual 7d6297c restore: sort complete ACL items only (NULL/empty/duplicates/grantable retained); canonicalize exactly two full CHECK forms distributing varchar literal array-to-text casts. All other text remains exact. Source evidence confirms 22 ACL and 31 CHECK pairs, no other catalog differences."
     },
     "phase2/host_gate_control.py": {
       "after": {

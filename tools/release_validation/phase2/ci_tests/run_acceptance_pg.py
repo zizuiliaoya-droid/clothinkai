@@ -113,12 +113,12 @@ async def database_time(identity):
     return value["utc"]
 
 
-async def catalog_evidence(identity, snapshot):
+async def catalog_evidence(identity, snapshot, *, normalized=True):
     """Only the two fixed synthetic catalogs; bounded rows/bytes, no production logs."""
     require(re.fullmatch(r"[0-9a-f]{64}", identity), "ci_catalog_identity")
     result = {}
     for name in ("acl", "references"):
-        query = backup.CATALOGS[name]
+        query = (backup.CATALOGS if normalized else backup.RAW_CATALOGS)[name]
         script = (
             "BEGIN READ ONLY; SET LOCAL statement_timeout='30s'; SET LOCAL lock_timeout='5s'; "
             "SET LOCAL timezone='UTC'; SET LOCAL extra_float_digits=3; SET LOCAL work_mem='16MB'; SET LOCAL temp_file_limit='256MB'; "
@@ -158,7 +158,12 @@ async def catalog_evidence(identity, snapshot):
                 sorted(hashlib.sha256(row.encode()).hexdigest() for row in rows)
             ).encode()
         ).hexdigest()
-        require(digest == snapshot[name + "_sha256"], "ci_catalog_snapshot_changed")
+        expected_hash = (
+            snapshot[name + "_sha256"]
+            if normalized
+            else await backup._query_hash(identity, query)
+        )
+        require(digest == expected_hash, "ci_catalog_snapshot_changed")
         result[name] = {"sha256": digest, "row_texts": rows}
     result["memberships_context"] = json.loads(
         await backup._sql(
@@ -168,6 +173,80 @@ SELECT COALESCE(json_agg(q),'[]') FROM (SELECT pg_get_userbyid(roleid) role,pg_g
         )
     )
     return result
+
+
+async def catalog_normalization_probes(identity):
+    """Real PG parser, synthetic VALUES only; no catalog or business mutation."""
+
+    def literal(value):
+        return (
+            "NULL::text"
+            if value is None
+            else "'" + value.replace("'", "''") + "'::text"
+        )
+
+    async def acl(value):
+        return await backup._query_hash(
+            identity,
+            backup.canonical_acl_query(
+                "SELECT 'relation'::text kind,'public'::text ns,'fixture'::text name,"
+                + literal(value)
+                + " acl"
+            ),
+        )
+
+    first = "clothing_app=r/clothing_bypass"
+    second = "clothing_bypass=arwdDxtm/clothing_bypass"
+    base = "{" + first + "," + second + "}"
+    acl_hash = await acl(base)
+    require(
+        await acl("{" + second + "," + first + "}") == acl_hash, "ci_acl_permutation"
+    )
+    changes = {
+        "grantee": base.replace("clothing_app=", "root="),
+        "grantor": base.replace("r/clothing_bypass", "r/root"),
+        "privilege": base.replace("=r/", "=rw/"),
+        "grantable": base.replace("=r/", "=r*/"),
+        "duplicate": "{" + first + "," + first + "," + second + "}",
+    }
+    for name, value in changes.items():
+        require(await acl(value) != acl_hash, "ci_acl_substance_" + name)
+    require(await acl(None) != await acl("{}"), "ci_acl_null_empty")
+
+    async def reference(value):
+        return await backup._query_hash(
+            identity,
+            backup.canonical_references_query(
+                "SELECT 'constraint'::text kind,'fixture'::text name,'check_fixture'::text sub,"
+                + literal(value)
+                + " definition"
+            ),
+        )
+
+    for _, source, _ in backup.CHECK_FORMS:
+        raw = source.format(
+            column="status",
+            items="'ready'::character varying, 'a::character varying'::character varying, 'it''s'::character varying",
+        )
+        expected = backup.canonical_check_definition(raw)
+        baseline = await reference(raw)
+        require(await reference(expected) == baseline, "ci_check_observed_forms")
+        for value in (
+            raw.replace("'ready'", "'changed'"),
+            raw.replace("status", "other_column"),
+            raw.replace(" = ANY ", " <> ALL "),
+            raw.replace("::character varying", "::character varying(9)"),
+            raw + " NOT VALID",
+        ):
+            require(await reference(value) != baseline, "ci_check_substance")
+    return {
+        "synthetic_values_only": True,
+        "writes": False,
+        "acl_order_only": True,
+        "acl_substance_negatives": [*changes, "null_vs_empty"],
+        "check_forms": 2,
+        "check_literal_operator_column_type_suffix_changes_rejected": True,
+    }
 
 
 def catalog_differences(before, after):
@@ -276,6 +355,12 @@ async def restore(identity, image, temporary, output):
     before = await backup._database_snapshot(identity)
     before_catalogs = await catalog_evidence(identity, before)
     write(output / "restore-catalog-before.json", before_catalogs)
+    raw_before_catalogs = await catalog_evidence(identity, before, normalized=False)
+    write(output / "restore-catalog-raw-before.json", raw_before_catalogs)
+    write(
+        output / "restore-catalog-normalization-probes.json",
+        await catalog_normalization_probes(identity),
+    )
     dump = temporary / "database.dump"
     with dump.open("xb") as target:
         await asyncio.to_thread(
@@ -409,6 +494,12 @@ async def restore(identity, image, temporary, output):
         write(
             output / "restore-catalog-diff.json",
             catalog_differences(before_catalogs, after_catalogs),
+        )
+        raw_after_catalogs = await catalog_evidence(owned, after, normalized=False)
+        write(output / "restore-catalog-raw-after.json", raw_after_catalogs)
+        write(
+            output / "restore-catalog-raw-diff.json",
+            catalog_differences(raw_before_catalogs, raw_after_catalogs),
         )
         require(before == after, "ci_restore_complete_snapshot")
         source_after = await backup._database_snapshot(identity)
