@@ -147,9 +147,18 @@ class TestReceiverRead:
         for who in ("pr", "pr_manager", "admin", "warehouse"):
             resp = await svc.get_promotion(promo.id, getattr(flow_users, who))
             assert _receiver_of(resp) == _RECEIVER, who
-        # 财务看不到收货地址（Q4），运营看不到收件（4.6）
+        # 财务没有 promotion:read，不能越过详情 gate；投影层仍保留 Q4 的字段裁剪。
+        with pytest.raises(PermissionDeniedError) as denied:
+            await svc.get_promotion(promo.id, flow_users.finance)
+        assert denied.value.details["required_scope"] == "promotion"
+        # 运营可读详情但看不到收件（4.6）；单独验证财务投影，不扩大详情权限。
         for who in ("finance", "operations"):
-            resp = await svc.get_promotion(promo.id, getattr(flow_users, who))
+            user = getattr(flow_users, who)
+            resp = (
+                await svc._to_response(promo, user)
+                if who == "finance"
+                else await svc.get_promotion(promo.id, user)
+            )
             assert _receiver_of(resp) == dict.fromkeys(_RECEIVER), who
 
     async def test_list_projection_by_role(
@@ -1104,7 +1113,11 @@ class TestFlowUi:
             "freight_payment": {"state": "read"},
             "timeline": {"state": "read"},
         }
-        assert (await svc.get_promotion(promo.id, flow_users.finance)).ui == {
+        # 默认财务过不了详情 gate；仍在投影层验证原有独立运费摘要矩阵。
+        with pytest.raises(PermissionDeniedError) as denied:
+            await svc.get_promotion(promo.id, flow_users.finance)
+        assert denied.value.details["required_scope"] == "promotion"
+        assert (await svc._to_response(promo, flow_users.finance)).ui == {
             "column": "A",
             "actions": {},
             "fields": {"freight_payment": {"state": "read"}},
