@@ -11,12 +11,12 @@
       "sha256": "fb59825130da06335bf8cd2a9c76d402f9a4951e6c4ad926a6011886f85af383"
     },
     "phase2/ci_tests/run_acceptance_pg.py": {
-      "bytes": 27659,
-      "sha256": "b7f8e7a92f811122e44b76b25e422d3f55dcd9eb5189fb9a3e08bdb639c34c10"
+      "bytes": 31203,
+      "sha256": "49b392b5af30cbfce659626ca85696ddc7ba16e46eec2fc570a6c7e814907415"
     },
     "phase2/ci_tests/run_compose_docker.py": {
-      "bytes": 11032,
-      "sha256": "b4d7081a97942ad6652ed60509c0240ed0a3a981e16a0a22dd56d0e0ce2add27"
+      "bytes": 11683,
+      "sha256": "058561b0989798e231bc71b1aad165ca0dc2519c507fd35f449c84f6d1ad68ef"
     },
     "phase2/ci_tests/run_dbm_docker.py": {
       "bytes": 12108,
@@ -266,16 +266,16 @@
       "sha256": "acd3479265e346df535d34c818a4128a4179eb641d4baf5c052c09f0b30aea81"
     },
     "phase2/ci_tests/run_acceptance_pg.py": {
-      "bytes": 27659,
-      "sha256": "b7f8e7a92f811122e44b76b25e422d3f55dcd9eb5189fb9a3e08bdb639c34c10"
+      "bytes": 31203,
+      "sha256": "49b392b5af30cbfce659626ca85696ddc7ba16e46eec2fc570a6c7e814907415"
     },
     "phase2/ci_tests/run_build_control_os.py": {
       "bytes": 2155,
       "sha256": "dbdc1cd43ad07602358f1132305de35d6a4e467ddbdc6111df9ffb5801e50760"
     },
     "phase2/ci_tests/run_compose_docker.py": {
-      "bytes": 11032,
-      "sha256": "b4d7081a97942ad6652ed60509c0240ed0a3a981e16a0a22dd56d0e0ce2add27"
+      "bytes": 11683,
+      "sha256": "058561b0989798e231bc71b1aad165ca0dc2519c507fd35f449c84f6d1ad68ef"
     },
     "phase2/ci_tests/run_dbm_docker.py": {
       "bytes": 12108,

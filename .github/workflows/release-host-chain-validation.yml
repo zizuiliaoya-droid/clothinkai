@@ -216,10 +216,11 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
+          export FLOW78_CI_OUTPUT="$RUNNER_TEMP/release-validation"
           export FLOW78_CI_CONTROL_IMAGE=$(cat "$RUNNER_TEMP/release-validation/control-image-id.txt")
           export FLOW78_CI_PRODUCER_IMAGE=$(cat "$RUNNER_TEMP/release-validation/health-image-id.txt")
           export FLOW78_CI_NGINX_IMAGE=$(docker image inspect --format '{{.Id}}' nginx:1.27-alpine)
-          sudo --preserve-env=GITHUB_ACTIONS,FLOW78_CI_CONTROL_IMAGE,FLOW78_CI_PRODUCER_IMAGE,FLOW78_CI_NGINX_IMAGE "$(command -v python)" -B \
+          sudo --preserve-env=GITHUB_ACTIONS,FLOW78_CI_CONTROL_IMAGE,FLOW78_CI_PRODUCER_IMAGE,FLOW78_CI_NGINX_IMAGE,FLOW78_CI_OUTPUT "$(command -v python)" -B \
             validation/tools/release_validation/phase2/ci_tests/run_compose_docker.py \
             > "$RUNNER_TEMP/release-validation/compose-result.json" \
             2> "$RUNNER_TEMP/release-validation/compose-output.log"

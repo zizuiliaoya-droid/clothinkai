@@ -122,6 +122,11 @@ def main():
     project = "flow78-compose-" + secrets.token_hex(6)
     networks = {}
     version = call("compose", "version").decode().strip()
+    output = Path(os.environ["FLOW78_CI_OUTPUT"])
+    assert (
+        output.is_absolute() and output.name == "release-validation" and output.is_dir()
+    )
+    observations = []
     with tempfile.TemporaryDirectory(
         prefix="flow78-compose-", dir="/root"
     ) as temporary:
@@ -191,6 +196,17 @@ def main():
                     "prod-" + role,
                 )
                 after = observe(compose, project, current)
+                observations.append(
+                    {
+                        "role": role,
+                        "before": before,
+                        "after": after,
+                        "expected_image": current["services"]["prod-" + role]["image"],
+                    }
+                )
+                (output / "compose-observations.json").write_text(
+                    json.dumps(observations, sort_keys=True), encoding="utf-8"
+                )
                 verify_replaced(
                     before, after, role, current["services"]["prod-" + role]["image"]
                 )

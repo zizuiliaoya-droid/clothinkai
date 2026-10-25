@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections import Counter
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
@@ -112,6 +113,80 @@ async def database_time(identity):
     return value["utc"]
 
 
+async def catalog_evidence(identity, snapshot):
+    """Only the two fixed synthetic catalogs; bounded rows/bytes, no production logs."""
+    require(re.fullmatch(r"[0-9a-f]{64}", identity), "ci_catalog_identity")
+    result = {}
+    for name in ("acl", "references"):
+        query = backup.CATALOGS[name]
+        script = (
+            "BEGIN READ ONLY; SET LOCAL statement_timeout='30s'; SET LOCAL lock_timeout='5s'; "
+            "SET LOCAL timezone='UTC'; SET LOCAL extra_float_digits=3; SET LOCAL work_mem='16MB'; SET LOCAL temp_file_limit='256MB'; "
+            "WITH source AS (SELECT row_to_json(q)::text line FROM (" + query + ") q), "
+            "payload AS (SELECT count(*) n,COALESCE(json_agg(line ORDER BY line)::text,'[]') body FROM source) "
+            "SELECT CASE WHEN n<=20000 AND octet_length(body)<=4194304 THEN body ELSE '{\"diagnostic_bound_exceeded\":true}' END FROM payload; ROLLBACK;"
+        )
+        raw = await asyncio.to_thread(
+            call,
+            "exec",
+            "-i",
+            "-u",
+            "0",
+            identity,
+            "psql",
+            "-X",
+            "-q",
+            "-A",
+            "-t",
+            "--set=ON_ERROR_STOP=1",
+            "--host=/var/run/postgresql",
+            "--username=root",
+            "--dbname=" + DATABASE,
+            stdin=script.encode(),
+            timeout=40,
+        )
+        require(len(raw) <= 4194305, "ci_catalog_output_bound")
+        rows = json.loads(raw)
+        require(
+            type(rows) is list
+            and len(rows) <= 20000
+            and all(type(row) is str for row in rows),
+            "ci_catalog_rows_bound",
+        )
+        digest = hashlib.sha256(
+            "".join(
+                sorted(hashlib.sha256(row.encode()).hexdigest() for row in rows)
+            ).encode()
+        ).hexdigest()
+        require(digest == snapshot[name + "_sha256"], "ci_catalog_snapshot_changed")
+        result[name] = {"sha256": digest, "row_texts": rows}
+    result["memberships_context"] = json.loads(
+        await backup._sql(
+            identity,
+            b"""BEGIN READ ONLY; SET LOCAL statement_timeout='10s';
+SELECT COALESCE(json_agg(q),'[]') FROM (SELECT pg_get_userbyid(roleid) role,pg_get_userbyid(member) member,pg_get_userbyid(grantor) grantor,admin_option,inherit_option,set_option FROM pg_auth_members WHERE pg_get_userbyid(roleid) LIKE 'clothing_%' OR pg_get_userbyid(member) LIKE 'clothing_%' ORDER BY roleid,member,grantor LIMIT 128) q; ROLLBACK;""",
+        )
+    )
+    return result
+
+
+def catalog_differences(before, after):
+    result = {}
+    for name in ("acl", "references"):
+        left, right = (Counter(value[name]["row_texts"]) for value in (before, after))
+        result[name] = {
+            "only_source": [
+                {"row": json.loads(row), "count": count}
+                for row, count in sorted((left - right).items())
+            ],
+            "only_restore": [
+                {"row": json.loads(row), "count": count}
+                for row, count in sorted((right - left).items())
+            ],
+        }
+    return result
+
+
 async def restore_failure_evidence(identity, image, data, output):
     """Read only the already-created synthetic full ID; never inspect Env."""
     require(
@@ -199,6 +274,8 @@ async def restore(identity, image, temporary, output):
         },
     )
     before = await backup._database_snapshot(identity)
+    before_catalogs = await catalog_evidence(identity, before)
+    write(output / "restore-catalog-before.json", before_catalogs)
     dump = temporary / "database.dump"
     with dump.open("xb") as target:
         await asyncio.to_thread(
@@ -326,6 +403,12 @@ async def restore(identity, image, temporary, output):
         write(
             output / "restore-comparison.json",
             {"before": before, "after": after, "isolation": isolated},
+        )
+        after_catalogs = await catalog_evidence(owned, after)
+        write(output / "restore-catalog-after.json", after_catalogs)
+        write(
+            output / "restore-catalog-diff.json",
+            catalog_differences(before_catalogs, after_catalogs),
         )
         require(before == after, "ci_restore_complete_snapshot")
         source_after = await backup._database_snapshot(identity)
