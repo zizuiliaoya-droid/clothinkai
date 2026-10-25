@@ -17,6 +17,10 @@
     "phase2/ci_tests/run_producer_healthcheck.py": {
       "bytes": 6828,
       "sha256": "0340de3c25a3a57f082d6dd9df0b0a37dbd75a7067ddd4cdcebe7a02543b980c"
+    },
+    "phase2/ci_tests/test_host_dashboard_user.py": {
+      "bytes": 3985,
+      "sha256": "335006046b898ed38e1961756a6a3283df752447c593aaeb9f862e176f515d3e"
     }
   },
   "ci_test_deltas": {
@@ -247,6 +251,10 @@
       "bytes": 11315,
       "sha256": "dcb2b81f99c85a2477349fd2e26059153a8c7475dde2e69e9ec61c2f231a68fb"
     },
+    "phase2/ci_tests/test_host_dashboard_user.py": {
+      "bytes": 3985,
+      "sha256": "335006046b898ed38e1961756a6a3283df752447c593aaeb9f862e176f515d3e"
+    },
     "phase2/ci_tests/test_host_sequence.py": {
       "bytes": 4078,
       "sha256": "af56b2df0f7b1449746df57a9ac3eca84ba6b35dd293a18ef4c0279df53095ee"
@@ -356,8 +364,8 @@
       "sha256": "cc7167da55d07504c6b9484aa33e9a972001c7519a89006418fa88772522a0b3"
     },
     "phase2/host_gate_control.py": {
-      "bytes": 9469,
-      "sha256": "85f45be5204c8e20fe2f445e32b7bd3aa641088aa8abab8125907d8ae9d18f3f"
+      "bytes": 9494,
+      "sha256": "189e7201b8305a1249070a65663be1c9f338f368fbc2382d50755c68229f453d"
     },
     "phase2/host_jobs_control.py": {
       "bytes": 6751,
@@ -710,6 +718,19 @@
   "fixture_only": true,
   "frozen": true,
   "historical_tool_commit": "5472ee15abe50f760ae77883e8c3f4b3a0dab37c",
+  "host_runtime_deltas": {
+    "phase2/host_gate_control.py": {
+      "after": {
+        "bytes": 9494,
+        "sha256": "189e7201b8305a1249070a65663be1c9f338f368fbc2382d50755c68229f453d"
+      },
+      "before": {
+        "bytes": 9469,
+        "sha256": "85f45be5204c8e20fe2f445e32b7bd3aa641088aa8abab8125907d8ae9d18f3f"
+      },
+      "reason": "root authorized fixed dashboard snapshot reader UID:GID 10001:10001 after private-file permission failure; no chmod/chown/capability change"
+    }
+  },
   "live_enabled": false,
   "new_real_pg_executed": false,
   "original_healthcheck_compatible": false,

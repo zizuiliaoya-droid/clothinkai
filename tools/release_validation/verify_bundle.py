@@ -68,6 +68,14 @@ def verify():
     for name, delta in deltas.items():
         require(delta["before"] == transfer["files"][name], "test delta origin drift")
     changed = {name: delta["after"] for name, delta in deltas.items()}
+    runtime_deltas = manifest["host_runtime_deltas"]
+    require(
+        set(runtime_deltas) == {"phase2/host_gate_control.py"},
+        "finite authorized host runtime delta required",
+    )
+    for name, delta in runtime_deltas.items():
+        require(delta["before"] == transfer["files"][name], "host delta origin drift")
+    changed.update({name: delta["after"] for name, delta in runtime_deltas.items()})
     public_raw = (HERE / "original-public-pins-1024.json").read_bytes()
     require(
         sha256(public_raw) == manifest["original_public_pins_sha256"],

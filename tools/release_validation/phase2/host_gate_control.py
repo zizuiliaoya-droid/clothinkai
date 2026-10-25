@@ -44,7 +44,7 @@ async def dashboard_state(web_id):
     require(board["image"] == BOARD_IMAGE, "gate_board_image")
     row = parse(
         await _capture(
-            DOCKER + ("exec", "-i", BOARD_ID, "python", "-I", "-B", "-"),
+            DOCKER + ("exec", "--user", "10001:10001", "-i", BOARD_ID, "python", "-I", "-B", "-"),
             stdin=BOARD_PROBE,
             timeout=15,
         )
