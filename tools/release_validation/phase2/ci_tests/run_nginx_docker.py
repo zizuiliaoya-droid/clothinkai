@@ -264,6 +264,8 @@ async def exercise(root, python_image, nginx_image):
             "--pids-limit=64",
             "--tmpfs",
             "/tmp:rw,noexec,nosuid,size=32m",
+            "--tmpfs",
+            "/var/cache/nginx:rw,noexec,nosuid,size=16m,mode=0755",
             "--mount",
             "type=bind,src=" + str(root / "control") + ",dst=/opt/production,readonly",
             "--mount",
@@ -286,13 +288,19 @@ async def exercise(root, python_image, nginx_image):
         ).decode()
         assert re.fullmatch(r"[0-9a-f]{64}", web)
         containers.append(web)
-        projection = '{"id":{{json .Id}},"image":{{json .Image}},"pid":{{json .State.Pid}},"ports":{{json .HostConfig.PortBindings}},"privileged":{{json .HostConfig.Privileged}},"cap_add":{{json .HostConfig.CapAdd}},"cap_drop":{{json .HostConfig.CapDrop}},"tmpfs":{{json .HostConfig.Tmpfs}},"networks":{{json .NetworkSettings.Networks}}}'
+        projection = '{"id":{{json .Id}},"image":{{json .Image}},"pid":{{json .State.Pid}},"ports":{{json .HostConfig.PortBindings}},"privileged":{{json .HostConfig.Privileged}},"readonly":{{json .HostConfig.ReadonlyRootfs}},"cap_add":{{json .HostConfig.CapAdd}},"cap_drop":{{json .HostConfig.CapDrop}},"tmpfs":{{json .HostConfig.Tmpfs}},"networks":{{json .NetworkSettings.Networks}}}'
         observed = json.loads(call("inspect", "--format", projection, web))
         assert (
             observed["id"] == web
             and observed["image"] == nginx_image
             and observed["ports"] in (None, {})
             and observed["privileged"] is False
+            and observed["readonly"] is True
+            and observed["tmpfs"]
+            == {
+                "/tmp": "rw,noexec,nosuid,size=32m",
+                "/var/cache/nginx": "rw,noexec,nosuid,size=16m,mode=0755",
+            }
         )
         networks = list(observed["networks"].values())
         assert len(networks) == 1 and networks[0]["NetworkID"] == network
@@ -372,6 +380,8 @@ async def exercise(root, python_image, nginx_image):
             "mode": "real_linux_nginx_synthetic_upstreams",
             "nginx_image": nginx_image,
             "dependency_image": python_image,
+            "fixture_only_cache_tmpfs_added": True,
+            "production_cache_mount_verified": False,
             "template_sha256": {
                 "open": hashlib.sha256(opened).hexdigest(),
                 "closed": hashlib.sha256(closed).hexdigest(),
