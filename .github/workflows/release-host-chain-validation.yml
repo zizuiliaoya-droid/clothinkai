@@ -190,6 +190,28 @@ jobs:
             --entrypoint python "$image" -I -B /validation/phase2/ci_tests/run_dbm_docker.py \
             > "$RUNNER_TEMP/release-validation/dbm-result.json" \
             2> "$RUNNER_TEMP/release-validation/dbm-output.log"
+      - name: Actual nginx maintenance routes and old-worker drain
+        if: always()
+        run: |
+          set -euo pipefail
+          python - "$GITHUB_WORKSPACE/product-source/frontend/Dockerfile" <<'PY'
+          import hashlib, json, os, sys
+          from pathlib import Path
+          raw = Path(sys.argv[1]).read_bytes()
+          assert b"FROM nginx:1.27-alpine\n" in raw
+          result = {"source_commit": os.environ["SOURCE_COMMIT"], "dockerfile_sha256": hashlib.sha256(raw).hexdigest(), "base_reference": "nginx:1.27-alpine", "production_image_verified": False}
+          output = Path(os.environ["RUNNER_TEMP"]) / "release-validation/nginx-source-base.json"
+          output.write_text(json.dumps(result, sort_keys=True) + "\n", encoding="utf-8")
+          PY
+          docker pull nginx:1.27-alpine > "$RUNNER_TEMP/release-validation/nginx-pull.log" 2>&1
+          export FLOW78_CI_NGINX_IMAGE=$(docker image inspect --format '{{.Id}}' nginx:1.27-alpine)
+          [[ "$FLOW78_CI_NGINX_IMAGE" =~ ^sha256:[0-9a-f]{64}$ ]]
+          docker image inspect --format '{"id":{{json .Id}},"repo_digests":{{json .RepoDigests}}}' "$FLOW78_CI_NGINX_IMAGE" > "$RUNNER_TEMP/release-validation/nginx-fixture-image.json"
+          export FLOW78_CI_PRODUCER_IMAGE=$(cat "$RUNNER_TEMP/release-validation/control-image-id.txt")
+          sudo --preserve-env=GITHUB_ACTIONS,FLOW78_CI_PRODUCER_IMAGE,FLOW78_CI_NGINX_IMAGE "$(command -v python)" -B \
+            validation/tools/release_validation/phase2/ci_tests/run_nginx_docker.py \
+            > "$RUNNER_TEMP/release-validation/nginx-result.json" \
+            2> "$RUNNER_TEMP/release-validation/nginx-output.log"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -18,6 +18,10 @@
       "bytes": 12108,
       "sha256": "15352560787c691897f2b1948539952758cab1f5d0b43c406e0ad52a1706badc"
     },
+    "phase2/ci_tests/run_nginx_docker.py": {
+      "bytes": 17170,
+      "sha256": "71e0605baa410c1ef23ad05e0ea961543f0d51d7ae8bbc59f64f0a1c2baf1a54"
+    },
     "phase2/ci_tests/run_producer_healthcheck.py": {
       "bytes": 11753,
       "sha256": "cc6f7ed0de8a0fa40d3918101d53b1e8c8d11dd39bbd6d1d129fb2d7aedd69cd"
@@ -287,6 +291,10 @@
     "phase2/ci_tests/run_linux_os.py": {
       "bytes": 2622,
       "sha256": "fd3792e83cc02a545df2f3334e013221d0e73543c0aaf534dd137c1df1973b07"
+    },
+    "phase2/ci_tests/run_nginx_docker.py": {
+      "bytes": 17170,
+      "sha256": "71e0605baa410c1ef23ad05e0ea961543f0d51d7ae8bbc59f64f0a1c2baf1a54"
     },
     "phase2/ci_tests/run_producer_healthcheck.py": {
       "bytes": 11753,
