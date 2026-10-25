@@ -819,22 +819,55 @@ async def _drill_identity(identity, data, dump_name, *, owner=(0, 0)):
     return observed
 
 
+FINAL_POSTMASTER_PROBE = """set -u
+# During image initialization the accepting temporary postmaster is a child of
+# entrypoint. Only the final exec'd PID1 may authorize the first restore SQL.
+if [ "$(cat /proc/1/comm)" != postgres ]; then printf initializing; exit 0; fi
+if ! test /proc/1/exe -ef "$(command -v postgres)"; then printf unknown_exe; exit 0; fi
+if ! read -r data_pid < /var/lib/postgresql/postmaster.pid; then printf initializing; exit 0; fi
+if ! read -r socket_pid < /var/run/postgresql/.s.PGSQL.5432.lock; then printf initializing; exit 0; fi
+if [ "$data_pid" != 1 ] || [ "$socket_pid" != 1 ]; then printf initializing; exit 0; fi
+if ! test -S /var/run/postgresql/.s.PGSQL.5432; then printf initializing; exit 0; fi
+before=$(awk '{print $22}' /proc/1/stat)
+pg_isready -q -h /var/run/postgresql -U root -d clothing_erp_prod_20261018
+status=$?
+if [ "$status" != 0 ]; then printf 'starting:%s' "$status"; exit 0; fi
+after=$(awk '{print $22}' /proc/1/stat)
+read -r data_pid < /var/lib/postgresql/postmaster.pid || exit 1
+read -r socket_pid < /var/run/postgresql/.s.PGSQL.5432.lock || exit 1
+if [ "$before" != "$after" ] || [ "$data_pid" != 1 ] || [ "$socket_pid" != 1 ]; then printf unknown_changed; exit 0; fi
+if ! test /proc/1/exe -ef "$(command -v postgres)"; then printf unknown_exe; exit 0; fi
+printf 'ready:%s' "$after"
+"""
+
+
 async def _ready(identity):
+    sha(identity)
     for _ in range(30):
-        # One read-only probe process returns a status; no mutation is retried.
+        # Same UID permits /proc executable identity reads without adding caps.
+        # These bounded startup polls never repeat any SQL or container write.
         raw = await _capture(
             DOCKER
             + (
                 "exec",
+                "--user",
+                "postgres",
                 identity,
                 "sh",
                 "-c",
-                "pg_isready -q -h /var/run/postgresql -U root -d clothing_erp_prod_20261018; printf '%s' $?",
+                FINAL_POSTMASTER_PROBE,
             )
         )
-        require(raw in (b"0", b"1", b"2"), "restore_readiness")
-        if raw == b"0":
-            return
+        if re.fullmatch(rb"ready:[1-9][0-9]*", raw):
+            return {
+                "pid": 1,
+                "start_ticks": int(raw.split(b":")[1]),
+                "final_postmaster_executable_verified": True,
+                "socket_owner_pid": 1,
+            }
+        require(
+            raw in (b"initializing", b"starting:1", b"starting:2"), "restore_readiness"
+        )
         await asyncio.sleep(1)
     require(False, "restore_readiness_timeout")
 

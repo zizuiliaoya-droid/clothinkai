@@ -545,6 +545,41 @@ class NarrowBoundaryTests(NoSocketAsyncCase):
             with self.assertRaisesRegex(Rejected, "restore_container_isolation"):
                 await control._drill_identity("9" * 64, data, NAME)
 
+    async def test_ready_requires_final_pid1_and_bound_socket_not_temporary_server(self):
+        with (
+            patch.object(control, "_capture", AsyncMock(side_effect=[b"initializing", b"starting:1", b"ready:12345"])) as capture,
+            patch.object(control.asyncio, "sleep", AsyncMock()) as wait,
+        ):
+            result = await control._ready("9" * 64)
+        self.assertEqual(result, {"pid": 1, "start_ticks": 12345, "final_postmaster_executable_verified": True, "socket_owner_pid": 1})
+        self.assertEqual(capture.await_count, 3)
+        self.assertEqual(wait.await_count, 2)
+        for args in capture.await_args_list:
+            self.assertEqual(args.args[0][-6:], ("--user", "postgres", "9" * 64, "sh", "-c", control.FINAL_POSTMASTER_PROBE))
+        self.assertIn("test /proc/1/exe -ef", control.FINAL_POSTMASTER_PROBE)
+        self.assertIn("/var/lib/postgresql/postmaster.pid", control.FINAL_POSTMASTER_PROBE)
+        self.assertIn("/var/run/postgresql/.s.PGSQL.5432.lock", control.FINAL_POSTMASTER_PROBE)
+        self.assertNotIn("psql", control.FINAL_POSTMASTER_PROBE)
+
+    async def test_readiness_unknown_and_incomplete_startup_remain_hold(self):
+        for raw in (b"0", b"ready:0", b"ready:123\n", b"unknown_exe", b"unknown_changed", b"starting:3"):
+            with (
+                self.subTest(raw=raw),
+                patch.object(control, "_capture", AsyncMock(return_value=raw)) as capture,
+                patch.object(control.asyncio, "sleep", AsyncMock()) as wait,
+                self.assertRaisesRegex(Rejected, "restore_readiness"),
+            ):
+                await control._ready("9" * 64)
+            capture.assert_awaited_once()
+            wait.assert_not_awaited()
+        with (
+            patch.object(control, "_capture", AsyncMock(return_value=b"initializing")) as capture,
+            patch.object(control.asyncio, "sleep", AsyncMock()),
+            self.assertRaisesRegex(Rejected, "restore_readiness_timeout"),
+        ):
+            await control._ready("9" * 64)
+        self.assertEqual(capture.await_count, 30)
+
     async def test_restore_requires_exact_socket_tmpfs_and_owner_stage(self):
         data = {"path": control.ROOT + "/releases/flow78-aaaaaaaaaaaa/drill/data"}
         original = {

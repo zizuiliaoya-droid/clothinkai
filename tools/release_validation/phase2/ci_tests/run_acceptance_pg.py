@@ -277,7 +277,8 @@ async def restore(identity, image, temporary, output):
         )
         require(re.fullmatch(r"[0-9a-f]{64}", owned), "ci_restore_full_id")
         call("start", owned)
-        await backup._ready(owned)
+        ready = await backup._ready(owned)
+        write(output / "restore-final-ready.json", ready)
         backup._data_identity(data_identity, owner=(postgres_uid, 0))
         projection = '{"id":{{json .Id}},"image":{{json .Image}},"network":{{json .HostConfig.NetworkMode}},"ports":{{json .HostConfig.PortBindings}},"privileged":{{json .HostConfig.Privileged}},"cap_add":{{json .HostConfig.CapAdd}},"cap_drop":{{json .HostConfig.CapDrop}}}'
         isolated = json.loads(call("inspect", "--format", projection, owned))
