@@ -14,9 +14,11 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections import deque
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import host_gate_control as gate_control
 from dashboard_contract import validate_routes
 from fixed_host_transport import _capture
 from host_gate_control import nginx_workers, wait_old_workers
@@ -149,7 +151,36 @@ async def routes(address, context, challenge, payload, *, closed):
     return results
 
 
-async def exercise(root, python_image, nginx_image):
+def record_process_read(read, samples, pid, phase="guard_read"):
+    """Observe the real reader without replacing, filtering or mutating its result."""
+    item = {"pid": pid, "phase": phase, "monotonic_ns": time.monotonic_ns()}
+    try:
+        row = read(pid)
+    except BaseException as error:
+        item["error"] = {"type": type(error).__name__, "code": str(error)[:256]}
+        samples.append(item)
+        raise
+    item["observation"] = (
+        None
+        if row is None
+        else {
+            **{key: row[key] for key in ("pid", "state", "ppid", "start_ticks")},
+            "command_hex": row["command"].hex(),
+        }
+    )
+    samples.append(item)
+    return row
+
+
+def require_drain_pending(task):
+    if task.done():
+        task.result()  # Propagate a real failure; done() alone is not successful drain.
+        raise AssertionError(
+            "drain successfully completed while original request remained active"
+        )
+
+
+async def exercise(root, python_image, nginx_image, *, output):
     files = Path(__file__).resolve().parents[1] / "templates"
     opened = (files / "nginx-release-open.conf").read_bytes()
     closed = (files / "nginx-release-closed.conf").read_bytes()
@@ -196,6 +227,10 @@ async def exercise(root, python_image, nginx_image):
     context = ssl.create_default_context(cafile=str(root / "cert/fullchain.pem"))
     control = os.open(root / "control", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     network, containers, held, draining = None, [], None, None
+    web, observed, original, failure, after_failure = None, None, None, None, None
+    samples = deque(maxlen=64)
+    read_process = gate_control._proc
+    gate_control._proc = lambda pid: record_process_read(read_process, samples, pid)
     try:
         _atomic_replace(control, None, opened, absent=True)
         network = call(
@@ -336,9 +371,7 @@ async def exercise(root, python_image, nginx_image):
         )
         draining = asyncio.create_task(wait_old_workers(original))
         await asyncio.sleep(0.5)
-        assert not draining.done(), (
-            "drain incorrectly completed while original request remained active"
-        )
+        require_drain_pending(draining)
         maintenance = await routes(
             address,
             context,
@@ -346,7 +379,7 @@ async def exercise(root, python_image, nginx_image):
             payload,
             closed=True,
         )
-        assert not draining.done()
+        require_drain_pending(draining)
         (root / "events/release").write_bytes(b"release")
         assert (await held)[0] == 200
         closed_workers = await asyncio.wait_for(draining, 15)
@@ -405,7 +438,52 @@ async def exercise(root, python_image, nginx_image):
             "production_29_actions_verified": False,
             "release_gate": "HOLD_remaining_release_validation",
         }
-    except BaseException:
+    except BaseException as error:
+        failure = {
+            "type": type(error).__name__,
+            "code": str(error)[:256],
+            "held_request_done": None if held is None else held.done(),
+            "request_entered": (root / "events/entered").exists(),
+            "request_released": (root / "events/release").exists(),
+        }
+        # One diagnostic read of the same bound master. Only its currently listed
+        # children may be read again, and none of these reads changes the failure.
+        if original is not None:
+            try:
+                pid = original["master"]["pid"]
+                master = record_process_read(
+                    read_process, samples, pid, "after_failure"
+                )
+                assert (
+                    master is not None
+                    and {k: master[k] for k in ("pid", "start_ticks")}
+                    == original["master"]
+                )
+                assert master["state"] not in ("Z", "X")
+                assert master["command"].startswith(b"nginx: master process nginx ")
+                assert b"-c /opt/production/nginx-active.conf" in master["command"]
+                path = f"/proc/{pid}/task/{pid}/children"
+                fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+                try:
+                    raw = os.read(fd, 65537)
+                finally:
+                    os.close(fd)
+                assert len(raw) <= 65536
+                children = raw.split()
+                assert len(children) <= 256 and all(v.isdigit() for v in children)
+                after_failure = {
+                    "master_children": [int(v) for v in children],
+                    "read_limit": 16,
+                }
+                for child in children[:16]:
+                    record_process_read(
+                        read_process, samples, int(child), "after_failure"
+                    )
+            except BaseException as diagnostic_error:  # noqa: BLE001 - retain original failure
+                after_failure = {
+                    "error_type": type(diagnostic_error).__name__,
+                    "code": str(diagnostic_error)[:256],
+                }
         for identity in containers:
             try:
                 raw = await _capture(
@@ -443,9 +521,36 @@ async def exercise(root, python_image, nginx_image):
                 )
         raise
     finally:
+        gate_control._proc = read_process
+        try:
+            (output / "nginx-process-observations.json").write_text(
+                json.dumps(
+                    {
+                        "synthetic_container_id": web,
+                        "container_projection": observed,
+                        "original_workers": original,
+                        "failure": failure,
+                        "after_failure": after_failure,
+                        "sample_limit": 64,
+                        "samples": list(samples),
+                        "runtime_policy_changed": False,
+                        "diagnostic_reads_affect_verdict": False,
+                    },
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+        except Exception as diagnostic_error:  # noqa: BLE001 - preserve original verdict
+            print(
+                json.dumps(
+                    {"process_diagnostic_error": type(diagnostic_error).__name__}
+                ),
+                file=sys.stderr,
+            )
         (root / "events/release").write_bytes(b"release")
-        if draining is not None and not draining.done():
-            draining.cancel()
+        if draining is not None:
+            if not draining.done():
+                draining.cancel()
             await asyncio.gather(draining, return_exceptions=True)
         if held is not None:
             await asyncio.gather(held, return_exceptions=True)
@@ -468,8 +573,12 @@ def main():
     assert all(re.fullmatch(r"sha256:[0-9a-f]{64}", image) for image in images)
     for image in images:
         assert call("image", "inspect", "--format", "{{.Id}}", image).decode() == image
+    output = Path(os.environ["FLOW78_CI_OUTPUT"])
+    assert (
+        output.is_absolute() and output.name == "release-validation" and output.is_dir()
+    )
     with tempfile.TemporaryDirectory(prefix="flow78-nginx-ci-") as temporary:
-        result = asyncio.run(exercise(Path(temporary), *images))
+        result = asyncio.run(exercise(Path(temporary), *images, output=output))
     print(json.dumps(result, sort_keys=True))
 
 

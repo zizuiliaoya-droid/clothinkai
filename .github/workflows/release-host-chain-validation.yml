@@ -309,7 +309,8 @@ jobs:
           [[ "$FLOW78_CI_NGINX_IMAGE" =~ ^sha256:[0-9a-f]{64}$ ]]
           docker image inspect --format '{"id":{{json .Id}},"repo_digests":{{json .RepoDigests}}}' "$FLOW78_CI_NGINX_IMAGE" > "$RUNNER_TEMP/release-validation/nginx-fixture-image.json"
           export FLOW78_CI_PRODUCER_IMAGE=$(cat "$RUNNER_TEMP/release-validation/control-image-id.txt")
-          sudo --preserve-env=GITHUB_ACTIONS,FLOW78_CI_PRODUCER_IMAGE,FLOW78_CI_NGINX_IMAGE "$(command -v python)" -B \
+          export FLOW78_CI_OUTPUT="$RUNNER_TEMP/release-validation"
+          sudo --preserve-env=GITHUB_ACTIONS,FLOW78_CI_PRODUCER_IMAGE,FLOW78_CI_NGINX_IMAGE,FLOW78_CI_OUTPUT "$(command -v python)" -B \
             validation/tools/release_validation/phase2/ci_tests/run_nginx_docker.py \
             > "$RUNNER_TEMP/release-validation/nginx-result.json" \
             2> "$RUNNER_TEMP/release-validation/nginx-output.log"
