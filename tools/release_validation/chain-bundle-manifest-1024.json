@@ -14,6 +14,10 @@
       "bytes": 27593,
       "sha256": "f72a9133352de9c51926935a7ffffe384444e209eec4bb979723a3d53f7d87f2"
     },
+    "phase2/ci_tests/run_compose_docker.py": {
+      "bytes": 11032,
+      "sha256": "b4d7081a97942ad6652ed60509c0240ed0a3a981e16a0a22dd56d0e0ce2add27"
+    },
     "phase2/ci_tests/run_dbm_docker.py": {
       "bytes": 12108,
       "sha256": "15352560787c691897f2b1948539952758cab1f5d0b43c406e0ad52a1706badc"
@@ -267,6 +271,10 @@
     "phase2/ci_tests/run_build_control_os.py": {
       "bytes": 2155,
       "sha256": "dbdc1cd43ad07602358f1132305de35d6a4e467ddbdc6111df9ffb5801e50760"
+    },
+    "phase2/ci_tests/run_compose_docker.py": {
+      "bytes": 11032,
+      "sha256": "b4d7081a97942ad6652ed60509c0240ed0a3a981e16a0a22dd56d0e0ce2add27"
     },
     "phase2/ci_tests/run_dbm_docker.py": {
       "bytes": 12108,
