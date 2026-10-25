@@ -112,6 +112,65 @@ async def database_time(identity):
     return value["utc"]
 
 
+async def restore_failure_evidence(identity, image, data, output):
+    """Read only the already-created synthetic full ID; never inspect Env."""
+    require(
+        re.fullmatch(r"[0-9a-f]{64}", identity)
+        and re.fullmatch(r"sha256:[0-9a-f]{64}", image),
+        "ci_restore_diagnostic_identity",
+    )
+    projection = '{"id":{{json .Id}},"image":{{json .Image}},"status":{{json .State.Status}},"running":{{json .State.Running}},"pid":{{json .State.Pid}},"exit_code":{{json .State.ExitCode}},"oom":{{json .State.OOMKilled}},"error":{{json .State.Error}}}'
+    state = json.loads(
+        await backup._capture(
+            DOCKER + ("inspect", "--format", projection, identity), timeout=10
+        )
+    )
+    require(
+        state["id"] == identity and state["image"] == image,
+        "ci_restore_diagnostic_binding",
+    )
+    info = data.lstat()
+    write(
+        output / "restore-failure-state.json",
+        {
+            "data_kind": "synthetic_restore_failure",
+            "container": state,
+            "bind_parent": {
+                "uid": info.st_uid,
+                "gid": info.st_gid,
+                "mode": info.st_mode & 0o777,
+            },
+        },
+    )
+    # Both streams are captured; head bounds bytes even for one enormous line.
+    # timeout bounds the entire read-only pipeline. A nonzero logs status is
+    # diagnostic text only; the original restore failure is always re-raised.
+    raw = await backup._capture(
+        (
+            "/usr/bin/timeout",
+            "15",
+            "/bin/sh",
+            "-c",
+            '/usr/bin/docker --host unix:///var/run/docker.sock logs --tail 80 "$1" 2>&1 | /usr/bin/head -c 65536',
+            "restore-fixture-diagnostic",
+            identity,
+        ),
+        timeout=20,
+    )
+    require(len(raw) <= 65536, "ci_restore_diagnostic_bound")
+    with (output / "restore-failure.log").open("xb") as target:
+        target.write(raw)
+    write(
+        output / "restore-failure-log-meta.json",
+        {
+            "container_id": identity,
+            "bytes": len(raw),
+            "possibly_truncated": len(raw) == 65536,
+            "tail_lines": 80,
+        },
+    )
+
+
 async def restore(identity, image, temporary, output):
     """Real dump and same isolation/init/restore primitives as host module.
 
@@ -145,6 +204,7 @@ async def restore(identity, image, temporary, output):
     inode = (data.stat().st_dev, data.stat().st_ino)
     owned = None
     started = time.monotonic()
+    failed = False
     try:
         owned = (
             call(
@@ -238,10 +298,36 @@ async def restore(identity, image, temporary, output):
             "original_api_backup_tested": False,
             "r2_tested": False,
         }
+    except BaseException:
+        failed = True
+        if owned is not None and re.fullmatch(r"[0-9a-f]{64}", owned):
+            try:
+                await restore_failure_evidence(owned, image, data, output)
+            except BaseException as diagnostic_error:  # noqa: BLE001 - preserve original restore failure
+                print(
+                    json.dumps(
+                        {
+                            "data_kind": "synthetic_restore_diagnostic_failure",
+                            "error_type": type(diagnostic_error).__name__,
+                        }
+                    ),
+                    file=sys.stderr,
+                    flush=True,
+                )
+        raise
     finally:
-        if owned is not None:
+        if owned is not None and re.fullmatch(r"[0-9a-f]{64}", owned):
             # This exact ID was created above, never a container name or glob.
-            call("rm", "-f", owned)
+            try:
+                call("rm", "-f", owned)
+            except BaseException:
+                if not failed:
+                    raise
+                print(
+                    '{"data_kind":"synthetic_restore_cleanup_failed_original_error_preserved"}',
+                    file=sys.stderr,
+                    flush=True,
+                )
 
 
 async def negative_cases(identity, spec, before, after, migrated, counts, window):
