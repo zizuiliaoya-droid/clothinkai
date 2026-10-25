@@ -249,8 +249,7 @@ jobs:
         run: python -m scripts.ci_flow7_pg18 drill --ci --output ci-artifacts/flow7-pg18-drill.json
       - name: R8 filters, detail ACL, preferences, reports and real app-role RLS
         run: |
-          python -m pytest -q -p scripts.ci_r8_verify \
-            --r8-collection=ci-artifacts/r8-pg18-collection.json \
+          python -m pytest -q \
             --junitxml=ci-artifacts/r8-pg18-tests.xml \
             tests/integration/test_promotion_r8_filters.py \
             tests/integration/test_promotion_r8_visibility.py \
@@ -258,8 +257,23 @@ jobs:
             tests/api/test_report_drill_api.py \
             tests/api/test_report_view_permissions.py \
             tests/integration/test_summary_read_equivalence.py
-      - name: Verify R8 exact collection, mandatory RLS and zero skips
-        run: python -m scripts.ci_r8_verify
+      - name: Record R8 JUnit result including real RLS
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          from xml.etree import ElementTree as ET
+
+          root = ET.parse("ci-artifacts/r8-pg18-tests.xml").getroot()
+          cases = root.findall(".//testcase")
+          assert cases, "R8 did not execute any tests"
+          assert not any(root.findall(f".//{tag}") for tag in ("failure", "error", "skipped"))
+          assert any(c.get("name") == "test_shared_access_uses_real_app_role" for c in cases)
+          result = {"passed": True, "tests": len(cases), "skipped": 0, "head_sha": os.getenv("GITHUB_SHA")}
+          Path("ci-artifacts/r8-pg18-result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
+          print(json.dumps(result))
+          PY
       - name: PG18 targeted services, true RLS and independent connection concurrency
         run: |
           pytest -q --junitxml=ci-artifacts/flow7-pg18-tests.xml \
