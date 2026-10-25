@@ -249,7 +249,7 @@ jobs:
         run: python -m scripts.ci_flow7_pg18 drill --ci --output ci-artifacts/flow7-pg18-drill.json
       - name: R8 filters, detail ACL, preferences, reports and real app-role RLS
         run: |
-          pytest -q -p scripts.ci_r8_verify \
+          python -m pytest -q -p scripts.ci_r8_verify \
             --r8-collection=ci-artifacts/r8-pg18-collection.json \
             --junitxml=ci-artifacts/r8-pg18-tests.xml \
             tests/integration/test_promotion_r8_filters.py \
