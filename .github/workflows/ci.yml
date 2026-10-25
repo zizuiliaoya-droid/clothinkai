@@ -291,6 +291,19 @@ jobs:
         run: python -m scripts.ci_flow8_faults
       - name: Verify PR8 mandatory evidence and zero skips
         run: python -m scripts.ci_flow8_verify
+      - name: R8 filters, detail ACL, preferences, reports and real app-role RLS
+        run: |
+          pytest -q -p scripts.ci_r8_verify \
+            --r8-collection=ci-artifacts/r8-pg18-collection.json \
+            --junitxml=ci-artifacts/r8-pg18-tests.xml \
+            tests/integration/test_promotion_r8_filters.py \
+            tests/integration/test_promotion_r8_visibility.py \
+            tests/integration/test_filter_preference.py \
+            tests/api/test_report_drill_api.py \
+            tests/api/test_report_view_permissions.py \
+            tests/integration/test_summary_read_equivalence.py
+      - name: Verify R8 exact collection, mandatory RLS and zero skips
+        run: python -m scripts.ci_r8_verify
       - name: Retain synthetic validation evidence
         if: always()
         uses: actions/upload-artifact@v4
