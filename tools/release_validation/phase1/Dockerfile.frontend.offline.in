@@ -1,5 +1,6 @@
 FROM clothinkai-trial-nginx-base:20261018
 COPY frontend-dist/ /usr/share/nginx/html/
+RUN find /usr/share/nginx/html -type d -exec chmod 0755 '{}' ';' && find /usr/share/nginx/html -type f -exec chmod 0644 '{}' ';'
 COPY release.json /opt/release/release.json
 LABEL org.opencontainers.image.revision="@SOURCE_COMMIT@" clothinkai.production.origin="https://47.110.76.9"
 # Future updater supplies the audited legacy-compatible HTTPS configuration explicitly.

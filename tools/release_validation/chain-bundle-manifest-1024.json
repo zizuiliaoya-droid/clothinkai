@@ -34,6 +34,10 @@
       "bytes": 11753,
       "sha256": "cc6f7ed0de8a0fa40d3918101d53b1e8c8d11dd39bbd6d1d129fb2d7aedd69cd"
     },
+    "phase2/ci_tests/run_r1_docker.py": {
+      "bytes": 13896,
+      "sha256": "e7928cdbab757b296fe8105bad6bc1e66909d4c2e3f632bdf5ace2fbe7967577"
+    },
     "phase2/ci_tests/test_acceptance_pg_entry.py": {
       "bytes": 4961,
       "sha256": "20b0c8d8dcde2c6ecd6cd6a6bcdc5819f80c18ef9fedff4a3eea19887da888ef"
@@ -47,8 +51,8 @@
       "sha256": "2a878c6d20a767dd49006c0871d182261811cae419f68487e2bb28e78c159581"
     },
     "phase2/ci_tests/test_schedule_zoneinfo.py": {
-      "bytes": 5438,
-      "sha256": "8962e75ed4cb62e43c4520d0dbb7f65eca759e0ea3fc90d335b6c5441810dc4b"
+      "bytes": 5439,
+      "sha256": "350d9924ed73b4174f90f4a99e4442647cef4566c71872c4a5523617c0457e1a"
     }
   },
   "ci_test_deltas": {
@@ -118,8 +122,8 @@
       "sha256": "fba1e2f110964be5b755b6a3a104ac494421ba4d0b3fb3054d8a99361a0b4eb4"
     },
     "phase1/Dockerfile.frontend.offline.in": {
-      "bytes": 418,
-      "sha256": "a063de4dca1822ad8d54929c43678a94792606d0373b403bd26d5a179f408d2b"
+      "bytes": 547,
+      "sha256": "9b31f12a77e191db52e4f7b68f158f8273384f06a2a45e790c83918f988f57b6"
     },
     "phase1/README.md": {
       "bytes": 13025,
@@ -238,8 +242,8 @@
       "sha256": "db648368f18ac1966533145cd69920a4bd205c842083a63acc0af20416f61403"
     },
     "phase2/beat_health_candidate.py": {
-      "bytes": 7799,
-      "sha256": "0a8f5bf854428e981aa6abd37d4a99becdfa29df4a8befca5d9c480ab47fc86a"
+      "bytes": 7801,
+      "sha256": "80d19bd1175fdc919063cdd181166ac5d6794d8a0b44cb2ccd291681737c1007"
     },
     "phase2/build_adapter.py": {
       "bytes": 3053,
@@ -321,6 +325,10 @@
       "bytes": 11753,
       "sha256": "cc6f7ed0de8a0fa40d3918101d53b1e8c8d11dd39bbd6d1d129fb2d7aedd69cd"
     },
+    "phase2/ci_tests/run_r1_docker.py": {
+      "bytes": 13896,
+      "sha256": "e7928cdbab757b296fe8105bad6bc1e66909d4c2e3f632bdf5ace2fbe7967577"
+    },
     "phase2/ci_tests/run_web_control_os.py": {
       "bytes": 2909,
       "sha256": "c3f44e7bb0c78bbac2bf8ecc656a5840693a1605389713d65c0b54db9438ddb6"
@@ -354,8 +362,8 @@
       "sha256": "2a878c6d20a767dd49006c0871d182261811cae419f68487e2bb28e78c159581"
     },
     "phase2/ci_tests/test_schedule_zoneinfo.py": {
-      "bytes": 5438,
-      "sha256": "8962e75ed4cb62e43c4520d0dbb7f65eca759e0ea3fc90d335b6c5441810dc4b"
+      "bytes": 5439,
+      "sha256": "350d9924ed73b4174f90f4a99e4442647cef4566c71872c4a5523617c0457e1a"
     },
     "phase2/ci_tests/test_source_binding.py": {
       "bytes": 5343,
@@ -422,8 +430,8 @@
       "sha256": "65eec3e0e1ae3da1458a383461eb2d7bbfe392022b7339166fac49cdbf3ab74b"
     },
     "phase2/host_acceptance_control.py": {
-      "bytes": 42132,
-      "sha256": "19e34dc5f113663c937786e863cecf3cd70c6eb976e7eee6e805c49b6bf398a5"
+      "bytes": 42175,
+      "sha256": "35e25425198f98cf0be38ab4c30b54ada03e7fa43470eebf79534eb40c3d1b02"
     },
     "phase2/host_alembic_runtime.py": {
       "bytes": 4905,
@@ -442,8 +450,8 @@
       "sha256": "a42f49d367d62a075a343cbea9de6e05b84fb6c22ee02e4074083c9bce17ef55"
     },
     "phase2/host_build_control.py": {
-      "bytes": 10366,
-      "sha256": "8b7b311ae9aed9d308072af68e87d93f595eba023ff9c252a391d65950020b1d"
+      "bytes": 10435,
+      "sha256": "86c1d0f18dc7c0ce89ea1da3517ff312ce8ad1157e0584afca5bfaef8e9f4385"
     },
     "phase2/host_collectors.py": {
       "bytes": 10754,
@@ -566,8 +574,8 @@
       "sha256": "5a36f651dbb45e2900a293f2e626d9f3422a780917a36dc215659133628e86c6"
     },
     "phase2/phase1_package_binding.py": {
-      "bytes": 14206,
-      "sha256": "2c718a7f5221a4202aa0d1676bdc9a2fa5fb8221d8e11ce7023ed1a61942e9db"
+      "bytes": 14656,
+      "sha256": "65373b313609f1476b4cf818ec4170284a719b21d1da802727f924db7b98365d"
     },
     "phase2/pre_migration_recover.py": {
       "bytes": 4497,
@@ -809,6 +817,17 @@
   "frozen": true,
   "historical_tool_commit": "5472ee15abe50f760ae77883e8c3f4b3a0dab37c",
   "host_runtime_deltas": {
+    "phase1/Dockerfile.frontend.offline.in": {
+      "after": {
+        "bytes": 547,
+        "sha256": "9b31f12a77e191db52e4f7b68f158f8273384f06a2a45e790c83918f988f57b6"
+      },
+      "before": {
+        "bytes": 418,
+        "sha256": "a063de4dca1822ad8d54929c43678a94792606d0373b403bd26d5a179f408d2b"
+      },
+      "reason": "R1-02: image-only public static directories 0755 and files 0644; host staging remains private."
+    },
     "phase1/schedule_pickle_guard.py": {
       "after": {
         "bytes": 12557,
@@ -822,25 +841,25 @@
     },
     "phase2/beat_health_candidate.py": {
       "after": {
-        "bytes": 7799,
-        "sha256": "0a8f5bf854428e981aa6abd37d4a99becdfa29df4a8befca5d9c480ab47fc86a"
+        "bytes": 7801,
+        "sha256": "80d19bd1175fdc919063cdd181166ac5d6794d8a0b44cb2ccd291681737c1007"
       },
       "before": {
         "bytes": 7745,
         "sha256": "5b0ba7ca7fddc41f7b363fcee1e749d00a39cefd6378cda0cc895957bf47f999"
       },
-      "reason": "Use the same exact schedule guard successor pin for the existing frozen read-only loader; no historical pin mutation or mixed guard versions."
+      "reason": "Use the same exact schedule guard successor pin for the existing frozen read-only loader; no historical pin mutation or mixed guard versions. Rename the existing finite effective-control pin helper for the frontend recipe correction."
     },
     "phase2/host_acceptance_control.py": {
       "after": {
-        "bytes": 42132,
-        "sha256": "19e34dc5f113663c937786e863cecf3cd70c6eb976e7eee6e805c49b6bf398a5"
+        "bytes": 42175,
+        "sha256": "35e25425198f98cf0be38ab4c30b54ada03e7fa43470eebf79534eb40c3d1b02"
       },
       "before": {
         "bytes": 41050,
         "sha256": "d2ffbaebf8cdde8a5ea86007a749638c2a65a9086fa65e349464b5889a4dd9f9"
       },
-      "reason": "R1-01: TTL exec loads exact approved private config hash with existing runtime guards before importing source-bound settings; emits TTL only."
+      "reason": "R1-01: TTL exec loads exact approved private config hash with existing runtime guards before importing source-bound settings; emits TTL only. R1-02 static readback also runs as nginx."
     },
     "phase2/host_backup_control.py": {
       "after": {
@@ -852,6 +871,17 @@
         "sha256": "18b45d5a6f0f0d1827fe69838053ae52d5df9c07f693ad481b2ee8fd7abfb8fe"
       },
       "reason": "Preserve PG18 default ACL text cast; bind exact socket tmpfs and inspect its options. Require new data root0:0/0700 before start, same inode postgres UID:0/0700 after entrypoint, outer drill remains root0:0/0700. PostgreSQL UID comes from original bound DB image; no ownership changes to outer release directories. Actual Docker 31ad033 observation requires canonical CAP_* exact triple, privileged false, two top-level bind mounts and exact legacy socket HostConfig.Tmpfs; shared host/CI validator rejects extra/missing capabilities, mounts and tmpfs. Read-only readiness waits for final PID1 postgres executable, stable start ticks, PGDATA PID1 and socket lock PID1 before pg_isready success; temporary init postmaster cannot authorize first SQL. No SQL is retried. Actual 7d6297c restore: sort complete ACL items only (NULL/empty/duplicates/grantable retained); canonicalize exactly two full CHECK forms distributing varchar literal array-to-text casts. All other text remains exact. Source evidence confirms 22 ACL and 31 CHECK pairs, no other catalog differences."
+    },
+    "phase2/host_build_control.py": {
+      "after": {
+        "bytes": 10435,
+        "sha256": "86c1d0f18dc7c0ce89ea1da3517ff312ce8ad1157e0584afca5bfaef8e9f4385"
+      },
+      "before": {
+        "bytes": 10366,
+        "sha256": "8b7b311ae9aed9d308072af68e87d93f595eba023ff9c252a391d65950020b1d"
+      },
+      "reason": "R1-02: all frontend image files are read back by nginx before build success and CLOSE_GATE."
     },
     "phase2/host_gate_control.py": {
       "after": {
@@ -888,14 +918,14 @@
     },
     "phase2/phase1_package_binding.py": {
       "after": {
-        "bytes": 14206,
-        "sha256": "2c718a7f5221a4202aa0d1676bdc9a2fa5fb8221d8e11ce7023ed1a61942e9db"
+        "bytes": 14656,
+        "sha256": "65373b313609f1476b4cf818ec4170284a719b21d1da802727f924db7b98365d"
       },
       "before": {
         "bytes": 13527,
         "sha256": "411014951ffd6b36576bc0fd9c0bb4b26bdccce33df6dcf8251686fdb8324dbc"
       },
-      "reason": "Bind the single schedule guard correction to exact before and after pins, require current after bytes only, retain original phase1 pin documents and all other dependencies unchanged."
+      "reason": "Bind the single schedule guard correction to exact before and after pins, require current after bytes only, retain original phase1 pin documents and all other dependencies unchanged. R1-02 adds exact original-to-corrected frontend recipe pin; no historical recipe acceptance."
     },
     "phase2/restore_drill.py": {
       "after": {

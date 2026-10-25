@@ -253,7 +253,7 @@ async def build(spec, journal, kind):
 
 async def _frontend_files(image):
     # Fixed command prints only checksums; BusyBox is in the frozen nginx image.
-    script = "cd /usr/share/nginx/html && find . -type f -exec sha256sum '{}' ';'"
+    script = "test $(id -un) = nginx && cd /usr/share/nginx/html && find . -type f -exec sha256sum '{}' ';'"
     raw = await _capture(
         DOCKER
         + (
@@ -266,6 +266,8 @@ async def _frontend_files(image):
             "--security-opt=no-new-privileges=true",
             "--memory=128m",
             "--cpus=1",
+            "--user",
+            "nginx",
             "--entrypoint",
             "/bin/sh",
             image,

@@ -1,4 +1,4 @@
-"""Original phase1 contract plus one pinned schedule recognizer correction; no build/install."""
+"""Original phase1 contract plus pinned schedule and frontend permission corrections; no build/install."""
 
 import ast
 import hashlib
@@ -22,6 +22,15 @@ SCHEDULE_GUARD_AFTER = {
     "sha256": "c7c5a9d619e8d32dd114004d79d197af47ee029e63d6404365027a81cb612ad9",
 }
 
+FRONTEND_RECIPE_BEFORE = {
+    "bytes": 418,
+    "sha256": "a063de4dca1822ad8d54929c43678a94792606d0373b403bd26d5a179f408d2b",
+}
+FRONTEND_RECIPE_AFTER = {
+    "bytes": 547,
+    "sha256": "9b31f12a77e191db52e4f7b68f158f8273384f06a2a45e790c83918f988f57b6",
+}
+
 
 class PackageRejected(ValueError):
     pass
@@ -36,8 +45,11 @@ def digest(raw):
     return hashlib.sha256(raw).hexdigest()
 
 
-def schedule_guard_pin(name, original):
-    """Require the historical origin, then bind only the corrected guard bytes."""
+def current_control_pin(name, original):
+    """Require historical origins and only the two explicit corrected controls."""
+    if name == "Dockerfile.frontend.offline.in":
+        need(original == FRONTEND_RECIPE_BEFORE, "frontend_recipe_origin")
+        return dict(FRONTEND_RECIPE_AFTER)
     if name != "schedule_pickle_guard.py":
         return original
     need(original == SCHEDULE_GUARD_BEFORE, "schedule_guard_origin")
@@ -84,7 +96,8 @@ def tool_bundle():
         )
         raw = path.read_bytes()
         need(
-            schedule_guard_pin(name, pin) == {"bytes": len(raw), "sha256": digest(raw)},
+            current_control_pin(name, pin)
+            == {"bytes": len(raw), "sha256": digest(raw)},
             "frozen_file_drift",
         )
         result["frozen_phase1/" + name] = raw
@@ -131,7 +144,7 @@ def frozen_contract():
         )
         content = path.read_bytes()
         need(
-            schedule_guard_pin(name, pins["files"][name])
+            current_control_pin(name, pins["files"][name])
             == {"bytes": len(content), "sha256": digest(content)},
             "phase1_control_drift",
         )

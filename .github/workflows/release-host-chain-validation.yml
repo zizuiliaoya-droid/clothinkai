@@ -2,7 +2,7 @@ name: Disposable host chain kernels
 
 on:
   push:
-    branches: [codex/release-linux-ci-1023]
+    branches: [codex/release-linux-ci-1023, codex/release-r1-fixes-1025]
 
 permissions:
   contents: read
@@ -18,6 +18,7 @@ env:
 
 jobs:
   global-lock:
+    if: github.ref_name == 'codex/release-linux-ci-1023'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -261,6 +262,7 @@ jobs:
           print(json.dumps(result, sort_keys=True))
           PY
       - name: Original no-healthcheck kernel as an explicit control case
+        if: github.ref_name == 'codex/release-linux-ci-1023'
         run: |
           set -euo pipefail
           export FLOW78_CI_PRODUCER_IMAGE=$(cat "$RUNNER_TEMP/release-validation/control-image-id.txt")
@@ -269,7 +271,7 @@ jobs:
             > "$RUNNER_TEMP/release-validation/control-result.json" \
             2> "$RUNNER_TEMP/release-validation/control-output.log"
       - name: Actual inherited healthcheck overlap diagnostic (HOLD is not compatibility)
-        if: always()
+        if: always() && github.ref_name == 'codex/release-linux-ci-1023'
         run: |
           set -euo pipefail
           export FLOW78_CI_PRODUCER_IMAGE=$(cat "$RUNNER_TEMP/release-validation/health-image-id.txt")
@@ -278,7 +280,7 @@ jobs:
             > "$RUNNER_TEMP/release-validation/health-overlap-result.json" \
             2> "$RUNNER_TEMP/release-validation/health-overlap-output.log"
       - name: Actual GNU and dumb DBM stores with the pinned original seven tasks
-        if: always()
+        if: always() && github.ref_name == 'codex/release-linux-ci-1023'
         run: |
           set -euo pipefail
           image=$(cat "$RUNNER_TEMP/release-validation/control-image-id.txt")
@@ -292,7 +294,7 @@ jobs:
             > "$RUNNER_TEMP/release-validation/dbm-result.json" \
             2> "$RUNNER_TEMP/release-validation/dbm-output.log"
       - name: Actual nginx maintenance routes and old-worker drain
-        if: always()
+        if: always() && github.ref_name == 'codex/release-linux-ci-1023'
         run: |
           set -euo pipefail
           python - "$GITHUB_WORKSPACE/product-source/frontend/Dockerfile" <<'PY'
@@ -315,7 +317,7 @@ jobs:
             > "$RUNNER_TEMP/release-validation/nginx-result.json" \
             2> "$RUNNER_TEMP/release-validation/nginx-output.log"
       - name: Actual Compose replacement bindings without running application commands
-        if: always()
+        if: always() && github.ref_name == 'codex/release-linux-ci-1023'
         run: |
           set -euo pipefail
           export FLOW78_CI_OUTPUT="$RUNNER_TEMP/release-validation"
@@ -327,7 +329,7 @@ jobs:
             > "$RUNNER_TEMP/release-validation/compose-result.json" \
             2> "$RUNNER_TEMP/release-validation/compose-output.log"
       - name: Actual original Celery registry and isolated Redis scheduling windows
-        if: always()
+        if: always() && github.ref_name == 'codex/release-linux-ci-1023'
         run: |
           set -euo pipefail
           python - "$GITHUB_WORKSPACE/product-source/.github/workflows/ci.yml" <<'PY'
@@ -349,6 +351,20 @@ jobs:
             validation/tools/release_validation/phase2/ci_tests/run_celery_docker.py \
             > "$RUNNER_TEMP/release-validation/celery-result.json" \
             2> "$RUNNER_TEMP/release-validation/celery-output.log"
+      - name: R1 only - private-config TTL and staged frontend readability
+        if: github.ref_name == 'codex/release-r1-fixes-1025'
+        run: |
+          set -euo pipefail
+          docker pull nginx:1.27-alpine > "$RUNNER_TEMP/release-validation/nginx-pull.log" 2>&1
+          export FLOW78_CI_NGINX_IMAGE=$(docker image inspect --format '{{.Id}}' nginx:1.27-alpine)
+          docker image inspect --format '{"id":{{json .Id}},"repo_digests":{{json .RepoDigests}}}' "$FLOW78_CI_NGINX_IMAGE" > "$RUNNER_TEMP/release-validation/nginx-fixture-image.json"
+          export FLOW78_CI_CONTROL_IMAGE=$(cat "$RUNNER_TEMP/release-validation/control-image-id.txt")
+          export FLOW78_CI_PRODUCT_SOURCE="$GITHUB_WORKSPACE/product-source"
+          export FLOW78_CI_OUTPUT="$RUNNER_TEMP/release-validation"
+          sudo --preserve-env=GITHUB_ACTIONS,FLOW78_CI_CONTROL_IMAGE,FLOW78_CI_NGINX_IMAGE,FLOW78_CI_PRODUCT_SOURCE,FLOW78_CI_OUTPUT "$(command -v python)" -B \
+            validation/tools/release_validation/phase2/ci_tests/run_r1_docker.py \
+            > "$RUNNER_TEMP/release-validation/r1-result.json" \
+            2> "$RUNNER_TEMP/release-validation/r1-output.log"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -358,6 +374,7 @@ jobs:
           path: ${{ runner.temp }}/release-validation/
 
   pg-acceptance-restore:
+    if: github.ref_name == 'codex/release-linux-ci-1023'
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     services:

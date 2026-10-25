@@ -745,6 +745,8 @@ async def _web_files(identity):
         DOCKER
         + (
             "exec",
+            "--user",
+            "nginx",
             identity,
             "/bin/sh",
             "-c",

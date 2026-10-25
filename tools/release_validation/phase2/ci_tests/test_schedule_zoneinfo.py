@@ -141,7 +141,7 @@ class ZoneInfoShapeTests(unittest.TestCase):
         )
         self.assertTrue(callable(_frozen_start().validate_existing_schedule))
         with self.assertRaises(binding.PackageRejected):
-            binding.schedule_guard_pin("schedule_pickle_guard.py", pin)
+            binding.current_control_pin("schedule_pickle_guard.py", pin)
         read = Path.read_bytes
         with (
             patch.object(

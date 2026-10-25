@@ -84,6 +84,8 @@ def verify():
             "phase2/host_producer_control.py",
             "phase2/restore_drill.py",
             "phase1/schedule_pickle_guard.py",
+            "phase1/Dockerfile.frontend.offline.in",
+            "phase2/host_build_control.py",
             "phase2/phase1_package_binding.py",
             "phase2/beat_health_candidate.py",
         },
@@ -212,9 +214,12 @@ def verify():
                 "implementation-pins-origin-1024.json",
             }:
                 expected = phase_files.get(relative)
-                if name == "phase1/schedule_pickle_guard.py":
+                if name in {
+                    "phase1/schedule_pickle_guard.py",
+                    "phase1/Dockerfile.frontend.offline.in",
+                }:
                     delta = runtime_deltas[name]
-                    require(delta["before"] == expected, "schedule guard origin drift")
+                    require(delta["before"] == expected, "phase1 control origin drift")
                     expected = delta["after"]
                 require(expected == pin, "unbound phase1 file: " + name)
     require(
