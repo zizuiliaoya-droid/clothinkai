@@ -76,6 +76,9 @@ def verify():
         set(runtime_deltas)
         == {
             "phase2/host_gate_control.py",
+            "phase2/host_web_control.py",
+            "phase2/templates/nginx-maintenance.conf",
+            "phase2/templates/nginx-release-closed.conf",
             "phase2/host_backup_control.py",
             "phase2/host_producer_control.py",
             "phase2/restore_drill.py",

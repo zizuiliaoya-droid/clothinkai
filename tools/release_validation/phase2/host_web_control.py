@@ -16,8 +16,8 @@ from host_sequence import HostJournal
 from sql_policy import require_host_authority
 
 TEMPLATE_PINS = {
-    "nginx-maintenance.conf": "811b2119751d703aa06bdeb8e02273c53fdf2badaca541e6ff452a333dfdcadb",
-    "nginx-release-closed.conf": "811b2119751d703aa06bdeb8e02273c53fdf2badaca541e6ff452a333dfdcadb",
+    "nginx-maintenance.conf": "85198931f26d43f8fb36475ca47e699800d9a46d027684453ad8ba97564f04de",
+    "nginx-release-closed.conf": "85198931f26d43f8fb36475ca47e699800d9a46d027684453ad8ba97564f04de",
     "nginx-release-open.conf": "89519863caaa05ed9e7e314bf7f912db240e2a8371ee26208c64579d98e05a93",
 }
 

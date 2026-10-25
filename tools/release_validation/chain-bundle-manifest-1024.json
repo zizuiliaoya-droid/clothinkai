@@ -23,8 +23,8 @@
       "sha256": "15352560787c691897f2b1948539952758cab1f5d0b43c406e0ad52a1706badc"
     },
     "phase2/ci_tests/run_nginx_docker.py": {
-      "bytes": 17652,
-      "sha256": "abb4c3a24ceff44b2a15885e06a091c1683eea3178a106c3728f6728fa48e1c6"
+      "bytes": 17772,
+      "sha256": "5a07224933b56cc60c264fbc641d018a9df2555f772aff4aa0b625e44deb171b"
     },
     "phase2/ci_tests/run_producer_healthcheck.py": {
       "bytes": 11753,
@@ -46,13 +46,14 @@
   "ci_test_deltas": {
     "phase2/ci_tests/test_dashboard_contract.py": {
       "after": {
-        "bytes": 11315,
-        "sha256": "dcb2b81f99c85a2477349fd2e26059153a8c7475dde2e69e9ec61c2f231a68fb"
+        "bytes": 12343,
+        "sha256": "bd11dde90653f36862af2e87f220dc5df812dbb3fe73168365c754cc51b2eb83"
       },
       "before": {
         "bytes": 10874,
         "sha256": "1475374fe468a347f53c2d882c48c4327b948004fdf2c53e0c5c79fbd887702f"
-      }
+      },
+      "reason": "Preserve old 2364-byte active hash reconstruction; require all templates to preserve its exact five /tmp paths and PID path."
     },
     "phase2/ci_tests/test_host_sequence.py": {
       "after": {
@@ -301,8 +302,8 @@
       "sha256": "fd3792e83cc02a545df2f3334e013221d0e73543c0aaf534dd137c1df1973b07"
     },
     "phase2/ci_tests/run_nginx_docker.py": {
-      "bytes": 17652,
-      "sha256": "abb4c3a24ceff44b2a15885e06a091c1683eea3178a106c3728f6728fa48e1c6"
+      "bytes": 17772,
+      "sha256": "5a07224933b56cc60c264fbc641d018a9df2555f772aff4aa0b625e44deb171b"
     },
     "phase2/ci_tests/run_producer_healthcheck.py": {
       "bytes": 11753,
@@ -317,8 +318,8 @@
       "sha256": "20b0c8d8dcde2c6ecd6cd6a6bcdc5819f80c18ef9fedff4a3eea19887da888ef"
     },
     "phase2/ci_tests/test_dashboard_contract.py": {
-      "bytes": 11315,
-      "sha256": "dcb2b81f99c85a2477349fd2e26059153a8c7475dde2e69e9ec61c2f231a68fb"
+      "bytes": 12343,
+      "sha256": "bd11dde90653f36862af2e87f220dc5df812dbb3fe73168365c754cc51b2eb83"
     },
     "phase2/ci_tests/test_host_dashboard_user.py": {
       "bytes": 3985,
@@ -490,7 +491,7 @@
     },
     "phase2/host_web_control.py": {
       "bytes": 5814,
-      "sha256": "98c933f71cc8f3b043b92cb4c92aa1c43ead8ea682f8a82259d732271d5d3af9"
+      "sha256": "8fe5e7679df4af7cc115367b423a139662afed9e71affea8f94ac8901478bb61"
     },
     "phase2/host_web_network.py": {
       "bytes": 4715,
@@ -609,12 +610,12 @@
       "sha256": "0397e6f075bdc0324648bfa9d7721992c16a8c3647be971c3b73f011bd419ac2"
     },
     "phase2/templates/nginx-maintenance.conf": {
-      "bytes": 1547,
-      "sha256": "811b2119751d703aa06bdeb8e02273c53fdf2badaca541e6ff452a333dfdcadb"
+      "bytes": 1706,
+      "sha256": "85198931f26d43f8fb36475ca47e699800d9a46d027684453ad8ba97564f04de"
     },
     "phase2/templates/nginx-release-closed.conf": {
-      "bytes": 1547,
-      "sha256": "811b2119751d703aa06bdeb8e02273c53fdf2badaca541e6ff452a333dfdcadb"
+      "bytes": 1706,
+      "sha256": "85198931f26d43f8fb36475ca47e699800d9a46d027684453ad8ba97564f04de"
     },
     "phase2/templates/nginx-release-open.conf": {
       "bytes": 2479,
@@ -825,6 +826,17 @@
       },
       "reason": "Original full Healthcheck config bound to container ID/PID; only stable exact shell/python pair with runtime parent, namespaces, UID, executable identity, bounded lifetime and no other tasks/children may coexist with frozen uvicorn. Incomplete or unknown samples HOLD without write retry."
     },
+    "phase2/host_web_control.py": {
+      "after": {
+        "bytes": 5814,
+        "sha256": "8fe5e7679df4af7cc115367b423a139662afed9e71affea8f94ac8901478bb61"
+      },
+      "before": {
+        "bytes": 5814,
+        "sha256": "98c933f71cc8f3b043b92cb4c92aa1c43ead8ea682f8a82259d732271d5d3af9"
+      },
+      "reason": "Actual nginx maintenance test failed on readonly /var/cache/nginx. Preserve original readonly root plus only /tmp 64MiB tmpfs; use exact five temp paths from captured 2364-byte active SHA4e9eeec6, update only closed/maintenance template pins. No production config change and no fixture-only extra cache mount."
+    },
     "phase2/restore_drill.py": {
       "after": {
         "bytes": 3159,
@@ -835,6 +847,28 @@
         "sha256": "95473c2b18608e961cc2f0c0aeaba8f6ea7f34ab4a4f9d6f1948a0403fb0f521"
       },
       "reason": "Actual PG18 entrypoint cannot traverse root-private parent of nested PGDATA. Bind root is now PGDATA; only private socket tmpfs added, same no-network/no-ports and capability policy."
+    },
+    "phase2/templates/nginx-maintenance.conf": {
+      "after": {
+        "bytes": 1706,
+        "sha256": "85198931f26d43f8fb36475ca47e699800d9a46d027684453ad8ba97564f04de"
+      },
+      "before": {
+        "bytes": 1547,
+        "sha256": "811b2119751d703aa06bdeb8e02273c53fdf2badaca541e6ff452a333dfdcadb"
+      },
+      "reason": "Actual nginx maintenance test failed on readonly /var/cache/nginx. Preserve original readonly root plus only /tmp 64MiB tmpfs; use exact five temp paths from captured 2364-byte active SHA4e9eeec6, update only closed/maintenance template pins. No production config change and no fixture-only extra cache mount."
+    },
+    "phase2/templates/nginx-release-closed.conf": {
+      "after": {
+        "bytes": 1706,
+        "sha256": "85198931f26d43f8fb36475ca47e699800d9a46d027684453ad8ba97564f04de"
+      },
+      "before": {
+        "bytes": 1547,
+        "sha256": "811b2119751d703aa06bdeb8e02273c53fdf2badaca541e6ff452a333dfdcadb"
+      },
+      "reason": "Actual nginx maintenance test failed on readonly /var/cache/nginx. Preserve original readonly root plus only /tmp 64MiB tmpfs; use exact five temp paths from captured 2364-byte active SHA4e9eeec6, update only closed/maintenance template pins. No production config change and no fixture-only extra cache mount."
     }
   },
   "live_enabled": false,

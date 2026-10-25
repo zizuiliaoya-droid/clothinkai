@@ -91,6 +91,31 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(hashlib.sha256(raw).hexdigest(), expected)
             board.validate_routes(raw)
 
+    def test_all_templates_use_exact_captured_active_tmp_paths(self):
+        original = board.original_active(old_active())
+        expected = [
+            b"  client_body_temp_path /tmp/client;",
+            b"  proxy_temp_path /tmp/proxy;",
+            b"  fastcgi_temp_path /tmp/fastcgi;",
+            b"  uwsgi_temp_path /tmp/uwsgi;",
+            b"  scgi_temp_path /tmp/scgi;",
+        ]
+        self.assertEqual(
+            [line for line in original.splitlines() if b"_temp_path " in line], expected
+        )
+        for name in ("maintenance", "release-closed", "release-open"):
+            raw = (
+                Path(board.__file__)
+                .with_name("templates")
+                .joinpath("nginx-" + name + ".conf")
+                .read_bytes()
+            )
+            self.assertEqual(
+                [line for line in raw.splitlines() if b"_temp_path " in line], expected
+            )
+            self.assertIn(b"pid /tmp/nginx.pid;", raw)
+            self.assertNotIn(b"/var/cache/nginx", raw)
+
     def test_three_templates_keep_exact_routes_and_no_startup_board_dns(self):
         for name in ("maintenance", "release-closed", "release-open"):
             raw = (
