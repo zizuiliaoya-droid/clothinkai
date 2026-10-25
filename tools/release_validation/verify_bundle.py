@@ -63,6 +63,7 @@ def verify():
             "phase2/ci_tests/test_dashboard_contract.py",
             "phase2/ci_tests/test_host_sequence.py",
             "phase2/tests/test_host_acceptance_control.py",
+            "phase2/tests/test_host_freeze_control.py",
         },
         "finite successor test deltas required",
     )
@@ -72,7 +73,11 @@ def verify():
     runtime_deltas = manifest["host_runtime_deltas"]
     require(
         set(runtime_deltas)
-        == {"phase2/host_gate_control.py", "phase2/host_backup_control.py"},
+        == {
+            "phase2/host_gate_control.py",
+            "phase2/host_backup_control.py",
+            "phase2/host_producer_control.py",
+        },
         "finite authorized host runtime delta required",
     )
     for name, delta in runtime_deltas.items():

@@ -42,6 +42,7 @@ jobs:
             tests.test_host_session_contract tests.test_host_migration_control tests.test_host_backup_control \
             tests.test_host_acceptance_private_json tests.test_host_acceptance_control -v \
             > "$RUNNER_TEMP/release-validation/host-contracts.log" 2>&1
+          python -B -m unittest discover -s ci_tests -p test_producer_health_policy.py -v > "$RUNNER_TEMP/release-validation/health-policy-contracts.log" 2>&1
           python -B ../test_host_bundle.py -v > "$RUNNER_TEMP/release-validation/bundle-contracts.log" 2>&1
       - uses: actions/upload-artifact@v4
         if: always()

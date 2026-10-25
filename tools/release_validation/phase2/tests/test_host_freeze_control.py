@@ -6,7 +6,8 @@ from unittest.mock import AsyncMock, patch
 
 from contracts import Rejected
 from host_drain_control import validate_queue
-from host_producer_control import freeze, same_group, terminate
+from host_producer_control import HEALTH, freeze, same_group, terminate
+
 from tests.test_migration_process import NoSocketAsyncCase
 
 
@@ -99,6 +100,10 @@ class FreezeTests(NoSocketAsyncCase):
             patch("host_producer_control.require_step"),
             patch("host_migration_control.recorded_facts"),
             patch(
+                "host_producer_control.original_healthcheck",
+                AsyncMock(return_value=HEALTH),
+            ),
+            patch(
                 "host_producer_control.collect",
                 AsyncMock(return_value={"facts": current}),
             ),
@@ -134,6 +139,10 @@ class FreezeTests(NoSocketAsyncCase):
         with (
             patch("host_producer_control.require_step"),
             patch("host_migration_control.recorded_facts"),
+            patch(
+                "host_producer_control.original_healthcheck",
+                AsyncMock(return_value=HEALTH),
+            ),
             patch(
                 "host_producer_control.collect",
                 AsyncMock(return_value={"facts": current}),

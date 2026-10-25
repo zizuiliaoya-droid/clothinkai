@@ -15,8 +15,8 @@
       "sha256": "cd902ec3ee11fb052c5d244ab7cbb18d94c2819a343cbc279ebb3c7ba4834d11"
     },
     "phase2/ci_tests/run_producer_healthcheck.py": {
-      "bytes": 6828,
-      "sha256": "0340de3c25a3a57f082d6dd9df0b0a37dbd75a7067ddd4cdcebe7a02543b980c"
+      "bytes": 11209,
+      "sha256": "ad03be79472242366b52b091f51c8e61e631d346e9e4733c46d7751d8fdec17c"
     },
     "phase2/ci_tests/test_acceptance_pg_entry.py": {
       "bytes": 2040,
@@ -25,6 +25,10 @@
     "phase2/ci_tests/test_host_dashboard_user.py": {
       "bytes": 3985,
       "sha256": "335006046b898ed38e1961756a6a3283df752447c593aaeb9f862e176f515d3e"
+    },
+    "phase2/ci_tests/test_producer_health_policy.py": {
+      "bytes": 6456,
+      "sha256": "8a8f793f375a04c0fbe6e01f2e74e803e0e8979e301a2e76455cf086ab91d615"
     }
   },
   "ci_test_deltas": {
@@ -58,6 +62,17 @@
         "sha256": "217d4f632db8a948f4358da36790754fc1100bf1e2a1175b9d34cae47adb7378"
       },
       "reason": "fresh runner monotonic uptime may be below 1001 seconds; nonnegative test interval and explicit negative/reversed/future tick regressions; business validator unchanged"
+    },
+    "phase2/tests/test_host_freeze_control.py": {
+      "after": {
+        "bytes": 6312,
+        "sha256": "7f9caac6917016541c6f9f003fbb0665205ec535516c0441241e6d3b002c0edf"
+      },
+      "before": {
+        "bytes": 6015,
+        "sha256": "7d80f2a9fff219fe1b775262432de9489f8ed5b2195e21cede9857f71c244fe5"
+      },
+      "reason": "Existing freeze signal/journal contracts mock the new narrow original Healthcheck read; no signal expectations relaxed."
     }
   },
   "deployable": false,
@@ -255,8 +270,8 @@
       "sha256": "fd3792e83cc02a545df2f3334e013221d0e73543c0aaf534dd137c1df1973b07"
     },
     "phase2/ci_tests/run_producer_healthcheck.py": {
-      "bytes": 6828,
-      "sha256": "0340de3c25a3a57f082d6dd9df0b0a37dbd75a7067ddd4cdcebe7a02543b980c"
+      "bytes": 11209,
+      "sha256": "ad03be79472242366b52b091f51c8e61e631d346e9e4733c46d7751d8fdec17c"
     },
     "phase2/ci_tests/run_web_control_os.py": {
       "bytes": 2909,
@@ -285,6 +300,10 @@
     "phase2/ci_tests/test_linux_contract.py": {
       "bytes": 6119,
       "sha256": "3014b797e596e2967cd5c40779fa0e9a275ba1d533dab57817c634bdbfd2e02e"
+    },
+    "phase2/ci_tests/test_producer_health_policy.py": {
+      "bytes": 6456,
+      "sha256": "8a8f793f375a04c0fbe6e01f2e74e803e0e8979e301a2e76455cf086ab91d615"
     },
     "phase2/ci_tests/test_source_binding.py": {
       "bytes": 5343,
@@ -403,8 +422,8 @@
       "sha256": "c37b23bf94b6d30e8fb8a1b658c4076a50598a6b1d175201a3556f3d1f31d2de"
     },
     "phase2/host_producer_control.py": {
-      "bytes": 7770,
-      "sha256": "3604ef5b77fec3ac9ea3ef538b0d57740350a041425f8b26e6d3e32976f94750"
+      "bytes": 14374,
+      "sha256": "d39e938563a20b9bf5ca8ebdaaa7886955439f3fe95314d16cbd29f3ba5ce0b8"
     },
     "phase2/host_queue_observer.py": {
       "bytes": 3058,
@@ -639,8 +658,8 @@
       "sha256": "6fb2a4f3c05b9e523e4cd1a8b255a567446b6455f9687d38bd51d0df5c8492a8"
     },
     "phase2/tests/test_host_freeze_control.py": {
-      "bytes": 6015,
-      "sha256": "7d80f2a9fff219fe1b775262432de9489f8ed5b2195e21cede9857f71c244fe5"
+      "bytes": 6312,
+      "sha256": "7f9caac6917016541c6f9f003fbb0665205ec535516c0441241e6d3b002c0edf"
     },
     "phase2/tests/test_host_journal_connection.py": {
       "bytes": 4408,
@@ -759,6 +778,17 @@
         "sha256": "85f45be5204c8e20fe2f445e32b7bd3aa641088aa8abab8125907d8ae9d18f3f"
       },
       "reason": "root authorized fixed dashboard snapshot reader UID:GID 10001:10001 after private-file permission failure; no chmod/chown/capability change"
+    },
+    "phase2/host_producer_control.py": {
+      "after": {
+        "bytes": 14374,
+        "sha256": "d39e938563a20b9bf5ca8ebdaaa7886955439f3fe95314d16cbd29f3ba5ce0b8"
+      },
+      "before": {
+        "bytes": 7770,
+        "sha256": "3604ef5b77fec3ac9ea3ef538b0d57740350a041425f8b26e6d3e32976f94750"
+      },
+      "reason": "Original full Healthcheck config bound to container ID/PID; only stable exact shell/python pair with runtime parent, namespaces, UID, executable identity, bounded lifetime and no other tasks/children may coexist with frozen uvicorn. Incomplete or unknown samples HOLD without write retry."
     }
   },
   "live_enabled": false,
