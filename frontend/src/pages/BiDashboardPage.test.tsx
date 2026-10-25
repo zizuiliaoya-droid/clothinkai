@@ -622,7 +622,7 @@ describe("BiDashboardPage 单品分析", () => {
     expect(screen.queryByText(/只显示最近 500 篇/)).toBeNull();
   });
 
-  it("散点截断：提示「只显示最近 500 篇」；点不可点、悬停说明详情页随时间线上线；promo_cost 为空也画", async () => {
+  it("散点截断：提示「只显示最近 500 篇」；点不可点、悬停说明无可访问详情；promo_cost 为空也画", async () => {
     goodsNotesMock.mockResolvedValue(
       notes({
         truncated: true,
@@ -653,8 +653,32 @@ describe("BiDashboardPage 单品分析", () => {
     const pts = await screen.findAllByTestId("point");
     expect(pts).toHaveLength(2);
     expect(pts[0].getAttribute("style") ?? "").toContain("cursor: default");
-    expect(pts[0].querySelector("title")?.textContent).toContain("详情页随推广单时间线上线");
+    expect(pts[0].querySelector("title")?.textContent).toContain("暂无可访问的推广详情");
     expect(screen.queryByText("还没有录 7 天数据的笔记")).toBeNull();
+  });
+
+  it.each(["point", "table"])("散点与数据表逐点按URL可见性跳转：%s", async (mode) => {
+    goodsNotesMock.mockResolvedValue(notes({ points: [
+      { promotion_id: "p1", publish_date: "2026-10-01", like_count: 120, promo_cost: null, blogger_nickname: "可见博主", platform: "小红书", detail_url: "/promotions?id=p1" },
+      { promotion_id: "p2", publish_date: "2026-10-02", like_count: 80, promo_cost: null, blogger_nickname: "隐藏详情博主", platform: "抖音", detail_url: null },
+    ] }));
+    renderPage("/bi?tab=goods");
+    const pts = await screen.findAllByTestId("point");
+    expect(pts[0].getAttribute("style")).toContain("cursor: pointer");
+    expect(pts[1].getAttribute("style")).toContain("cursor: default");
+    fireEvent.click(pts[1]);
+    expect(screen.queryByTestId("location")).toBeNull();
+    if (mode === "point") fireEvent.click(pts[0]);
+    else {
+      openAllTables();
+      const link = screen.getByRole("link", { name: "可见博主（小红书）" });
+      expect(link.getAttribute("href")).toBe("/promotions?id=p1");
+      expect(screen.queryByRole("link", { name: "隐藏详情博主（抖音）" })).toBeNull();
+      link.focus();
+      expect(document.activeElement).toBe(link);
+      fireEvent.click(link);
+    }
+    expect(await screen.findByTestId("location")).toHaveProperty("textContent", "/promotions?id=p1");
   });
 
   it("金额趋势 / 净投产趋势跟着卡片宽度画，不按固定 720 画（窄卡里不用横向滚动，第 2 轮浏览器复核）", async () => {

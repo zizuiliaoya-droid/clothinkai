@@ -30,6 +30,22 @@ export async function listPromotions(
   return resp.data;
 }
 
+export interface PromotionGoodsOption { id: string; display_name: string }
+export interface PromotionFilterOptions {
+  items: PromotionGoodsOption[];
+  total: number;
+  page: number;
+  page_size: number;
+  selected: PromotionGoodsOption | null;
+  seasons: string[];
+}
+
+export async function getPromotionFilterOptions(params: {
+  keyword?: string; page?: number; page_size?: number; selected_id?: string;
+}): Promise<PromotionFilterOptions> {
+  return (await apiClient.get<PromotionFilterOptions>("/api/promotions/filter-options", { params })).data;
+}
+
 /** 推广详情的 query key：在 ["promotions"] 前缀下，列表页弹窗成功 invalidate ["promotions"] 时一起重拉。 */
 export function promotionDetailKey(promotionId: string) {
   return ["promotions", "detail", promotionId] as const;

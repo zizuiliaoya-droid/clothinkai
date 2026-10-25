@@ -414,6 +414,9 @@ export interface PromotionPage {
 }
 
 export interface PromotionListFilters {
+  goods_main_id?: string;
+  seasons?: string[];
+  unassigned_only?: boolean;
   page?: number;
   page_size?: number;
   keyword?: string;

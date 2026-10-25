@@ -1,5 +1,6 @@
 import { useState } from "react";
 import {
+  Alert,
   Button,
   Card,
   Dropdown,
@@ -20,7 +21,10 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnsType } from "antd/es/table";
 import dayjs from "dayjs";
 import { useSearchParams } from "react-router-dom";
-import { listPromotions, reviewPromotion, shipInclude } from "@/features/promotion/api";
+import { getPromotion, promotionDetailKey, listPromotions, reviewPromotion, shipInclude } from "@/features/promotion/api";
+import { useReportFilters } from "@/features/report/useReportFilters";
+import { PROMOTION_FILTER_DEFAULTS, PROMOTION_FILTER_SCHEMA, promotionDimensionParams, promotionIdFromUrl, type PromotionDimensions } from "@/features/promotion/promotionFilters";
+import { PromotionDimensionFilters } from "@/features/promotion/components/PromotionDimensionFilters";
 import { LINE_EVENTS_ALL } from "@/features/flow/api";
 import { buildMenuItems } from "@/features/flow/flowMenu";
 import { LineDrawer } from "@/features/flow/LineDrawer";
@@ -123,13 +127,32 @@ export function PromotionListPage() {
   const qc = useQueryClient();
   const { token } = theme.useToken();
   // 谈款定稿后「去推广管理」带 ?keyword=内部编码 过来（流程线 8.3）
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const initialKeyword = searchParams.get("keyword")?.trim() || undefined;
   const [filters, setFilters] = useState<PromotionListFilters>({
     page: 1,
     page_size: 10,
     keyword: initialKeyword,
   });
+  const dimensions = useReportFilters("promotion_list", PROMOTION_FILTER_SCHEMA, PROMOTION_FILTER_DEFAULTS);
+  const queryFilters = { ...filters, ...promotionDimensionParams(dimensions.filters) };
+  const changeDimensions = (patch: Partial<PromotionDimensions>) => {
+    dimensions.setFilters(patch);
+    setFilters((f) => ({ ...f, page: 1 }));
+  };
+  const rawDetailId = searchParams.get("id");
+  const detailId = promotionIdFromUrl(rawDetailId);
+  const landingQuery = useQuery({
+    queryKey: promotionDetailKey(detailId ?? ""),
+    queryFn: () => getPromotion(detailId!),
+    enabled: Boolean(detailId),
+    retry: false,
+  });
+  const removeDetailId = () => setSearchParams((prev) => {
+    const next = new URLSearchParams(prev);
+    next.delete("id");
+    return next;
+  }, { replace: true });
   // 各弹窗的表单与提交都在 features/promotion/components/ 里，页面只管开哪个、对哪条单
   const [open, setOpen] = useState(false);
   const [publishOpen, setPublishOpen] = useState(false);
@@ -146,7 +169,11 @@ export function PromotionListPage() {
   const [metricsTarget, setMetricsTarget] = useState<Promotion | null>(null);
   const [retroTarget, setRetroTarget] = useState<Promotion | null>(null);
   // 点一行（或「留言」「金额改动记录」菜单）开主线抽屉；tab = 打开时先显示的页签
-  const [lineTarget, setLineTarget] = useState<{ row: Promotion; tab?: LineTab } | null>(null);
+  const [manualLineTarget, setLineTarget] = useState<{ row: Promotion; tab?: LineTab } | null>(null);
+  // URL目标直接由当前ID的查询推导；不以异步effect写回旧目标，关闭后迟到响应也不能重开。
+  const lineTarget = rawDetailId !== null
+    ? (detailId && landingQuery.data?.id === detailId ? { row: landingQuery.data, tab: undefined } : null)
+    : manualLineTarget;
   const [recallTarget, setRecallTarget] = useState<Promotion | null>(null);
   const [recallWaybillTarget, setRecallWaybillTarget] = useState<Promotion | null>(null);
   const [recallResultTarget, setRecallResultTarget] = useState<Promotion | null>(null);
@@ -163,7 +190,10 @@ export function PromotionListPage() {
   const [settlementChatTarget, setSettlementChatTarget] = useState<Promotion | null>(null);
   const flowFeedback = useFlowFeedback();
   const openLine = (row: Promotion, tab?: LineTab) => {
-    if (row.line_id) setLineTarget({ row, tab });
+    if (row.line_id) {
+      if (rawDetailId !== null) removeDetailId();
+      setLineTarget({ row, tab });
+    }
   };
   /** 抽屉页签（6.6）：单据详情 / 金额改动（按页级 ui.actions.amount_log 出）/ 催发记录。 */
   const lineTabs = (row: Promotion) => [
@@ -191,8 +221,9 @@ export function PromotionListPage() {
   ];
 
   const { data, isLoading } = useQuery({
-    queryKey: ["promotions", filters],
-    queryFn: () => listPromotions(filters),
+    queryKey: ["promotions", queryFilters],
+    queryFn: () => listPromotions(queryFilters),
+    enabled: dimensions.ready,
   });
   // 「金额改动」页签与菜单只看页级标记（与金额改动接口同一判定），不看行上的报价值
   const canAmountLog = Boolean(data?.ui?.actions?.amount_log);
@@ -670,6 +701,7 @@ export function PromotionListPage() {
         ) : undefined
       }
     >
+      <PromotionDimensionFilters value={dimensions.filters} onChange={changeDimensions} />
       <Space style={{ marginBottom: 16 }} wrap>
         <Input.Search
           placeholder="搜索内部编码 / 货号 / 商品简称 / 商品编码"
@@ -707,6 +739,12 @@ export function PromotionListPage() {
           }
         />
       </Space>
+
+      {rawDetailId !== null && (!detailId || landingQuery.isError) ? (
+        <Alert type="warning" showIcon closable style={{ marginBottom: 16 }}
+          message={!detailId ? "推广编号无效" : "无法打开推广详情，单据不存在或没有访问权限"}
+          onClose={() => { setLineTarget(null); removeDetailId(); }} />
+      ) : null}
 
       <Table
         rowKey="id"
@@ -763,7 +801,7 @@ export function PromotionListPage() {
 
       <LineDrawer
         lineId={lineTarget?.row.line_id ?? null}
-        onClose={() => setLineTarget(null)}
+        onClose={() => { setLineTarget(null); if (rawDetailId !== null) removeDetailId(); }}
         goodsName={
           lineTarget ? lineTarget.row.display_short_name ?? lineTarget.row.style_short_name_snapshot : null
         }

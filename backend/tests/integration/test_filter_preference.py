@@ -119,6 +119,26 @@ class TestFilterRoundtrip:
         finally:
             tenant_id_ctx.reset(tok)
 
+    async def test_promotion_dimensions_are_user_and_page_local(
+        self, session: AsyncSession, tenant_a: Any, factory: Any, admin_role: Any
+    ) -> None:
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            first = await factory.user(tenant_a, roles=[admin_role])
+            second = await factory.user(tenant_a, roles=[admin_role])
+            svc = UserPreferenceService(session)
+            payload = {"season": ["春季"], "pr_id": "unassigned"}
+            assert await save_filter_preference("promotion_list", first, svc, payload) == {
+                "ok": True
+            }
+            assert await get_filter_preference("promotion_list", first, svc) == payload
+            assert await get_filter_preference("promotion_list", second, svc) == {}
+            assert await get_filter_preference("pr_work_progress", first, svc) == {}
+            await save_filter_preference("promotion_list", first, svc, {"season": []})
+            assert await get_filter_preference("promotion_list", first, svc) == {"season": []}
+        finally:
+            tenant_id_ctx.reset(tok)
+
     async def test_users_do_not_share_filters(
         self, session: AsyncSession, tenant_a: Any, factory: Any, admin_role: Any
     ) -> None:
