@@ -58,10 +58,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: {ref: "${{ github.sha }}", path: validation, persist-credentials: false}
+      - uses: actions/checkout@v4
+        with:
+          ref: 55477c44f09bb1a25169bfb44ff6c90bc4f9cedb
+          path: product-source
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with: {python-version: "3.12"}
       - name: Verify exact frozen bundle
-        run: python -B validation/tools/release_validation/verify_bundle.py --expected-tool-commit "$GITHUB_SHA" --output "$RUNNER_TEMP/release-validation"
+        run: python -B validation/tools/release_validation/verify_bundle.py --expected-tool-commit "$GITHUB_SHA" --source "$GITHUB_WORKSPACE/product-source" --output "$RUNNER_TEMP/release-validation"
       - name: Select bounded dependency source for the synthetic fixture
         shell: bash
         run: |
@@ -171,6 +176,20 @@ jobs:
             validation/tools/release_validation/phase2/ci_tests/run_producer_healthcheck.py \
             > "$RUNNER_TEMP/release-validation/health-overlap-result.json" \
             2> "$RUNNER_TEMP/release-validation/health-overlap-output.log"
+      - name: Actual GNU and dumb DBM stores with the pinned original seven tasks
+        if: always()
+        run: |
+          set -euo pipefail
+          image=$(cat "$RUNNER_TEMP/release-validation/control-image-id.txt")
+          [[ "$image" =~ ^sha256:[0-9a-f]{64}$ ]]
+          docker run --rm --pull=never --network=none --read-only --cap-drop=ALL \
+            --security-opt=no-new-privileges=true --memory=512m --cpus=1 --pids-limit=64 \
+            --tmpfs /tmp:rw,noexec,nosuid,size=64m --env GITHUB_ACTIONS=true \
+            --mount "type=bind,src=$GITHUB_WORKSPACE/validation/tools/release_validation,dst=/validation,readonly" \
+            --mount "type=bind,src=$GITHUB_WORKSPACE/product-source,dst=/product-source,readonly" \
+            --entrypoint python "$image" -I -B /validation/phase2/ci_tests/run_dbm_docker.py \
+            > "$RUNNER_TEMP/release-validation/dbm-result.json" \
+            2> "$RUNNER_TEMP/release-validation/dbm-output.log"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
