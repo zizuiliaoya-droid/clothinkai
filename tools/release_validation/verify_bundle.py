@@ -29,13 +29,13 @@ def git(repository, *args):
 
 
 def verify():
-    raw = (HERE / "checkpoint-bundle-manifest-1024.json").read_bytes()
+    raw = (HERE / "chain-bundle-manifest-1024.json").read_bytes()
     manifest = json.loads(raw)
     require(manifest["schema_version"] == 1, "manifest schema")
     require(manifest["frozen"] is True, "root has not frozen the candidate bundle")
     require(manifest["source_commit"] == SOURCE_COMMIT, "source commit drift")
     require(manifest["source_tree"] == SOURCE_TREE, "source tree drift")
-    transfer_raw = (HERE / "checkpoint-ci-transfer-pins-1024.json").read_bytes()
+    transfer_raw = (HERE / "chain-ci-transfer-pins-1024.json").read_bytes()
     require(
         sha256(transfer_raw) == manifest["pins"]["ci_transfer"], "transfer pins drift"
     )
@@ -46,7 +46,7 @@ def verify():
         "transfer source binding",
     )
     require(manifest["fixture_only"] is True, "product source must remain fixture only")
-    historical_raw = (HERE / "host-ci-transfer-pins-1023.json").read_bytes()
+    historical_raw = (HERE / "checkpoint-ci-transfer-pins-1024.json").read_bytes()
     require(
         sha256(historical_raw)
         == manifest["base_ci_transfer"]
@@ -55,9 +55,90 @@ def verify():
     )
     files = manifest["files"]
     require(bool(files), "empty bundle")
-    require(files == transfer["files"], "approved transfer allowlist drift")
+    additions = manifest["ci_additions"]
+    deltas = manifest["ci_test_deltas"]
+    require(
+        set(deltas)
+        == {
+            "phase2/ci_tests/test_dashboard_contract.py",
+            "phase2/ci_tests/test_host_sequence.py",
+        },
+        "finite successor test deltas required",
+    )
+    for name, delta in deltas.items():
+        require(delta["before"] == transfer["files"][name], "test delta origin drift")
+    changed = {name: delta["after"] for name, delta in deltas.items()}
+    public_raw = (HERE / "original-public-pins-1024.json").read_bytes()
+    require(
+        sha256(public_raw) == manifest["original_public_pins_sha256"],
+        "original public dependency pins drift",
+    )
+    public = json.loads(public_raw)
+    dependencies = manifest["public_dependencies"]
+    require(
+        public["runtime_execution_authorized"] is False
+        and public["secrets_included"] is False
+        and dependencies == public["files"]
+        and set(dependencies)
+        == {
+            "production-infra-1018/backup.py",
+            "production-infra-1018/upload_backup.py",
+            "app-trial-infra-1018/bootstrap-roles.sql",
+        },
+        "exact public hash/import dependencies required",
+    )
+    fixture_raw = (HERE / "fixture-input-pins-1024.json").read_bytes()
+    require(
+        sha256(fixture_raw) == manifest["fixture_input_pins_sha256"],
+        "original fixture input pins drift",
+    )
+    fixture = json.loads(fixture_raw)
+    fixture_inputs = manifest["fixture_inputs"]
+    require(
+        fixture["secret_values_included"] is False
+        and fixture["production_execution_authorized"] is False
+        and set(fixture["files"])
+        == {"original-backend.Dockerfile", "requirements-linux.lock"}
+        and fixture_inputs
+        == {"phase2/ci_tests/" + n: p for n, p in fixture["files"].items()},
+        "exact original fixture inputs required",
+    )
+    original_health = [
+        line
+        for line in (HERE / "phase2/ci_tests/original-backend.Dockerfile")
+        .read_bytes()
+        .splitlines()
+        if line.startswith(b"HEALTHCHECK ")
+    ]
+    synthetic_health = [
+        line
+        for line in (HERE / "phase2/ci_tests/producer-fixture.Dockerfile")
+        .read_bytes()
+        .splitlines()
+        if line.startswith(b"HEALTHCHECK ")
+    ]
+    require(
+        len(original_health) == 1 and synthetic_health == original_health,
+        "exact original CMD-SHELL healthcheck required",
+    )
+    require(
+        not set(additions) & set(transfer["files"])
+        and all(n.startswith("phase2/ci_tests/") for n in additions),
+        "CI additions must not overwrite frozen source",
+    )
+    require(
+        files
+        == {
+            **transfer["files"],
+            **changed,
+            **additions,
+            **dependencies,
+            **fixture_inputs,
+        },
+        "approved transfer allowlist drift",
+    )
     actual = set()
-    for phase in ("phase1", "phase2"):
+    for phase in ("phase1", "phase2", "production-infra-1018", "app-trial-infra-1018"):
         root = HERE / phase
         require(
             root.is_dir() and not root.is_symlink() and not root.is_junction(),
@@ -71,7 +152,10 @@ def verify():
     require(actual == set(files), "bundle file allowlist mismatch")
     for name, pin in files.items():
         require(
-            re.fullmatch(r"phase[12]/[A-Za-z0-9_./-]+", name)
+            re.fullmatch(
+                r"(?:phase[12]|production-infra-1018|app-trial-infra-1018)/[A-Za-z0-9_./-]+",
+                name,
+            )
             and ".." not in name.split("/"),
             "unsafe bundle path",
         )
@@ -110,10 +194,12 @@ def verify():
         manifest["deployable"] is False
         and manifest["live_enabled"] is False
         and manifest["production_29_actions_verified"] is False
-        and manifest["backup_module_included"] is False,
+        and manifest["backup_module_included"] is True,
         "candidate boundary",
     )
-    require("phase2/host_backup_control.py" not in files, "unfrozen backup module")
+    require(
+        "phase2/host_backup_control.py" in transfer["files"], "unfrozen backup module"
+    )
     return manifest, sha256(raw)
 
 
@@ -159,6 +245,8 @@ def main():
         "tool_pins": manifest["pins"],
         "bundle_manifest_sha256": manifest_hash,
         "bundle_file_count": len(manifest["files"]),
+        "original_public_pins_sha256": manifest["original_public_pins_sha256"],
+        "fixture_input_pins_sha256": manifest["fixture_input_pins_sha256"],
         "dependency_declaration_sha256": dependencies,
         "github_run_id": os.environ.get("GITHUB_RUN_ID"),
         "package_semantics_verified": False,

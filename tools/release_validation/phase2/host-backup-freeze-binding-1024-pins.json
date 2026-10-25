@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "purpose": "host-backup-freeze-binding-1024",
+  "baseline": "backup-idle-1024",
+  "deployable": false,
+  "live_verified": false,
+  "files": {
+    "host_backup_control.py": {
+      "bytes": 36677,
+      "sha256": "18b45d5a6f0f0d1827fe69838053ae52d5df9c07f693ad481b2ee8fd7abfb8fe"
+    },
+    "tests/test_host_backup_control.py": {
+      "bytes": 22565,
+      "sha256": "f9bda25f6a929727344fbcd984383c8294e5d5cc17f5fe9e28f11aef1506a191"
+    }
+  },
+  "patch_sha256": "be65f28ac8f45939f7acb0a6dc541f6f5a1beafe0d837e104ca5e772049fa415"
+}

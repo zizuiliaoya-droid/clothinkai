@@ -99,9 +99,10 @@ class HostSequenceTests(unittest.TestCase):
                 HostDirectory(commit)
 
     def test_pending_actions_are_not_implicitly_success(self):
-        self.assertIn("MIGRATE", SUPPORTED)
-        self.assertIn("PREPARE", SUPPORTED)
-        self.assertNotIn("OPEN_GATE", SUPPORTED)
+        self.assertEqual(SUPPORTED, frozenset(STEPS))
+        action = next_action(self.spec, State())
+        state = replay(self.spec, [{"kind": "intent", "payload": asdict(action)}])
+        self.assertEqual(next_action(self.spec, state).classification, "HOLD_UNKNOWN")
 
 
 if __name__ == "__main__":

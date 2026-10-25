@@ -34,12 +34,19 @@ async def ensure_web_network(spec, journal, web_id):
         and last["payload"]["name"] == "REPLACE_WEB",
         "network_replace_intent",
     )
-    binding = parse(spec._binding)
+    from host_migration_control import recorded_facts
+    from host_release_input import HostReleaseSpec
+
+    image_id = (
+        recorded_facts(spec, journal, "BUILD_FRONTEND")["image"]["id"]
+        if type(spec) is HostReleaseSpec
+        else parse(spec._binding)["frontend_image"]
+    )
     web = (await collect("inspect", "web"))["facts"]
     control = (await collect("web_control_show", "web"))["facts"]
     require(
         web["id"] == control["id"] == web_id
-        and web["image"] == control["image"] == binding["frontend_image"],
+        and web["image"] == control["image"] == image_id,
         "network_new_web_identity",
     )
     require(

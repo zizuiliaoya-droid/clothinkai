@@ -18,7 +18,7 @@ from sql_policy import require_host_authority
 TEMPLATE_PINS = {
     "nginx-maintenance.conf": "811b2119751d703aa06bdeb8e02273c53fdf2badaca541e6ff452a333dfdcadb",
     "nginx-release-closed.conf": "811b2119751d703aa06bdeb8e02273c53fdf2badaca541e6ff452a333dfdcadb",
-    "nginx-release-open.conf": "71925a73657c967bd63f6cd678fc79a4096c858cb2390a7e2dbf713aa001970d",
+    "nginx-release-open.conf": "89519863caaa05ed9e7e314bf7f912db240e2a8371ee26208c64579d98e05a93",
 }
 
 

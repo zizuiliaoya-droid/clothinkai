@@ -1,0 +1,142 @@
+--- a/host_backup_control.py
++++ b/host_backup_control.py
+@@ -7,10 +7,10 @@
+ import asyncio
+ import hashlib
+ import os
+-from pathlib import Path
+ import re
+ import stat
+ import time
++from pathlib import Path
+ 
+ import backup_adapter
+ import restore_drill
+@@ -216,7 +216,10 @@
+     )
+ 
+ 
+-async def _frozen(spec, baseline):
++async def _frozen(spec, baseline, journal):
++    from host_producer_control import verify_frozen
++
++    await verify_frozen(journal, baseline)
+     require_host_authority(spec)
+     exact(baseline, ROLES)
+     require(
+@@ -248,6 +251,7 @@
+             "backup_timer_active",
+         )
+     sessions = await two_idle_windows(baseline["db"])
++    await verify_frozen(journal, baseline)
+     require_host_authority(spec)
+     return {"containers": rows, "sessions": sessions}
+ 
+@@ -295,9 +299,10 @@
+     journal.directory.create(name, canonical(row))
+ 
+ 
+-async def backup(spec, journal, baseline):
++async def backup(spec, journal, baseline, *, schema_before_sha256):
++    sha(schema_before_sha256)
+     action_id = _action(spec, journal, "BACKUP")
+-    freeze_before = await _frozen(spec, baseline)
++    freeze_before = await _frozen(spec, baseline, journal)
+     rows = freeze_before["containers"]
+     _script_pins()
+     mounts = await _mounts(baseline["api"])
+@@ -454,7 +459,7 @@
+     verified = backup_adapter.verify(
+         old, projected, receipt, freeze_tick, action_id, baseline["api"]
+     )
+-    freeze_after = await _frozen(spec, baseline)
++    freeze_after = await _frozen(spec, baseline, journal)
+     after_rows = freeze_after["containers"]
+     require(
+         {k: v["image"] for k, v in rows.items()}
+@@ -484,7 +489,12 @@
+         "freeze_after": freeze_after,
+     }
+     journal.directory.create("backup-private.json", canonical(private))
+-    result = {**verified, "mode": "host_observed", "receipt_sha256": digest(private)}
++    result = {
++        **verified,
++        "mode": "host_observed",
++        "receipt_sha256": digest(private),
++        "schema_before_sha256": schema_before_sha256,
++    }
+     journal.directory.create("backup-observed.json", canonical(result))
+     return result
+ 
+@@ -786,7 +796,7 @@
+ 
+ async def restore(spec, journal, baseline):
+     action_id = _action(spec, journal, "RESTORE")
+-    freeze_before = await _frozen(spec, baseline)
++    freeze_before = await _frozen(spec, baseline, journal)
+     backup_raw = journal.directory.read("backup-observed.json", 16384)
+     backup_result = parse(backup_raw)
+     private_raw = journal.directory.read("backup-private.json", 8 * 1024**2)
+@@ -895,7 +905,7 @@
+     comparison = await _database_snapshot(identity)
+     require(comparison["rls_sha256"] == expected["rls_sha256"], "restore_rls_baseline")
+     after = await _drill_identity(identity, data, name)
+-    freeze_after = await _frozen(spec, baseline)
++    freeze_after = await _frozen(spec, baseline, journal)
+     require(
+         await _database_snapshot(baseline["db"]) == expected, "restore_source_changed"
+     )
+--- a/tests/test_host_backup_control.py
++++ b/tests/test_host_backup_control.py
+@@ -184,7 +184,9 @@
+         self.addCleanup(self.clock.stop)
+ 
+     async def run_backup(self):
+-        return await control.backup(self.spec, self.journal, BASELINE)
++        return await control.backup(
++            self.spec, self.journal, BASELINE, schema_before_sha256="f" * 64
++        )
+ 
+     async def test_success_one_original_host_call_receipt_bound(self):
+         result = await self.run_backup()
+@@ -417,6 +419,13 @@
+ 
+ 
+ class NarrowBoundaryTests(NoSocketAsyncCase):
++    async def asyncSetUp(self):
++        self.producer = patch(
++            "host_producer_control.verify_frozen", AsyncMock(return_value={})
++        )
++        self.producer.start()
++        self.addCleanup(self.producer.stop)
++
+     async def test_frozen_gate_refuses_replaced_original_identity(self):
+         spec = SimpleNamespace(
+             _binding=canonical({"baseline_sha256": digest(BASELINE)})
+@@ -432,7 +441,7 @@
+             ),
+         ):
+             with self.assertRaisesRegex(Rejected, "backup_container_identity"):
+-                await control._frozen(spec, BASELINE)
++                await control._frozen(spec, BASELINE, None)
+ 
+     async def test_frozen_gate_refuses_business_session(self):
+         spec = SimpleNamespace(
+@@ -457,7 +466,7 @@
+             patch.object(control, "_sql", AsyncMock(return_value=canonical(active))),
+         ):
+             with self.assertRaisesRegex(Rejected, "session_not_quiescent"):
+-                await control._frozen(spec, BASELINE)
++                await control._frozen(spec, BASELINE, None)
+ 
+     async def test_frozen_gate_preserves_both_idle_windows(self):
+         spec = SimpleNamespace(
+@@ -480,7 +489,7 @@
+                 control, "two_idle_windows", AsyncMock(return_value=session_windows())
+             ) as windows,
+         ):
+-            result = await control._frozen(spec, BASELINE)
++            result = await control._frozen(spec, BASELINE, None)
+         windows.assert_awaited_once_with(BASELINE["db"])
+         self.assertEqual(result["sessions"], session_windows())
+         self.assertEqual(result["containers"], rows)

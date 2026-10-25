@@ -73,6 +73,8 @@ class MigrationHostTests(NoSocketAsyncCase):
 
         async def capture(argv, **kwargs):
             calls.append(argv)
+            if "{{.HostConfig.NetworkMode}}" in argv:
+                return ("2" * 64).encode()
             if "create" in argv:
                 self.assertTrue(
                     (Path(self.temp.name) / "migration-create-intent.json").exists()
@@ -104,6 +106,15 @@ class MigrationHostTests(NoSocketAsyncCase):
             }
 
         with ExitStack() as stack:
+            stack.enter_context(
+                patch(
+                    "host_migration_control.database_clock",
+                    return_value="2026-10-24T01:00:00.000000Z",
+                )
+            )
+            stack.enter_context(
+                patch("host_session_contract.observe_sessions", return_value={})
+            )
             for target in ("require_step", "migration_artifacts"):
                 stack.enter_context(patch("host_migration_control." + target))
             stack.enter_context(
@@ -169,7 +180,13 @@ class MigrationHostTests(NoSocketAsyncCase):
 
         async def capture(argv, **kwargs):
             calls.append(argv)
-            return canonical({"present": False, "heads": ["067_retro_completion"]})
+            return canonical(
+                {
+                    "present": False,
+                    "lock_present": False,
+                    "heads": ["067_retro_completion"],
+                }
+            )
 
         with patch("host_migration_control._capture", side_effect=capture):
             await verify_backend_absence(policy, self.baseline["db"], identity)
@@ -178,7 +195,11 @@ class MigrationHostTests(NoSocketAsyncCase):
         with patch(
             "host_migration_control._capture",
             return_value=canonical(
-                {"present": True, "heads": ["067_retro_completion"]}
+                {
+                    "present": True,
+                    "lock_present": False,
+                    "heads": ["067_retro_completion"],
+                }
             ),
         ):
             with self.assertRaises(Exception):

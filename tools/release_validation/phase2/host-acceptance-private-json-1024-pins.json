@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "purpose": "host-acceptance-private-json-1024",
+  "baseline": "acceptance-9d0138-1024",
+  "deployable": false,
+  "live_verified": false,
+  "files": {
+    "host_acceptance_control.py": {
+      "bytes": 41050,
+      "sha256": "d2ffbaebf8cdde8a5ea86007a749638c2a65a9086fa65e349464b5889a4dd9f9"
+    },
+    "tests/test_host_acceptance_private_json.py": {
+      "bytes": 1123,
+      "sha256": "028de2a0a4c8fdb5b14ea26f62396408583d962f9db1de47fb5890b55df74853"
+    }
+  },
+  "patch_sha256": "0669878c51bfce34749b16fb26208435faa8e218b608f23d77f624b48402073a"
+}

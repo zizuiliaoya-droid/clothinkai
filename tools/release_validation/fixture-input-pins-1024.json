@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "purpose": "original_public_API_healthcheck_and_runtime_dependency_fixture_inputs",
+  "files": {
+    "original-backend.Dockerfile": {
+      "bytes": 778,
+      "sha256": "902a41221cfe002268241b8d31a55c3a59c4ec55d5e6bf38af6ba6974e2dcb9f"
+    },
+    "requirements-linux.lock": {
+      "bytes": 6870,
+      "sha256": "acd3479265e346df535d34c818a4128a4179eb641d4baf5c052c09f0b30aea81"
+    }
+  },
+  "secret_values_included": false,
+  "production_execution_authorized": false
+}

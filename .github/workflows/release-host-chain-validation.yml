@@ -1,0 +1,228 @@
+name: Disposable host chain kernels
+
+on:
+  push:
+    branches: [codex/release-linux-ci-1023]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-host-chain-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+  SOURCE_COMMIT: 55477c44f09bb1a25169bfb44ff6c90bc4f9cedb
+  SOURCE_TREE: 28c0cac9a15cc48a5dfa5c7d3ed732cd6a59abdc
+
+jobs:
+  global-lock:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: "${{ github.sha }}", path: validation, persist-credentials: false}
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - name: Verify exact frozen bundle
+        run: python -B validation/tools/release_validation/verify_bundle.py --expected-tool-commit "$GITHUB_SHA" --output "$RUNNER_TEMP/release-validation"
+      - name: Actual cross-candidate flock and durable claims
+        run: |
+          set -euo pipefail
+          sudo --preserve-env=GITHUB_ACTIONS "$(command -v python)" -B \
+            validation/tools/release_validation/phase2/ci_tests/run_host_global_lock_os.py \
+            > "$RUNNER_TEMP/release-validation/result.json" \
+            2> "$RUNNER_TEMP/release-validation/output.log"
+      - name: Host contracts and exact public dependency pins
+        working-directory: validation/tools/release_validation/phase2
+        run: |
+          set -euo pipefail
+          python -B -m unittest tests.test_host_app_open_control tests.test_host_freeze_control \
+            tests.test_host_session_contract tests.test_host_migration_control tests.test_host_backup_control \
+            tests.test_host_acceptance_private_json tests.test_host_acceptance_control -v \
+            > "$RUNNER_TEMP/release-validation/host-contracts.log" 2>&1
+          python -B ../test_host_bundle.py -v > "$RUNNER_TEMP/release-validation/bundle-contracts.log" 2>&1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: host-chain-global-lock-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: error
+          path: ${{ runner.temp }}/release-validation/
+
+  producer:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: "${{ github.sha }}", path: validation, persist-credentials: false}
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - name: Verify exact frozen bundle
+        run: python -B validation/tools/release_validation/verify_bundle.py --expected-tool-commit "$GITHUB_SHA" --output "$RUNNER_TEMP/release-validation"
+      - name: Select bounded dependency source for the synthetic fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          mirror=https://pypi.tuna.tsinghua.edu.cn/simple
+          index="$mirror"
+          probe_exit=0
+          if probe_http=$(curl --fail --silent --show-error \
+            --connect-timeout 5 --max-time 15 --retry 1 --retry-max-time 25 \
+            --output /dev/null --write-out '%{http_code}' "$mirror/asyncpg/"); then
+            echo "Dependency mirror probe succeeded; using Tsinghua mirror."
+          else
+            probe_exit=$?
+            index=https://pypi.org/simple
+            echo "::notice::Mirror unavailable (curl=$probe_exit HTTP=$probe_http); bounded fallback to official PyPI."
+          fi
+          python - "$mirror" "$index" "$probe_http" "$probe_exit" <<'PY'
+          import json, os, sys
+          from pathlib import Path
+          result = {
+              "data_kind": "synthetic_dependency_source_selection",
+              "primary_index": sys.argv[1],
+              "selected_index": sys.argv[2],
+              "mirror_probe_http_status": sys.argv[3],
+              "mirror_probe_exit_code": int(sys.argv[4]),
+              "fallback_due_to_probe_failure": sys.argv[1] != sys.argv[2],
+              "fallback_after_dependency_error": False,
+          }
+          output = Path(os.environ["RUNNER_TEMP"]) / "release-validation/dependency-source.json"
+          output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          print(json.dumps(result, sort_keys=True))
+          PY
+          printf 'FIXTURE_PIP_INDEX=%s\n' "$index" >> "$GITHUB_ENV"
+      - name: Build synthetic Python fixture and pin actual image IDs
+        run: |
+          set -euo pipefail
+          docker pull python:3.12-slim > "$RUNNER_TEMP/release-validation/fixture-pull.log"
+          base=$(docker image inspect --format '{{.Id}}' python:3.12-slim)
+          docker build --pull=false --build-arg "BASE_IMAGE=$base" --build-arg "PIP_INDEX_URL=$FIXTURE_PIP_INDEX" \
+            --iidfile "$RUNNER_TEMP/release-validation/health-image-id.txt" \
+            -f validation/tools/release_validation/phase2/ci_tests/producer-fixture.Dockerfile \
+            validation/tools/release_validation/phase2/ci_tests \
+            > "$RUNNER_TEMP/release-validation/fixture-build.log" 2>&1
+          image=$(cat "$RUNNER_TEMP/release-validation/health-image-id.txt")
+          docker image inspect --format '{{json .}}' "$image" > "$RUNNER_TEMP/release-validation/fixture-image.json"
+          docker run --rm --pull=never --network=none --entrypoint python "$image" -m pip freeze \
+            > "$RUNNER_TEMP/release-validation/fixture-dependencies.txt"
+          mkdir "$RUNNER_TEMP/producer-control-context"
+          printf 'FROM %s\nHEALTHCHECK NONE\n' "$image" > "$RUNNER_TEMP/producer-control-context/Dockerfile"
+          docker build --pull=false --iidfile "$RUNNER_TEMP/release-validation/control-image-id.txt" \
+            "$RUNNER_TEMP/producer-control-context" \
+            > "$RUNNER_TEMP/release-validation/control-build.log" 2>&1
+      - name: Original no-healthcheck kernel as an explicit control case
+        run: |
+          set -euo pipefail
+          export FLOW78_CI_PRODUCER_IMAGE=$(cat "$RUNNER_TEMP/release-validation/control-image-id.txt")
+          sudo --preserve-env=GITHUB_ACTIONS,FLOW78_CI_PRODUCER_IMAGE "$(command -v python)" -B \
+            validation/tools/release_validation/phase2/ci_tests/run_host_producer_docker.py \
+            > "$RUNNER_TEMP/release-validation/control-result.json" \
+            2> "$RUNNER_TEMP/release-validation/control-output.log"
+      - name: Actual inherited healthcheck overlap diagnostic (HOLD is not compatibility)
+        if: always()
+        run: |
+          set -euo pipefail
+          export FLOW78_CI_PRODUCER_IMAGE=$(cat "$RUNNER_TEMP/release-validation/health-image-id.txt")
+          sudo --preserve-env=GITHUB_ACTIONS,FLOW78_CI_PRODUCER_IMAGE "$(command -v python)" -B \
+            validation/tools/release_validation/phase2/ci_tests/run_producer_healthcheck.py \
+            > "$RUNNER_TEMP/release-validation/health-overlap-result.json" \
+            2> "$RUNNER_TEMP/release-validation/health-overlap-output.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: host-chain-producer-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: error
+          path: ${{ runner.temp }}/release-validation/
+
+  pg-acceptance-restore:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    services:
+      postgres:
+        image: postgres:18.6
+        env:
+          POSTGRES_DB: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: flow78-disposable-admin-only
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: "${{ github.sha }}", path: validation, persist-credentials: false}
+      - uses: actions/checkout@v4
+        with:
+          ref: 55477c44f09bb1a25169bfb44ff6c90bc4f9cedb
+          path: product-source
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - name: Verify exact frozen bundle and candidate product source
+        run: python -B validation/tools/release_validation/verify_bundle.py --expected-tool-commit "$GITHUB_SHA" --source "$GITHUB_WORKSPACE/product-source" --output "$RUNNER_TEMP/release-validation"
+      - name: Install exact candidate dependency declarations on disposable runner
+        working-directory: product-source/backend
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          set -euo pipefail
+          mirror=https://pypi.tuna.tsinghua.edu.cn/simple
+          index="$mirror"
+          probe_exit=0
+          if probe_http=$(curl --fail --silent --show-error \
+            --connect-timeout 5 --max-time 15 --retry 1 --retry-max-time 25 \
+            --output /dev/null --write-out '%{http_code}' "$mirror/asyncpg/"); then
+            echo "Dependency mirror probe succeeded; using Tsinghua mirror."
+          else
+            probe_exit=$?
+            index=https://pypi.org/simple
+            echo "::notice::Mirror unavailable (curl=$probe_exit HTTP=$probe_http); bounded fallback to official PyPI."
+          fi
+          python - "$mirror" "$index" "$probe_http" "$probe_exit" <<'PY'
+          import json, os, sys
+          from pathlib import Path
+          result = {
+              "data_kind": "synthetic_dependency_source_selection",
+              "primary_index": sys.argv[1],
+              "selected_index": sys.argv[2],
+              "mirror_probe_http_status": sys.argv[3],
+              "mirror_probe_exit_code": int(sys.argv[4]),
+              "fallback_due_to_probe_failure": sys.argv[1] != sys.argv[2],
+              "fallback_after_dependency_error": False,
+          }
+          output = Path(os.environ["RUNNER_TEMP"]) / "release-validation/dependency-source.json"
+          output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          print(json.dumps(result, sort_keys=True))
+          PY
+          # Installation errors fail this job; they never trigger another index.
+          python -m pip --isolated install --disable-pip-version-check \
+            --timeout 30 --retries 1 --index-url "$index" -r requirements-dev.txt
+      - name: Bind fixture DNS exclusively to loopback
+        run: printf '127.0.0.1 prod-db\n' | sudo tee -a /etc/hosts > /dev/null
+      - name: Actual PG18.6 5000-row capture, restore, migration, RLS and negative cases
+        timeout-minutes: 22
+        env:
+          PG_FIXTURE_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          sudo chown -R root:root "$GITHUB_WORKSPACE/product-source"
+          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_TEMP "$(command -v python)" -B \
+            validation/tools/release_validation/phase2/ci_tests/run_acceptance_pg.py \
+            --repository "$GITHUB_WORKSPACE/product-source" --commit "$SOURCE_COMMIT" --tree "$SOURCE_TREE" \
+            --pg-container "$PG_FIXTURE_CONTAINER" --output "$RUNNER_TEMP/release-validation/pg" \
+            > "$RUNNER_TEMP/release-validation/pg-result-stdout.json" \
+            2> "$RUNNER_TEMP/release-validation/pg-output.log"
+      - name: Make only synthetic evidence readable for artifact collection
+        if: always()
+        run: sudo chmod -R a+rX "$RUNNER_TEMP/release-validation"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: host-chain-pg-acceptance-restore-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: error
+          path: ${{ runner.temp }}/release-validation/

@@ -131,7 +131,7 @@ def validate(candidate, base, commit):
             )
             require(
                 new.get("command") == old.get("command")
-                and new["healthcheck"] == old["healthcheck"],
+                and new.get("healthcheck") == old.get("healthcheck"),
                 "web_entry",
             )
             require(
@@ -149,8 +149,8 @@ def validate(candidate, base, commit):
         "worker_api_health",
     )
     require(
-        candidate["services"]["prod-api"]["healthcheck"]
-        == base["services"]["prod-api"]["healthcheck"],
+        candidate["services"]["prod-api"].get("healthcheck")
+        == base["services"]["prod-api"].get("healthcheck"),
         "api_health_changed",
     )
     require(

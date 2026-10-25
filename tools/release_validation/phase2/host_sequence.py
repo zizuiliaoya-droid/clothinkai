@@ -56,6 +56,105 @@ class HostJournal(LinuxJournal):
         self.directory = HostDirectory(spec.data["source_commit"])
         self.root = self.directory.root
         self.lock = None
+        self.global_lock = None
+        self.claim = {
+            "release_id": spec.data["release_id"],
+            "source_commit": spec.data["source_commit"],
+            "input_sha256": spec.sha256,
+        }
+
+    def acquire(self):
+        import fcntl
+
+        from contracts import canonical
+        from host_backup_control import _directory, _read
+
+        parent = _directory(ROOT)
+        fd = None
+        try:
+            fd = os.open(
+                "flow78-release.lock",
+                os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
+                0o600,
+                dir_fd=parent,
+            )
+            info = os.fstat(fd)
+            require(
+                stat.S_ISREG(info.st_mode)
+                and info.st_uid == 0
+                and info.st_nlink == 1
+                and stat.S_IMODE(info.st_mode) == 0o600,
+                "host_global_lock_metadata",
+            )
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            try:
+                claim = os.open(
+                    "flow78-active.json",
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                    0o600,
+                    dir_fd=parent,
+                )
+            except FileExistsError:
+                require(
+                    parse(_read(parent, "flow78-active.json", 8192)) == self.claim,
+                    "host_other_release_claimed",
+                )
+            else:
+                with os.fdopen(claim, "wb") as handle:
+                    handle.write(canonical(self.claim))
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.fsync(parent)
+            super().acquire()
+            self.global_lock, fd = fd, None
+        finally:
+            if fd is not None:
+                os.close(fd)
+            os.close(parent)
+
+    def release(self):
+        import fcntl
+
+        super().release()
+        if self.global_lock is not None:
+            fcntl.flock(self.global_lock, fcntl.LOCK_UN)
+            os.close(self.global_lock)
+            self.global_lock = None
+        # Keep the durable claim. Operator closes it only after verified complete
+        # or the separately reviewed PRE066 recovery; process death is not proof.
+
+    def close_completed_claim(self, spec):
+        from host_backup_control import _directory, _read
+        from host_migration_control import recorded_facts
+
+        require(
+            self.lock is not None and self.global_lock is not None,
+            "host_claim_lock_required",
+        )
+        state = replay(spec, self.read())
+        require(
+            state.completed == STEPS and state.pending is None and state.hold is None,
+            "host_claim_not_complete",
+        )
+        for step in STEPS:
+            recorded_facts(spec, self, step)
+        parent = _directory(ROOT)
+        try:
+            before = os.stat("flow78-active.json", dir_fd=parent, follow_symlinks=False)
+            require(
+                parse(_read(parent, "flow78-active.json", 8192)) == self.claim,
+                "host_claim_replaced",
+            )
+            after = os.stat("flow78-active.json", dir_fd=parent, follow_symlinks=False)
+            require(
+                (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+                == (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns),
+                "host_claim_changed",
+            )
+            os.unlink("flow78-active.json", dir_fd=parent)
+            os.fsync(parent)
+        finally:
+            os.close(parent)
 
 
 def replay(spec, rows):
@@ -105,6 +204,8 @@ SUPPORTED = frozenset(
         "BUILD_BACKEND",
         "BUILD_FRONTEND",
         "MIGRATE",
+        "BACKUP",
+        "RESTORE",
         "PREFLIGHT",
         "FREEZE_TIMERS",
         "DISABLE_RESTART",
@@ -112,6 +213,22 @@ SUPPORTED = frozenset(
         "STOP_WORKER",
         "STOP_API",
         "CLOSE_GATE",
+        "FREEZE_PRODUCERS",
+        "DRAIN",
+        "FREEZE_VERIFY",
+        "REPLACE_API",
+        "REPLACE_WEB",
+        "START_WORKER",
+        "START_BEAT",
+        "VERIFY_SCHEMA",
+        "ACCEPT_INTERNAL",
+        "VERIFY_WORKER",
+        "VERIFY_JOBS",
+        "OPEN_GATE",
+        "VERIFY_OPEN",
+        "RESTORE_RESTART",
+        "RESTORE_TIMERS",
+        "VERIFY_COMPLETE",
     }
 )
 
@@ -140,49 +257,86 @@ async def _dispatch(name, spec, baseline, journal):
         from host_migration_control import migrate
 
         return await migrate(spec, journal, baseline)
-    if name == "CLOSE_GATE":
-        from host_web_control import switch_active
+    if name in ("BACKUP", "RESTORE"):
+        from host_backup_control import backup, restore
 
-        before = (await collect("inspect", "web"))["facts"]
-        require(before["id"] == baseline["web"], "host_web_replaced")
-        switch_active(spec, journal, name)
-        for operation in ("nginx_test", "nginx_reload"):
-            argv = command(operation, "web")
-            argv = tuple(
-                before["id"] if part == "clothinkai-prod-web-20261018" else part
-                for part in argv
+        if name == "BACKUP":
+            from host_acceptance_control import capture_pre_migration
+
+            captured = await capture_pre_migration(spec, journal, baseline)
+            return await backup(
+                spec, journal, baseline, schema_before_sha256=captured["receipt_sha256"]
             )
-            await _capture(argv, timeout=15)
-        # A client exit is not proof all old nginx workers/requests have drained.
-        raise Rejected("host_old_requests_and_dashboard_freshness_pending")
+        return await restore(spec, journal, baseline)
+    if name in ("VERIFY_SCHEMA", "ACCEPT_INTERNAL"):
+        from host_acceptance_control import accept_internal, verify_schema
+
+        return await (verify_schema if name == "VERIFY_SCHEMA" else accept_internal)(
+            spec, journal, baseline
+        )
+    if name in ("REPLACE_API", "REPLACE_WEB", "START_WORKER", "START_BEAT"):
+        from host_app_control import replace_app
+
+        return await replace_app(spec, journal, baseline, name.split("_")[-1].lower())
+    if name in ("VERIFY_WORKER", "VERIFY_JOBS"):
+        from host_jobs_control import verify_jobs, verify_worker
+
+        return await (verify_worker if name == "VERIFY_WORKER" else verify_jobs)(
+            spec, journal, baseline
+        )
+    if name in (
+        "OPEN_GATE",
+        "VERIFY_OPEN",
+        "RESTORE_RESTART",
+        "RESTORE_TIMERS",
+        "VERIFY_COMPLETE",
+    ):
+        from host_open_control import (
+            open_gate,
+            restore_restart,
+            restore_timers,
+            verify_complete,
+            verify_open,
+        )
+
+        operation = {
+            "OPEN_GATE": open_gate,
+            "VERIFY_OPEN": verify_open,
+            "RESTORE_RESTART": restore_restart,
+            "RESTORE_TIMERS": restore_timers,
+            "VERIFY_COMPLETE": verify_complete,
+        }[name]
+        return await operation(spec, journal, baseline)
+    if name == "FREEZE_PRODUCERS":
+        from host_producer_control import freeze
+
+        return await freeze(spec, journal, baseline)
+    if name in ("DRAIN", "FREEZE_VERIFY"):
+        from host_drain_control import drain, freeze_verify
+
+        return await (drain if name == "DRAIN" else freeze_verify)(
+            spec, journal, baseline
+        )
+    if name == "STOP_API":
+        from host_producer_control import terminate
+
+        return await terminate(spec, journal, baseline)
+    if name == "CLOSE_GATE":
+        from host_gate_control import close_gate
+
+        return await close_gate(spec, journal, baseline)
     if name == "PREFLIGHT":
-        rows = {role: (await collect("inspect", role))["facts"] for role in ROLES}
-        require(
-            all(rows[role]["id"] == baseline[role] for role in ROLES),
-            "host_baseline_identity",
-        )
-        network = (await collect("dashboard_network", "web"))["facts"]
-        board = (await collect("dashboard_board", "web"))["facts"]
-        from dashboard_contract import verify_members
+        from host_preflight_control import preflight
 
-        verify_members(network, board, rows["web"]["id"])
-        from contracts import canonical
-
-        journal.directory.create(
-            "preflight-observation.json",
-            canonical(
-                {
-                    "containers": rows,
-                    "dashboard_network": network,
-                    "dashboard_board": board,
-                }
-            ),
-        )
-        raise Rejected("host_preflight_roles_mounts_tls_pending")
+        return await preflight(spec, journal, baseline)
     if name == "FREEZE_TIMERS":
         from host_timer_control import freeze_timers
 
         return await freeze_timers(spec, journal)
+    if name in ("STOP_BEAT", "STOP_WORKER", "STOP_API"):
+        from host_stop_control import stop
+
+        return await stop(spec, journal, baseline, name.removeprefix("STOP_").lower())
     roles = (
         ROLES[:4]
         if name == "DISABLE_RESTART"
@@ -226,7 +380,7 @@ async def _dispatch(name, spec, baseline, journal):
             raise Rejected("host_exact_backend_absence_pending")
         require(after["restart_policy"] == "no", "host_restart_readback")
         results[role] = after
-    return results
+    return {"original_sha256": digest(before_rows), "containers": results}
 
 
 class HostCoordinator:
@@ -257,6 +411,17 @@ class HostCoordinator:
         if self.journal.lock is None:
             self.journal.acquire()
         state = replay(self.spec, self.journal.read())
+        if (
+            len(state.completed) == len(STEPS)
+            and state.pending is None
+            and state.hold is None
+        ):
+            return {
+                "status": "COMPLETE",
+                "scope": "29_host_actions_recorded",
+                "live_enabled": False,
+                "pending": ["independent_external_vantage", "K7-4", "R33"],
+            }
         action = next_action(self.spec, state)
         if not hasattr(action, "action_id"):
             return {"status": "HOLD", "reason": action.reason, "live_enabled": False}

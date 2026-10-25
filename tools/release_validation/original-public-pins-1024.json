@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "purpose": "exact_original_public_backup_and_role_fixture_dependencies",
+  "files": {
+    "production-infra-1018/backup.py": {
+      "bytes": 3240,
+      "sha256": "082ad3f1dbee2911ee325e551c4a0d59faee752bedf7d0c69ae35b59172a49d6"
+    },
+    "production-infra-1018/upload_backup.py": {
+      "bytes": 2176,
+      "sha256": "a9f5b74c46351bd57b854002f75f2a4d6f6fc49c499e3ec9f11795ad9bb1ff24"
+    },
+    "app-trial-infra-1018/bootstrap-roles.sql": {
+      "bytes": 378,
+      "sha256": "760e6ff923405f8be5193dd2a9a670d9b2e2be240b0563315efe0df49c43e912"
+    }
+  },
+  "secrets_included": false,
+  "runtime_execution_authorized": false,
+  "boundary": "Hash/import contract references only; original R2 uploader is not run in CI."
+}

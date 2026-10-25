@@ -1,0 +1,90 @@
+--- a/host_acceptance_control.py
++++ b/host_acceptance_control.py
+@@ -7,6 +7,7 @@
+ 
+ import asyncio
+ import hashlib
++import json
+ import re
+ import time
+ from datetime import datetime
+@@ -30,6 +31,27 @@
+ PAGE_ROWS = 16
+ MAX_BYTES = 16 * 1024**2
+ DEADLINE = 600
++
++
++def parse_private_receipt(raw):
++    """Private complete-set receipts have a 16 MiB limit, unlike SQL pages."""
++    require(type(raw) is bytes and 0 < len(raw) <= MAX_BYTES, "acceptance_receipt_size")
++
++    def pairs(values):
++        require(len(values) == len(dict(values)), "acceptance_receipt_duplicate")
++        return dict(values)
++
++    def constant(value):
++        require(False, "acceptance_receipt_constant")
++
++    try:
++        result = json.loads(raw, object_pairs_hook=pairs, parse_constant=constant)
++    except (ValueError, UnicodeError, RecursionError):
++        require(False, "acceptance_receipt_json")
++    require(type(result) is dict, "acceptance_receipt_object")
++    return result
++
++
+ EXTRA = {
+     # Preserve every promotion, including unpublished historical recall costs.
+     # Only the two fields deliberately changed by 067 are removed.
+@@ -365,7 +387,7 @@
+         == recorded_facts(spec, journal, "BACKUP")["schema_before_sha256"],
+         "acceptance_before_journal_hash",
+     )
+-    before = parse(raw)
++    before = parse_private_receipt(raw)
+     require(
+         before["mode"] == "host_observed"
+         and before["binding"] == _binding(spec, baseline),
+@@ -862,7 +884,7 @@
+         and hashlib.sha256(schema_raw).hexdigest() == schema["receipt_sha256"],
+         "acceptance_schema_receipt",
+     )
+-    schema_data = parse(schema_raw)
++    schema_data = parse_private_receipt(schema_raw)
+     migration = recorded_facts(spec, journal, "MIGRATE")
+     require(
+         schema_data["binding"] == marker["binding"]
+--- /dev/null
++++ b/tests/test_host_acceptance_private_json.py
+@@ -0,0 +1,31 @@
++import unittest
++
++from contracts import Rejected, canonical
++from host_acceptance_control import MAX_BYTES, parse_private_receipt
++from sql_policy import SqlRejected, parse
++
++
++class PrivateReceiptTests(unittest.TestCase):
++    def test_complete_set_over_one_mib_is_consumed_without_relaxing_public_parser(self):
++        receipt = {
++            "mode": "host_observed",
++            "rows": [{"id": str(i), "old_row_sha256": "a" * 64} for i in range(15000)],
++        }
++        raw = canonical(receipt)
++        self.assertGreater(len(raw), 1024**2)
++        self.assertLess(len(raw), MAX_BYTES)
++        self.assertEqual(parse_private_receipt(raw), receipt)
++        with self.assertRaises(SqlRejected):
++            parse(raw)
++
++    def test_over_limit_duplicate_keys_and_nonfinite_numbers_fail(self):
++        for raw in (
++            b" " * (MAX_BYTES + 1),
++            b'{"x":1,"x":2}',
++            b'{"nested":{"x":1,"x":2}}',
++            b'{"x":NaN}',
++            b'{"x":Infinity}',
++            b"[]",
++        ):
++            with self.subTest(size=len(raw)), self.assertRaises(Rejected):
++                parse_private_receipt(raw)

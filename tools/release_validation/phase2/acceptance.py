@@ -14,6 +14,23 @@ def stable_ticks(ticks):
 
 
 def verify(observed, expected):
+    return _verify(observed, expected, "synthetic")
+
+
+def verify_host(observed, expected):
+    """Validate host collector values without translating synthetic evidence.
+
+    The caller must bind collectors and predecessor receipts to its host journal;
+    this pure validator alone cannot establish that any observation took place.
+    role_access means the real database grant/override projection, not HTTP user
+    journeys. app_rls_checked requires an actual clothing_app connection. New
+    K7-4/R33 samples and authenticated HTTP writes remain separate pending proof.
+    """
+    require(expected.get("mode") == "host_observed", "host_expected_mode")
+    return _verify(observed, expected, "host_observed")
+
+
+def _verify(observed, expected, mode):
     fields = (
         "mode",
         "head",
@@ -62,7 +79,7 @@ def verify(observed, expected):
         "runtime_identity",
     )
     require(
-        observed["mode"] == "synthetic"
+        observed["mode"] == mode
         and observed["head"] == AFTER
         and observed["public_ports"] == [80, 443]
         and observed["origin"] == TARGET["origin"],
@@ -121,7 +138,7 @@ def verify(observed, expected):
         if observed[key] == 0
     ]
     return {
-        "mode": "synthetic",
+        "mode": mode,
         "live_verified": False,
         "acceptance_sha256": digest(observed),
         "pending_business_samples": pending,

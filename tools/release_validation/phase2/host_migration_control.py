@@ -3,6 +3,8 @@
 import ast
 import asyncio
 import os
+import time
+from datetime import datetime, timezone
 
 from contracts import BEFORE, canonical, digest, exact, require
 from contracts import sha as require_sha
@@ -158,6 +160,21 @@ async def _container(identity):
     return row
 
 
+async def database_clock(database_id):
+    from host_backup_control import _sql
+
+    row = parse(
+        await _sql(
+            database_id,
+            b"SELECT json_build_object('utc',to_char(clock_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'));",
+        )
+    )
+    exact(row, ("utc",))
+    stamp = datetime.fromisoformat(row["utc"].replace("Z", "+00:00"))
+    require(stamp.tzinfo == timezone.utc, "migration_database_clock")
+    return row["utc"]
+
+
 async def migrate(spec, journal, baseline):
     require_step(spec, journal, "MIGRATE")
     require(type(spec) is HostReleaseSpec, "migration_release_input")
@@ -178,6 +195,10 @@ async def migrate(spec, journal, baseline):
         )
     database = (await collect("inspect", "db"))["facts"]
     require(database["id"] == baseline["db"], "migration_database_identity")
+    from host_session_contract import observe_sessions
+
+    sessions = await observe_sessions(baseline["db"], require_absent=True)
+    journal.directory.create("migration-sessions-before.json", canonical(sessions))
     network = parse(spec._binding)["network_id"]
     require(network in database["networks"].values(), "migration_database_network")
     root = ROOT + "/releases/" + spec.data["release_id"]
@@ -261,15 +282,34 @@ async def migrate(spec, journal, baseline):
     }
     journal.directory.create("migration-policy.json", canonical(packed))
     before = await _container(identity)
+    mode = (
+        (
+            await _capture(
+                DOCKER
+                + ("inspect", "--format", "{{.HostConfig.NetworkMode}}", identity)
+            )
+        )
+        .decode("ascii")
+        .strip()
+    )
     require(
         before["image"] == backend
         and before["running"] is False
         and before["restart_policy"] == "no"
-        and set(before["networks"].values()) == {network},
+        and mode == network
+        and len(before["networks"]) == 1
+        and set(before["networks"].values()) <= {"", network},
         "migration_created_container",
     )
     try:
         async with asyncio.timeout(210):
+            time_window = {
+                "db_before_utc": await database_clock(baseline["db"]),
+                "started_monotonic_ns": time.monotonic_ns(),
+            }
+            journal.directory.create(
+                "migration-time-before.json", canonical(time_window)
+            )
             await _capture(DOCKER + ("start", "--attach", identity), timeout=180)
             after = await _container(identity)
             require(
@@ -294,6 +334,14 @@ async def migrate(spec, journal, baseline):
             validate_evidence(result["proof"], policy)
             identity_row = validate_identity(result["identity"], policy)
             await verify_backend_absence(policy, baseline["db"], identity_row)
+            time_window.update(
+                db_after_utc=await database_clock(baseline["db"]),
+                completed_monotonic_ns=time.monotonic_ns(),
+            )
+            require(
+                time_window["db_after_utc"] >= time_window["db_before_utc"],
+                "migration_database_clock_regressed",
+            )
     except BaseException:
         # Stop only the owned immutable container. Failure retains both identities
         # and the durable MIGRATE intent; no cleanup outcome is inferred here.
@@ -309,6 +357,7 @@ async def migrate(spec, journal, baseline):
         "proof": result["proof"],
         "backend_absent": True,
         "post_head": result["post_head"],
+        "time_window": time_window,
     }
     journal.directory.create("migration-observed.json", canonical(facts))
     return facts
@@ -324,7 +373,9 @@ async def verify_backend_absence(policy, database_id, identity):
         + identity["backend_start"]
         + "' AND application_name='"
         + identity["application_name"]
-        + "'), 'heads', (SELECT json_agg(version_num ORDER BY version_num) FROM alembic_version))"
+        + "'), 'lock_present', EXISTS(SELECT 1 FROM pg_locks WHERE locktype='advisory' AND classid=0 AND objid="
+        + str(LOCK_KEY)
+        + " AND objsubid=1), 'heads', (SELECT json_agg(version_num ORDER BY version_num) FROM alembic_version))"
     )
     row = parse(
         await _capture(
@@ -348,7 +399,10 @@ async def verify_backend_absence(policy, database_id, identity):
     )
     from contracts import AFTER
 
-    exact(row, ("present", "heads"))
+    exact(row, ("present", "lock_present", "heads"))
     require(
-        row["present"] is False and row["heads"] == [AFTER], "migration_backend_or_head"
+        row["present"] is False
+        and row["lock_present"] is False
+        and row["heads"] == [AFTER],
+        "migration_backend_or_head",
     )

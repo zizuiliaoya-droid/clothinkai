@@ -25,6 +25,12 @@ def old_active():
         .joinpath("nginx-release-open.conf")
         .read_bytes()
     )
+    # The successor adds HTTPS ACME; reconstruct the separately pinned old
+    # active file, retaining its original HTTP ACME route and exact hash.
+    acme = b"    location ^~ /.well-known/acme-challenge/ { root /var/www/acme; default_type text/plain; try_files $uri =404; }\n"
+    assert raw.count(acme) == 2
+    before, after = raw.split(b"    listen 443 ssl;", 1)
+    raw = before + b"    listen 443 ssl;" + after.replace(acme, b"", 1)
     routes = board.route_bytes()
     return raw.replace(routes, b"").replace(
         b"    location /api/ {", routes + b"    location /api/ {"
