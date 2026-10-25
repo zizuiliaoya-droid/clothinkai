@@ -80,6 +80,7 @@ def verify():
             "phase2/templates/nginx-maintenance.conf",
             "phase2/templates/nginx-release-closed.conf",
             "phase2/host_backup_control.py",
+            "phase2/host_acceptance_control.py",
             "phase2/host_producer_control.py",
             "phase2/restore_drill.py",
             "phase1/schedule_pickle_guard.py",

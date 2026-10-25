@@ -22,6 +22,30 @@ from host_release_input import require_step
 from migration_adapter import verify_acceptance
 from sql_policy import parse
 
+TTL_OBSERVER = """import hashlib,json,os,sys
+try:
+ sys.path.insert(0,'/opt/release')
+ from runtime_guard import CONFIG,RELEASE,need,parse,read_protected,validate_config,validate_release
+ from pathlib import Path
+ commit,tree,config_sha=sys.argv[1:]
+ need(os.geteuid()==0 and not Path('/app/.env').exists(),'runtime_identity')
+ release=validate_release(parse(RELEASE.read_bytes()),commit)
+ need(release['source_tree']==tree,'release_tree')
+ raw=read_protected(CONFIG)
+ need(hashlib.sha256(raw).hexdigest()==config_sha,'config_binding')
+ config=validate_config(parse(raw))
+ os.environ.clear()
+ os.environ.update({'PATH':'/usr/local/bin:/usr/bin:/bin','LANG':'C.UTF-8','HOME':'/root',**config})
+ os.chdir('/app');sys.path.insert(0,'/app')
+ from app.core.config import settings
+ ttl=settings.PERM_CACHE_TTL_SECONDS
+ need(type(ttl) is int and 300<=ttl<=540,'cache_ttl')
+ print(json.dumps({'permission_cache_ttl_seconds':ttl}))
+except BaseException:
+ raise SystemExit(2) from None
+"""
+
+
 SQL_PINS = {
     "baseline_queries.sql": "db648368f18ac1966533145cd69920a4bd205c842083a63acc0af20416f61403",
     "migration_acceptance.sql": "bd079c6e9aaa197e433f99b2702af4515198eda4eb4d5e3565f5560f816ec4c9",
@@ -922,11 +946,17 @@ async def accept_internal(spec, journal, baseline):
                 DOCKER
                 + (
                     "exec",
+                    "--user",
+                    "0:0",
                     replacements["api"]["new_container"]["id"],
                     "python",
+                    "-I",
                     "-B",
                     "-c",
-                    "import json; from app.core.config import settings; print(json.dumps({'permission_cache_ttl_seconds':settings.PERM_CACHE_TTL_SECONDS}))",
+                    TTL_OBSERVER,
+                    spec.data["source_commit"],
+                    spec.data["source_tree"],
+                    spec.data["config_sha256"],
                 )
             )
         )

@@ -75,8 +75,8 @@
     },
     "phase2/tests/test_host_acceptance_control.py": {
       "after": {
-        "bytes": 28572,
-        "sha256": "4823a5bb5aeecac86926e5e3efad060268b0df52d96ec0002d5f1c596ac5c28c"
+        "bytes": 28908,
+        "sha256": "636b7911e2acee810fe357634423edc90a2b991e7e4a3edb3bb1f3188d3cb256"
       },
       "before": {
         "bytes": 27552,
@@ -422,8 +422,8 @@
       "sha256": "65eec3e0e1ae3da1458a383461eb2d7bbfe392022b7339166fac49cdbf3ab74b"
     },
     "phase2/host_acceptance_control.py": {
-      "bytes": 41050,
-      "sha256": "d2ffbaebf8cdde8a5ea86007a749638c2a65a9086fa65e349464b5889a4dd9f9"
+      "bytes": 42132,
+      "sha256": "19e34dc5f113663c937786e863cecf3cd70c6eb976e7eee6e805c49b6bf398a5"
     },
     "phase2/host_alembic_runtime.py": {
       "bytes": 4905,
@@ -686,8 +686,8 @@
       "sha256": "81d148280418be50b01ce27eee51dc319e38ada74fef9ceba3143675b167b348"
     },
     "phase2/tests/test_host_acceptance_control.py": {
-      "bytes": 28572,
-      "sha256": "4823a5bb5aeecac86926e5e3efad060268b0df52d96ec0002d5f1c596ac5c28c"
+      "bytes": 28908,
+      "sha256": "636b7911e2acee810fe357634423edc90a2b991e7e4a3edb3bb1f3188d3cb256"
     },
     "phase2/tests/test_host_acceptance_private_json.py": {
       "bytes": 1123,
@@ -830,6 +830,17 @@
         "sha256": "5b0ba7ca7fddc41f7b363fcee1e749d00a39cefd6378cda0cc895957bf47f999"
       },
       "reason": "Use the same exact schedule guard successor pin for the existing frozen read-only loader; no historical pin mutation or mixed guard versions."
+    },
+    "phase2/host_acceptance_control.py": {
+      "after": {
+        "bytes": 42132,
+        "sha256": "19e34dc5f113663c937786e863cecf3cd70c6eb976e7eee6e805c49b6bf398a5"
+      },
+      "before": {
+        "bytes": 41050,
+        "sha256": "d2ffbaebf8cdde8a5ea86007a749638c2a65a9086fa65e349464b5889a4dd9f9"
+      },
+      "reason": "R1-01: TTL exec loads exact approved private config hash with existing runtime guards before importing source-bound settings; emits TTL only."
     },
     "phase2/host_backup_control.py": {
       "after": {

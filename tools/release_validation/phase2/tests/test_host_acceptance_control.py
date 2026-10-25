@@ -133,6 +133,7 @@ def spec():
             "release_id": "release-test",
             "source_commit": "a" * 40,
             "source_tree": "b" * 40,
+            "config_sha256": "d" * 64,
         },
         _binding=canonical(
             {
@@ -421,7 +422,7 @@ class CollectorBoundaries(NoSocketAsyncCase):
                     AsyncMock(
                         return_value=canonical({"permission_cache_ttl_seconds": 300})
                     ),
-                ),
+                ) as ttl_reader,
                 patch.object(
                     control,
                     "_runtime",
@@ -437,6 +438,11 @@ class CollectorBoundaries(NoSocketAsyncCase):
                 patch.object(control, "_web_files", AsyncMock(return_value=static)),
             ):
                 accepted = await control.accept_internal(data, journal, BASELINE)
+                ttl_reader.assert_awaited_once()
+                self.assertEqual(ttl_reader.await_args.args[0][-4:], (
+                    control.TTL_OBSERVER, data.data["source_commit"],
+                    data.data["source_tree"], data.data["config_sha256"],
+                ))
             self.assertEqual(accepted["head"], AFTER)
             self.assertEqual(
                 accepted["pending_business_samples"], control.BUSINESS_PENDING
