@@ -1,9 +1,12 @@
 """Isolated restore description and independent owner/ACL/RLS/dataset comparisons."""
 
 import re
+
 from contracts import BEFORE, digest, exact, require, sha
 
 R = "/srv/clothinkai/production-20261018"
+PGDATA_ENV = "PGDATA=/var/lib/postgresql"
+SOCKET_TMPFS = "/var/run/postgresql:rw,noexec,nosuid,size=16m,mode=3775"
 
 
 def plan(commit, dump_name, image):
@@ -27,6 +30,8 @@ def plan(commit, dump_name, image):
         "--cpus=1",
         "--cap-drop=ALL",
         "--security-opt=no-new-privileges=true",
+        "--tmpfs",
+        SOCKET_TMPFS,
         "--mount",
         "type=bind,src=" + data + ",dst=/var/lib/postgresql",
         "--mount",
@@ -36,7 +41,7 @@ def plan(commit, dump_name, image):
         + dump_name
         + ",dst=/input/database.dump,readonly",
         "-e",
-        "PGDATA=/var/lib/postgresql/18/docker/pgdata",
+        PGDATA_ENV,
         image,
     )
     return {

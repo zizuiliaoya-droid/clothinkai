@@ -177,6 +177,27 @@ async def restore(identity, image, temporary, output):
     Fixture DB root ownership is normalized before seed, so DB/extension owner
     comparison is meaningful. This is not original API backup.py or R2 proof.
     """
+    postgres_uid = await backup._postgres_uid(identity)
+    entrypoint = await backup._capture(
+        DOCKER + ("exec", identity, "cat", "/usr/local/bin/docker-entrypoint.sh"),
+        timeout=10,
+    )
+    require(0 < len(entrypoint) <= 65536, "ci_pg_entrypoint_bound")
+    with (output / "pg-original-entrypoint.sh").open("xb") as public_script:
+        public_script.write(entrypoint)
+    write(
+        output / "pg-runtime-public.json",
+        {
+            "data_kind": "synthetic_image_public_runtime",
+            "service_id": identity,
+            "image_id": image,
+            "postgres_uid": postgres_uid,
+            "new_data_initial_owner": [0, 0],
+            "new_data_ready_owner": [postgres_uid, 0],
+            "entrypoint_bytes": len(entrypoint),
+            "entrypoint_sha256": hashlib.sha256(entrypoint).hexdigest(),
+        },
+    )
     before = await backup._database_snapshot(identity)
     dump = temporary / "database.dump"
     with dump.open("xb") as target:
@@ -202,6 +223,8 @@ async def restore(identity, image, temporary, output):
     data = temporary / "data"
     data.mkdir(mode=0o700)
     inode = (data.stat().st_dev, data.stat().st_ino)
+    data_identity = {"path": str(data), "device": inode[0], "inode": inode[1]}
+    backup._data_identity(data_identity)
     owned = None
     started = time.monotonic()
     failed = False
@@ -221,12 +244,14 @@ async def restore(identity, image, temporary, output):
                 "--cap-add=SETUID",
                 "--cap-add=SETGID",
                 "--security-opt=no-new-privileges=true",
+                "--tmpfs",
+                backup.restore_drill.SOCKET_TMPFS,
                 "--mount",
                 "type=bind,src=" + str(data) + ",dst=/var/lib/postgresql",
                 "--mount",
                 "type=bind,src=" + str(dump) + ",dst=/input/database.dump,readonly",
                 "-e",
-                "PGDATA=/var/lib/postgresql/18/docker/pgdata",
+                backup.restore_drill.PGDATA_ENV,
                 "-e",
                 "POSTGRES_USER=root",
                 "-e",
@@ -244,6 +269,7 @@ async def restore(identity, image, temporary, output):
         require(re.fullmatch(r"[0-9a-f]{64}", owned), "ci_restore_full_id")
         call("start", owned)
         await backup._ready(owned)
+        backup._data_identity(data_identity, owner=(postgres_uid, 0))
         projection = '{"id":{{json .Id}},"image":{{json .Image}},"network":{{json .HostConfig.NetworkMode}},"ports":{{json .HostConfig.PortBindings}},"privileged":{{json .HostConfig.Privileged}},"cap_add":{{json .HostConfig.CapAdd}},"cap_drop":{{json .HostConfig.CapDrop}}}'
         isolated = json.loads(call("inspect", "--format", projection, owned))
         require(
@@ -256,6 +282,41 @@ async def restore(identity, image, temporary, output):
             and isolated["cap_drop"] == ["ALL"],
             "ci_restore_isolation",
         )
+        mounts = await backup._mounts(owned)
+        expected_mounts = [
+            {
+                "source": str(data),
+                "destination": "/var/lib/postgresql",
+                "rw": True,
+                "type": "bind",
+            },
+            {
+                "source": str(dump),
+                "destination": "/input/database.dump",
+                "rw": False,
+                "type": "bind",
+            },
+            {
+                "source": "",
+                "destination": "/var/run/postgresql",
+                "rw": True,
+                "type": "tmpfs",
+            },
+        ]
+        require(
+            mounts["id"] == owned
+            and mounts["image"] == image
+            and mounts["tmpfs"]
+            == {
+                "/var/run/postgresql": backup.restore_drill.SOCKET_TMPFS.split(":", 1)[
+                    1
+                ]
+            }
+            and sorted(mounts["mounts"], key=lambda row: row["destination"])
+            == sorted(expected_mounts, key=lambda row: row["destination"]),
+            "ci_restore_exact_mounts",
+        )
+        isolated["mounts"] = mounts
         require(
             (data.stat().st_dev, data.stat().st_ino) == inode,
             "ci_restore_data_identity",
@@ -275,6 +336,7 @@ async def restore(identity, image, temporary, output):
             timeout=180,
         )
         after = await backup._database_snapshot(owned)
+        backup._data_identity(data_identity, owner=(postgres_uid, 0))
         write(
             output / "restore-comparison.json",
             {"before": before, "after": after, "isolation": isolated},
@@ -295,6 +357,8 @@ async def restore(identity, image, temporary, output):
             "restore_seconds": time.monotonic() - started,
             "image_id": image,
             "isolated_full_id": owned,
+            "data_owner": {"uid": postgres_uid, "gid": 0, "mode": 0o700},
+            "outer_directory_root_private": True,
             "original_api_backup_tested": False,
             "r2_tested": False,
         }

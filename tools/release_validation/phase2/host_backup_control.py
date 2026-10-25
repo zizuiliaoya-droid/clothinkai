@@ -33,7 +33,7 @@ CREATE ROLE clothing_archiver NOSUPERUSER NOINHERIT NOCREATEROLE NOCREATEDB LOGI
 MOUNT_FORMAT = (
     '{"id":{{json .Id}},"image":{{json .Image}},'
     '"network":{{json .HostConfig.NetworkMode}},'
-    '"ports":{{json .HostConfig.PortBindings}},"mounts":['
+    '"ports":{{json .HostConfig.PortBindings}},"tmpfs":{{json .HostConfig.Tmpfs}},"mounts":['
     "{{$first := true}}{{range .Mounts}}{{if not $first}},{{end}}"
     '{"source":{{json .Source}},"destination":{{json .Destination}},'
     '"rw":{{json .RW}},"type":{{json .Type}}}{{$first = false}}{{end}}]}'
@@ -712,6 +712,10 @@ def _new_drill_directory(spec):
             os.mkdir("data", 0o700, dir_fd=drill)
             os.fsync(drill)
             data = os.stat("data", dir_fd=drill, follow_symlinks=False)
+            require(
+                data.st_uid == data.st_gid == 0 and stat.S_IMODE(data.st_mode) == 0o700,
+                "restore_new_data_owner",
+            )
             return {
                 "path": root + "/drill/data",
                 "inode": data.st_ino,
@@ -723,11 +727,26 @@ def _new_drill_directory(spec):
         os.close(fd)
 
 
-def _data_identity(data):
-    # Entry point may chown the data directory; its inode/device must stay fixed.
+async def _postgres_uid(identity):
+    sha(identity)
+    raw = (
+        await _capture(DOCKER + ("exec", identity, "id", "-u", "postgres"), timeout=10)
+    ).strip()
+    require(raw.isdigit() and 0 < int(raw) < 2**31, "restore_postgres_uid")
+    return int(raw)
+
+
+def _data_identity(data, *, owner=(0, 0)):
+    # PG entrypoint chown postgres changes only UID of this new bind root. Its
+    # initial root GID, private mode and inode stay fixed; outer dirs stay root.
     path = Path(data["path"])
     parent = _directory(path.parent)
     try:
+        outer = os.fstat(parent)
+        require(
+            outer.st_uid == outer.st_gid == 0 and stat.S_IMODE(outer.st_mode) == 0o700,
+            "restore_outer_directory_owner",
+        )
         fd = os.open(
             path.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent
         )
@@ -736,7 +755,8 @@ def _data_identity(data):
             require(
                 info.st_ino == data["inode"]
                 and info.st_dev == data["device"]
-                and not info.st_mode & 0o077,
+                and (info.st_uid, info.st_gid) == owner
+                and stat.S_IMODE(info.st_mode) == 0o700,
                 "restore_data_identity",
             )
         finally:
@@ -745,7 +765,7 @@ def _data_identity(data):
         os.close(parent)
 
 
-async def _drill_identity(identity, data, dump_name):
+async def _drill_identity(identity, data, dump_name, *, owner=(0, 0)):
     observed = await _mounts(identity)
     expected_mounts = [
         {
@@ -760,17 +780,26 @@ async def _drill_identity(identity, data, dump_name):
             "rw": False,
             "type": "bind",
         },
+        {
+            "source": "",
+            "destination": "/var/run/postgresql",
+            "rw": True,
+            "type": "tmpfs",
+        },
     ]
     require(
         observed["id"] == identity
         and observed["image"] == PG_IMAGE
         and observed["network"] == "none"
         and observed["ports"] in (None, {})
+        and observed.get("tmpfs")
+        == {"/var/run/postgresql": restore_drill.SOCKET_TMPFS.split(":", 1)[1]}
         and sorted(observed["mounts"], key=lambda x: x["destination"])
         == sorted(expected_mounts, key=lambda x: x["destination"]),
         "restore_container_isolation",
     )
-    _data_identity(data)
+    _data_identity(data, owner=owner)
+    observed["data_owner"] = {"uid": owner[0], "gid": owner[1], "mode": 0o700}
     return observed
 
 
@@ -836,6 +865,7 @@ async def restore(spec, journal, baseline):
     require(
         await _database_snapshot(baseline["db"]) == expected, "restore_source_changed"
     )
+    postgres_uid = await _postgres_uid(baseline["db"])
     require_host_authority(spec)
     manual_freeze(spec, journal)
     _once(
@@ -881,6 +911,7 @@ async def restore(spec, journal, baseline):
     require_host_authority(spec)
     await _capture(DOCKER + ("start", identity), timeout=30)
     await _ready(identity)
+    await _drill_identity(identity, data, name, owner=(postgres_uid, 0))
     require_host_authority(spec)
     manual_freeze(spec, journal)
     await _sql(identity, ROLE_SQL)
@@ -904,7 +935,7 @@ async def restore(spec, journal, baseline):
     )
     comparison = await _database_snapshot(identity)
     require(comparison["rls_sha256"] == expected["rls_sha256"], "restore_rls_baseline")
-    after = await _drill_identity(identity, data, name)
+    after = await _drill_identity(identity, data, name, owner=(postgres_uid, 0))
     freeze_after = await _frozen(spec, baseline, journal)
     require(
         await _database_snapshot(baseline["db"]) == expected, "restore_source_changed"

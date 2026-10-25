@@ -11,8 +11,8 @@
       "sha256": "fb59825130da06335bf8cd2a9c76d402f9a4951e6c4ad926a6011886f85af383"
     },
     "phase2/ci_tests/run_acceptance_pg.py": {
-      "bytes": 24669,
-      "sha256": "d0e398b2b64bc5b5ce38bda1221d1f513121ebe1ff4d753c6ad1efd19827e93c"
+      "bytes": 27119,
+      "sha256": "340efb0a616ea7efbf253c779ddf069c353035225328d79d9f5b9dac3401be6e"
     },
     "phase2/ci_tests/run_dbm_docker.py": {
       "bytes": 12108,
@@ -66,6 +66,17 @@
         "sha256": "217d4f632db8a948f4358da36790754fc1100bf1e2a1175b9d34cae47adb7378"
       },
       "reason": "fresh runner monotonic uptime may be below 1001 seconds; nonnegative test interval and explicit negative/reversed/future tick regressions; business validator unchanged"
+    },
+    "phase2/tests/test_host_backup_control.py": {
+      "after": {
+        "bytes": 27575,
+        "sha256": "bd3aa9b6592f9b2b873b4f4daf71f3e137c408313ccef2663df3c7962b9aac35"
+      },
+      "before": {
+        "bytes": 22565,
+        "sha256": "f9bda25f6a929727344fbcd984383c8294e5d5cc17f5fe9e28f11aef1506a191"
+      },
+      "reason": "Maintain existing restore/SQL/journal tests with narrow UID observation mock; add exact socket mount/options and private owner-transition negatives."
     },
     "phase2/tests/test_host_freeze_control.py": {
       "after": {
@@ -246,8 +257,8 @@
       "sha256": "acd3479265e346df535d34c818a4128a4179eb641d4baf5c052c09f0b30aea81"
     },
     "phase2/ci_tests/run_acceptance_pg.py": {
-      "bytes": 24669,
-      "sha256": "d0e398b2b64bc5b5ce38bda1221d1f513121ebe1ff4d753c6ad1efd19827e93c"
+      "bytes": 27119,
+      "sha256": "340efb0a616ea7efbf253c779ddf069c353035225328d79d9f5b9dac3401be6e"
     },
     "phase2/ci_tests/run_build_control_os.py": {
       "bytes": 2155,
@@ -394,8 +405,8 @@
       "sha256": "88ed4a1319493527b1ce7adb46e90abaf5c2cd921ba832b9dcb2d8f22ce8b19f"
     },
     "phase2/host_backup_control.py": {
-      "bytes": 36683,
-      "sha256": "4c5536cd6a2db4f83b50e3821b6c6126e4c727402ee8bfc4abaacc43e775a056"
+      "bytes": 38030,
+      "sha256": "ac6ea942b8e4db4d222e817bcd5e0df45ef9217df1646fbd7cd8bd3e8f5a32b7"
     },
     "phase2/host_build_control.py": {
       "bytes": 10366,
@@ -550,8 +561,8 @@
       "sha256": "ceb699fa397a8647700fd8d995efdc97ae68e657ed0b60a8e5680f788188abd9"
     },
     "phase2/restore_drill.py": {
-      "bytes": 3037,
-      "sha256": "95473c2b18608e961cc2f0c0aeaba8f6ea7f34ab4a4f9d6f1948a0403fb0f521"
+      "bytes": 3159,
+      "sha256": "a7e28e4bab4d7ac2b6b3b6c9c2c0ba6d24271f9b64e8bb65d1fffc80fa4830e4"
     },
     "phase2/simulator.py": {
       "bytes": 2467,
@@ -654,8 +665,8 @@
       "sha256": "0e73089f65c9bd4877e5f5ae4fee9269f585f93d8ac1ecd5a23f221e4be2914b"
     },
     "phase2/tests/test_host_backup_control.py": {
-      "bytes": 22565,
-      "sha256": "f9bda25f6a929727344fbcd984383c8294e5d5cc17f5fe9e28f11aef1506a191"
+      "bytes": 27575,
+      "sha256": "bd3aa9b6592f9b2b873b4f4daf71f3e137c408313ccef2663df3c7962b9aac35"
     },
     "phase2/tests/test_host_build_control.py": {
       "bytes": 7371,
@@ -767,14 +778,14 @@
   "host_runtime_deltas": {
     "phase2/host_backup_control.py": {
       "after": {
-        "bytes": 36683,
-        "sha256": "4c5536cd6a2db4f83b50e3821b6c6126e4c727402ee8bfc4abaacc43e775a056"
+        "bytes": 38030,
+        "sha256": "ac6ea942b8e4db4d222e817bcd5e0df45ef9217df1646fbd7cd8bd3e8f5a32b7"
       },
       "before": {
         "bytes": 36677,
         "sha256": "18b45d5a6f0f0d1827fe69838053ae52d5df9c07f693ad481b2ee8fd7abfb8fe"
       },
-      "reason": "PG18 actual ACL catalog concatenation requires explicit text cast of defaclobjtype; preserve all default ACL rows and hash comparison."
+      "reason": "Preserve PG18 default ACL text cast; bind exact socket tmpfs and inspect its options. Require new data root0:0/0700 before start, same inode postgres UID:0/0700 after entrypoint, outer drill remains root0:0/0700. PostgreSQL UID comes from original bound DB image; no ownership changes to outer release directories."
     },
     "phase2/host_gate_control.py": {
       "after": {
@@ -797,6 +808,17 @@
         "sha256": "3604ef5b77fec3ac9ea3ef538b0d57740350a041425f8b26e6d3e32976f94750"
       },
       "reason": "Original full Healthcheck config bound to container ID/PID; only stable exact shell/python pair with runtime parent, namespaces, UID, executable identity, bounded lifetime and no other tasks/children may coexist with frozen uvicorn. Incomplete or unknown samples HOLD without write retry."
+    },
+    "phase2/restore_drill.py": {
+      "after": {
+        "bytes": 3159,
+        "sha256": "a7e28e4bab4d7ac2b6b3b6c9c2c0ba6d24271f9b64e8bb65d1fffc80fa4830e4"
+      },
+      "before": {
+        "bytes": 3037,
+        "sha256": "95473c2b18608e961cc2f0c0aeaba8f6ea7f34ab4a4f9d6f1948a0403fb0f521"
+      },
+      "reason": "Actual PG18 entrypoint cannot traverse root-private parent of nested PGDATA. Bind root is now PGDATA; only private socket tmpfs added, same no-network/no-ports and capability policy."
     }
   },
   "live_enabled": false,

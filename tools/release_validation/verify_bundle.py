@@ -64,6 +64,7 @@ def verify():
             "phase2/ci_tests/test_host_sequence.py",
             "phase2/tests/test_host_acceptance_control.py",
             "phase2/tests/test_host_freeze_control.py",
+            "phase2/tests/test_host_backup_control.py",
         },
         "finite successor test deltas required",
     )
@@ -77,6 +78,7 @@ def verify():
             "phase2/host_gate_control.py",
             "phase2/host_backup_control.py",
             "phase2/host_producer_control.py",
+            "phase2/restore_drill.py",
         },
         "finite authorized host runtime delta required",
     )

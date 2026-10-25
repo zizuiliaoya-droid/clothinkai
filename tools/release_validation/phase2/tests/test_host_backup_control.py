@@ -331,6 +331,7 @@ class HostBackupTests(NoSocketAsyncCase):
             "_new_drill_directory": Mock(return_value=self.data),
             "_drill_identity": AsyncMock(return_value={"id": "9" * 64}),
             "_ready": AsyncMock(),
+            "_postgres_uid": AsyncMock(return_value=999),
             "_sql": AsyncMock(return_value=b""),
         }.items():
             context = patch.object(control, key, value)
@@ -356,6 +357,14 @@ class HostBackupTests(NoSocketAsyncCase):
         self.assertIn("--network=none", create)
         self.assertIn("--cap-drop=ALL", create)
         self.assertIn("POSTGRES_HOST_AUTH_METHOD=trust", create)
+        self.assertIn("PGDATA=/var/lib/postgresql", create)
+        self.assertEqual(
+            create[create.index("--tmpfs") + 1], control.restore_drill.SOCKET_TMPFS
+        )
+        self.assertEqual(
+            self.mocks["_drill_identity"].await_args_list[-1].kwargs,
+            {"owner": (999, 0)},
+        )
         self.assertEqual(
             {v for v in create if v.startswith("--cap-add=")},
             {"--cap-add=CHOWN", "--cap-add=SETUID", "--cap-add=SETGID"},
@@ -535,6 +544,111 @@ class NarrowBoundaryTests(NoSocketAsyncCase):
         ):
             with self.assertRaisesRegex(Rejected, "restore_container_isolation"):
                 await control._drill_identity("9" * 64, data, NAME)
+
+    async def test_restore_requires_exact_socket_tmpfs_and_owner_stage(self):
+        data = {"path": control.ROOT + "/releases/flow78-aaaaaaaaaaaa/drill/data"}
+        original = {
+            "id": "9" * 64,
+            "image": control.PG_IMAGE,
+            "network": "none",
+            "ports": {},
+            "tmpfs": {
+                "/var/run/postgresql": control.restore_drill.SOCKET_TMPFS.split(":", 1)[
+                    1
+                ]
+            },
+            "mounts": [
+                {
+                    "source": data["path"],
+                    "destination": "/var/lib/postgresql",
+                    "rw": True,
+                    "type": "bind",
+                },
+                {
+                    "source": control.ROOT + "/backups/" + NAME,
+                    "destination": "/input/database.dump",
+                    "rw": False,
+                    "type": "bind",
+                },
+                {
+                    "source": "",
+                    "destination": "/var/run/postgresql",
+                    "rw": True,
+                    "type": "tmpfs",
+                },
+            ],
+        }
+        with (
+            patch.object(
+                control, "_mounts", AsyncMock(return_value=deepcopy(original))
+            ),
+            patch.object(control, "_data_identity") as owner,
+        ):
+            result = await control._drill_identity("9" * 64, data, NAME, owner=(999, 0))
+            owner.assert_called_once_with(data, owner=(999, 0))
+            self.assertEqual(
+                result["data_owner"], {"uid": 999, "gid": 0, "mode": 0o700}
+            )
+        for kind in ("missing", "options", "bind", "readonly"):
+            changed = deepcopy(original)
+            if kind == "missing":
+                changed["mounts"].pop()
+            elif kind == "options":
+                changed["tmpfs"] = {"/var/run/postgresql": "rw,size=1g"}
+            elif kind == "bind":
+                changed["mounts"][-1]["type"] = "bind"
+            else:
+                changed["mounts"][-1]["rw"] = False
+            with (
+                self.subTest(kind=kind),
+                patch.object(control, "_mounts", AsyncMock(return_value=changed)),
+                patch.object(control, "_data_identity") as owner,
+                self.assertRaisesRegex(Rejected, "restore_container_isolation"),
+            ):
+                await control._drill_identity("9" * 64, data, NAME)
+            owner.assert_not_called()
+
+    def test_data_owner_transition_preserves_private_outer_directory(self):
+        data = {"path": "/fixture/drill/data", "inode": 30, "device": 1}
+        root = SimpleNamespace(st_uid=0, st_gid=0, st_mode=0o40700)
+        for uid in (0, 999):
+            info = SimpleNamespace(
+                st_uid=uid, st_gid=0, st_mode=0o40700, st_ino=30, st_dev=1
+            )
+            with (
+                patch.object(control, "_directory", return_value=8),
+                patch.object(control.os, "O_DIRECTORY", 0, create=True),
+                patch.object(control.os, "O_NOFOLLOW", 0, create=True),
+                patch.object(control.os, "open", return_value=9),
+                patch.object(control.os, "close"),
+                patch.object(control.os, "fstat", side_effect=[root, info]),
+            ):
+                control._data_identity(data, owner=(uid, 0))
+        for target, key, value in (
+            ("outer", "st_uid", 999),
+            ("outer", "st_gid", 999),
+            ("outer", "st_mode", 0o40755),
+            ("data", "st_uid", 0),
+            ("data", "st_gid", 999),
+            ("data", "st_mode", 0o40755),
+            ("data", "st_ino", 31),
+        ):
+            outer = deepcopy(root)
+            info = SimpleNamespace(
+                st_uid=999, st_gid=0, st_mode=0o40700, st_ino=30, st_dev=1
+            )
+            setattr(outer if target == "outer" else info, key, value)
+            with (
+                self.subTest(target=target, key=key),
+                patch.object(control, "_directory", return_value=8),
+                patch.object(control.os, "O_DIRECTORY", 0, create=True),
+                patch.object(control.os, "O_NOFOLLOW", 0, create=True),
+                patch.object(control.os, "open", return_value=9),
+                patch.object(control.os, "close"),
+                patch.object(control.os, "fstat", side_effect=[outer, info]),
+                self.assertRaises(Rejected),
+            ):
+                control._data_identity(data, owner=(999, 0))
 
     async def test_snapshot_global_timeout_applies(self):
         with patch.object(
