@@ -520,7 +520,7 @@ CATALOGS = {
         FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public'
         UNION ALL SELECT 'schema','public',nspname,nspacl::text FROM pg_namespace WHERE nspname='public'
         UNION ALL SELECT 'database','',datname,datacl::text FROM pg_database WHERE datname=current_database()
-        UNION ALL SELECT 'default',COALESCE(n.nspname,''),pg_get_userbyid(d.defaclrole)||':'||d.defaclobjtype,d.defaclacl::text
+        UNION ALL SELECT 'default',COALESCE(n.nspname,''),pg_get_userbyid(d.defaclrole)||':'||d.defaclobjtype::text,d.defaclacl::text
         FROM pg_default_acl d LEFT JOIN pg_namespace n ON n.oid=d.defaclnamespace
         UNION ALL SELECT 'column','public',c.relname||'.'||a.attname,a.attacl::text
         FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid WHERE c.relnamespace='public'::regnamespace AND a.attnum>0 AND NOT a.attisdropped

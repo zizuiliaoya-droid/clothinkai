@@ -367,8 +367,8 @@
       "sha256": "88ed4a1319493527b1ce7adb46e90abaf5c2cd921ba832b9dcb2d8f22ce8b19f"
     },
     "phase2/host_backup_control.py": {
-      "bytes": 36677,
-      "sha256": "18b45d5a6f0f0d1827fe69838053ae52d5df9c07f693ad481b2ee8fd7abfb8fe"
+      "bytes": 36683,
+      "sha256": "4c5536cd6a2db4f83b50e3821b6c6126e4c727402ee8bfc4abaacc43e775a056"
     },
     "phase2/host_build_control.py": {
       "bytes": 10366,
@@ -738,6 +738,17 @@
   "frozen": true,
   "historical_tool_commit": "5472ee15abe50f760ae77883e8c3f4b3a0dab37c",
   "host_runtime_deltas": {
+    "phase2/host_backup_control.py": {
+      "after": {
+        "bytes": 36683,
+        "sha256": "4c5536cd6a2db4f83b50e3821b6c6126e4c727402ee8bfc4abaacc43e775a056"
+      },
+      "before": {
+        "bytes": 36677,
+        "sha256": "18b45d5a6f0f0d1827fe69838053ae52d5df9c07f693ad481b2ee8fd7abfb8fe"
+      },
+      "reason": "PG18 actual ACL catalog concatenation requires explicit text cast of defaclobjtype; preserve all default ACL rows and hash comparison."
+    },
     "phase2/host_gate_control.py": {
       "after": {
         "bytes": 9494,

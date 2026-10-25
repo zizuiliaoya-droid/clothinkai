@@ -71,7 +71,8 @@ def verify():
     changed = {name: delta["after"] for name, delta in deltas.items()}
     runtime_deltas = manifest["host_runtime_deltas"]
     require(
-        set(runtime_deltas) == {"phase2/host_gate_control.py"},
+        set(runtime_deltas)
+        == {"phase2/host_gate_control.py", "phase2/host_backup_control.py"},
         "finite authorized host runtime delta required",
     )
     for name, delta in runtime_deltas.items():
