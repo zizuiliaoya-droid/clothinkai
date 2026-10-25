@@ -172,6 +172,8 @@ def main():
                 candidate, root, project, networks, old, original=False
             )
             current = copy.deepcopy(original)
+            # Every incremental model needs the already-created candidate networks.
+            current["networks"] = copy.deepcopy(after_model["networks"])
             path = root / "compose.json"
             path.write_text(json.dumps(current), encoding="utf-8")
             call(*compose, "up", "--no-start", "--no-build", "--pull", "never")
