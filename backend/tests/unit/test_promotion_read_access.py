@@ -9,6 +9,7 @@ from sqlalchemy.dialects import postgresql
 
 from app.core.exceptions import PermissionDeniedError
 from app.core.security.permissions import EffectivePermissions
+from app.modules.auth.default_roles import DEFAULT_ROLES
 from app.modules.promotion.read_access import PromotionReadAccess, can_read_promotion
 
 
@@ -25,6 +26,24 @@ from app.modules.promotion.read_access import PromotionReadAccess, can_read_prom
 )
 def test_permission_boundary(scopes, allowed):
     assert can_read_promotion(EffectivePermissions("user", frozenset(scopes))) is allowed
+
+
+@pytest.mark.parametrize(
+    "role,allowed",
+    [
+        ("admin", True),
+        ("pr", True),
+        ("pr_manager", True),
+        ("operations", True),
+        ("finance", False),
+        ("warehouse", False),
+    ],
+)
+def test_default_role_detail_read_contract(role, allowed):
+    """独立固定预期核对应用默认矩阵；真实迁移 seed 另由集成矩阵核对。"""
+    spec = next(item for item in DEFAULT_ROLES if item.code == role)
+    perms = EffectivePermissions("user", frozenset(spec.permissions))
+    assert can_read_promotion(perms) is allowed
 
 
 @pytest.mark.asyncio

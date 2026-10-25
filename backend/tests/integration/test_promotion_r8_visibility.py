@@ -27,6 +27,26 @@ scene = _scene
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("tenant_ctx")
+@pytest.mark.parametrize(
+    "who,status",
+    [
+        ("admin", 200),
+        ("pr", 200),
+        ("pr2", 200),
+        ("pr_manager", 200),
+        ("operations", 200),
+        ("finance", 403),
+        ("warehouse", 403),
+    ],
+)
+async def test_default_role_detail_api_matrix(session, scene, who, status):
+    """060 后仓库专用读取、财务字段可见均不授予完整推广详情入口。"""
+    response = await _call(session, getattr(scene.users, who), f"/api/promotions/{scene.p1}")
+    assert response.status_code == status, response.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("tenant_ctx")
 async def test_report_link_matches_detail_and_grant(session, scene):
     finance = scene.users.finance
     response = await _call(session, finance, f"{_URL}?{_RANGE}")

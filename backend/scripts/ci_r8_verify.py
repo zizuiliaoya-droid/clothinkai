@@ -22,6 +22,7 @@ REQUIRED = {
     RLS_TEST,
     "test_detail_service_rejects_report_and_finance_only",
     "test_promotion_dimensions_are_user_and_page_local",
+    "test_default_role_detail_api_matrix",
 }
 MAX_CASES = 1024
 
