@@ -106,6 +106,15 @@ def observe(compose, project, config):
     return result
 
 
+def comparison_projection(rows):
+    # observe() already proves the full expected bind set. Docker's Mounts list
+    # order is not binding identity; retain all fields and duplicate cardinality.
+    result = copy.deepcopy(rows)
+    for row in result.values():
+        row["mounts"] = sorted(row["mounts"], key=lambda mount: mount["destination"])
+    return result
+
+
 def main():
     assert sys.platform == "linux" and os.geteuid() == 0
     assert os.environ.get("GITHUB_ACTIONS") == "true"
@@ -208,7 +217,10 @@ def main():
                     json.dumps(observations, sort_keys=True), encoding="utf-8"
                 )
                 verify_replaced(
-                    before, after, role, current["services"]["prod-" + role]["image"]
+                    comparison_projection(before),
+                    comparison_projection(after),
+                    role,
+                    current["services"]["prod-" + role]["image"],
                 )
                 assert (
                     call(
@@ -224,7 +236,12 @@ def main():
                 negative = copy.deepcopy(after)
                 negative["db"]["id"] = "f" * 64
                 try:
-                    verify_replaced(before, negative, role, after[role]["image"])
+                    verify_replaced(
+                        comparison_projection(before),
+                        comparison_projection(negative),
+                        role,
+                        after[role]["image"],
+                    )
                 except Rejected:
                     pass
                 else:
@@ -247,6 +264,7 @@ def main():
                         "original_compose_sha256": ORIGINAL_SHA,
                         "networks": networks,
                         "steps": steps,
+                        "comparison_mount_order": "destination_only_all_fields_retained",
                         "final_infrastructure": {k: before[k] for k in ("db", "redis")},
                         "mapped_fixture_only": True,
                         "containers_started": False,
