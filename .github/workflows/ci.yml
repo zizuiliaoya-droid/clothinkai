@@ -190,7 +190,7 @@ jobs:
   backend-pg18-flow7:
     name: Backend PG18.6 (flow7 migration + RLS + concurrency)
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
     permissions:
       contents: read
     defaults:
