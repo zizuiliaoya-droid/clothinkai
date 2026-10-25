@@ -25,6 +25,75 @@ HEALTH = {
 }
 
 
+def process_diagnostic(before):
+    cgroup = Path("/sys/fs/cgroup") / before["cgroup"].lstrip("/")
+    members = (cgroup / "cgroup.procs").read_text().split()
+    rows = []
+    for member in members[:8]:
+        try:
+            rows.append(_health_identity(int(member)))
+        except (FileNotFoundError, ProcessLookupError, Rejected):
+            rows.append({"pid": int(member), "sample": "exited_or_changed"})
+    return {"processes": rows, "truncated": len(members) > 8}
+
+
+def observe_complete_pair(pid, before, health, holds):
+    """Bounded read-only fixture observation; never relax the production policy."""
+    deadline = time.monotonic() + 25
+
+    def hold(reason):
+        holds["count"] += 1
+        if len(holds["samples"]) < 32:
+            holds["samples"].append(
+                {
+                    "release_gate": "HOLD_" + reason,
+                    "read_only": True,
+                    "observation": process_diagnostic(before),
+                }
+            )
+
+    while time.monotonic() < deadline:
+        try:
+            process_group(pid)
+        except Rejected as strict_error:
+            assert str(strict_error) == "producer_uncovered_process"
+            try:
+                compatible = process_group(pid, healthcheck=health)
+                same_group(before, compatible, frozen=True)
+                pair = compatible["healthcheck_processes"]
+                if len(pair) != 2:
+                    hold("ci_health_pair_exited_before_observation")
+                    time.sleep(0.05)
+                    continue
+                time.sleep(0.1)
+                again = process_group(pid, healthcheck=health)
+                same_group(before, again, frozen=True)
+                if [
+                    (r["pid"], r["start_ticks"]) for r in again["healthcheck_processes"]
+                ] != [(r["pid"], r["start_ticks"]) for r in pair]:
+                    hold("ci_health_pair_exited_or_changed_before_confirmation")
+                    time.sleep(0.05)
+                    continue
+            except Rejected as rejected:
+                if str(rejected) not in {
+                    "producer_healthcheck_incomplete_pair",
+                    "producer_healthcheck_sample_changed",
+                }:
+                    raise
+                hold(str(rejected))
+                time.sleep(0.05)
+                continue
+            return {
+                "strict_policy_error": str(strict_error),
+                "process_count": 3,
+                "validated_probe_processes": pair,
+                "stable_pair_reobserved": True,
+            }
+        # A sample with only the main process is never overlap success.
+        time.sleep(0.05)
+    raise Rejected("ci_health_complete_pair_not_observed")
+
+
 def main():
     assert (
         sys.platform == "linux"
@@ -101,63 +170,22 @@ def main():
                 )
                 == health
             )
-            deadline = time.monotonic() + 25
-            observed = None
-            while time.monotonic() < deadline:
-                try:
-                    process_group(pid)
-                except Rejected as error:
-                    assert str(error) == "producer_uncovered_process"
-                    try:
-                        compatible = process_group(pid, healthcheck=health)
-                    except Rejected as rejected:
-                        cgroup = Path("/sys/fs/cgroup") / before["cgroup"].lstrip("/")
-                        members = (cgroup / "cgroup.procs").read_text().split()
-                        diagnostic = []
-                        for member in members[:8]:
-                            try:
-                                diagnostic.append(_health_identity(int(member)))
-                            except (FileNotFoundError, ProcessLookupError, Rejected):
-                                diagnostic.append(
-                                    {"pid": int(member), "sample": "exited_or_changed"}
-                                )
-                        print(
-                            json.dumps(
-                                {
-                                    "release_gate": "HOLD_" + str(rejected),
-                                    "original_healthcheck_compatible": False,
-                                    "synthetic_observed_processes": diagnostic,
-                                    "process_projection_truncated": len(members) > 8,
-                                }
-                            ),
-                            flush=True,
-                        )
-                        raise
-                    same_group(before, compatible, frozen=True)
-                    assert len(compatible["healthcheck_processes"]) == 2
-                    observed = {
-                        "strict_policy_error": str(error),
-                        "process_count": 3,
-                        "validated_probe_processes": compatible[
-                            "healthcheck_processes"
-                        ],
-                    }
-                    # A second real observation remains inside the same probe
-                    # lifetime. Any incomplete/exited sample fails this run.
-                    time.sleep(0.1)
-                    again = process_group(pid, healthcheck=health)
-                    same_group(before, again, frozen=True)
-                    assert [
-                        (r["pid"], r["start_ticks"])
-                        for r in again["healthcheck_processes"]
-                    ] == [
-                        (r["pid"], r["start_ticks"])
-                        for r in compatible["healthcheck_processes"]
-                    ]
-                    observed["stable_pair_reobserved"] = True
-                    break
-                time.sleep(0.05)
-            assert observed is not None, "healthcheck overlap not actually observed"
+            holds = {"count": 0, "samples": []}
+            try:
+                observed = observe_complete_pair(pid, before, health, holds)
+            except Rejected as rejected:
+                print(
+                    json.dumps(
+                        {
+                            "release_gate": "HOLD_" + str(rejected),
+                            "original_healthcheck_compatible": False,
+                            "read_only_sampling_holds": holds,
+                            "synthetic_observed_processes": process_diagnostic(before),
+                        }
+                    ),
+                    flush=True,
+                )
+                raise
             proof = call(
                 "exec",
                 owned,
@@ -258,6 +286,7 @@ def main():
                 "image_id": image,
                 "healthcheck": health,
                 "overlap": observed,
+                "read_only_sampling_holds": holds,
                 "business_heartbeat_stopped": True,
                 "separate_read_exec_succeeded": True,
                 "sigcont_used": False,

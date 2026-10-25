@@ -185,5 +185,85 @@ class NarrowInspect(unittest.TestCase):
                 inspect_now(identity, 123)
 
 
+class CompletePairFixture(unittest.TestCase):
+    def test_half_pair_then_main_only_requires_later_stable_pair(self):
+        import run_producer_healthcheck as fixture
+
+        pair = {
+            "healthcheck_processes": [
+                {"pid": 2, "start_ticks": 20},
+                {"pid": 3, "start_ticks": 21},
+            ]
+        }
+        holds = {"count": 0, "samples": []}
+        sequence = [
+            Rejected("producer_uncovered_process"),
+            Rejected("producer_healthcheck_incomplete_pair"),
+            {},
+            Rejected("producer_uncovered_process"),
+            pair,
+            copy.deepcopy(pair),
+        ]
+        with (
+            patch.object(fixture, "process_group", side_effect=sequence) as sample,
+            patch.object(fixture, "same_group"),
+            patch.object(fixture, "process_diagnostic", return_value={}),
+            patch.object(fixture.time, "monotonic", return_value=0),
+            patch.object(fixture.time, "sleep"),
+        ):
+            result = fixture.observe_complete_pair(1, {}, HEALTH, holds)
+        self.assertTrue(result["stable_pair_reobserved"])
+        self.assertEqual(sample.call_count, 6)
+        self.assertEqual(holds["count"], 1)
+        self.assertEqual(
+            holds["samples"][0]["release_gate"],
+            "HOLD_producer_healthcheck_incomplete_pair",
+        )
+
+    def test_probe_disappearing_is_hold_and_never_positive_success(self):
+        import run_producer_healthcheck as fixture
+
+        holds = {"count": 0, "samples": []}
+        with (
+            patch.object(
+                fixture,
+                "process_group",
+                side_effect=[
+                    Rejected("producer_uncovered_process"),
+                    {"healthcheck_processes": []},
+                ],
+            ),
+            patch.object(fixture, "same_group"),
+            patch.object(fixture, "process_diagnostic", return_value={}),
+            patch.object(fixture.time, "monotonic", side_effect=[0, 0, 26]),
+            patch.object(fixture.time, "sleep"),
+            self.assertRaisesRegex(Rejected, "complete_pair_not_observed"),
+        ):
+            fixture.observe_complete_pair(1, {}, HEALTH, holds)
+        self.assertEqual(holds["count"], 1)
+
+    def test_unsafe_probe_is_not_retried(self):
+        import run_producer_healthcheck as fixture
+
+        holds = {"count": 0, "samples": []}
+        with (
+            patch.object(
+                fixture,
+                "process_group",
+                side_effect=[
+                    Rejected("producer_uncovered_process"),
+                    Rejected("producer_healthcheck_argv"),
+                ],
+            ) as sample,
+            patch.object(fixture.time, "monotonic", return_value=0),
+            patch.object(fixture.time, "sleep") as sleep,
+            self.assertRaisesRegex(Rejected, "healthcheck_argv"),
+        ):
+            fixture.observe_complete_pair(1, {}, HEALTH, holds)
+        self.assertEqual(sample.call_count, 2)
+        sleep.assert_not_called()
+        self.assertEqual(holds["count"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()
