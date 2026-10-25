@@ -33,6 +33,8 @@ CREATE ROLE clothing_archiver NOSUPERUSER NOINHERIT NOCREATEROLE NOCREATEDB LOGI
 MOUNT_FORMAT = (
     '{"id":{{json .Id}},"image":{{json .Image}},'
     '"network":{{json .HostConfig.NetworkMode}},'
+    '"privileged":{{json .HostConfig.Privileged}},'
+    '"cap_add":{{json .HostConfig.CapAdd}},"cap_drop":{{json .HostConfig.CapDrop}},'
     '"ports":{{json .HostConfig.PortBindings}},"tmpfs":{{json .HostConfig.Tmpfs}},"mounts":['
     "{{$first := true}}{{range .Mounts}}{{if not $first}},{{end}}"
     '{"source":{{json .Source}},"destination":{{json .Destination}},'
@@ -765,31 +767,37 @@ def _data_identity(data, *, owner=(0, 0)):
         os.close(parent)
 
 
-async def _drill_identity(identity, data, dump_name, *, owner=(0, 0)):
-    observed = await _mounts(identity)
+def _restore_privileges(observed):
+    # Docker's observed canonical CapAdd representation; reject extras/duplicates.
+    added = observed.get("cap_add")
+    return (
+        observed.get("privileged") is False
+        and type(added) is list
+        and all(type(value) is str for value in added)
+        and sorted(added) == ["CAP_CHOWN", "CAP_SETGID", "CAP_SETUID"]
+        and observed.get("cap_drop") == ["ALL"]
+    )
+
+
+def _check_drill_projection(observed, identity, image, data_path, dump_path):
     expected_mounts = [
         {
-            "source": data["path"],
+            "source": data_path,
             "destination": "/var/lib/postgresql",
             "rw": True,
             "type": "bind",
         },
         {
-            "source": ROOT + "/backups/" + dump_name,
+            "source": dump_path,
             "destination": "/input/database.dump",
             "rw": False,
             "type": "bind",
         },
-        {
-            "source": "",
-            "destination": "/var/run/postgresql",
-            "rw": True,
-            "type": "tmpfs",
-        },
     ]
     require(
         observed["id"] == identity
-        and observed["image"] == PG_IMAGE
+        and observed["image"] == image
+        and _restore_privileges(observed)
         and observed["network"] == "none"
         and observed["ports"] in (None, {})
         and observed.get("tmpfs")
@@ -797,6 +805,14 @@ async def _drill_identity(identity, data, dump_name, *, owner=(0, 0)):
         and sorted(observed["mounts"], key=lambda x: x["destination"])
         == sorted(expected_mounts, key=lambda x: x["destination"]),
         "restore_container_isolation",
+    )
+
+
+async def _drill_identity(identity, data, dump_name, *, owner=(0, 0)):
+    observed = await _mounts(identity)
+    # Legacy --tmpfs appears only in HostConfig.Tmpfs, not in top-level Mounts.
+    _check_drill_projection(
+        observed, identity, PG_IMAGE, data["path"], ROOT + "/backups/" + dump_name
     )
     _data_identity(data, owner=owner)
     observed["data_owner"] = {"uid": owner[0], "gid": owner[1], "mode": 0o700}

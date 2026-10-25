@@ -552,6 +552,9 @@ class NarrowBoundaryTests(NoSocketAsyncCase):
             "image": control.PG_IMAGE,
             "network": "none",
             "ports": {},
+            "privileged": False,
+            "cap_add": ["CAP_CHOWN", "CAP_SETGID", "CAP_SETUID"],
+            "cap_drop": ["ALL"],
             "tmpfs": {
                 "/var/run/postgresql": control.restore_drill.SOCKET_TMPFS.split(":", 1)[
                     1
@@ -570,12 +573,6 @@ class NarrowBoundaryTests(NoSocketAsyncCase):
                     "rw": False,
                     "type": "bind",
                 },
-                {
-                    "source": "",
-                    "destination": "/var/run/postgresql",
-                    "rw": True,
-                    "type": "tmpfs",
-                },
             ],
         }
         with (
@@ -589,16 +586,30 @@ class NarrowBoundaryTests(NoSocketAsyncCase):
             self.assertEqual(
                 result["data_owner"], {"uid": 999, "gid": 0, "mode": 0o700}
             )
-        for kind in ("missing", "options", "bind", "readonly"):
+        mutations = [
+            ("missing_bind", lambda v: v["mounts"].pop()),
+            ("extra_bind", lambda v: v["mounts"].append(dict(v["mounts"][0]))),
+            ("mount_type", lambda v: v["mounts"][0].update(type="volume")),
+            ("data_readonly", lambda v: v["mounts"][0].update(rw=False)),
+            ("dump_writable", lambda v: v["mounts"][1].update(rw=True)),
+            ("tmpfs_missing", lambda v: v.update(tmpfs={})),
+            ("tmpfs_options", lambda v: v.update(tmpfs={"/var/run/postgresql": "rw,size=1g"})),
+            ("tmpfs_extra", lambda v: v["tmpfs"].update({"/extra": "rw"})),
+            ("tmpfs_mount_row", lambda v: v["mounts"].append({"source": "", "destination": "/var/run/postgresql", "rw": True, "type": "tmpfs"})),
+            ("cap_extra", lambda v: v["cap_add"].append("CAP_DAC_OVERRIDE")),
+            ("cap_missing", lambda v: v["cap_add"].pop()),
+            ("cap_duplicate", lambda v: v["cap_add"].append("CAP_CHOWN")),
+            ("cap_unknown_spelling", lambda v: v.update(cap_add=["CHOWN", "SETGID", "SETUID"])),
+            ("cap_null", lambda v: v.update(cap_add=None)),
+            ("cap_invalid_type", lambda v: v.update(cap_add=[None, 1, "CAP_SETUID"])),
+            ("cap_drop", lambda v: v.update(cap_drop=[])),
+            ("privileged", lambda v: v.update(privileged=True)),
+            ("network", lambda v: v.update(network="bridge")),
+            ("published_port", lambda v: v.update(ports={"5432/tcp": [{}]})),
+        ]
+        for kind, mutate in mutations:
             changed = deepcopy(original)
-            if kind == "missing":
-                changed["mounts"].pop()
-            elif kind == "options":
-                changed["tmpfs"] = {"/var/run/postgresql": "rw,size=1g"}
-            elif kind == "bind":
-                changed["mounts"][-1]["type"] = "bind"
-            else:
-                changed["mounts"][-1]["rw"] = False
+            mutate(changed)
             with (
                 self.subTest(kind=kind),
                 patch.object(control, "_mounts", AsyncMock(return_value=changed)),

@@ -11,8 +11,8 @@
       "sha256": "fb59825130da06335bf8cd2a9c76d402f9a4951e6c4ad926a6011886f85af383"
     },
     "phase2/ci_tests/run_acceptance_pg.py": {
-      "bytes": 28686,
-      "sha256": "3ede5c771427f142a28742382c974187e98c558c822d88c6d8538c5444fd118c"
+      "bytes": 27593,
+      "sha256": "f72a9133352de9c51926935a7ffffe384444e209eec4bb979723a3d53f7d87f2"
     },
     "phase2/ci_tests/run_dbm_docker.py": {
       "bytes": 12108,
@@ -73,14 +73,14 @@
     },
     "phase2/tests/test_host_backup_control.py": {
       "after": {
-        "bytes": 27575,
-        "sha256": "bd3aa9b6592f9b2b873b4f4daf71f3e137c408313ccef2663df3c7962b9aac35"
+        "bytes": 28676,
+        "sha256": "b6e0f8f56198f9ffecf2e1a31bfd56974af5067dfb6efb2b9cec9a7f34c9b6c6"
       },
       "before": {
         "bytes": 22565,
         "sha256": "f9bda25f6a929727344fbcd984383c8294e5d5cc17f5fe9e28f11aef1506a191"
       },
-      "reason": "Maintain existing restore/SQL/journal tests with narrow UID observation mock; add exact socket mount/options and private owner-transition negatives."
+      "reason": "Maintain existing restore/SQL/journal tests with narrow UID observation mock; add exact socket mount/options and private owner-transition negatives. Actual canonical capability and legacy tmpfs projection positive; 19 capability/mount/network/privilege mutation negatives remain HOLD."
     },
     "phase2/tests/test_host_freeze_control.py": {
       "after": {
@@ -261,8 +261,8 @@
       "sha256": "acd3479265e346df535d34c818a4128a4179eb641d4baf5c052c09f0b30aea81"
     },
     "phase2/ci_tests/run_acceptance_pg.py": {
-      "bytes": 28686,
-      "sha256": "3ede5c771427f142a28742382c974187e98c558c822d88c6d8538c5444fd118c"
+      "bytes": 27593,
+      "sha256": "f72a9133352de9c51926935a7ffffe384444e209eec4bb979723a3d53f7d87f2"
     },
     "phase2/ci_tests/run_build_control_os.py": {
       "bytes": 2155,
@@ -413,8 +413,8 @@
       "sha256": "88ed4a1319493527b1ce7adb46e90abaf5c2cd921ba832b9dcb2d8f22ce8b19f"
     },
     "phase2/host_backup_control.py": {
-      "bytes": 38030,
-      "sha256": "ac6ea942b8e4db4d222e817bcd5e0df45ef9217df1646fbd7cd8bd3e8f5a32b7"
+      "bytes": 38735,
+      "sha256": "f2217d22db5b525c94d51e015861671f63009349198c18d91bbd04dc6dcb9784"
     },
     "phase2/host_build_control.py": {
       "bytes": 10366,
@@ -673,8 +673,8 @@
       "sha256": "0e73089f65c9bd4877e5f5ae4fee9269f585f93d8ac1ecd5a23f221e4be2914b"
     },
     "phase2/tests/test_host_backup_control.py": {
-      "bytes": 27575,
-      "sha256": "bd3aa9b6592f9b2b873b4f4daf71f3e137c408313ccef2663df3c7962b9aac35"
+      "bytes": 28676,
+      "sha256": "b6e0f8f56198f9ffecf2e1a31bfd56974af5067dfb6efb2b9cec9a7f34c9b6c6"
     },
     "phase2/tests/test_host_build_control.py": {
       "bytes": 7371,
@@ -786,14 +786,14 @@
   "host_runtime_deltas": {
     "phase2/host_backup_control.py": {
       "after": {
-        "bytes": 38030,
-        "sha256": "ac6ea942b8e4db4d222e817bcd5e0df45ef9217df1646fbd7cd8bd3e8f5a32b7"
+        "bytes": 38735,
+        "sha256": "f2217d22db5b525c94d51e015861671f63009349198c18d91bbd04dc6dcb9784"
       },
       "before": {
         "bytes": 36677,
         "sha256": "18b45d5a6f0f0d1827fe69838053ae52d5df9c07f693ad481b2ee8fd7abfb8fe"
       },
-      "reason": "Preserve PG18 default ACL text cast; bind exact socket tmpfs and inspect its options. Require new data root0:0/0700 before start, same inode postgres UID:0/0700 after entrypoint, outer drill remains root0:0/0700. PostgreSQL UID comes from original bound DB image; no ownership changes to outer release directories."
+      "reason": "Preserve PG18 default ACL text cast; bind exact socket tmpfs and inspect its options. Require new data root0:0/0700 before start, same inode postgres UID:0/0700 after entrypoint, outer drill remains root0:0/0700. PostgreSQL UID comes from original bound DB image; no ownership changes to outer release directories. Actual Docker 31ad033 observation requires canonical CAP_* exact triple, privileged false, two top-level bind mounts and exact legacy socket HostConfig.Tmpfs; shared host/CI validator rejects extra/missing capabilities, mounts and tmpfs."
     },
     "phase2/host_gate_control.py": {
       "after": {

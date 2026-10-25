@@ -297,44 +297,10 @@ async def restore(identity, image, temporary, output):
             and isolated["image"] == image
             and isolated["network"] == "none"
             and isolated["ports"] in ({}, None)
-            and isolated["privileged"] is False
-            and set(isolated["cap_add"]) == {"CHOWN", "SETUID", "SETGID"}
-            and isolated["cap_drop"] == ["ALL"],
+            and backup._restore_privileges(isolated),
             "ci_restore_isolation",
         )
-        expected_mounts = [
-            {
-                "source": str(data),
-                "destination": "/var/lib/postgresql",
-                "rw": True,
-                "type": "bind",
-            },
-            {
-                "source": str(dump),
-                "destination": "/input/database.dump",
-                "rw": False,
-                "type": "bind",
-            },
-            {
-                "source": "",
-                "destination": "/var/run/postgresql",
-                "rw": True,
-                "type": "tmpfs",
-            },
-        ]
-        require(
-            mounts["id"] == owned
-            and mounts["image"] == image
-            and mounts["tmpfs"]
-            == {
-                "/var/run/postgresql": backup.restore_drill.SOCKET_TMPFS.split(":", 1)[
-                    1
-                ]
-            }
-            and sorted(mounts["mounts"], key=lambda row: row["destination"])
-            == sorted(expected_mounts, key=lambda row: row["destination"]),
-            "ci_restore_exact_mounts",
-        )
+        backup._check_drill_projection(mounts, owned, image, str(data), str(dump))
         isolated["mounts"] = mounts
         require(
             (data.stat().st_dev, data.stat().st_ino) == inode,
