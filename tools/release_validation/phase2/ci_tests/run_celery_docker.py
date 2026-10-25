@@ -185,22 +185,38 @@ def inside(mode):
             compile(prefix + b"\n" + WORKER_PROBE, "original-worker-probe", "exec"), {}
         )
     elif mode == "builtin-task":
+        from importlib.metadata import version
+
+        from celery.app import builtins
+
+        # Verified against the exact requirements lock wheel, without installing
+        # it locally. No index => args tuple, serialized by the original JSON backend.
+        source_sha = hashlib.sha256(Path(builtins.__file__).read_bytes()).hexdigest()
+        assert version("celery") == "5.4.0"
+        assert (
+            source_sha
+            == "8273b2134eccf338316ad4e66f40f4bcacedc75b1065a462fe13bf77e14b354b"
+        )
+        assert celery.conf.result_serializer == "json"
         # One write. Waiting for this result never republishes the task.
         task = celery.send_task(
             "celery.accumulate", args=["flow78-no-business"], queue="default"
         )
         value = task.get(timeout=20)
-        assert value == "flow78-no-business"
+        receipt = {
+            "task": "celery.accumulate",
+            "id": task.id,
+            "result": value,
+            "result_type": type(value).__name__,
+            "result_serializer": celery.conf.result_serializer,
+            "builtin_source_sha256": source_sha,
+            "original_business_handler_executed": False,
+        }
         print(
-            json.dumps(
-                {
-                    "task": "celery.accumulate",
-                    "id": task.id,
-                    "result": value,
-                    "original_business_handler_executed": False,
-                }
-            )
+            json.dumps({"builtin_task_observed": receipt}), file=sys.stderr, flush=True
         )
+        assert type(value) is list and value == ["flow78-no-business"]
+        print(json.dumps(receipt))
     elif mode == "quarantine":
         import redis
 
