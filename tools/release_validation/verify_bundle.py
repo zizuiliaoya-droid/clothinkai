@@ -62,6 +62,7 @@ def verify():
         == {
             "phase2/ci_tests/test_dashboard_contract.py",
             "phase2/ci_tests/test_host_sequence.py",
+            "phase2/tests/test_host_acceptance_control.py",
         },
         "finite successor test deltas required",
     )

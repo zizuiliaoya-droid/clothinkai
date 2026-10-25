@@ -41,9 +41,29 @@ ROOT_ROLE = "CREATE ROLE root LOGIN SUPERUSER INHERIT CREATEDB CREATEROLE REPLIC
 
 
 def call(*args, stdin=None, timeout=30):
-    return subprocess.check_output(
-        (*DOCKER, *args), input=stdin, timeout=timeout, stderr=subprocess.PIPE
-    )
+    try:
+        return subprocess.check_output(
+            (*DOCKER, *args), input=stdin, timeout=timeout, stderr=subprocess.PIPE
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+        # This entry handles only disposable synthetic resources. Do not print
+        # SQL stdin/argv; preserve a bounded error tail and keep the failure.
+        raw = error.stderr or b""
+        print(
+            json.dumps(
+                {
+                    "data_kind": "synthetic_subprocess_failure",
+                    "error_type": type(error).__name__,
+                    "exit_code": getattr(error, "returncode", None),
+                    "stderr_tail": raw[-8192:].decode("utf-8", errors="replace"),
+                    "stderr_truncated": len(raw) > 8192,
+                },
+                sort_keys=True,
+            ),
+            file=sys.stderr,
+            flush=True,
+        )
+        raise
 
 
 def write(path, value):
@@ -521,8 +541,10 @@ def main():
     nonce = secrets.token_hex(16)
     policy = stage(source, nonce)
     asyncio.run(bootstrap(nonce))
-    # Fixture bootstrap only: the source and target's root/database/extension
-    # owners match so the existing complete owner/ACL comparator is exercised.
+    # Fixture bootstrap only, before application seed: normalize this database,
+    # its nonce marker and the just-created user extension. Never REASSIGN the
+    # bootstrap superuser's system objects. DROP has no CASCADE, so unexpected
+    # dependencies fail. Recreate pg_trgm as root to match real restore owners.
     call(
         "exec",
         "-i",
@@ -540,7 +562,9 @@ def main():
             ROOT_ROLE
             + "ALTER DATABASE "
             + DATABASE
-            + " OWNER TO root; REASSIGN OWNED BY postgres TO root; GRANT CREATE ON SCHEMA public TO clothing_bypass;"
+            + " OWNER TO root; ALTER TABLE public.flow78_disposable_ci OWNER TO root; "
+            + "DROP EXTENSION pg_trgm; SET ROLE root; CREATE EXTENSION pg_trgm; RESET ROLE; "
+            + "GRANT CREATE ON SCHEMA public TO clothing_bypass;"
         ).encode(),
     )
     original_docker = backup.DOCKER

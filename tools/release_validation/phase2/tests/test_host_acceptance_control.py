@@ -94,8 +94,8 @@ def window():
     return {
         "db_before_utc": "2026-10-24T01:00:00.000000Z",
         "db_after_utc": "2026-10-24T01:00:02.000000Z",
-        "started_monotonic_ns": now - 1001 * 10**9,
-        "completed_monotonic_ns": now - 1000 * 10**9,
+        "started_monotonic_ns": max(0, now - 10**9),
+        "completed_monotonic_ns": now,
     }
 
 
@@ -168,6 +168,29 @@ class Projections(unittest.TestCase):
         control.verify_acceptance(self.before["projection"], projected)
         self.assertEqual(projected["mapped_ids"], [IDS[2]])
         self.assertEqual(projected["all_completed_ids"], IDS[:2])
+
+    def test_window_fixture_accepts_short_runner_uptime(self):
+        for now in (0, 1, 10 * 10**9, 1000 * 10**9):
+            with (
+                self.subTest(now=now),
+                patch.object(control.time, "monotonic_ns", return_value=now),
+            ):
+                projected = self.after()
+                control.verify_acceptance(self.before["projection"], projected)
+
+    def test_negative_reversed_and_future_monotonic_ticks_rejected(self):
+        now = 10 * 10**9
+        for start, finish in ((-1, now), (now, now - 1), (0, now + 1)):
+            with (
+                self.subTest(start=start, finish=finish),
+                patch.object(control.time, "monotonic_ns", return_value=now),
+            ):
+                interval = window()
+                interval.update(
+                    started_monotonic_ns=start, completed_monotonic_ns=finish
+                )
+                with self.assertRaisesRegex(Rejected, "^acceptance_migration_window$"):
+                    self.after(interval=interval)
 
     def test_same_count_changed_id_is_rejected(self):
         rows = migration_rows()

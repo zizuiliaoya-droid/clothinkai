@@ -99,20 +99,60 @@ jobs:
           set -euo pipefail
           docker pull python:3.12-slim > "$RUNNER_TEMP/release-validation/fixture-pull.log"
           base=$(docker image inspect --format '{{.Id}}' python:3.12-slim)
-          docker build --pull=false --build-arg "BASE_IMAGE=$base" --build-arg "PIP_INDEX_URL=$FIXTURE_PIP_INDEX" \
+          [[ "$base" =~ ^sha256:[0-9a-f]{64}$ ]]
+          # FROM accepts image references, not raw image IDs. The docker driver
+          # consumes verified local tags; loopback names prevent DockerHub fallback.
+          base_tag="localhost:65534/flow78-ci-python:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          health_tag="localhost:65534/flow78-ci-health:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          test -z "$(docker image ls --quiet --filter "reference=$base_tag")"
+          test -z "$(docker image ls --quiet --filter "reference=$health_tag")"
+          docker image tag "$base" "$base_tag"
+          test "$(docker image inspect --format '{{.Id}}' "$base_tag")" = "$base"
+          docker build --builder default --pull=false --build-arg "BASE_IMAGE=$base_tag" --build-arg "PIP_INDEX_URL=$FIXTURE_PIP_INDEX" \
             --iidfile "$RUNNER_TEMP/release-validation/health-image-id.txt" \
             -f validation/tools/release_validation/phase2/ci_tests/producer-fixture.Dockerfile \
             validation/tools/release_validation/phase2/ci_tests \
             > "$RUNNER_TEMP/release-validation/fixture-build.log" 2>&1
           image=$(cat "$RUNNER_TEMP/release-validation/health-image-id.txt")
+          [[ "$image" =~ ^sha256:[0-9a-f]{64}$ ]]
+          test "$(docker image inspect --format '{{.Id}}' "$base_tag")" = "$base"
+          docker image tag "$image" "$health_tag"
+          test "$(docker image inspect --format '{{.Id}}' "$health_tag")" = "$image"
           docker image inspect --format '{{json .}}' "$image" > "$RUNNER_TEMP/release-validation/fixture-image.json"
           docker run --rm --pull=never --network=none --entrypoint python "$image" -m pip freeze \
             > "$RUNNER_TEMP/release-validation/fixture-dependencies.txt"
           mkdir "$RUNNER_TEMP/producer-control-context"
-          printf 'FROM %s\nHEALTHCHECK NONE\n' "$image" > "$RUNNER_TEMP/producer-control-context/Dockerfile"
-          docker build --pull=false --iidfile "$RUNNER_TEMP/release-validation/control-image-id.txt" \
+          printf 'FROM %s\nHEALTHCHECK NONE\n' "$health_tag" > "$RUNNER_TEMP/producer-control-context/Dockerfile"
+          docker build --builder default --pull=false --network=none --iidfile "$RUNNER_TEMP/release-validation/control-image-id.txt" \
             "$RUNNER_TEMP/producer-control-context" \
             > "$RUNNER_TEMP/release-validation/control-build.log" 2>&1
+          control=$(cat "$RUNNER_TEMP/release-validation/control-image-id.txt")
+          [[ "$control" =~ ^sha256:[0-9a-f]{64}$ ]]
+          test "$(docker image inspect --format '{{.Id}}' "$base_tag")" = "$base"
+          test "$(docker image inspect --format '{{.Id}}' "$health_tag")" = "$image"
+          docker image inspect "$base" "$image" "$control" > "$RUNNER_TEMP/release-validation/fixture-build-images.json"
+          python - "$base_tag" "$base" "$health_tag" "$image" "$control" <<'PY'
+          import json, os, sys
+          from pathlib import Path
+          output = Path(os.environ["RUNNER_TEMP"]) / "release-validation"
+          base, health, control = json.loads((output / "fixture-build-images.json").read_bytes())
+          assert [base["Id"], health["Id"], control["Id"]] == [sys.argv[2], sys.argv[4], sys.argv[5]]
+          base_layers = base["RootFS"]["Layers"]
+          assert base_layers and health["RootFS"]["Layers"][:len(base_layers)] == base_layers
+          assert control["RootFS"] == health["RootFS"]
+          assert health["Config"]["Healthcheck"]["Test"][0] == "CMD-SHELL"
+          assert control["Config"]["Healthcheck"]["Test"] == ["NONE"]
+          result = {
+              "data_kind": "synthetic_local_build_binding",
+              "base_tag": sys.argv[1], "base_id": base["Id"],
+              "health_tag": sys.argv[3], "health_id": health["Id"], "control_id": control["Id"],
+              "local_tag_id_checked_before_and_after": True,
+              "base_layers_preserved": True, "control_layers_unchanged": True,
+              "builder": "default", "production_image": False,
+          }
+          (output / "fixture-build-bindings.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          print(json.dumps(result, sort_keys=True))
+          PY
       - name: Original no-healthcheck kernel as an explicit control case
         run: |
           set -euo pipefail
@@ -216,6 +256,18 @@ jobs:
             --pg-container "$PG_FIXTURE_CONTAINER" --output "$RUNNER_TEMP/release-validation/pg" \
             > "$RUNNER_TEMP/release-validation/pg-result-stdout.json" \
             2> "$RUNNER_TEMP/release-validation/pg-output.log"
+      - name: Preserve bounded disposable PostgreSQL errors on failure
+        if: failure()
+        timeout-minutes: 1
+        env:
+          PG_FIXTURE_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          [[ "$PG_FIXTURE_CONTAINER" =~ ^[0-9a-f]{64}$ ]]
+          mkdir -p "$RUNNER_TEMP/release-validation"
+          # Diagnostics only: never rerun SQL or hide the earlier failed step.
+          timeout 15s docker logs --tail 80 "$PG_FIXTURE_CONTAINER" 2>&1 \
+            | head -c 65536 > "$RUNNER_TEMP/release-validation/pg-service-error-tail.log" || true
       - name: Make only synthetic evidence readable for artifact collection
         if: always()
         run: sudo chmod -R a+rX "$RUNNER_TEMP/release-validation"

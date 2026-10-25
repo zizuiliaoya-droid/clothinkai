@@ -11,12 +11,16 @@
       "sha256": "fb59825130da06335bf8cd2a9c76d402f9a4951e6c4ad926a6011886f85af383"
     },
     "phase2/ci_tests/run_acceptance_pg.py": {
-      "bytes": 20302,
-      "sha256": "8a848a1b6f28e45bf15a9983ec3995587f42c6c4ce7d1c6499e1c43772fd4085"
+      "bytes": 21414,
+      "sha256": "cd902ec3ee11fb052c5d244ab7cbb18d94c2819a343cbc279ebb3c7ba4834d11"
     },
     "phase2/ci_tests/run_producer_healthcheck.py": {
       "bytes": 6828,
       "sha256": "0340de3c25a3a57f082d6dd9df0b0a37dbd75a7067ddd4cdcebe7a02543b980c"
+    },
+    "phase2/ci_tests/test_acceptance_pg_entry.py": {
+      "bytes": 2040,
+      "sha256": "646aedd4577b02661ac3140673418c33a44854ddb859f3163ffa29821585040c"
     },
     "phase2/ci_tests/test_host_dashboard_user.py": {
       "bytes": 3985,
@@ -43,6 +47,17 @@
         "bytes": 3942,
         "sha256": "30092bd83dfc20c95a213d14c64f600305686b935ad316db12faa32cd6b6cdb8"
       }
+    },
+    "phase2/tests/test_host_acceptance_control.py": {
+      "after": {
+        "bytes": 28572,
+        "sha256": "4823a5bb5aeecac86926e5e3efad060268b0df52d96ec0002d5f1c596ac5c28c"
+      },
+      "before": {
+        "bytes": 27552,
+        "sha256": "217d4f632db8a948f4358da36790754fc1100bf1e2a1175b9d34cae47adb7378"
+      },
+      "reason": "fresh runner monotonic uptime may be below 1001 seconds; nonnegative test interval and explicit negative/reversed/future tick regressions; business validator unchanged"
     }
   },
   "deployable": false,
@@ -212,8 +227,8 @@
       "sha256": "acd3479265e346df535d34c818a4128a4179eb641d4baf5c052c09f0b30aea81"
     },
     "phase2/ci_tests/run_acceptance_pg.py": {
-      "bytes": 20302,
-      "sha256": "8a848a1b6f28e45bf15a9983ec3995587f42c6c4ce7d1c6499e1c43772fd4085"
+      "bytes": 21414,
+      "sha256": "cd902ec3ee11fb052c5d244ab7cbb18d94c2819a343cbc279ebb3c7ba4834d11"
     },
     "phase2/ci_tests/run_build_control_os.py": {
       "bytes": 2155,
@@ -246,6 +261,10 @@
     "phase2/ci_tests/run_web_control_os.py": {
       "bytes": 2909,
       "sha256": "c3f44e7bb0c78bbac2bf8ecc656a5840693a1605389713d65c0b54db9438ddb6"
+    },
+    "phase2/ci_tests/test_acceptance_pg_entry.py": {
+      "bytes": 2040,
+      "sha256": "646aedd4577b02661ac3140673418c33a44854ddb859f3163ffa29821585040c"
     },
     "phase2/ci_tests/test_dashboard_contract.py": {
       "bytes": 11315,
@@ -596,8 +615,8 @@
       "sha256": "81d148280418be50b01ce27eee51dc319e38ada74fef9ceba3143675b167b348"
     },
     "phase2/tests/test_host_acceptance_control.py": {
-      "bytes": 27552,
-      "sha256": "217d4f632db8a948f4358da36790754fc1100bf1e2a1175b9d34cae47adb7378"
+      "bytes": 28572,
+      "sha256": "4823a5bb5aeecac86926e5e3efad060268b0df52d96ec0002d5f1c596ac5c28c"
     },
     "phase2/tests/test_host_acceptance_private_json.py": {
       "bytes": 1123,
