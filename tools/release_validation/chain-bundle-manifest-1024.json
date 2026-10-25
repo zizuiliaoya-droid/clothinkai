@@ -14,6 +14,10 @@
       "bytes": 31203,
       "sha256": "49b392b5af30cbfce659626ca85696ddc7ba16e46eec2fc570a6c7e814907415"
     },
+    "phase2/ci_tests/run_celery_docker.py": {
+      "bytes": 27630,
+      "sha256": "45d037652831835b271d13eb7f1fe5121be467700835b7f775a1fe590412c543"
+    },
     "phase2/ci_tests/run_compose_docker.py": {
       "bytes": 11683,
       "sha256": "058561b0989798e231bc71b1aad165ca0dc2519c507fd35f449c84f6d1ad68ef"
@@ -272,6 +276,10 @@
     "phase2/ci_tests/run_build_control_os.py": {
       "bytes": 2155,
       "sha256": "dbdc1cd43ad07602358f1132305de35d6a4e467ddbdc6111df9ffb5801e50760"
+    },
+    "phase2/ci_tests/run_celery_docker.py": {
+      "bytes": 27630,
+      "sha256": "45d037652831835b271d13eb7f1fe5121be467700835b7f775a1fe590412c543"
     },
     "phase2/ci_tests/run_compose_docker.py": {
       "bytes": 11683,

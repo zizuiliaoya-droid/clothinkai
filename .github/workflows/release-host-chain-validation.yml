@@ -224,6 +224,29 @@ jobs:
             validation/tools/release_validation/phase2/ci_tests/run_compose_docker.py \
             > "$RUNNER_TEMP/release-validation/compose-result.json" \
             2> "$RUNNER_TEMP/release-validation/compose-output.log"
+      - name: Actual original Celery registry and isolated Redis scheduling windows
+        if: always()
+        run: |
+          set -euo pipefail
+          python - "$GITHUB_WORKSPACE/product-source/.github/workflows/ci.yml" <<'PY'
+          import hashlib, json, os, sys
+          from pathlib import Path
+          raw = Path(sys.argv[1]).read_bytes()
+          assert b"image: redis:7-alpine" in raw
+          result = {"source_commit": os.environ["SOURCE_COMMIT"], "source_ci_sha256": hashlib.sha256(raw).hexdigest(), "reference": "redis:7-alpine", "production_image_verified": False}
+          (Path(os.environ["RUNNER_TEMP"]) / "release-validation/redis-source-reference.json").write_text(json.dumps(result, sort_keys=True) + "\n", encoding="utf-8")
+          PY
+          docker pull redis:7-alpine > "$RUNNER_TEMP/release-validation/redis-pull.log" 2>&1
+          export FLOW78_CI_REDIS_IMAGE=$(docker image inspect --format '{{.Id}}' redis:7-alpine)
+          [[ "$FLOW78_CI_REDIS_IMAGE" =~ ^sha256:[0-9a-f]{64}$ ]]
+          docker image inspect --format '{"id":{{json .Id}},"repo_digests":{{json .RepoDigests}}}' "$FLOW78_CI_REDIS_IMAGE" > "$RUNNER_TEMP/release-validation/redis-fixture-image.json"
+          export FLOW78_CI_CONTROL_IMAGE=$(cat "$RUNNER_TEMP/release-validation/control-image-id.txt")
+          export FLOW78_CI_PRODUCT_SOURCE="$GITHUB_WORKSPACE/product-source"
+          export FLOW78_CI_OUTPUT="$RUNNER_TEMP/release-validation"
+          sudo --preserve-env=GITHUB_ACTIONS,FLOW78_CI_CONTROL_IMAGE,FLOW78_CI_REDIS_IMAGE,FLOW78_CI_PRODUCT_SOURCE,FLOW78_CI_OUTPUT "$(command -v python)" -B \
+            validation/tools/release_validation/phase2/ci_tests/run_celery_docker.py \
+            > "$RUNNER_TEMP/release-validation/celery-result.json" \
+            2> "$RUNNER_TEMP/release-validation/celery-output.log"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
