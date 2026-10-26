@@ -435,6 +435,21 @@ class NarrowBoundaryTests(NoSocketAsyncCase):
         self.producer.start()
         self.addCleanup(self.producer.stop)
 
+    async def test_mount_projection_preserves_absent_tmpfs_as_null(self):
+        row = {
+            "id": BASELINE["db"],
+            "image": control.PG_IMAGE,
+            "network": "bridge",
+            "privileged": False,
+            "cap_add": None,
+            "cap_drop": None,
+            "ports": {},
+            "tmpfs": None,
+            "mounts": [],
+        }
+        with patch.object(control, "_capture", AsyncMock(return_value=canonical(row))):
+            self.assertEqual(await control._mounts(BASELINE["db"]), row)
+
     async def test_frozen_gate_refuses_replaced_original_identity(self):
         spec = SimpleNamespace(
             _binding=canonical({"baseline_sha256": digest(BASELINE)})

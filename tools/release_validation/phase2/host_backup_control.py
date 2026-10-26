@@ -35,7 +35,8 @@ MOUNT_FORMAT = (
     '"network":{{json .HostConfig.NetworkMode}},'
     '"privileged":{{json .HostConfig.Privileged}},'
     '"cap_add":{{json .HostConfig.CapAdd}},"cap_drop":{{json .HostConfig.CapDrop}},'
-    '"ports":{{json .HostConfig.PortBindings}},"tmpfs":{{json .HostConfig.Tmpfs}},"mounts":['
+    '"ports":{{json .HostConfig.PortBindings}},'
+    '"tmpfs":{{json (index .HostConfig "Tmpfs")}},"mounts":['
     "{{$first := true}}{{range .Mounts}}{{if not $first}},{{end}}"
     '{"source":{{json .Source}},"destination":{{json .Destination}},'
     '"rw":{{json .RW}},"type":{{json .Type}}}{{$first = false}}{{end}}]}'
