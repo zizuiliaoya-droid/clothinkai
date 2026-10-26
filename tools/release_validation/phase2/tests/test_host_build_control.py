@@ -5,11 +5,12 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-from contracts import AFTER, TARGET, canonical, digest
-from host_build_control import build
+from contracts import AFTER, TARGET, Rejected, canonical, digest
+from host_build_control import _image, build
 from host_release_input import prepare_release, validate_release
 from phase1_package_binding import BoundPackage
 from sql_policy import parse, sha
+
 from tests.test_host_finite_operations import FixtureDirectory
 from tests.test_migration_process import NoSocketAsyncCase
 
@@ -86,6 +87,68 @@ class BuildTests(NoSocketAsyncCase):
             "schema": AFTER,
             "origin": TARGET["origin"],
         }
+
+    async def test_base_image_without_labels_is_supported(self):
+        for labels in (None, {}):
+            with self.subTest(labels=labels):
+                raw = canonical(
+                    {
+                        "id": "sha256:" + "c" * 64,
+                        "os": "linux",
+                        "architecture": "amd64",
+                        "labels": labels,
+                    }
+                )
+                with patch("host_build_control._capture", return_value=raw):
+                    image = await _image("clothinkai-trial-python-base:20261018")
+                self.assertIsNone(image["revision"])
+                self.assertIsNone(image["schema"])
+                self.assertIsNone(image["origin"])
+
+    async def test_image_projection_retains_only_release_labels(self):
+        expected = self.image()
+        raw = canonical(
+            {
+                "id": expected["id"],
+                "os": "linux",
+                "architecture": "amd64",
+                "labels": {
+                    "org.opencontainers.image.revision": expected["revision"],
+                    "clothinkai.release.schema": AFTER,
+                    "clothinkai.production.origin": TARGET["origin"],
+                    "unrelated": "not-retained",
+                },
+            }
+        )
+        with patch("host_build_control._capture", return_value=raw):
+            self.assertEqual(await _image("candidate-image"), expected)
+
+    async def test_built_images_still_require_release_labels(self):
+        for kind, missing, error in (
+            ("backend", "revision", "build_revision"),
+            ("backend", "schema", "build_label"),
+            ("frontend", "revision", "build_revision"),
+            ("frontend", "origin", "build_label"),
+        ):
+            with (
+                self.subTest(kind=kind, missing=missing),
+                tempfile.TemporaryDirectory() as temp,
+            ):
+                self.journal.directory = FixtureDirectory(Path(temp))
+                image = {**self.image(), missing: None}
+                with (
+                    patch("host_build_control.require_step"),
+                    patch("host_build_control.verify_build_tree"),
+                    patch(
+                        "host_build_control._image",
+                        side_effect=[self.image(base=True), image],
+                    ),
+                    patch("host_build_control._capture", return_value=b""),
+                    patch("host_build_control._frontend_files", return_value={}),
+                    self.assertRaisesRegex(Rejected, error),
+                ):
+                    await build(self.spec, self.journal, kind)
+                self.assertFalse((Path(temp) / f"build-{kind}-observed.json").exists())
 
     async def test_release_inputs_require_no_future_images_or_backup(self):
         self.assertEqual(validate_release(self.spec), self.spec)

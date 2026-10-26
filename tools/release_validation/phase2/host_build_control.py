@@ -11,9 +11,7 @@ from sql_policy import parse, sha
 
 IMAGE_FORMAT = (
     '{"id":{{json .Id}},"os":{{json .Os}},"architecture":{{json .Architecture}},'
-    '"revision":{{json (index .Config.Labels "org.opencontainers.image.revision")}},'
-    '"schema":{{json (index .Config.Labels "clothinkai.release.schema")}},'
-    '"origin":{{json (index .Config.Labels "clothinkai.production.origin")}}}'
+    '"labels":{{json (index .Config "Labels")}}}'
 )
 BACKEND_PROBE = """import ast,hashlib,json,pathlib
 import alembic,asyncpg,fastapi,sqlalchemy
@@ -150,7 +148,17 @@ async def _image(subject):
     row = parse(
         await _capture(DOCKER + ("image", "inspect", "--format", IMAGE_FORMAT, subject))
     )
-    exact(row, ("id", "os", "architecture", "revision", "schema", "origin"))
+    exact(row, ("id", "os", "architecture", "labels"))
+    # Official base images may omit Config.Labels entirely. Final-image label
+    # requirements are still enforced by build() after the image is created.
+    labels = row.pop("labels")
+    require(labels is None or type(labels) is dict, "build_image_labels")
+    labels = labels or {}
+    row.update(
+        revision=labels.get("org.opencontainers.image.revision"),
+        schema=labels.get("clothinkai.release.schema"),
+        origin=labels.get("clothinkai.production.origin"),
+    )
     require(
         type(row["id"]) is str and row["id"].startswith("sha256:"), "build_image_id"
     )
