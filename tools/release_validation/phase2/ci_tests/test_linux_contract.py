@@ -153,6 +153,10 @@ class LinuxContractTests(unittest.TestCase):
         self.assertEqual(verify_processes(records, 42, commit, "dbm.gnu")["pid"], 42)
         from sql_policy import SqlRejected
 
+        container_pid_one = [{**records[0], "pid": 1}]
+        self.assertEqual(verify_processes(container_pid_one, 1, commit, "dbm.gnu")["pid"], 1)
+        with self.assertRaisesRegex(SqlRejected, "beat_unique_process"):
+            verify_processes([{**records[0], "pid": 0}], 0, commit, "dbm.gnu")
         for bad in (
             records * 2,
             [{**records[0], "pid": 43}],

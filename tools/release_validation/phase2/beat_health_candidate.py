@@ -18,7 +18,7 @@ def validate_projection(observed, expected):
 
 
 def verify_processes(records, pid, commit, db_format):
-    need(type(pid) is int and pid > 1 and len(records) == 1, "beat_unique_process")
+    need(type(pid) is int and pid > 0 and len(records) == 1, "beat_unique_process")
     record = records[0]
     need(
         record["pid"] == pid
