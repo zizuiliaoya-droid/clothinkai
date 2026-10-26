@@ -1871,3 +1871,11 @@ def test_settlement_self_review_rule_registered() -> None:
     doc = replace(S_DOCS["待付款"], owner_id=None, negotiator_id=None)
     assert "reject" in _real_ui(PERSONAS["pr_manager"], doc).actions
     assert _real_ui(PERSONAS["pr_manager"], doc).actions["reject"].state == "enabled"
+
+
+def test_flow7_retro_revision_requires_true_star() -> None:
+    doc = DOCS["promotion"]["已完结"]
+    assert (
+        cell_level(PERSONAS["pr"], doc, "action", "retro_revise") is not Level.EDIT
+    ), "FLOW7_FAULT_EXPECTED:matrix_revise"
+    assert cell_level(PERSONAS["admin"], doc, "action", "retro_revise") is Level.EDIT

@@ -42,7 +42,9 @@ pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 TH = UrgeThresholds(urge_days=10, important_days=3)
 RECORDED = datetime(2026, 10, 1, 8, 0, tzinfo=UTC)
 
-Combo = tuple[str, str, str, str | None, bool, date | None, str, datetime | None, date | None]
+Combo = tuple[
+    str, str, str, str | None, bool, date | None, str, datetime | None, date | None, datetime | None
+]
 
 
 def _sched_tiers(today: date) -> list[date | None]:
@@ -78,6 +80,7 @@ def _combos(today: date) -> list[Combo]:
             [s.value for s in RetroStatus],
             [None, RECORDED],
             _publish_tiers(today),
+            [None, RECORDED],
         )
     )
 
@@ -97,10 +100,11 @@ async def _sql_stages(session: AsyncSession, combos: list[Combo], today: date) -
             CAST(:sched AS date[]),
             CAST(:retro AS text[]),
             CAST(:recorded AS timestamptz[]),
-            CAST(:published AS date[])
+            CAST(:published AS date[]),
+            CAST(:completed AS timestamptz[])
         ) AS t(i, publish_status, recall_status, settlement_status, ship_status,
                is_active, scheduled_publish_date, retro_status, metrics_recorded_at,
-               actual_publish_date)
+               actual_publish_date, completed_at)
         ORDER BY t.i
         """
     )
@@ -118,6 +122,7 @@ async def _sql_stages(session: AsyncSession, combos: list[Combo], today: date) -
                 "retro": list(cols[6]),
                 "recorded": list(cols[7]),
                 "published": list(cols[8]),
+                "completed": list(cols[9]),
                 "today": today,
                 **TH.sql_params(),
             },
@@ -137,19 +142,20 @@ def _py_stages(combos: list[Combo], today: date) -> list[str]:
             is_active=act,
             retro_status=retro,
             metrics_recorded_at=recorded,
+            completed_at=completed,
             actual_publish_date=published,
             scheduled_publish_date=sched,
             today=today,
             thresholds=TH,
         )
-        for pub, rec, stl, ship, act, sched, retro, recorded, published in combos
+        for pub, rec, stl, ship, act, sched, retro, recorded, published, completed in combos
     ]
 
 
 async def test_python_and_sql_agree_on_every_combo(session: AsyncSession) -> None:
     today = get_today()
     combos = _combos(today)
-    assert len(combos) == 161_280
+    assert len(combos) == 241_920
     py = _py_stages(combos, today)
     sql = await _sql_stages(session, combos, today)
     mismatches = [
@@ -157,7 +163,7 @@ async def test_python_and_sql_agree_on_every_combo(session: AsyncSession) -> Non
         for i, (p, s) in enumerate(zip(py, sql, strict=True))
         if p != s
     ]
-    assert not mismatches, f"{len(mismatches)} 组不一致：\n" + "\n".join(mismatches[:20])
+    assert not mismatches, "FLOW7_FAULT_EXPECTED:stage_sql\n" + "\n".join(mismatches[:20])
     # 场景有效性：22 个阶段全命中、没有矩阵外的名字
     hit = set(py)
     assert len(PROMOTION_STAGES) == 22
@@ -189,14 +195,19 @@ async def test_list_with_cte_carries_stage(
             {"scheduled_publish_date": today - timedelta(days=2)},
             {"is_active": False, "ship_status": "待发货"},
             {"publish_status": "已发布", "settlement_status": "待付款"},
-            {"publish_status": "已取消", "recall_status": "召回成功"},
+            {"publish_status": "已取消", "recall_status": "召回成功", "completed_at": RECORDED},
             {"publish_status": "已发布", "settlement_status": "未核查"},
             {"publish_status": "已发布", "settlement_status": "结款驳回"},
             {"publish_status": "已发布", "settlement_status": "已付款"},
             {**settled, "actual_publish_date": today - timedelta(days=METRICS_WAIT_DAYS - 1)},
             {**settled, "actual_publish_date": today - timedelta(days=METRICS_WAIT_DAYS)},
-            {**settled, "metrics_recorded_at": RECORDED, "retro_status": "待确认"},
-            {**settled, "metrics_recorded_at": RECORDED, "retro_status": "已完成"},
+            {**settled, "metrics_recorded_at": RECORDED, "retro_status": "待复盘"},
+            {
+                **settled,
+                "metrics_recorded_at": RECORDED,
+                "retro_status": "已完成",
+                "completed_at": RECORDED,
+            },
         ]
         expected: dict[Any, str] = {}
         for kw in cases:
@@ -216,6 +227,7 @@ async def test_list_with_cte_carries_stage(
                 is_active=p.is_active,
                 retro_status=p.retro_status,
                 metrics_recorded_at=p.metrics_recorded_at,
+                completed_at=p.completed_at,
                 actual_publish_date=p.actual_publish_date,
                 scheduled_publish_date=p.scheduled_publish_date,
                 today=today,

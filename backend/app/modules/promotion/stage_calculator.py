@@ -8,15 +8,7 @@
 第 8 条（未发布 / 异常）直接嵌 ``calculate_urge_status`` / ``URGE_STATUS_SQL_EXPR``，
 SQL 的绑定参数沿用它的 ``:today`` / ``:urge_days`` / ``:important_days``。
 
-PR-6 覆盖 #1、#1a、#4 ~ #16；还没有 ``completed_at``（M5，PR-7）前按两条过渡规则：
-- 已取消 + 召回成功 → 「已完结 · 召回」（#2 的过渡）
-- #16 之后：已结款 且 已录 7 天数据 且 复盘 = 已完成 → 「已完结」（#3 的过渡，D8），
-  免得存量已完成的单落「状态异常」；复盘「待确认」算 ≠ 已完成
-- 发布日为空时 #14「待满 7 天」不拦（与录数的 7 天门槛同口径）
-- 其余（如已发布却还是未核查）→ 状态异常
-
-SQL 片段引用的列名不带表前缀（``publish_status`` 等）：放在只有推广单列的一层里用，
-``style`` 也有 ``is_active``，直接放进 JOIN 了款式的 SELECT 会歧义。
+PR-7按completed_at唯一标记完结；正常条件已满足却缺完结标记时回落“状态异常”。
 """
 
 from __future__ import annotations
@@ -103,7 +95,7 @@ def seven_days_reached(actual_publish_date: date | None, today: date) -> bool:
 
 @dataclass(frozen=True)
 class StageFacts:
-    """算阶段要用到的离散输入（PR-7 补完结 ``completed_at``）。"""
+    """算阶段要用到的离散输入（含M5完结标记）。"""
 
     publish_status: str
     recall_status: str
@@ -112,6 +104,7 @@ class StageFacts:
     is_active: bool
     retro_status: str
     metrics_recorded: bool
+    completed: bool
     seven_days_reached: bool
 
 
@@ -140,12 +133,13 @@ STAGE_RULES: tuple[StageRule, ...] = (
     StageRule("已删除", lambda f: f.publish_status == "已删除", "publish_status = '已删除'"),
     # 1a 停用（11-15）
     StageRule("已停用", lambda f: not f.is_active, "is_active = false"),
-    # 过渡：还没有 completed_at（M5），已取消 + 召回成功按「召回完结」
+    # 2 / 3：completed_at是唯一完结标记，优先于召回和结款阶段。
     StageRule(
         "已完结 · 召回",
-        lambda f: f.publish_status == "已取消" and f.recall_status == "召回成功",
-        "publish_status = '已取消' AND recall_status = '召回成功'",
+        lambda f: f.completed and f.publish_status == "已取消",
+        "completed_at IS NOT NULL AND publish_status = '已取消'",
     ),
+    StageRule("已完结", lambda f: f.completed, "completed_at IS NOT NULL"),
     # 4
     StageRule("召回中", lambda f: f.recall_status == "召回中", "recall_status = '召回中'"),
     # 5
@@ -217,12 +211,6 @@ STAGE_RULES: tuple[StageRule, ...] = (
         lambda f: _settled(f) and f.retro_status != "已完成",
         f"{_SETTLED_SQL} AND retro_status <> '已完成'",
     ),
-    # 过渡（D8）：还没有 completed_at（PR-7），已结款 + 已录 + 复盘已完成 → 已完结
-    StageRule(
-        "已完结",
-        lambda f: _settled(f) and f.metrics_recorded and f.retro_status == "已完成",
-        f"{_SETTLED_SQL} AND metrics_recorded_at IS NOT NULL AND retro_status = '已完成'",
-    ),
 )
 
 
@@ -235,6 +223,7 @@ def compute_stage(
     is_active: bool,
     retro_status: str,
     metrics_recorded_at: datetime | None,
+    completed_at: datetime | None,
     actual_publish_date: date | None,
     scheduled_publish_date: date | None,
     today: date,
@@ -249,6 +238,7 @@ def compute_stage(
         is_active=is_active,
         retro_status=retro_status,
         metrics_recorded=metrics_recorded_at is not None,
+        completed=completed_at is not None,
         seven_days_reached=seven_days_reached(actual_publish_date, today),
     )
     for rule in STAGE_RULES:

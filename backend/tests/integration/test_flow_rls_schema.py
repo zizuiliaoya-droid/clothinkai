@@ -64,6 +64,7 @@ ROLE_SCOPES: tuple[str, ...] = (
     # 7e R7（066）
     "metric_config:read",
     "metric_config:write",
+    "promotion_retro:write",
 )
 
 _APP_ROLE = "clothing_app"

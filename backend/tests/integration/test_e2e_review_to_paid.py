@@ -162,6 +162,7 @@ class TestE2EReviewToSettled:
                 blogger=blogger,
                 pr=flow_users.pr,
                 publish_status="已发布",
+                retro_status="待复盘",  # PR7发布即待复盘；本旅程从已发布单起跑。
                 settlement_status="待核查",
                 cooperation_mode="送拍",
                 quote_amount=Decimal("500.00"),
@@ -300,7 +301,8 @@ class TestE2EReviewToSettled:
             assert promo["settled_at"] is not None
             assert promo["settlement_chat_attachment_id"] is not None
 
-            # 8. 录 7 天数据：已结款且满 7 天 → 成功；过渡期复盘 未开始 → 待复盘（PR-7 改）
+            # 8. 录7天数据成功，复盘状态保持发布时的待复盘，不由录数推进。
+            assert (await _promotion_row(session, pid))["retro_status"] == "待复盘"
             resp = await _call(
                 session,
                 flow_users.pr,

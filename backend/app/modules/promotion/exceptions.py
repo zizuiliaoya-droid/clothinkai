@@ -292,6 +292,13 @@ class StateTransitionConflictError(IllegalStateTransitionError):
     status_code = 409
 
 
+class PromotionCompletedReadonlyError(StateTransitionConflictError):
+    """已完结推广单的统一写入门禁；只认真正*例外。"""
+
+    code = "PROMOTION_COMPLETED_READONLY"
+    message = "已完结，只读"
+
+
 class PromotionInactiveError(StateTransitionConflictError):
     """财务驳回结款单时推广单已停用（流程线 PR-6 收尾 L3 兜底）。
 

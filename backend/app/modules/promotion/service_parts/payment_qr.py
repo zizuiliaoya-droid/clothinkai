@@ -54,7 +54,7 @@ class PromotionPaymentQrMixin(PromotionServiceBase):
 
         返回推广单与它结款单的状态（没有结款单为 None，DELETE 要用）。
         """
-        promotion = await self._repo.get_by_id(promotion_id, include_inactive=True)
+        promotion = await self._writable_promotion(promotion_id, user, include_inactive=True)
         if promotion is None:
             raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
         settlement_status = await self._assert_payment_qr_changeable(promotion, user)

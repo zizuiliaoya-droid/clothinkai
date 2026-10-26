@@ -93,25 +93,10 @@ AMOUNT_LOG_FIELDS: tuple[str, ...] = (
 
 
 class RetroStatus(str, Enum):
-    """复盘状态机（PRD V1.4 改动 4）。
-
-    PRD 原流程最后一步是「已结款 → 发布满 7 天录点赞/收藏/评论+截图 → 已完成」，
-    改动 4 在中间插了复盘::
-
-        已结款 → 录 7 天数据(点赞/收藏/评论+截图) → 待复盘
-              → PR 手输复盘文字 → 待确认
-              → 主管确认 → 已完成（终态）
-
-    **为什么新开一个字段而不是给 settlement_status 加值**：``已付款`` 在
-    ``SettlementStatusMachine`` 里是终态，而且全系统有一批查询按
-    ``settlement_status = '已付款'`` 过滤（索引、汇总、财务列表）。把「待复盘」
-    塞进那个枚举，所有这些查询都会漏掉进入复盘的单子。复盘是正交的一条线，
-    独立字段才不互相污染。
-    """
+    """复盘三态（流程线3.6）：发布进入待复盘，主管写完即完成。"""
 
     NOT_STARTED = "未开始"
     PENDING_RETRO = "待复盘"
-    PENDING_CONFIRM = "待确认"
     COMPLETED = "已完成"
 
 

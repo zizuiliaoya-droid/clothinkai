@@ -52,7 +52,7 @@ export interface PromotionSettlementBlock {
 }
 
 /** 复盘状态（PRD 改动 4）。已结款 → 录 7 天数据 → 待复盘 → 待确认 → 已完成。 */
-export type RetroStatus = "未开始" | "待复盘" | "待确认" | "已完成";
+export type RetroStatus = "未开始" | "待复盘" | "已完成";
 
 export type { Platform } from "@/features/common/platforms";
 
@@ -174,6 +174,7 @@ export interface Promotion {
   recall_status: string;
   settlement_status: string;
   /** 复盘状态（PRD 改动 4）。与 settlement_status 正交，互不影响。 */
+  completed_at?: string | null;
   retro_status: RetroStatus;
   retro_confirmed_by: string | null;
   retro_confirmed_at: string | null;
