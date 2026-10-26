@@ -5,6 +5,7 @@ provisioned approval and a durable intent; incomplete actions retain the lock.
 """
 
 import os
+import re
 import stat
 from dataclasses import asdict, replace
 from pathlib import Path
@@ -13,7 +14,7 @@ from contracts import STEPS, Rejected, digest, exact, require, sha
 from fixed_host_transport import ROLES, ROOT, _capture, collect, command
 from host_release_input import HostReleaseSpec, validate_host_input
 from linux_transport import LinuxJournal, PrivateDirectory, require_linux
-from sql_policy import HostMigrationSpec, parse, require_host_authority
+from sql_policy import HostMigrationSpec, SqlRejected, parse, require_host_authority
 from state_machine import State, intent, next_action
 
 
@@ -383,6 +384,16 @@ async def _dispatch(name, spec, baseline, journal):
     return {"original_sha256": digest(before_rows), "containers": results}
 
 
+def _hold_error_code(error):
+    # These two contract exceptions carry fixed internal codes. Never retain OS
+    # exceptions, stderr, arbitrary messages, or multi-argument exception data.
+    if type(error) in (Rejected, SqlRejected) and len(error.args) == 1:
+        code = error.args[0]
+        if type(code) is str and re.fullmatch(r"[a-z][a-z0-9_]{0,95}", code):
+            return code
+    return "host_action_unknown"
+
+
 class HostCoordinator:
     def __init__(self, spec, journal, baseline):
         require(
@@ -456,11 +467,16 @@ class HostCoordinator:
                 "step": action.name,
                 "live_enabled": False,
             }
-        except BaseException:
+        except BaseException as error:
+            error_code = _hold_error_code(error)
             try:
                 self.journal.append(
                     "hold",
-                    {"reason": "host_action_unknown", "action_id": action.action_id},
+                    {
+                        "reason": "host_action_unknown",
+                        "action_id": action.action_id,
+                        "error_code": error_code,
+                    },
                 )
             except BaseException:
                 pass
@@ -468,5 +484,6 @@ class HostCoordinator:
             return {
                 "status": "HOLD_UNKNOWN",
                 "step": action.name,
+                "error_code": error_code,
                 "live_enabled": False,
             }

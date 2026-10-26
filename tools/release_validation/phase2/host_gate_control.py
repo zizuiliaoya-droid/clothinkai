@@ -109,7 +109,7 @@ def _proc(pid):
         os.close(fd)
 
 
-def nginx_workers(master_pid):
+def _nginx_master(master_pid):
     master = _proc(master_pid)
     require(
         master is not None
@@ -118,6 +118,11 @@ def nginx_workers(master_pid):
         and b"-c /opt/production/nginx-active.conf" in master["command"],
         "nginx_master_identity",
     )
+    return master
+
+
+def nginx_workers(master_pid):
+    master = _nginx_master(master_pid)
     path = "/proc/" + str(master_pid) + "/task/" + str(master_pid) + "/children"
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
     try:
@@ -146,14 +151,21 @@ def nginx_workers(master_pid):
 async def wait_old_workers(original):
     deadline = time.monotonic() + 120
     while True:
-        current = nginx_workers(original["master"]["pid"])
-        require(current["master"] == original["master"], "nginx_master_changed")
+        master = _nginx_master(original["master"]["pid"])
+        require(
+            {k: master[k] for k in ("pid", "start_ticks")} == original["master"],
+            "nginx_master_changed",
+        )
         remaining = []
         for old in original["workers"]:
             now = _proc(old["pid"])
             if now is not None and now["start_ticks"] == old["start_ticks"]:
                 remaining.append(old)
         if not remaining:
+            # Exiting old children can disappear or have an empty cmdline while
+            # being reaped. Inspect the new live set only after they are gone.
+            current = nginx_workers(original["master"]["pid"])
+            require(current["master"] == original["master"], "nginx_master_changed")
             return current
         require(time.monotonic() < deadline, "nginx_old_workers_not_drained")
         await asyncio.sleep(0.25)

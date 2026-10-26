@@ -5,11 +5,11 @@ from dataclasses import asdict, replace
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-from contracts import digest
+from contracts import Rejected, digest
 from fixed_host_transport import ROLES, ROOT
-from host_sequence import HostCoordinator, HostJournal, replay
+from host_sequence import HostCoordinator, HostJournal, _hold_error_code, replay
 from journal import Journal
-from sql_policy import canonical, parse
+from sql_policy import SqlRejected, canonical, parse
 from state_machine import next_action
 from tests.test_host_policy import policy_fixture
 from tests.test_migration_process import NoSocketAsyncCase
@@ -84,10 +84,43 @@ class HostJournalConnectionTests(NoSocketAsyncCase):
             first = await self.coordinator.run_next()
             second = await self.coordinator.run_next()
         self.assertEqual(first["status"], "HOLD_UNKNOWN")
+        self.assertEqual(first["error_code"], "host_action_unknown")
+        self.assertNotIn("synthetic-reply-lost", str(self.disk.read()) + str(first))
         self.assertEqual(second["status"], "HOLD")
         self.assertEqual(effects.await_count, 1)
         self.assertIsNotNone(replay(self.spec, self.disk.read()).pending)
         self.assertIsNotNone(self.disk.lock)
+
+    async def test_fixed_error_code_is_durable_and_does_not_allow_replay(self):
+        effects = AsyncMock(side_effect=Rejected("nginx_child_identity"))
+        with (
+            patch("host_sequence.require_host_authority"),
+            patch("host_sequence.collect", new=AsyncMock()),
+            patch("host_sequence._dispatch", effects),
+        ):
+            first = await self.coordinator.run_next()
+            second = await self.coordinator.run_next()
+        self.assertEqual(first["error_code"], "nginx_child_identity")
+        self.assertEqual(
+            self.disk.read()[-1]["payload"]["error_code"], "nginx_child_identity"
+        )
+        self.assertEqual(second["status"], "HOLD")
+        self.assertEqual(effects.await_count, 1)
+
+    def test_only_fixed_contract_code_format_is_reported(self):
+        self.assertEqual(
+            _hold_error_code(SqlRejected("private_regular_file")),
+            "private_regular_file",
+        )
+        for error in (
+            RuntimeError("nginx_child_identity"),
+            Rejected("password=secret"),
+            Rejected("nginx_child_identity\nsecret"),
+            Rejected("x" * 97),
+            Rejected("nginx_child_identity", "secret"),
+        ):
+            with self.subTest(error_type=type(error).__name__):
+                self.assertEqual(_hold_error_code(error), "host_action_unknown")
 
     async def test_intent_fsync_failure_launches_nothing(self):
         self.disk.fail_at = "file_fsync"
