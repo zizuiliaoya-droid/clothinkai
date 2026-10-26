@@ -4,16 +4,19 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from app.core.exceptions import IllegalStateTransitionError
+from app.core.exceptions import FieldPermissionDenied, IllegalStateTransitionError
+from app.core.security.field_permissions import can_write_field
 from app.modules.auth.models import User
 from app.modules.flow.line_events import LineEventRepository, LineEventType
 from app.modules.promotion.enums import PublishStatus, RecallStatus, SettlementStatus
 from app.modules.promotion.exceptions import (
     InvalidPaymentQrAttachmentError,
     PaymentQrLockedError,
+    PromotionCompletedReadonlyError,
     PromotionNotFoundError,
 )
 from app.modules.promotion.flow_matrix import PAYMENT_QR_GREY_HINT
+from app.modules.promotion.freight_repository import ReturnFreightRepository
 from app.modules.promotion.models import Promotion
 from app.modules.promotion.schemas import (
     PromotionPaymentQrBindRequest,
@@ -29,12 +32,12 @@ from app.modules.promotion.stage_calculator import STAGE_FALLBACK
 
 # 7.3 收款码接口 ①：没发布（未发布 / 异常）且不在召回中 → 「发布后上传」，管理员也一样
 _BEFORE_PUBLISH = frozenset({PublishStatus.UNPUBLISHED.value, PublishStatus.ABNORMAL.value})
-# ①'：H 列只读（PR / 主管）。「已完结 · 召回」是没有 completed_at 前的过渡阶段，PR-7 起改走「已完结只读」
+# ①'：H 列只读（PR / 主管）；召回成功过渡阶段另外判完结与R33驳回例外。
 _READONLY_STAGES = frozenset(
     {"已停用", "已删除", "已完结 · 不合作", "已完结 · 召回", STAGE_FALLBACK}
 )
 _READONLY_REASON = "已停用 / 已取消，只读"
-# ③：服务费已付 / 已结款（召回中、寄回运费付款单已驳回两个例外随 PR-8）
+# ③：服务费已付 / 已结款，召回中、R33已驳回为精确例外。
 _SETTLED = frozenset({SettlementStatus.PAID.value, SettlementStatus.SETTLED.value})
 # ④ 放行只剩 D 列、E 列的待财务付款（结款单待付款）与结款驳回、G 列召回中
 _OPEN_STAGES = frozenset(
@@ -54,9 +57,15 @@ class PromotionPaymentQrMixin(PromotionServiceBase):
 
         返回推广单与它结款单的状态（没有结款单为 None，DELETE 要用）。
         """
-        promotion = await self._writable_promotion(promotion_id, user, include_inactive=True)
+        # 专用入口在同一推广行锁内按7.3判完结；不放宽普通_writable_promotion。
+        promotion = await self._repo.get_for_write(
+            promotion_id, tenant_id=user.tenant_id, include_inactive=True
+        )
         if promotion is None:
             raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
+        actor = await self._flow_actor(user)
+        if not can_write_field("promotion", "payment_qr", actor.field_ctx):
+            raise FieldPermissionDenied(field="payment_qr", entity="promotion")
         settlement_status = await self._assert_payment_qr_changeable(promotion, user)
         return promotion, settlement_status
 
@@ -65,9 +74,10 @@ class PromotionPaymentQrMixin(PromotionServiceBase):
 
         按顺序判，持 ``*`` 的管理员只受 ①：
         ① 发布状态 ∈ {未发布, 异常} 且不在召回中 → 422 ``ILLEGAL_STATE_TRANSITION``「发布后上传」；
-        ①' 已停用 / 已删除 / 状态异常 / 已完结 · 不合作（及过渡的已完结 · 召回）→ 422「已停用 / 已取消，只读」；
+        ①' 已停用 / 已删除 / 状态异常 / 已完结 · 不合作 → 422「已停用 / 已取消，只读」；
         ② 结款单 = 待财务付款 → 409 ``PAYMENT_QR_LOCKED``（``lock = settlement_paying``）；
         ③ 推广单 已付款 / 已结款 → 409 ``PAYMENT_QR_LOCKED``（``lock = settled``）；
+        ③的已结款与完结锁仅对召回中或R33已驳回放行；②始终优先。
         ④ 其余只放行 D 列、E 列的待财务付款与结款驳回、G 列召回中。
         """
         if (
@@ -85,19 +95,29 @@ class PromotionPaymentQrMixin(PromotionServiceBase):
         if (await self._flow_actor(user)).is_star:
             return settlement_status
         stage = await self._compute_stage(promotion)
-        if stage in _READONLY_STAGES:
+        freight_status = await ReturnFreightRepository(self._session).status_for_promotion(
+            promotion.id, tenant_id=promotion.tenant_id
+        )
+        exception = promotion.recall_status == "召回中" or freight_status == "已驳回"
+        if (
+            not promotion.is_active
+            or promotion.publish_status == "已删除"
+            or stage in (_READONLY_STAGES - {"已完结 · 召回"})
+        ):
             raise IllegalStateTransitionError(_READONLY_REASON, details={"stage": stage})
         if settlement_status == _SETTLEMENT_PAYING:
             raise PaymentQrLockedError(
                 "财务付款中，收款码已锁定；码不对请让财务驳回后重传",
                 details={"lock": "settlement_paying"},
             )
-        if promotion.settlement_status in _SETTLED:
+        if promotion.completed_at is not None and not exception:
+            raise PromotionCompletedReadonlyError("已完结，只读")
+        if promotion.settlement_status in _SETTLED and not exception:
             raise PaymentQrLockedError(
                 "已结款，收款码已锁定",
                 details={"lock": "settled", "settlement_status": promotion.settlement_status},
             )
-        if stage not in _OPEN_STAGES:
+        if stage not in _OPEN_STAGES and not exception:
             raise IllegalStateTransitionError(_READONLY_REASON, details={"stage": stage})
         return settlement_status
 

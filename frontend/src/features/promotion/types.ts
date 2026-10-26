@@ -141,6 +141,17 @@ export interface Promotion {
   /** 寄拍 / 送拍 / 置换。历史导入数据为 null，可补一次。单据生成后不可改。 */
   cooperation_mode: string | null;
   return_shipping_fee: string | null; // 敏感
+  return_shipping_payer?: "博主垫付" | "到付" | null;
+  recall_waybill_attachment_id?: string | null;
+  recall_waybill_signed_url?: string | null;
+  freight_payment?: {
+    id: string;
+    status: import("./freightTypes").FreightStatus;
+    amount: string | null;
+    payment_date: string | null;
+    reject_reason: string | null;
+    ui: import("@/features/flow/keys").UiState;
+  } | null;
   /** 站外推广成本 = 博主服务费 + 样品成本 + 寄回运费。后端生成列，只读。敏感。 */
   total_promo_cost: string | null;
   /** 博主寄回衣服单号。寄拍模式没有它审核通不过。 */
@@ -328,7 +339,13 @@ export interface PromotionCancelRequest {
 }
 
 export interface PromotionRecallStartRequest {
-  recall_reason?: string | null;
+  recall_reason: string;
+}
+
+export interface PromotionRecallSuccessRequest {
+  return_shipping_fee: string;
+  return_shipping_payer: "博主垫付" | "到付";
+  remark?: string;
 }
 
 /** 驳回原因分类，三选一（PRD 改动 5）。 */

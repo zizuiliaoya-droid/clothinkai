@@ -230,7 +230,9 @@ class LineEventService:
         sees_negotiation = negotiation is not None and can_see_negotiation(
             actor, pr_id=negotiation.pr_id, status=negotiation.status
         )
-        sees_settlement = header.has_settlement and actor.perms.has("finance.settlement", "read")
+        sees_settlement = (header.has_settlement or header.has_freight) and actor.perms.has(
+            "finance.settlement", "read"
+        )
         if not (sees_promotion or sees_negotiation or sees_settlement):
             raise LineNotFoundError(details={"line_id": str(line_id)})
         return actor, header, sees_negotiation, sees_promotion or sees_settlement
@@ -507,6 +509,7 @@ class LineEventService:
                 negotiator_id=negotiation.pr_id if negotiation is not None else None,
                 items_complete=False,
                 settlement_status=None,
+                freight_status=header.freight_status,
             )
         if negotiation is None:  # 第 1 层已挡住：线上至少有一张单
             raise LineNotFoundError()

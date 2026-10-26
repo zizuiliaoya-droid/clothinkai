@@ -1,3 +1,4 @@
+import { StyleImageThumbnail } from "@/components/StyleImageThumbnail/StyleImageThumbnail";
 // 主线抽屉「单据详情」页签（流程线设计 8.4）：拉推广单详情（带 ui.fields），按分组从上到下渲染。
 //
 // - 矩阵里已有的分组（商品归属与颜色尺码、收件、发货）按 ui.fields 出：不在 fields 里整块不渲染（运营看不到收件），
@@ -5,7 +6,7 @@
 // - 合作信息、发布两块矩阵还没有分组（随 PR-6 ~ PR-9 补），照详情接口给的值只读显示；报价读不到时接口给 null，整行不出
 // - 不显示商品编码 / SKU 编码（规-1）
 import type { ReactNode } from "react";
-import { Descriptions, Space, Spin, Tag, Typography } from "antd";
+import { Button, Descriptions, Space, Spin, Tag, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { FieldBlock } from "@/features/flow/FieldBlock";
 import { shipStatusStyle } from "@/features/flow/stageStyle";
@@ -13,6 +14,8 @@ import { goodsDisplayName } from "@/features/product/api";
 import { getPromotion, promotionDetailKey } from "@/features/promotion/api";
 import { itemSpecLines, shipDetailLines } from "@/features/promotion/shipDisplay";
 import type { Promotion } from "@/features/promotion/types";
+import { FlowAction } from "@/features/flow/FlowAction";
+import type { FreightModalMode } from "./FreightModal";
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -30,6 +33,11 @@ export function PromotionDetailPanel({
   onEditReceiver,
   onEditItems,
   onEditRetro,
+  onRecallStart,
+  onRecallWaybill,
+  onRecallResult,
+  onPaymentQr,
+  onFreight,
 }: {
   promotionId: string;
   /** 打开「改收件信息」弹窗（ui.fields.receiver = edit 时出按钮）。 */
@@ -37,6 +45,11 @@ export function PromotionDetailPanel({
   /** 打开「改颜色尺码」弹窗（ui.fields.goods_items = edit 时出按钮）。 */
   onEditItems?: (row: Promotion) => void;
   onEditRetro?: (row: Promotion) => void;
+  onRecallStart?: (row: Promotion) => void;
+  onRecallWaybill?: (row: Promotion) => void;
+  onRecallResult?: (row: Promotion) => void;
+  onPaymentQr?: (row: Promotion) => void;
+  onFreight?: (row: Promotion, mode: FreightModalMode) => void;
 }) {
   const { data, isLoading, error } = useQuery({
     queryKey: promotionDetailKey(promotionId),
@@ -126,6 +139,40 @@ export function PromotionDetailPanel({
           </Descriptions.Item>
         </Descriptions>
       </Section>
+      <FieldBlock ui={ui} group="payment_qr" title="收款码">
+        {data.payment_qr_signed_url ? <StyleImageThumbnail size={100} src={data.payment_qr_signed_url} alt="博主收款码" /> : <Typography.Text>{data.payment_qr_attachment_id ? "已上传收款码（暂时无法预览）" : "尚未上传收款码"}</Typography.Text>}
+        {onPaymentQr && <Button onClick={() => onPaymentQr(data)}>{ui?.fields?.payment_qr?.state === "edit" ? "管理收款码" : "查看收款码"}</Button>}
+      </FieldBlock>
+      <FieldBlock ui={ui} group="recall_info" title="召回">
+        <Descriptions size="small" column={1}>
+          <Descriptions.Item label="召回状态">{data.recall_status}</Descriptions.Item>
+          <Descriptions.Item label="召回原因"><span style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{dash(data.recall_reason)}</span></Descriptions.Item>
+          {data.return_shipping_fee != null && <Descriptions.Item label="寄回运费">¥{data.return_shipping_fee}</Descriptions.Item>}
+          {data.return_shipping_payer && <Descriptions.Item label="承担方">{data.return_shipping_payer}</Descriptions.Item>}
+        </Descriptions>
+        {data.recall_waybill_signed_url ? <StyleImageThumbnail size={100} src={data.recall_waybill_signed_url} alt="召回寄回截图" /> : data.recall_waybill_attachment_id ? <Typography.Paragraph>已上传寄回截图（暂时无法预览）</Typography.Paragraph> : null}
+        <Space wrap>
+          {onRecallStart && <FlowAction ui={ui} actionKey="recall_start" label="发起召回" onClick={() => onRecallStart(data)} showReasonBelow />}
+          {onRecallWaybill && <FlowAction ui={ui} actionKey="recall_waybill" label="上传召回寄回截图" onClick={() => onRecallWaybill(data)} showReasonBelow />}
+          {onRecallResult && <FlowAction ui={ui} actionKey="recall_result" label="登记召回结果" onClick={() => onRecallResult(data)} showReasonBelow />}
+        </Space>
+      </FieldBlock>
+      <FieldBlock ui={ui} group="freight_payment" title="寄回运费">
+        {data.freight_payment ? <Space direction="vertical">
+          <Tag>{data.freight_payment.status}</Tag>
+          {data.freight_payment.amount != null && <Typography.Text>金额 ¥{data.freight_payment.amount}</Typography.Text>}
+          {data.freight_payment.reject_reason && <Typography.Paragraph style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>驳回原因：{data.freight_payment.reject_reason}</Typography.Paragraph>}
+          {data.freight_payment.payment_date && <Typography.Text>付款日期：{data.freight_payment.payment_date}</Typography.Text>}
+          {onFreight && <Space wrap>
+            <Button onClick={() => onFreight(data, "view")}>查看运费付款单</Button>
+            <FlowAction ui={data.freight_payment.ui} actionKey="freight_review" label="审核寄回运费" onClick={() => onFreight(data, "review")} showReasonBelow />
+            <FlowAction ui={data.freight_payment.ui} actionKey="freight_resubmit" label="重提寄回运费" onClick={() => onFreight(data, "resubmit")} showReasonBelow />
+            <FlowAction ui={data.freight_payment.ui} actionKey="freight_pay" label="支付寄回运费" onClick={() => onFreight(data, "pay")} showReasonBelow />
+            <FlowAction ui={data.freight_payment.ui} actionKey="freight_reject_payment" label="驳回寄回运费付款" onClick={() => onFreight(data, "reject")} showReasonBelow />
+          </Space>}
+        </Space> : <Typography.Paragraph type="secondary">尚无寄回运费付款单</Typography.Paragraph>}
+        {onFreight && <FlowAction ui={ui} actionKey="freight_submit" label="提交寄回运费" onClick={() => onFreight(data, "submit")} showReasonBelow />}
+      </FieldBlock>
       <FieldBlock ui={ui} group="retro" title="复盘" onEdit={onEditRetro ? () => onEditRetro(data) : undefined}>
         <Typography.Paragraph style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}>
           {data.retro_content || "主管尚未填写复盘"}

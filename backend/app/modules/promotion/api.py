@@ -47,6 +47,7 @@ from app.modules.promotion.schemas import (
     PromotionPublishRequest,
     PromotionRecallResultRequest,
     PromotionRecallStartRequest,
+    PromotionRecallSuccessRequest,
     PromotionResponse,
     PromotionResubmitRequest,
     PromotionReturnWaybillRequest,
@@ -331,18 +332,38 @@ async def start_recall_promotion(
 
 
 @router.post(
+    "/promotions/{promotion_id}/recall/waybill",
+    response_model=PromotionResponse,
+    dependencies=[require_permission("promotion", "write")],
+)
+async def upload_recall_waybill(
+    promotion_id: UUID,
+    user: CurrentActiveUser,
+    service: PromotionServiceDep,
+    file: Annotated[UploadFile, File()],
+) -> PromotionResponse:
+    try:
+        data = await file.read(10 * 1024 * 1024 + 1)
+    finally:
+        await file.close()
+    return await service.upload_recall_waybill(
+        promotion_id, user=user, filename=file.filename, mime_type=file.content_type, data=data
+    )
+
+
+@router.post(
     "/promotions/{promotion_id}/recall/success",
     response_model=PromotionResponse,
     dependencies=[require_permission("promotion", "write")],
 )
 async def recall_success(
     promotion_id: UUID,
-    payload: PromotionRecallResultRequest,
+    payload: PromotionRecallSuccessRequest,
     user: CurrentActiveUser,
     service: PromotionServiceDep,
 ) -> PromotionResponse:
     """EP05-S09 召回成功（终态）."""
-    return await service.recall_success(promotion_id, user)
+    return await service.recall_success(promotion_id, payload, user)
 
 
 @router.post(
@@ -357,7 +378,7 @@ async def recall_failure(
     service: PromotionServiceDep,
 ) -> PromotionResponse:
     """EP05-S09 召回失败（可重新发起）."""
-    return await service.recall_failure(promotion_id, user)
+    return await service.recall_failure(promotion_id, user, remark=payload.remark)
 
 
 @router.post(

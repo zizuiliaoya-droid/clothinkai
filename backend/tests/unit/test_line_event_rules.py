@@ -135,6 +135,18 @@ def test_attachment_rules_keyed_by_existing_event_types() -> None:
         LineEventType.PROMOTION_PAYMENT_QR_UPLOADED.value: ("promotion", "payment_qr"),
         LineEventType.SETTLEMENT_PAID.value: ("promotion", "payment_qr"),
         LineEventType.PROMOTION_SETTLED.value: ("promotion", "payment_qr"),
+        LineEventType.RECALL_WAYBILL_UPLOADED.value: ("promotion", "payment_qr"),
+        LineEventType.RECALL_SUCCEEDED.value: ("promotion", "payment_qr"),
+        **{
+            event.value: ("promotion", "payment_qr")
+            for event in (
+                LineEventType.FREIGHT_SUBMITTED,
+                LineEventType.FREIGHT_APPROVED,
+                LineEventType.FREIGHT_REJECTED,
+                LineEventType.FREIGHT_PAID,
+                LineEventType.FREIGHT_RESUBMITTED,
+            )
+        },
     }
 
 

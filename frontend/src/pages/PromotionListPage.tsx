@@ -56,6 +56,9 @@ import { promotionUrgeRecordsKey } from "@/features/urge/api";
 import { MetricsModal } from "@/features/promotion/components/MetricsModal";
 import { PublishModal } from "@/features/promotion/components/PublishModal";
 import { RecallModal } from "@/features/promotion/components/RecallModal";
+import { RecallWaybillModal } from "@/features/promotion/components/RecallWaybillModal";
+import { RecallResultModal } from "@/features/promotion/components/RecallResultModal";
+import { FreightModal, type FreightModalMode } from "@/features/promotion/components/FreightModal";
 import { RejectModal } from "@/features/promotion/components/RejectModal";
 import { ResubmitModal } from "@/features/promotion/components/ResubmitModal";
 import { RetroModal } from "@/features/promotion/components/RetroModal";
@@ -145,6 +148,9 @@ export function PromotionListPage() {
   // 点一行（或「留言」「金额改动记录」菜单）开主线抽屉；tab = 打开时先显示的页签
   const [lineTarget, setLineTarget] = useState<{ row: Promotion; tab?: LineTab } | null>(null);
   const [recallTarget, setRecallTarget] = useState<Promotion | null>(null);
+  const [recallWaybillTarget, setRecallWaybillTarget] = useState<Promotion | null>(null);
+  const [recallResultTarget, setRecallResultTarget] = useState<Promotion | null>(null);
+  const [freightTarget, setFreightTarget] = useState<{ row: Promotion; mode: FreightModalMode } | null>(null);
   // 发货（流程线 8.4）：按行 ui 出菜单项，弹窗在 features/promotion/components/
   const [shipPushTarget, setShipPushTarget] = useState<ShipPushTarget | null>(null);
   const [shipWithdrawTarget, setShipWithdrawTarget] = useState<Promotion | null>(null);
@@ -170,6 +176,11 @@ export function PromotionListPage() {
           onEditReceiver={setReceiverTarget}
           onEditItems={setItemsTarget}
           onEditRetro={setRetroTarget}
+          onRecallStart={setRecallTarget}
+          onRecallWaybill={setRecallWaybillTarget}
+          onRecallResult={setRecallResultTarget}
+          onPaymentQr={setPaymentQrTarget}
+          onFreight={(row, mode) => setFreightTarget({ row, mode })}
         />
       ),
     },
@@ -233,6 +244,10 @@ export function PromotionListPage() {
   function flowMenuItems(record: Promotion): NonNullable<MenuProps["items"]> {
     const built = buildMenuItems("promotion", record.ui, {
       actions: {
+        recall_start: { label: "发起召回", onClick: () => setRecallTarget(record) },
+        recall_waybill: { label: "上传召回寄回截图", onClick: () => setRecallWaybillTarget(record) },
+        recall_result: { label: "登记召回结果", onClick: () => setRecallResultTarget(record) },
+        freight_submit: { label: "提交寄回运费", onClick: () => setFreightTarget({ row: record, mode: "submit" }) },
         ship_push: {
           label: "确认推送仓库",
           onClick: (action) => setShipPushTarget({ row: record, action }),
@@ -281,6 +296,12 @@ export function PromotionListPage() {
       },
     });
     const items = expandReviewItem(built, record.ui?.actions?.review, () => setRejectTarget(record));
+    items.push(...buildMenuItems("freight", record.freight_payment?.ui, { actions: {
+      freight_review: { label: "审核寄回运费", onClick: () => setFreightTarget({ row: record, mode: "review" }) },
+      freight_resubmit: { label: "重提寄回运费", onClick: () => setFreightTarget({ row: record, mode: "resubmit" }) },
+      freight_pay: { label: "支付寄回运费", onClick: () => setFreightTarget({ row: record, mode: "pay" }) },
+      freight_reject_payment: { label: "驳回寄回运费付款", onClick: () => setFreightTarget({ row: record, mode: "reject" }) },
+    } }));
     // 换不了收款码（锁定 / 只读）但看得到、也传过：给一个只看的入口，弹窗里写为什么锁
     if (!record.ui?.edits?.includes("payment_qr") && record.payment_qr_attachment_id) {
       items.push({
@@ -486,13 +507,15 @@ export function PromotionListPage() {
     {
       title: "召回",
       dataIndex: "recall_status",
-      width: 100,
-      render: (v: string) =>
-        v === "未召回" ? (
+      width: 150,
+      render: (v: string, row: Promotion) => <Space direction="vertical" size={4}>
+        {v === "未召回" ? (
           <Typography.Text type="secondary">—</Typography.Text>
         ) : (
           <Tag color={recallColor[v]}>{v}</Tag>
-        ),
+        )}
+        {row.badges?.includes("freight_open") && row.freight_payment && <Tag color="orange">运费单：{row.freight_payment.status}</Tag>}
+      </Space>,
     },
     {
       title: "寄回单号",
@@ -579,15 +602,6 @@ export function PromotionListPage() {
                 },
               ]
             : []),
-          {
-            key: "recall",
-            label: "召回",
-            // 召回要求已发布或已取消（后端 BR-U04-24），召回成功是终态
-            disabled:
-              !["已发布", "已取消"].includes(record.publish_status) ||
-              record.recall_status === "召回成功",
-            onClick: () => setRecallTarget(record),
-          },
           {
             // 驳回后 PR 改完重新交给主管（已驳回 → 待核查）。后端还要求「已发布」
             // （否则进了待核查也批不了），这里对齐，免得点了得到 409
@@ -743,6 +757,9 @@ export function PromotionListPage() {
 
 
       <RecallModal target={recallTarget} onClose={() => setRecallTarget(null)} />
+      <RecallWaybillModal target={recallWaybillTarget} onClose={() => setRecallWaybillTarget(null)} />
+      <RecallResultModal target={recallResultTarget} onClose={() => setRecallResultTarget(null)} />
+      <FreightModal target={freightTarget?.row ?? null} mode={freightTarget?.mode ?? "view"} onClose={() => setFreightTarget(null)} />
 
       <LineDrawer
         lineId={lineTarget?.row.line_id ?? null}

@@ -32,6 +32,10 @@ describe("事件文案", () => {
 });
 
 describe("describeDiff", () => {
+  it("召回及R33金额/承担方可读；付款单ID仍不显示", () => {
+    expect(describeDiff({ freight_amount: "30.00", return_shipping_fee: "30.00", return_shipping_payer: "博主垫付", freight_id: "opaque-id" })).toEqual(["运费付款金额：¥30.00", "寄回运费：¥30.00", "承担方：博主垫付"]);
+    expect(describeDiff({ return_shipping_payer: "到付" })).toEqual(["承担方：到付"]);
+  });
   it("diff 条目「名：前 → 后」，金额两位、空值显示「空」", () => {
     expect(
       describeDiff({

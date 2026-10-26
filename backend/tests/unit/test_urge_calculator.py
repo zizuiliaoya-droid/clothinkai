@@ -90,3 +90,32 @@ class TestGetToday:
     @freeze_time("2026-05-26 12:00:00")  # UTC 12:00 = Shanghai 20:00
     def test_get_today_normal_day(self) -> None:
         assert get_today() == date(2026, 5, 26)
+
+    def test_configured_urge_threshold_advances_at_shanghai_midnight(self) -> None:
+        """同一排期在北京时间午夜由剩 3 天变 2 天，应进入配置的重要催发。"""
+        with freeze_time("2026-10-23 15:59:59") as clock:
+            assert get_today() == date(2026, 10, 23)
+            assert (
+                calculate_urge_status(
+                    publish_status="未发布",
+                    scheduled_publish_date=date(2026, 10, 26),
+                    today=get_today(),
+                    urge_threshold_days=5,
+                    important_threshold_days=2,
+                )
+                == "催发"
+            )
+
+            clock.move_to("2026-10-23 16:00:00")
+
+            assert get_today() == date(2026, 10, 24)
+            assert (
+                calculate_urge_status(
+                    publish_status="未发布",
+                    scheduled_publish_date=date(2026, 10, 26),
+                    today=get_today(),
+                    urge_threshold_days=5,
+                    important_threshold_days=2,
+                )
+                == "重要催发"
+            )

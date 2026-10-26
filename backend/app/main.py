@@ -64,6 +64,7 @@ from app.modules.product.dict_api import router as dict_router
 from app.modules.product.goods_api import router as goods_router
 from app.modules.product.platform_product_api import router as platform_product_router
 from app.modules.promotion.api import router as promotion_router
+from app.modules.promotion.freight_api import router as freight_router
 from app.modules.promotion.shipping_api import router as promotion_shipping_router
 from app.modules.report.advanced_api import router as report_advanced_router
 from app.modules.report.api import router as report_router
@@ -453,6 +454,7 @@ def create_app() -> FastAPI:
     app.include_router(dict_router)  # 可维护字典 /api/dict-items
     app.include_router(blogger_router)  # blogger router 已含 /api 前缀
     app.include_router(promotion_router)  # promotion router 已含 /api 前缀
+    app.include_router(freight_router)
     app.include_router(promotion_shipping_router)  # 推广单发货 /api/promotions/{id}/ship/*
     app.include_router(finance_router)  # finance router 已含 /api 前缀
     app.include_router(order_adjustment_router)  # U16 拍单/刷单/余额 /api/finance

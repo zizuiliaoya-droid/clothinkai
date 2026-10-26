@@ -42,6 +42,14 @@ describe("keys（与后端 flow/matrix.py 的常量一一对应）", () => {
 });
 
 describe("buildMenuItems", () => {
+  it("后端未结清运费禁用原因原样呈现，禁用动作没有可调用handler", () => {
+    const onClick = vi.fn();
+    const [item] = buildMenuItems("promotion", { actions: { deactivate: { state: "disabled", reason: "寄回运费尚未结清，不能停用推广单" } } }, { actions: { deactivate: { label: "停用推广单", onClick } } });
+    expect(item.label).toBe("停用推广单（寄回运费尚未结清，不能停用推广单）");
+    expect(item.disabled).toBe(true);
+    item.onClick?.();
+    expect(onClick).not.toHaveBeenCalled();
+  });
   it("顺序按 keys.ts 固定，与接口返回的键顺序无关；动作在前、edits 在后", () => {
     const ui: UiState = {
       actions: {
