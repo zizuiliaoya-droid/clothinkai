@@ -174,8 +174,31 @@ async def wait_old_workers(original):
 def acme_file(spec):
     name = "flow78-proof-" + spec.data["source_commit"][:12]
     payload = (sha((spec.sha256 + ":acme").encode()) + "\n").encode()
-    directory = _directory(ROOT + "/acme/.well-known/acme-challenge")
+    directory = _directory(ROOT + "/acme")
     try:
+        for part in (".well-known", "acme-challenge"):
+            created = False
+            try:
+                os.mkdir(part, 0o755, dir_fd=directory)
+                created = True
+            except FileExistsError:
+                pass
+            child = os.open(
+                part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory
+            )
+            parent, directory = directory, child
+            try:
+                info = os.fstat(directory)
+                require(
+                    info.st_uid == 0 and not info.st_mode & 0o022,
+                    "acme_directory_owner_mode",
+                )
+                if created:
+                    os.fchmod(directory, 0o755)
+                os.fsync(directory)
+                os.fsync(parent)
+            finally:
+                os.close(parent)
         file = os.open(
             name,
             os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
