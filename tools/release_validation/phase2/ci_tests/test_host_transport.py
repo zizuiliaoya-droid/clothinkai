@@ -167,6 +167,41 @@ class HostTransportTests(unittest.TestCase):
             with self.assertRaisesRegex(Rejected, "http_redirect"):
                 observe_gate()
 
+    def test_preflight_uses_health_paths_without_allowing_redirects(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock, patch
+
+        from public_gate_observer import observe_gate, observe_preflight_gate
+
+        requested = []
+        statuses = {"/api": 301}
+
+        def connection(*args, **kwargs):
+            client = Mock()
+            client.sock.getpeercert.return_value = {
+                "notAfter": "Oct 23 00:00:00 2030 GMT"
+            }
+            client.request.side_effect = lambda method, path, headers: requested.append(
+                path
+            )
+            client.getresponse.side_effect = lambda: SimpleNamespace(
+                status=statuses.get(requested[-1], 200), read=lambda limit: b""
+            )
+            return client
+
+        with patch("public_gate_observer.http.client.HTTPSConnection", connection):
+            result = observe_preflight_gate()
+            self.assertEqual(requested, ["/", "/health", "/ready"])
+            self.assertEqual(result["public_status"], {p: 200 for p in requested})
+            requested.clear()
+            with self.assertRaisesRegex(Rejected, "http_redirect"):
+                observe_gate()
+            self.assertEqual(requested, ["/", "/api"])
+            requested.clear()
+            statuses["/ready"] = 301
+            with self.assertRaisesRegex(Rejected, "http_redirect"):
+                observe_preflight_gate()
+
 
 if __name__ == "__main__":
     unittest.main()

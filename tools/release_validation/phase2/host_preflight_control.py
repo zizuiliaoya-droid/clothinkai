@@ -174,9 +174,9 @@ async def preflight(spec, journal, baseline):
     )
     from asyncio import to_thread
 
-    from public_gate_observer import observe_dashboard, observe_gate
+    from public_gate_observer import observe_dashboard, observe_preflight_gate
 
-    public = await to_thread(observe_gate)
+    public = await to_thread(observe_preflight_gate)
     require(
         public["tls_verified"]
         and all(public["public_status"][p] == 200 for p in ("/", "/health", "/ready")),

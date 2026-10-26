@@ -9,10 +9,19 @@ from maintenance import PROBES
 
 
 def observe_gate():
+    return _observe_gate(preflight=False)
+
+
+def observe_preflight_gate():
+    """Read the three public health paths while the existing ERP is still open."""
+    return _observe_gate(preflight=True)
+
+
+def _observe_gate(*, preflight):
     context = ssl.create_default_context()
     started = time.monotonic_ns()
     statuses, expiry = {}, None
-    for path in PROBES:
+    for path in ("/", "/health", "/ready") if preflight else PROBES:
         connection = http.client.HTTPSConnection(
             "47.110.76.9", port=443, timeout=5, context=context
         )
