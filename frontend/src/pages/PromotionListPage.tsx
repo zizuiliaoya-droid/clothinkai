@@ -94,6 +94,10 @@ import { isApiError } from "@/services/apiClient";
 import { PromotionQuickFilters, PromotionStageCell } from "@/features/promotion/components/PromotionStages";
 import { BADGE_LABELS, stageCountParams } from "@/features/promotion/promotionStages";
 import "./PromotionListPage.css";
+import { usePromotionColumnPreference } from "@/features/preference/usePromotionColumnPreference";
+import { PromotionColumnSettings } from "@/features/preference/PromotionColumnSettings";
+import { visibleColumnKeys } from "@/features/preference/columnPreference";
+import { formatMoney } from "@/utils/money";
 
 const PUBLISH_STATUS = ["未发布", "已发布", "已取消", "异常", "已删除"];
 
@@ -132,6 +136,7 @@ const statusColor: Record<string, string> = {
 
 export function PromotionListPage() {
   const qc = useQueryClient();
+  const columnSettings = usePromotionColumnPreference();
   const screens = Grid.useBreakpoint();
   const { token } = theme.useToken();
   // 谈款定稿后「去推广管理」带 ?keyword=内部编码 过来（流程线 8.3）
@@ -493,7 +498,7 @@ export function PromotionListPage() {
       title: "报价",
       dataIndex: "quote_amount",
       width: 90,
-      render: (v: string | null) => (v == null ? "—" : `¥${v}`),
+      render: (v: string | null) => (v == null ? "—" : formatMoney(v)),
     },
     {
       // 发货 3 态（流程线 3.3）；历史单（null）没进发货流程显示「—」。
@@ -662,33 +667,31 @@ export function PromotionListPage() {
     },
   ];
 
+  // 只重排当前页面允许的列，不根据偏好构造列或补回服务端隐藏数据。
+  const allowedColumns = columns.filter((column) => hasOperations || column.key !== "actions")
+    .map((column) => ({ ...column, key: String(column.key ?? ("dataIndex" in column ? column.dataIndex : "")) }));
+  const defaultKeys = allowedColumns.map((column) => column.key);
+  const selectedKeys = visibleColumnKeys(defaultKeys, columnSettings.preference);
+  const reordered = selectedKeys.join(",") !== defaultKeys.filter((key) => selectedKeys.includes(key)).join(",");
+  const displayColumns = selectedKeys.map((key) => {
+    const column = allowedColumns.find((entry) => entry.key === key)!;
+    // 自由拖排后不再把旧固定列吸回原侧；窄屏也不让固定区盖住其它列。
+    return { ...column, fixed: screens.xl && !reordered ? column.fixed : undefined };
+  });
+  const toolbar = <Space wrap className="promotion-toolbar">
+    <PromotionColumnSettings key={columnSettings.userId} {...columnSettings}
+      options={allowedColumns.map((column) => ({ key: column.key, label: typeof column.title === "string" ? column.title : column.key }))} />
+    {canImport && <ImportUploadButton source="manual_promotion" label="导入站外推广"
+      invalidateKeys={[["promotions"]]} templateColumns={PROMOTION_IMPORT_COLUMNS} />}
+    {canCreate && <Button type="primary" icon={<PlusOutlined />} onClick={() => setOpen(true)}>新建推广</Button>}
+  </Space>;
+
   return (
     <Card
       title={<Typography.Title level={4} style={{ margin: 0 }}>推广管理</Typography.Title>}
-      extra={
-        canCreate || canImport ? (
-          <Space>
-            {canImport && (
-              <ImportUploadButton
-                source="manual_promotion"
-                label="导入站外推广"
-                invalidateKeys={[["promotions"]]}
-                templateColumns={PROMOTION_IMPORT_COLUMNS}
-              />
-            )}
-            {canCreate && (
-              <Button
-                type="primary"
-                icon={<PlusOutlined />}
-                onClick={() => setOpen(true)}
-              >
-                新建推广
-              </Button>
-            )}
-          </Space>
-        ) : undefined
-      }
+      extra={screens.md ? toolbar : undefined}
     >
+      {!screens.md && <div style={{ marginBottom: 16 }}>{toolbar}</div>}
       <PromotionQuickFilters filters={queryFilters} counts={countsQuery.data} error={countsQuery.isError} onChange={(patch) => setFilters((current) => ({ ...current, ...patch }))} />
       <PromotionDimensionFilters value={dimensions.filters} onChange={changeDimensions} />
       <Space className="promotion-filters" style={{ marginBottom: 16, width: "100%" }} wrap>
@@ -749,12 +752,12 @@ export function PromotionListPage() {
       <Table
         rowKey="id"
         loading={isLoading}
-        columns={hasOperations ? columns : columns.filter((column) => column.key !== "actions")}
+        columns={displayColumns}
         dataSource={data?.items ?? []}
         // 点一行（操作列、主图、按钮链接以外）或 Enter 开主线抽屉（8.4）
         rowClassName={(r) => [r.line_id ? LINE_ROW_CLASS : "", r.badges?.includes("metrics_due") ? "promotion-metrics-due" : ""].filter(Boolean).join(" ")}
         onRow={(r) => (r.line_id ? lineRowProps(() => openLine(r)) : {})}
-        scroll={{ x: 2760 }}
+        scroll={{ x: displayColumns.reduce((width, column) => width + Number(column.width ?? 120), 0) }}
         pagination={{
           current: data?.page ?? 1,
           pageSize: data?.page_size ?? 10,

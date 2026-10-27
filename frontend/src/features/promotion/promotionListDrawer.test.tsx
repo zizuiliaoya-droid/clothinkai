@@ -42,6 +42,12 @@ vi.mock("@/features/flow/api", () => ({
   postLineComment: vi.fn(),
 }));
 
+import { useAuthStore } from "@/stores/authStore";
+import { getPromotionColumnPreference, savePromotionColumnPreference } from "@/features/preference/columnPreference";
+vi.mock("@/features/preference/columnPreference", async (original) => ({
+  ...await original<typeof import("@/features/preference/columnPreference")>(),
+  getPromotionColumnPreference: vi.fn(), savePromotionColumnPreference: vi.fn(),
+}));
 import { PromotionListPage } from "@/pages/PromotionListPage";
 
 beforeAll(() => {
@@ -157,6 +163,9 @@ function promotion(over: Partial<Promotion> = {}): Promotion {
 }
 
 beforeEach(() => {
+  useAuthStore.setState({ user: null, isAuthenticated: false });
+  vi.mocked(getPromotionColumnPreference).mockReset().mockResolvedValue({ order: [], hidden: [] });
+  vi.mocked(savePromotionColumnPreference).mockReset().mockResolvedValue();
   for (const fn of Object.values(api)) fn.mockReset();
   api.getFilterPreference.mockResolvedValue({});
   api.getPromotionStageCounts.mockResolvedValue({ stages: {}, badges: {}, completed: 0, total: 0 });
@@ -504,4 +513,26 @@ describe("PR10 R1 收件筛选", () => {
     expect(await screen.findByRole("searchbox", { name: "收件人前缀" })).toBeTruthy();
     expect(screen.queryByRole("searchbox", { name: "电话前缀" })).toBeNull();
   });
+});
+
+ it("列偏好接入当前阶段和分类，未知/无权限操作列不回填，保存后表格按新顺序显示", async () => {
+  useAuthStore.setState({ user: { id: "column-user", username: "a", display_name: null, email: null, status: "active", roles: [] }, isAuthenticated: true });
+  vi.mocked(getPromotionColumnPreference).mockResolvedValue({ order: ["content_category", "stage", "unknown", "actions"], hidden: ["quote_amount"] });
+  const row = promotion({ content_category: "测评", ui: { actions: {}, edits: [] } });
+  renderPage([row], row, PAGE_UI_NONE);
+  await screen.findByText("测评");
+  await waitFor(() => expect(screen.queryByRole("columnheader", { name: "报价" })).toBeNull());
+  expect(screen.getAllByRole("columnheader").slice(0, 2).map((cell) => cell.textContent)).toEqual(["内容分类", "当前阶段"]);
+  expect(screen.queryByRole("columnheader", { name: "操作" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "列设置" }));
+  const dialog = screen.getByRole("dialog");
+  expect(within(dialog).queryByLabelText("操作")).toBeNull();
+  expect(within(dialog).queryByText("unknown")).toBeNull();
+  fireEvent.click(within(dialog).getByRole("button", { name: "上移当前阶段" }));
+  fireEvent.click(within(dialog).getByRole("checkbox", { name: "内容分类" }));
+  fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+  await waitFor(() => expect(savePromotionColumnPreference).toHaveBeenCalled());
+  await waitFor(() => expect(screen.getAllByRole("columnheader")[0].textContent).toBe("当前阶段"));
+  expect(screen.queryByRole("columnheader", { name: "内容分类" })).toBeNull();
+  expect(api.saveFilterPreference).not.toHaveBeenCalled();
 });
