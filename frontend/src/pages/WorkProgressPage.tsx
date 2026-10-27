@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Button, Card, Select, Space, Table, Typography, message } from "antd";
+import { Alert, Button, Card, Select, Space, Table, Typography, message } from "antd";
 import { DownloadOutlined } from "@ant-design/icons";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import type { ColumnsType } from "antd/es/table";
@@ -197,6 +197,10 @@ export function WorkProgressPage() {
         />
       }
     >
+      {landingPrId && data && !isLoading && !error && !data.some((row) =>
+        landingPrId === UNASSIGNED_PR ? row.pr_id === null : row.pr_id === landingPrId) &&
+        <Alert type="info" showIcon message="链接指定的 PR 不在当前筛选范围或可见结果中"
+          description="可调整筛选后查看。" style={{ marginBottom: 16 }} />}
       <Space style={{ marginBottom: 16 }} wrap>
         <ReportTimeRangeFilter
           preset={preset}

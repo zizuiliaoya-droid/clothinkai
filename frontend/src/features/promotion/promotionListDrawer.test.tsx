@@ -515,7 +515,7 @@ describe("PR10 R1 收件筛选", () => {
   });
 });
 
- it("列偏好接入当前阶段和分类，未知/无权限操作列不回填，保存后表格按新顺序显示", async () => {
+it("列偏好接入当前阶段和分类，未知/无权限操作列不回填，保存后表格按新顺序显示", async () => {
   useAuthStore.setState({ user: { id: "column-user", username: "a", display_name: null, email: null, status: "active", roles: [] }, isAuthenticated: true });
   vi.mocked(getPromotionColumnPreference).mockResolvedValue({ order: ["content_category", "stage", "unknown", "actions"], hidden: ["quote_amount"] });
   const row = promotion({ content_category: "测评", ui: { actions: {}, edits: [] } });

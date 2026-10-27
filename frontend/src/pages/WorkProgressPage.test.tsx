@@ -613,6 +613,7 @@ describe("WorkProgressPage BI 下钻落点（7e R6 S7）", () => {
   it("pr_id 不在本区间的行里：不弹下钻", async () => {
     renderPage(`/work-progress?${RANGE}&pr_id=33333333-3333-4333-8333-333333333333`);
     await screen.findByText("小王");
+    expect(screen.getByText("链接指定的 PR 不在当前筛选范围或可见结果中")).toBeTruthy();
     await waitDebounce();
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(drillMock).not.toHaveBeenCalled();

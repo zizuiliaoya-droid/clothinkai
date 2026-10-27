@@ -583,6 +583,7 @@ describe("BiDashboardPage 单品分析", () => {
     renderPage(`/bi?tab=goods&goods_id=cccccccc-cccc-4ccc-8ccc-cccccccccccc`);
     await waitFor(() => expect(goodsTrendMock).toHaveBeenCalled());
     expect(goodsTrendMock.mock.calls[0][0]).toBe(G1);
+    expect(screen.getByText("所选商品不在当前筛选范围或可见结果中")).toBeTruthy();
     await waitDebounce();
     expect(savePrefMock).not.toHaveBeenCalled();
   });
@@ -811,4 +812,16 @@ describe("BiDashboardPage 导出图片", () => {
     expect(shots[0].nodeText).toContain("目标篇数");
     expect(document.querySelector("[data-bi-watermark]")).toBeNull();
   });
+});
+
+it("经营趋势可查看同一数据源的明细并切回图表", async () => {
+  renderPage(); await waitData();
+  const card = screen.getByText("经营趋势").closest(".ant-card") as HTMLElement;
+  fireEvent.click(within(card).getByRole("button", { name: "查看数据" }));
+  const table = within(card).getByRole("table", { name: "经营趋势" });
+  expect(within(table).getByRole("columnheader", { name: "期间" })).toBeTruthy();
+  expect(within(table).getByText("¥1,000.00")).toBeTruthy();
+  expect(within(table).getByText("¥200.00")).toBeTruthy();
+  fireEvent.click(within(card).getByRole("button", { name: "查看数据" }));
+  expect(within(card).queryByRole("table")).toBeNull();
 });
