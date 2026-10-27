@@ -100,7 +100,7 @@ async def test_counts_share_filters_exclude_stage_badge_and_other_tenant(
             "retro_due": 2,
         }
         listed = await _call(
-            session, flow_users.admin, "/api/promotions?" + urlencode(query | {"page_size": 1})
+            session, flow_users.admin, "/api/promotions/?" + urlencode(query | {"page_size": 1})
         )
         assert listed.status_code == 200, listed.text
         assert listed.json()["total"] == 1 and listed.json()["items"][0]["id"] == str(rows[2].id)
@@ -126,7 +126,7 @@ async def test_receiver_search_denied_without_field_read_and_invalid_stage_rejec
 ):
     token = tenant_id_ctx.set(tenant_a.id)
     try:
-        for path in ("/api/promotions", "/api/promotions/stage-counts"):
+        for path in ("/api/promotions/", "/api/promotions/stage-counts"):
             for field in ("receiver_name", "receiver_phone"):
                 response = await _call(session, flow_users.operations, f"{path}?{field}=138")
                 assert response.status_code == 403, response.text

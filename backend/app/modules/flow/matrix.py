@@ -22,8 +22,8 @@
 1. ``ui_for(actor, doc)`` → ``UiState``（``to_dict(view=...)`` 出 7.1 的 ``ui`` 形状）
 2. ``require(actor, doc, action)``：状态机 422 → 规则 403 ``FLOW_ACTION_FORBIDDEN`` → ★ 缺项 422 ``FLOW_GATE_MISSING``；
    端点 scope 已在路由层判过，这里不重复判
-3. ``writable_fields(actor, doc)`` / ``ensure_patch_allowed(...)``：过渡期只管已入矩阵的 PATCH 字段（``Matrix.patch_groups``），
-   没入矩阵的沿用现状
+3. ``writable_fields(actor, doc)`` / ``ensure_patch_allowed(...)``：PATCH 严格按 ``Matrix.patch_groups`` 白名单；
+   未登记或当前不可写字段统一拒绝
 
 PR-1 只有类型与三个出口；PR-2 起各单据模块在 import 时把自己的表 ``MATRICES.update(...)`` 进来
 （推广单 / 仓库行：``promotion/flow_matrix.py``，由 ``promotion/flow_doc.py`` import 保证注册；
