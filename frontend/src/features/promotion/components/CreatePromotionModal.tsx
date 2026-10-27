@@ -132,6 +132,9 @@ export function CreatePromotionModal({ open, onClose }: Props) {
           />
         </Form.Item>
         <Space size="large">
+            <Form.Item name="content_category" label="内容分类" extra="留空使用博主当前分类">
+              <Input maxLength={8} placeholder="单篇 / 合集" style={{ width: 160 }} />
+            </Form.Item>
           <Form.Item
             name="platform"
             label="平台"

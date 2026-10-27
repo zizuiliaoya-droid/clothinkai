@@ -31,6 +31,14 @@ export type SettlementStatus =
 
 export type ReviewAction = "approve" | "reject";
 
+export interface PlatformPostInput {
+  platform: string;
+  publish_url?: string | null;
+  actual_publish_date?: string | null;
+  like_count?: number | null;
+}
+export interface PlatformPost extends PlatformPostInput { id: string }
+
 /**
  * 审核通过的去向（7.3，只在审核通过的响应里有）：settlement_created 已生成结款单（待财务付款）、
  * settled_directly 应付 0 直接记已结款、imported_settlement_paid 已有导入的已付款结款单（待传结款截图）。
@@ -112,6 +120,9 @@ export type UrgeStatus =
  * 字段可见性由后端字段级权限矩阵过滤，当前角色无权查看时返回 null。
  */
 export interface Promotion {
+  content_category?: string | null;
+  extra_platforms?: string[];
+  platform_posts?: PlatformPost[];
   id: string;
   internal_code: string;
   style_id: string;
@@ -262,6 +273,7 @@ export interface PromotionDuplicateWarning {
 }
 
 export interface PromotionCreate {
+  content_category?: string | null;
   style_id: string;
   sku_id?: string | null;
   /** 这次推广归属的商品。不传由后端取主商品（非套装优先）。 */
@@ -287,6 +299,7 @@ export interface PromotionCreate {
 }
 
 export interface PromotionUpdate {
+  content_category?: string | null;
   sku_id?: string | null;
   /** 商品归属可改：录错、或套装是推广录完之后才建的。 */
   goods_main_id?: string | null;
@@ -414,6 +427,7 @@ export interface PromotionPage {
 }
 
 export interface PromotionListFilters {
+  content_category?: string;
   goods_main_id?: string;
   seasons?: string[];
   unassigned_only?: boolean;

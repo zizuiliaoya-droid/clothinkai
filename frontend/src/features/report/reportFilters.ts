@@ -20,6 +20,7 @@ export const URL_FILTER_KEYS: readonly string[] = [
   "season",
   "pr_id",
   "goods_id",
+  "content_category",
   "channel",
   "tab",
   "exclude_brushing",

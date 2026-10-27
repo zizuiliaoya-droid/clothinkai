@@ -4,6 +4,7 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { UNASSIGNED_PR } from "@/features/report/reportFilters";
 import { getPromotionFilterOptions } from "../api";
 import type { PromotionDimensions } from "../promotionFilters";
+import { CONTENT_CATEGORIES } from "../listConstants";
 
 interface Props {
   value: PromotionDimensions;
@@ -41,6 +42,10 @@ export function PromotionDimensionFilters({ value, onChange }: Props) {
           </>
         )}
       />
+      <Select aria-label="内容分类筛选" placeholder="内容分类" allowClear
+        style={{ width: 140, maxWidth: "100%" }} value={value.content_category}
+        options={CONTENT_CATEGORIES.map((value) => ({ value, label: value }))}
+        onChange={(content_category) => onChange({ content_category })} />
       <Select<string[]>
         aria-label="季节筛选" placeholder="季节" mode="multiple" allowClear maxCount={20} maxTagCount={1}
         style={{ width: 200, maxWidth: "100%" }} value={value.season}

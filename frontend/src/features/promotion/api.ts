@@ -3,6 +3,7 @@
 import { apiClient } from "@/services/apiClient";
 import type {
   GoodsItemIn,
+  PlatformPostInput,
   Promotion,
   PromotionCancelRequest,
   PromotionCreate,
@@ -82,6 +83,10 @@ export interface PaymentQrUploadInit {
   attachment_id: string;
   presigned_url: string;
   expires_in_seconds: number;
+}
+
+export async function replacePlatformPosts(id: string, rows: PlatformPostInput[]): Promise<Promotion> {
+  return (await apiClient.put<Promotion>(`/api/promotions/${id}/platform-posts`, rows)).data;
 }
 
 export async function initPaymentQrUpload(
