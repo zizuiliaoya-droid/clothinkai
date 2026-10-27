@@ -1,0 +1,28 @@
+.app-workspace { min-width: 0; }
+.app-content { min-width: 0; margin: 24px; }
+.module-tabs {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  margin: 16px 24px 0;
+  padding-bottom: 4px;
+  scrollbar-width: thin;
+}
+.module-tab {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  border: 1px solid #d9d9d9;
+  border-radius: 6px;
+  background: #fff;
+}
+.module-tab a { padding: 8px 4px 8px 12px; color: #434343; white-space: nowrap; }
+.module-tab .ant-btn { width: 36px; height: 36px; margin-right: 2px; color: #595959; }
+.module-tab-active { border-color: #1677ff; background: #e6f4ff; }
+.module-tab-active a { color: #0958d9; font-weight: 600; }
+.module-tab a:hover { color: #1677ff; }
+.module-tab a:focus-visible { outline: 2px solid #1677ff; outline-offset: -2px; border-radius: 4px; }
+@media (max-width: 767px) {
+  .app-content { margin: 16px 12px; }
+  .module-tabs { margin: 12px 12px 0; }
+}
