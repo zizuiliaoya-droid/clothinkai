@@ -1,0 +1,202 @@
+"""PR9快照、整组修改与主平台报表隔离。"""
+
+from datetime import UTC, timedelta
+from decimal import Decimal
+from uuid import uuid4
+
+import pytest
+from sqlalchemy import select, text
+
+from app.core.exceptions import ValidationError
+from app.core.tenancy import tenant_id_ctx
+from app.modules.importer.adapters.promotion import PromotionImportAdapter
+from app.modules.promotion.exceptions import FieldPermissionDenied, PromotionCompletedReadonlyError
+from app.modules.promotion.models import Promotion
+from app.modules.promotion.schemas import (
+    PlatformPostIn,
+    PromotionCreate,
+    PromotionListFilters,
+    PromotionUpdate,
+)
+from app.modules.promotion.service import PromotionService
+from app.modules.promotion.urge_calculator import get_today
+
+pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
+
+
+@pytest.fixture(autouse=True)
+def tenant_ctx(tenant_a):
+    token = tenant_id_ctx.set(tenant_a.id)
+    yield
+    tenant_id_ctx.reset(token)
+
+
+async def promotion(product_factory, blogger_factory, promotion_factory, flow_users, **kw):
+    return await promotion_factory.promotion(
+        style=await product_factory.style(),
+        blogger=await blogger_factory.blogger(),
+        pr=flow_users.pr,
+        internal_code=f"F9{uuid4().hex}",
+        publish_status="已发布",
+        cooperation_date=get_today(),
+        actual_publish_date=get_today() - timedelta(days=8),
+        quote_amount=Decimal("500"),
+        like_count=123,
+        **kw,
+    )
+
+
+async def test_created_snapshot_is_independent(
+    session, flow_users, product_factory, blogger_factory
+):
+    style = await product_factory.style()
+    blogger = await blogger_factory.blogger()
+    blogger.content_category = "合集"
+    await session.flush()
+    svc = PromotionService(session)
+    created = await svc.create_promotion(
+        PromotionCreate(
+            style_id=style.id, blogger_id=blogger.id, platform="小红书", cooperation_mode="寄拍"
+        ),
+        flow_users.pr_manager,
+    )
+    assert created.content_category == "合集", "FLOW9_FAULT_EXPECTED:snapshot"
+    blogger.content_category = "单篇"
+    await session.flush()
+    assert (await svc.get_promotion(created.id, flow_users.pr_manager)).content_category == "合集"
+    changed = await svc.update_promotion(
+        created.id, PromotionUpdate(content_category="历史分类"), flow_users.pr_manager
+    )
+    assert changed.content_category == "历史分类"
+    cleared = await svc.update_promotion(
+        created.id, PromotionUpdate(content_category=None), flow_users.pr_manager
+    )
+    assert cleared.content_category is None
+
+
+async def test_platform_replace_is_atomic_and_primary_remains_authoritative(
+    session, tenant_a, flow_users, product_factory, blogger_factory, promotion_factory
+):
+    p = await promotion(product_factory, blogger_factory, promotion_factory, flow_users)
+    svc = PromotionService(session)
+    before = await svc.get_promotion(p.id, flow_users.pr)
+    from app.modules.report.domain import resolve_time_range
+    from app.modules.report.pr_scope import PR_SCOPE_ALL
+    from app.modules.report.production_service import ProductionService
+    from app.modules.report.service import PublishProgressService
+
+    progress = PublishProgressService(session)
+    tr = resolve_time_range("last_30d")
+    report_before = await progress.get_summary(tenant_a.id, tr, pr_scope=PR_SCOPE_ALL)
+    assert (
+        report_before.publish_count > 0
+        and report_before.like_count > 0
+        and report_before.cooperation_amount > 0
+    )
+    production = ProductionService(session)
+    production_before = await production.get_report(
+        tenant_a.id, (get_today(), get_today()), use_summary=False
+    )
+    row = PlatformPostIn(platform="抖音", publish_url="https://example.com/post", like_count=999999)
+    after = await svc.replace_platform_posts(p.id, [row], flow_users.pr)
+    assert after.extra_platforms == ["抖音"] and after.platform_posts[0].like_count == 999999
+    assert (await progress.get_summary(tenant_a.id, tr, pr_scope=PR_SCOPE_ALL)).model_dump(
+        mode="json"
+    ) == report_before.model_dump(mode="json"), "FLOW9_FAULT_EXPECTED:primary_report"
+    assert (
+        await production.get_report(tenant_a.id, (get_today(), get_today()), use_summary=False)
+    ).model_dump(mode="json") == production_before.model_dump(mode="json")
+    for key in (
+        "like_count",
+        "effective_like_count",
+        "is_hit",
+        "cpl",
+        "total_promo_cost",
+        "publish_status",
+        "settlement_status",
+    ):
+        assert after.model_dump(mode="json")[key] == before.model_dump(mode="json")[key], key
+    assert before.like_count == 123 and before.total_promo_cost != 0
+    for rows in (
+        [PlatformPostIn(platform=p.platform)],
+        [row, row],
+        [PlatformPostIn(platform=f"平台{i}") for i in range(6)],
+    ):
+        with pytest.raises(ValidationError):
+            await svc.replace_platform_posts(p.id, rows, flow_users.pr)
+    with pytest.raises(ValidationError):
+        await svc.update_promotion(p.id, PromotionUpdate(platform="抖音"), flow_users.admin)
+    assert (await svc.get_promotion(p.id, flow_users.pr)).extra_platforms == ["抖音"]
+    with pytest.raises(FieldPermissionDenied):
+        await svc.replace_platform_posts(p.id, [], flow_users.operations)
+    page = await svc.list_promotions(
+        filters=PromotionListFilters(content_category="不存在"),
+        page=1,
+        page_size=20,
+        user=flow_users.pr,
+    )
+    assert page.total == 0
+    assert not (await svc.replace_platform_posts(p.id, [], flow_users.pr)).platform_posts
+    count = (
+        await session.execute(
+            text(
+                "SELECT count(*) FROM line_event WHERE promotion_id=:pid AND payload->'diff' ? 'platform_posts'"
+            ),
+            {"pid": p.id},
+        )
+    ).scalar_one()
+    assert count == 2
+
+
+async def test_completed_posts_only_admin_can_edit(
+    session, flow_users, product_factory, blogger_factory, promotion_factory
+):
+    from datetime import datetime
+
+    p = await promotion(
+        product_factory,
+        blogger_factory,
+        promotion_factory,
+        flow_users,
+        completed_at=datetime.now(UTC),
+    )
+    svc = PromotionService(session)
+    for user in (flow_users.pr, flow_users.pr_manager):
+        with pytest.raises(PromotionCompletedReadonlyError):
+            await svc.replace_platform_posts(p.id, [PlatformPostIn(platform="抖音")], user)
+    result = await svc.replace_platform_posts(
+        p.id, [PlatformPostIn(platform="抖音")], flow_users.admin
+    )
+    assert result.extra_platforms == ["抖音"]
+
+
+@pytest.mark.parametrize(
+    "category, expected", [("单篇", "单篇"), ("", "合集")], ids=["mapped", "fallback"]
+)
+async def test_import_category_uses_mapped_value_or_blogger(
+    session, tenant_a, flow_users, product_factory, blogger_factory, category, expected
+):
+    style = await product_factory.style()
+    blogger = await blogger_factory.blogger()
+    blogger.content_category = "合集"
+    await session.flush()
+    adapter = PromotionImportAdapter()
+    parsed = adapter.parse_row(
+        {
+            "款式编码": style.style_code,
+            "小红书ID": blogger.xiaohongshu_id,
+            "合作形式": category,
+            "报价金额": "1,234.50",
+            "合作日期": "2026-10-20",
+        },
+        None,
+    )
+    assert not adapter.validate(parsed)
+    pid, inserted = await adapter.upsert(
+        parsed, session=session, tenant_id=tenant_a.id, actor_id=flow_users.pr_manager.id
+    )
+    imported = await session.scalar(select(Promotion).where(Promotion.id == pid))
+    assert (
+        inserted and imported.content_category == expected
+    ), "FLOW9_FAULT_EXPECTED:import_category"
+    assert imported.ship_status is None and imported.source_extra == {}

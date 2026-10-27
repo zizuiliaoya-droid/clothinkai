@@ -75,6 +75,7 @@ class PromotionListFilters:
     recall_status: str | None = None
     settlement_status: str | None = None
     platform: str | None = None
+    content_category: str | None = None
     blogger_id: UUID | None = None
     style_id: UUID | None = None
     pr_id: UUID | None = None
@@ -1032,6 +1033,9 @@ class PromotionRepository:
         if filters.pr_id:
             clauses.append("pr_id = :pr_id")
             params["pr_id"] = filters.pr_id
+        if filters.content_category is not None:
+            clauses.append("content_category = :content_category")
+            params["content_category"] = filters.content_category
         if filters.cooperation_date_from:
             clauses.append("cooperation_date >= :coop_from")
             params["coop_from"] = filters.cooperation_date_from

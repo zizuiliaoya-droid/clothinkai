@@ -813,6 +813,7 @@ class PromotionServiceBase:
         goods_short_name: str | None = None,
         goods_preloaded: bool = False,
         items: builtins.list[PromotionItemView] | None = None,
+        platform_posts: builtins.list[Any] | None = None,
         actor: FlowActor | None = None,
         view: View = "detail",
         stage: str | None = None,
@@ -1029,6 +1030,14 @@ class PromotionServiceBase:
             freights=freights,
         )
         ui = ui_for(actor, doc).to_dict(view=view)
+        if cell_level(actor, doc, "field", "platform_posts") is Level.HIDDEN:
+            platform_posts = []
+        elif platform_posts is None:
+            from app.modules.promotion.platform_posts import posts_by_promotion
+
+            platform_posts = (
+                await posts_by_promotion(self._session, [promotion.id], tenant_id=user.tenant_id)
+            ).get(promotion.id, [])
         settlement_block = (
             await self._settlement_block(promotion, ctx, ui) if view != "list" else None
         )
@@ -1103,6 +1112,9 @@ class PromotionServiceBase:
             ),
             return_waybill=promotion.return_waybill,
             platform=promotion.platform,
+            content_category=promotion.content_category,
+            extra_platforms=[p.platform for p in platform_posts],
+            platform_posts=platform_posts if view != "list" else [],
             cooperation_date=promotion.cooperation_date,
             scheduled_publish_date=promotion.scheduled_publish_date,
             actual_publish_date=promotion.actual_publish_date,

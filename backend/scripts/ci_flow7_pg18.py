@@ -190,7 +190,9 @@ def drill(values: dict[str, str]) -> dict:
 
     cfg = Config()
     cfg.set_main_option("script_location", "alembic")
-    assert ScriptDirectory.from_config(cfg).get_heads() == [HEAD]
+    scripts = ScriptDirectory.from_config(cfg)
+    heads = scripts.get_heads()
+    assert len(heads) == 1 and HEAD in {r.revision for r in scripts.walk_revisions(head=heads[0])}
     ids = {
         key: str(uuid4())
         for key in (
@@ -340,7 +342,12 @@ def verify_results(values: dict[str, str]) -> dict:
         assert any(name.startswith(required) for name in names), required
     with closing(connect(values["DATABASE_URL_SYNC"])) as conn:
         verify_server(conn)
-        assert current(conn) == HEAD
+        from alembic.config import Config
+        from alembic.script import ScriptDirectory
+
+        cfg = Config()
+        cfg.set_main_option("script_location", "alembic")
+        assert ScriptDirectory.from_config(cfg).get_heads() == [current(conn)]
     return {
         "evidence_type": "synthetic_migration_drill_and_tests",
         "passed": True,

@@ -222,6 +222,8 @@ PAYLOAD_FIELD_RULES: dict[str, tuple[str, str] | PayloadContainer | None] = {
     "goods_items": None,
     "cooperation_mode": None,
     "platform": None,
+    "content_category": None,
+    "platform_posts": None,
     "scheduled_publish_date": None,
     "promotion_id": None,
     "negotiation_id": None,
