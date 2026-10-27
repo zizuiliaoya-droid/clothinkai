@@ -595,9 +595,16 @@ class PermissionService:
 
     async def _ensure_user(self, user_id: UUID) -> User:
         user = await self._users.get_by_id(user_id)
-        if user is None or user.deleted_at is not None:
+        # session.get 可能命中 identity map；此时也必须校验目标租户。
+        if user is None or user.deleted_at is not None or user.tenant_id != tenant_id_ctx.get():
             raise ResourceNotFoundError("用户不存在")
         return user
+
+    async def list_registered(self) -> list[dict[str, str]]:
+        return [
+            {"scope": perm.scope, "name": perm.name, "category": perm.category}
+            for perm in await self._perms.list_registered()
+        ]
 
     async def _resolve_permission_id(self, scope: str) -> UUID:
         perm = await self._perms.get_by_scope(scope)
@@ -653,6 +660,30 @@ class PermissionService:
         reason: str | None = None,
     ) -> None:
         await self._apply(target_user_id, scope, effect="revoke", actor_id=actor_id, reason=reason)
+
+    async def reset(
+        self,
+        target_user_id: UUID,
+        scope: str,
+        *,
+        actor_id: UUID,
+        reason: str | None = None,
+    ) -> None:
+        await self._ensure_user(target_user_id)
+        permission_id = await self._resolve_permission_id(scope)
+        previous_effect = await self._perms.delete_override(target_user_id, permission_id)
+        await self._audit.log(
+            action="permission.reset",
+            actor_type="user",
+            user_id=actor_id,
+            resource="user",
+            resource_id=target_user_id,
+            before={"scope": scope, "effect": previous_effect},
+            after={"scope": scope, "effect": "role_default"},
+            purpose=reason,
+        )
+        await self._session.commit()
+        await invalidate_user_permissions_cache(str(target_user_id))
 
     async def get_effective(self, target_user_id: UUID) -> dict[str, Any]:
         await self._ensure_user(target_user_id)

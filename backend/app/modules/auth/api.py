@@ -37,6 +37,7 @@ from app.modules.auth.schemas import (
     PageMeta,
     PermissionOverrideIn,
     RefreshRequest,
+    RegisteredPermissionView,
     ResetPasswordResponse,
     RoleAssignRequest,
     TokenPair,
@@ -326,9 +327,25 @@ async def assign_roles(
 # ============================================================================
 
 
+@router.get(
+    "/permissions",
+    response_model=list[RegisteredPermissionView],
+    dependencies=[require_permission("auth.permission", "grant")],
+)
+async def registered_permissions(
+    session: SessionDep,
+    _user: CurrentActiveUser,
+) -> list[RegisteredPermissionView]:
+    """仅供权限管理使用的已注册权限目录。"""
+    return [
+        RegisteredPermissionView(**item)
+        for item in await PermissionService(session).list_registered()
+    ]
+
+
 @router.post(
     "/users/{user_id}/permissions/grant",
-    dependencies=[require_permission(scopes.SCOPE_PERMISSION_GRANT, "grant")],
+    dependencies=[require_permission("auth.permission", "grant")],
 )
 async def grant_permission(
     user_id: UUID,
@@ -345,7 +362,7 @@ async def grant_permission(
 
 @router.post(
     "/users/{user_id}/permissions/revoke",
-    dependencies=[require_permission(scopes.SCOPE_PERMISSION_GRANT, "grant")],
+    dependencies=[require_permission("auth.permission", "grant")],
 )
 async def revoke_permission(
     user_id: UUID,
@@ -360,10 +377,27 @@ async def revoke_permission(
     return {"ok": True}
 
 
+@router.post(
+    "/users/{user_id}/permissions/reset",
+    dependencies=[require_permission("auth.permission", "grant")],
+)
+async def reset_permission(
+    user_id: UUID,
+    payload: PermissionOverrideIn,
+    session: SessionDep,
+    actor: CurrentActiveUser,
+) -> dict[str, bool]:
+    """删除单项个人覆盖（grant 或 revoke），恢复角色默认。"""
+    await PermissionService(session).reset(
+        user_id, payload.scope, actor_id=actor.id, reason=payload.reason
+    )
+    return {"ok": True}
+
+
 @router.get(
     "/users/{user_id}/effective-permissions",
     response_model=EffectivePermissionsView,
-    dependencies=[require_permission(scopes.SCOPE_PERMISSION_GRANT, "grant")],
+    dependencies=[require_permission("auth.permission", "grant")],
 )
 async def effective_permissions(
     user_id: UUID,
