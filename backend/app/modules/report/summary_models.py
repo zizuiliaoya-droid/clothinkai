@@ -1,6 +1,6 @@
 """报表中间汇总表 ORM（migration 052 / PRD V1.4 模块三）。
 
-这五张表存的是**预聚合结果**，不是业务数据源 —— 删光重建只丢性能不丢数据。
+这三张日汇总表存的是**预聚合结果**，不是业务数据源 —— 删光重建只丢性能不丢数据。
 刷新由 ``summary_refresh_service`` 复用 ``advanced_repository`` 的方法完成，不另写
 聚合 SQL（理由见 052 migration 的 docstring：口径两处定义是这个项目反复付过代价的坑）。
 
@@ -187,7 +187,7 @@ class PrWorkProgressSummary(TenantScopedModel):
 class _ShopSummaryBase(TenantScopedModel):
     """店铺汇总的公共指标。
 
-    指标全部可加，所以周/月表可以直接从日表二次聚合，不必另写分桶 SQL。
+    指标全部可加，当前周/月报表由日行分桶，不另存周/月缓存。
 
     ``store_daily`` 的手填值（3 个广告消耗 + 仅退款 + 备注）**不在这里** —— 那是人工
     override 层，读取时 LEFT JOIN 过去，填完立刻生效，不用等下次刷新。
@@ -222,20 +222,6 @@ class ShopDailySummary(_ShopSummaryBase):
     __table_args__ = (Index("uq_shop_daily_summary", "tenant_id", "stat_date", unique=True),)
 
 
-class ShopWeekSummary(_ShopSummaryBase):
-    """店铺按 ISO 周。刷新源：``shop_daily_summary`` 二次聚合。
-
-    ``week_start`` 存桶首日（``date_trunc('week')`` 的结果），不存 'YYYY-Www'
-    字符串 —— 字符串的排序与区间筛选都要额外转换。
-    """
-
-    __tablename__ = "shop_week_summary"
-
-    week_start: Mapped[date] = mapped_column(Date, nullable=False)
-
-    __table_args__ = (Index("uq_shop_week_summary", "tenant_id", "week_start", unique=True),)
-
-
 class ReportSummaryCoverage(TenantScopedModel):
     """哪些日子被完整刷新过（migration 053）。
 
@@ -252,21 +238,7 @@ class ReportSummaryCoverage(TenantScopedModel):
     __table_args__ = (Index("uq_report_summary_coverage", "tenant_id", "stat_date", unique=True),)
 
 
-class ShopMonthSummary(_ShopSummaryBase):
-    """店铺按月。刷新源：``shop_daily_summary`` 二次聚合。
-
-    ``period_month`` 是 ``date``（存月初），不是 ``target_planning.period_month``
-    那种 'YYYY-MM' 字符串 —— 那是那张表的历史格式，不该传染过来。
-    """
-
-    __tablename__ = "shop_month_summary"
-
-    period_month: Mapped[date] = mapped_column(Date, nullable=False)
-
-    __table_args__ = (Index("uq_shop_month_summary", "tenant_id", "period_month", unique=True),)
-
-
-# 各表落盘的指标列：刷新写入与汇总读取（含周 / 月二次聚合）都引这里，不另抄清单。
+# 各表落盘的指标列：刷新写入与汇总读取都引这里，不另抄清单。
 # 单测断言它们 = 模型列去掉键列与 refreshed_at，加列漏写会红（推广列表漏过 5 列的教训）。
 # 比率不落盘，由 service 层的 safe_div 现算。
 ROI_METRICS: tuple[str, ...] = (
@@ -330,6 +302,4 @@ __all__ = [
     "ProductRoiSummary",
     "ReportSummaryCoverage",
     "ShopDailySummary",
-    "ShopMonthSummary",
-    "ShopWeekSummary",
 ]

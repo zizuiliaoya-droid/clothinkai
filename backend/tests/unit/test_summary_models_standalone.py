@@ -36,8 +36,6 @@ _SUMMARY_TABLES = (
     "product_roi_summary",
     "pr_work_progress_summary",
     "shop_daily_summary",
-    "shop_week_summary",
-    "shop_month_summary",
 )
 
 _PROBE_TEMPLATE = textwrap.dedent(
@@ -53,8 +51,6 @@ _PROBE_TEMPLATE = textwrap.dedent(
         PrWorkProgressSummary,
         ProductRoiSummary,
         ShopDailySummary,
-        ShopMonthSummary,
-        ShopWeekSummary,
     )
 
     configure_mappers()
@@ -71,13 +67,14 @@ _PROBE_TEMPLATE = textwrap.dedent(
     if missing:
         raise SystemExit("MISSING_FK_TARGETS: " + "; ".join(missing))
 
+    assert "shop_week_summary" not in Base.metadata.tables
+    assert "shop_month_summary" not in Base.metadata.tables
+
     # 真实触发点：flush 时要给相关表排序，那一步会解析 fk.column
     models = [
         ProductRoiSummary,
         PrWorkProgressSummary,
         ShopDailySummary,
-        ShopWeekSummary,
-        ShopMonthSummary,
     ]
     sort_tables_and_constraints([m.__table__ for m in models])
     for m in models:
@@ -144,16 +141,12 @@ class TestMetricTuplesMatchColumns:
             ProductRoiSummary,
             PrWorkProgressSummary,
             ShopDailySummary,
-            ShopMonthSummary,
-            ShopWeekSummary,
         )
 
         cases = [
             (ROI_METRICS, ProductRoiSummary, {"goods_main_id", "channel", "stat_date"}),
             (PR_PROGRESS_METRICS, PrWorkProgressSummary, {"pr_id", "goods_main_id", "stat_date"}),
             (SHOP_METRICS, ShopDailySummary, {"stat_date"}),
-            (SHOP_METRICS, ShopWeekSummary, {"week_start"}),
-            (SHOP_METRICS, ShopMonthSummary, {"period_month"}),
         ]
         for metrics, model, keys in cases:
             assert len(set(metrics)) == len(metrics), model

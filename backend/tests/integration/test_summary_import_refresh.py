@@ -203,8 +203,6 @@ class TestRefreshDates:
                 "product_roi_summary",
                 "pr_work_progress_summary",
                 "shop_daily_summary",
-                "shop_week_summary",
-                "shop_month_summary",
             ):
                 await s.execute(text(f"DELETE FROM {table} WHERE tenant_id = :t"), {"t": tid})
             await s.execute(text("DELETE FROM tenant WHERE id = :t"), {"t": tid})
