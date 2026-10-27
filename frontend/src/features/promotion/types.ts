@@ -1,6 +1,7 @@
 // U04 promotion feature 类型定义。
 
 import type { UiState } from "@/features/flow/keys";
+import type { PromotionStage } from "@/features/flow/stageStyle";
 
 export type PublishStatus =
   | "未发布"
@@ -220,6 +221,7 @@ export interface Promotion {
   metrics_available_from?: string | null;
   /** 行角标：复盘列的「待录数据」「满 7 天 · 待结款」读它。 */
   badges?: string[];
+  stage?: PromotionStage | null;
   /** 结款聊天截图签名 URL：只在详情与动作返回里签，列表为 null。 */
   settlement_chat_signed_url?: string | null;
   /** 结款块：只在详情与动作返回里有；没有结款单或看不到为 null。 */
@@ -423,10 +425,23 @@ export interface PromotionPage {
    * 页级 ui.actions：amount_log 能读金额改动接口才有，「金额改动」页签与菜单只看它；
    * create（持 promotion_create:write）/ import（能上传站外推广）有才出「新建推广」「导入站外推广」（流程线 PR-5）。
    */
-  ui: Pick<UiState, "actions">;
+  ui: Pick<UiState, "actions"> & { fields?: UiState["fields"] };
+}
+
+export type PromotionBadge = "missing_qr" | "metrics_due" | "metrics_wait_settle" | "retro_due" | "freight_open";
+export interface PromotionStageCounts {
+  stages: Record<PromotionStage, number>;
+  badges: Record<PromotionBadge, number>;
+  completed: number;
+  total: number;
 }
 
 export interface PromotionListFilters {
+  stage?: PromotionStage;
+  badge?: PromotionBadge;
+  completed?: boolean;
+  receiver_name?: string;
+  receiver_phone?: string;
   content_category?: string;
   goods_main_id?: string;
   seasons?: string[];

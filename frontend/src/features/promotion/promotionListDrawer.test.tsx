@@ -10,6 +10,7 @@ import type { Promotion, PromotionListFilters, PromotionPage } from "./types";
 
 const api = vi.hoisted(() => ({
   listPromotions: vi.fn(),
+  getPromotionStageCounts: vi.fn(),
   getPromotion: vi.fn(),
   promotionAmountLog: vi.fn(),
   listPromotionUrgeRecords: vi.fn(),
@@ -21,6 +22,7 @@ const api = vi.hoisted(() => ({
 vi.mock("@/features/promotion/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/features/promotion/api")>()),
   listPromotions: api.listPromotions,
+  getPromotionStageCounts: api.getPromotionStageCounts,
   getPromotion: api.getPromotion,
   promotionAmountLog: api.promotionAmountLog,
   getPromotionFilterOptions: api.getPromotionFilterOptions,
@@ -157,6 +159,7 @@ function promotion(over: Partial<Promotion> = {}): Promotion {
 beforeEach(() => {
   for (const fn of Object.values(api)) fn.mockReset();
   api.getFilterPreference.mockResolvedValue({});
+  api.getPromotionStageCounts.mockResolvedValue({ stages: {}, badges: {}, completed: 0, total: 0 });
   api.saveFilterPreference.mockResolvedValue(undefined);
   api.getPromotionFilterOptions.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 50, selected: null, seasons: [] });
   api.getLineEvents.mockResolvedValue({
@@ -350,7 +353,9 @@ describe("PromotionListPage 主线抽屉", () => {
       { ...opsRow, quote_amount: null, ui: { actions: {}, fields: { goods_items: { state: "read" }, shipping: { state: "read" } } } },
       PAGE_UI_NONE
     );
-    expect(await openMenu()).not.toContain("金额改动记录");
+    await screen.findAllByText("XHS-20261009-001");
+    expect(screen.queryByRole("columnheader", { name: "操作" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /操作/ })).toBeNull();
     fireEvent.click((await screen.findAllByText("XHS-20261009-001"))[0]);
     await waitFor(() => expect(drawer()).toBeTruthy());
     const d = within(drawer());
@@ -433,7 +438,8 @@ describe("PromotionListPage 按 ui 出按钮与菜单项", () => {
 
   it("催发按行 ui.actions.urge：没有就不出，可点就出，禁用带原因", async () => {
     renderPage([promotion({ ui: { actions: {}, edits: [] } })], promotion({ ui: DETAIL_UI }));
-    expect((await openMenu()).filter((l) => l.startsWith("催发"))).toEqual([]);
+    await screen.findAllByText("XHS-20261009-001");
+    expect(screen.queryByRole("button", { name: /操作/ })).toBeNull();
     cleanup();
     renderPage([promotion({ ui: { actions: { urge: ENABLED }, edits: [] } })], promotion({ ui: DETAIL_UI }));
     expect(await openMenu()).toContain("催发");
@@ -443,5 +449,32 @@ describe("PromotionListPage 按 ui 出按钮与菜单项", () => {
       promotion({ ui: DETAIL_UI })
     );
     expect(await openMenu()).toContain("催发（已发布不用催）");
+  });
+});
+
+
+describe("PR10 阶段与按钮收尾", () => {
+  it("菜单只消费ui，保留禁用原因，隐藏的取消/重提不因状态合适而出现", async () => {
+    const row = promotion({ ui: { actions: { publish: { state: "enabled" }, deactivate: { state: "disabled", reason: "寄回运费尚未结清" } }, edits: ["other_info", "return_waybill"] } });
+    renderPage([row], row, PAGE_UI_NONE);
+    const labels = await openMenu();
+    expect(labels).toEqual(["标记发布", "停用（寄回运费尚未结清）", "填寄回单号", "其他信息"]);
+    expect(screen.getByRole("menuitem", { name: "停用（寄回运费尚未结清）" }).getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("阶段列/可录文字与蓝底一致，快捷筛选切换列表但计数不带stage/badge/分页", async () => {
+    api.getPromotionStageCounts.mockResolvedValue({ stages: {}, badges: { metrics_due: 2 }, completed: 0, total: 2 });
+    const row = promotion({ stage: "待录 7 天数据", badges: ["metrics_due"], ui: { actions: {}, edits: [] } });
+    renderPage([row], row, PAGE_UI_NONE, "/promotions?keyword=定位");
+    const cell = await screen.findByText("满 7 天 · 可录");
+    expect(cell.closest("tr")?.classList.contains("promotion-metrics-due")).toBe(true);
+    expect(screen.getByRole("columnheader", { name: "当前阶段" })).toBeTruthy();
+    const shortcut = await screen.findByRole("button", { name: "满 7 天可录（2）" });
+    fireEvent.click(shortcut);
+    await waitFor(() => expect(api.listPromotions.mock.calls.at(-1)?.[0]).toMatchObject({ badge: "metrics_due", page: 1, keyword: "定位" }));
+    expect(api.getPromotionStageCounts.mock.calls.at(-1)?.[0]).not.toHaveProperty("badge");
+    expect(api.getPromotionStageCounts.mock.calls.at(-1)?.[0]).not.toHaveProperty("page");
+    fireEvent.click(shortcut);
+    await waitFor(() => expect(api.listPromotions.mock.calls.at(-1)?.[0].badge).toBeUndefined());
   });
 });

@@ -1,3 +1,4 @@
+import type { UiState } from "@/features/flow/keys";
 // 催发任务（PRD V1.4 改动 2）类型。
 
 export type UrgeTaskStatus = "进行中" | "已关闭";
@@ -27,6 +28,7 @@ export interface UrgeRecord {
 }
 
 export interface UrgeTask {
+  ui?: Pick<UiState, "actions">;
   id: string;
   promotion_id: string;
   promotion_internal_code: string | null;
@@ -68,6 +70,7 @@ export interface UrgeTaskDetail extends UrgeTask {
 }
 
 export interface UrgeTaskPage {
+  ui?: Pick<UiState, "actions">;
   items: UrgeTask[];
   total: number;
   page: number;
