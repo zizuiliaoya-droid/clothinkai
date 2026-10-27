@@ -29,7 +29,10 @@ afterEach(() => {
 
 function Page({ path }: { path: string }) {
   const location = useLocation();
-  const { data, error } = useQuery({ queryKey: [path.slice(1), { list: true }], queryFn: () => load(path) });
+  const queryKey = path === "/production"
+    ? ["production", "month", undefined, undefined, false, []]
+    : [path.slice(1), { list: true }];
+  const { data, error } = useQuery({ queryKey, queryFn: () => load(path) });
   return <><output aria-label="当前地址">{location.pathname + location.search + location.hash}</output>
     <output aria-label="页面数据">{error ? "无权限" : data}</output>
     <Link to={`${path}?goods_id=g1&season=spring&season=summer&pr_user_id=p1&id=detail-1#detail`}>更新筛选和详情</Link></>;
@@ -153,6 +156,40 @@ describe("五模块路由页签", () => {
     load.mockResolvedValue("restored permission");
     await open("博主库");
     expect(tabs().getByRole("link", { name: "博主库" })).toBeTruthy();
+  });
+
+  it.each([
+    ["站外推广", "/promotions", ["promotions", "filter-options", "", 1, undefined]],
+    ["博主库", "/bloggers", ["bloggers", "picker-options", "小红书"]],
+  ] as const)("%s辅助选项403不关签、不清主列表缓存或跳转", async (label, path, key) => {
+    const { qc } = mount();
+    await open(label);
+    await waitFor(() => expect(screen.getByLabelText("页面数据").textContent).toBe(`fresh:${path}`));
+    await act(async () => {
+      await qc.fetchQuery({ queryKey: key, queryFn: async () => { throw { response: { status: 403 } }; } }).catch(() => {});
+    });
+    expect(tabs().getByRole("link", { name: label })).toBeTruthy();
+    expect(screen.getByLabelText("当前地址").textContent).toBe(path);
+    expect(qc.getQueryData([path.slice(1), { list: true }])).toBe(`fresh:${path}`);
+  });
+
+  it("五模块仅真实主列表成功恢复失权页签，辅助选项成功不恢复", async () => {
+    const { qc } = mount();
+    for (const module of MODULES) {
+      load.mockRejectedValue({ response: { status: 403 } });
+      fireEvent.click(screen.getByRole("link", { name: `打开${module.label}` }));
+      await screen.findByText("概览页面");
+      expect(screen.queryByRole("button", { name: `关闭${module.label}` })).toBeNull();
+      let resolve!: (value: string) => void;
+      load.mockImplementation(() => new Promise<string>((done) => { resolve = done; }));
+      fireEvent.click(screen.getByRole("link", { name: `打开${module.label}` }));
+      await act(async () => {
+        await qc.fetchQuery({ queryKey: [module.path.slice(1), "picker-options", "*"], queryFn: async () => ["option"] });
+      });
+      expect(screen.queryByRole("button", { name: `关闭${module.label}` })).toBeNull();
+      await act(async () => resolve("permission restored"));
+      await screen.findByRole("button", { name: `关闭${module.label}` });
+    }
   });
 
   it("存储损坏/禁用不阻塞导航；保存地址不接受外站或非模块路由", async () => {

@@ -13,6 +13,23 @@ export function moduleFor(path: string) {
   return MODULES.find((module) => module.path === path);
 }
 
+/** 仅识别五个页面的主列表键；共享前缀的选项/详情不代表模块授权。 */
+export function moduleForListQuery(key: readonly unknown[]) {
+  const module = MODULES.find((item) => item.path.slice(1) === key[0]);
+  if (!module) return undefined;
+  if (module.path === "/production") {
+    // ProductionPage: [production, preset, dateFrom, dateTo, excludeBrushing, seasons]
+    return key.length === 6 && typeof key[1] === "string" &&
+      (key[2] === undefined || typeof key[2] === "string") &&
+      (key[3] === undefined || typeof key[3] === "string") &&
+      typeof key[4] === "boolean" && Array.isArray(key[5]) &&
+      key[5].every((season) => typeof season === "string") ? module : undefined;
+  }
+  // Blogger/Negotiation/Promotion/UrgePage: [namespace, filtersObject]
+  return key.length === 2 && key[1] !== null && typeof key[1] === "object" &&
+    !Array.isArray(key[1]) ? module : undefined;
+}
+
 // User.id 是全局 UUID 主键，每条用户记录只属于一个租户；无需读取 token。
 export function navigationStorageKey(userId: string) {
   return `clothing_erp_module_tabs:${userId}`;

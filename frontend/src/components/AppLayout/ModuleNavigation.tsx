@@ -5,7 +5,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuthStore } from "@/stores/authStore";
 import { isForbiddenError } from "@/features/warehouse/shipmentForm";
-import { MODULES, moduleFor, readTabs, saveTabs } from "./moduleTabsStorage";
+import { moduleFor, moduleForListQuery, readTabs, saveTabs } from "./moduleTabsStorage";
 import "./moduleNavigation.css";
 
 export function ModuleNavigation({ productionAccess }: { productionAccess?: boolean }) {
@@ -60,9 +60,8 @@ function ModuleTabs({ userId, roles, productionAccess, warehouseOnly }: {
   // 明细403可能仅是某条记录不可见，不应关闭整个模块。
   useEffect(() => client.getQueryCache().subscribe((event) => {
     if (event.type !== "updated") return;
-    const key = event.query.queryKey;
-    const module = MODULES.find((item) => item.path.slice(1) === key[0]);
-    if (!module || (module.path === "/promotions" && key[1] === "detail")) return;
+    const module = moduleForListQuery(event.query.queryKey);
+    if (!module) return;
     if (event.action.type === "success") {
       setDenied((previous) => previous.includes(module.path)
         ? previous.filter((item) => item !== module.path) : previous);
