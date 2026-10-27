@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Alert,
   Button,
@@ -89,6 +89,7 @@ import { GoodsImages } from "@/components/GoodsImages/GoodsImages";
 import { DisplayNameCell } from "@/components/DisplayNameCell/DisplayNameCell";
 import { UrgeModal } from "@/components/UrgeModal/UrgeModal";
 import { PLATFORMS } from "@/features/common/platforms";
+import { isApiError } from "@/services/apiClient";
 
 import { PromotionQuickFilters, PromotionStageCell } from "@/features/promotion/components/PromotionStages";
 import { BADGE_LABELS, stageCountParams } from "@/features/promotion/promotionStages";
@@ -229,7 +230,7 @@ export function PromotionListPage() {
     { key: "urge", label: "催发记录", children: <UrgeRecordsPanel promotionId={row.id} /> },
   ];
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error: listError } = useQuery({
     queryKey: ["promotions", queryFilters],
     queryFn: () => listPromotions(queryFilters),
     enabled: dimensions.ready,
@@ -240,7 +241,19 @@ export function PromotionListPage() {
     queryFn: () => getPromotionStageCounts(countParams),
     enabled: dimensions.ready,
   });
-  const canSearchReceiver = Boolean(data?.ui?.fields?.receiver);
+  const canSearchReceiverName = Boolean(data?.ui?.fields?.receiver_name);
+  const canSearchReceiverPhone = Boolean(data?.ui?.fields?.receiver_phone);
+  // 权限可能在输入后被撤销；只清除服务端明确拒绝的收件条件，避免输入框消失后卡在403。
+  useEffect(() => {
+    if (!isApiError(listError) || listError.response.data.code !== "FIELD_PERMISSION_DENIED") return;
+    const fields = listError.response.data.details?.fields;
+    if (!Array.isArray(fields)) return;
+    const clearName = fields.includes("receiver_name") && filters.receiver_name !== undefined;
+    const clearPhone = fields.includes("receiver_phone") && filters.receiver_phone !== undefined;
+    if (!clearName && !clearPhone) return;
+    setFilters((current) => ({ ...current, ...(clearName ? { receiver_name: undefined } : {}), ...(clearPhone ? { receiver_phone: undefined } : {}), page: 1 }));
+    message.warning("收件筛选权限已变化，已清除不可用条件");
+  }, [listError, filters.receiver_name, filters.receiver_phone]);
   const hasOperations = data?.items.some((row) => Object.keys(row.ui?.actions ?? {}).length > 0 || (row.ui?.edits?.length ?? 0) > 0 || Object.keys(row.freight_payment?.ui?.actions ?? {}).length > 0);
   const deactivateMutation = useMutation({
     mutationFn: deletePromotion,
@@ -687,10 +700,8 @@ export function PromotionListPage() {
           options={[{ value: "true", label: "已完结" }, { value: "false", label: "未完结" }]} onChange={(value) => setFilters((f) => ({ ...f, completed: value === undefined ? undefined : value === "true", page: 1 }))} />
         <Select aria-label="启用状态" style={{ width: 130 }} value={String(filters.is_active ?? true)}
           options={[{ value: "true", label: "只看启用" }, { value: "false", label: "只看停用" }]} onChange={(value) => setFilters((f) => ({ ...f, is_active: value === "true", page: 1 }))} />
-        {canSearchReceiver && <>
-          <Input.Search aria-label="收件人前缀" placeholder="收件人前缀" allowClear maxLength={32} style={{ width: 150 }} onSearch={(value) => setFilters((f) => ({ ...f, receiver_name: value || undefined, page: 1 }))} />
-          <Input.Search aria-label="电话前缀" placeholder="电话前缀" allowClear maxLength={32} style={{ width: 150 }} onSearch={(value) => setFilters((f) => ({ ...f, receiver_phone: value || undefined, page: 1 }))} />
-        </>}
+        {canSearchReceiverName && <Input.Search aria-label="收件人前缀" placeholder="收件人前缀" defaultValue={filters.receiver_name} allowClear maxLength={32} style={{ width: 150 }} onSearch={(value) => setFilters((f) => ({ ...f, receiver_name: value || undefined, page: 1 }))} />}
+        {canSearchReceiverPhone && <Input.Search aria-label="电话前缀" placeholder="电话前缀" defaultValue={filters.receiver_phone} allowClear maxLength={32} style={{ width: 150 }} onSearch={(value) => setFilters((f) => ({ ...f, receiver_phone: value || undefined, page: 1 }))} />}
 
         <Input.Search
           placeholder="搜索内部编码 / 货号 / 商品简称 / 商品编码"

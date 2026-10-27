@@ -845,12 +845,11 @@ class PromotionService(
             page_size=page_size,
             ui={
                 "actions": page_actions,
-                "fields": {"receiver": {"state": "read"}}
-                if any(
-                    can_read_field("promotion", f, actor.field_ctx)
-                    for f in ("receiver_name", "receiver_phone", "receiver_address")
-                )
-                else {},
+                "fields": {
+                    field: {"state": "read"}
+                    for field in ("receiver_name", "receiver_phone")
+                    if can_read_field("promotion", field, actor.field_ctx)
+                },
             },
         )
 
