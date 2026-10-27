@@ -1,3 +1,4 @@
+import { formatMoney } from "@/utils/money";
 // 工作进度的指标列（7e R5）：PR 表与周明细共用，首列（负责PR / 所在周）由各表自己加。
 //
 // 列对齐 final.xlsx「工作进度表」，R5 加 PRD 公式与 R2 落盘的几列；「成本(含衣服)」改为「推广成本」（口径变大）。
@@ -9,7 +10,7 @@ import type { WorkProgressMetrics } from "../types";
 /** 比率显示成百分比（一位小数）；null →「—」。 */
 export const pct = (v: string | null) => (v == null ? "—" : `${(Number(v) * 100).toFixed(1)}%`);
 /** 金额加 ¥；读不到（null）→「—」。 */
-export const money = (v: string | null) => (v == null ? "—" : `¥${v}`);
+export const money = (v: string | null) => (v == null ? "—" : formatMoney(v));
 
 export const LIKE_HINT = "折算点赞：按系统设置 · 平台指标的系数折算（默认抖音 / 快手 ×0.1）";
 export const TOTAL_AMOUNT_PUBLISH_RATE_HINT = "已发布服务费 ÷ 有效约稿服务费（扣取消与召回）";

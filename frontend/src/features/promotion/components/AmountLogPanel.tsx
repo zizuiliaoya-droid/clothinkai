@@ -1,3 +1,4 @@
+import { formatMoney } from "@/utils/money";
 import { Space, Tag, Timeline, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import dayjs from "dayjs";
@@ -17,7 +18,7 @@ const amountSourceColor: Record<string, string> = {
 };
 
 function fmtAmount(v: string | null): string {
-  return v == null ? "—" : `¥${Number(v).toFixed(2)}`;
+  return v == null ? "—" : formatMoney(Number(v).toFixed(2));
 }
 
 /**

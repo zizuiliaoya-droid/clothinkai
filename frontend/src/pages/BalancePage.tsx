@@ -1,10 +1,11 @@
+import { formatMoney } from "@/utils/money";
 import { Card, Table, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import type { ColumnsType } from "antd/es/table";
 import { listBalanceRecords } from "@/features/finance/api";
 import type { BalanceRecord } from "@/features/finance/types";
 
-const money = (v: string | null) => (v == null ? "—" : `¥${v}`);
+const money = (v: string | null) => (v == null ? "—" : formatMoney(v));
 
 export function BalancePage() {
   const { data, isLoading } = useQuery({
@@ -25,12 +26,12 @@ export function BalancePage() {
     {
       title: "推广支出",
       width: 120,
-      render: (_, r) => (r.expense != null && !isBrushTao(r.record_type) ? `¥${r.expense}` : "—"),
+      render: (_, r) => (r.expense != null && !isBrushTao(r.record_type) ? formatMoney(r.expense) : "—"),
     },
     {
       title: "刷/拍单支出",
       width: 130,
-      render: (_, r) => (r.expense != null && isBrushTao(r.record_type) ? `¥${r.expense}` : "—"),
+      render: (_, r) => (r.expense != null && isBrushTao(r.record_type) ? formatMoney(r.expense) : "—"),
     },
     { title: "余额", dataIndex: "balance_after", width: 120, render: money },
     { title: "余额截图", width: 100, render: () => "—" },

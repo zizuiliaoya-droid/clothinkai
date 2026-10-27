@@ -1,3 +1,4 @@
+import { formatMoney } from "@/utils/money";
 import { useState } from "react";
 import {
   Alert,
@@ -41,7 +42,7 @@ import { LineDrawer } from "@/features/flow/LineDrawer";
 import { DisplayNameCell } from "@/components/DisplayNameCell/DisplayNameCell";
 import { ImportUploadButton } from "@/components/ImportUploadButton";
 
-const money = (v: string | null) => (v == null ? "—" : `¥${v}`);
+const money = (v: string | null) => (v == null ? "—" : formatMoney(v));
 const STATUS: SettlementStatus[] = [
   "待核查",
   "待付款",

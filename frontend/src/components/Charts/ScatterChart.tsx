@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { ChartFrame } from "./ChartFrame";
+import { useChartWidth } from "./useChartWidth";
 import { AXIS_TEXT, CHART_PALETTE, GRID_LINE, defaultFormat, isFiniteNumber } from "./chartUtils";
 
 export interface ScatterDatum {
@@ -67,11 +68,12 @@ export function ScatterChart({
   renderLabel,
   pointTitle,
   emptyText = "暂无数据",
-  width = 640,
+  width: fallbackWidth = 640,
   height = 280,
   color = CHART_PALETTE[0],
 }: Props) {
   const [hovered, setHovered] = useState<string | null>(null);
+  const { ref, width } = useChartWidth(fallbackWidth);
   const points = data.filter((d): d is ValidPoint => isFiniteNumber(d.x) && isFiniteNumber(d.y));
 
   const sizes = points.map((p) => p.size).filter((s): s is number => isFiniteNumber(s) && s >= 0);
@@ -91,6 +93,7 @@ export function ScatterChart({
 
   const columns = [labelHeader, xLabel, yLabel, ...(sizeLabel ? [sizeLabel] : [])];
   return (
+    <div ref={ref} style={{ width: "100%", minWidth: 0 }}>
     <ChartFrame
       title={title}
       columns={columns}
@@ -107,8 +110,9 @@ export function ScatterChart({
       emptyText={emptyText}
     >
       <svg
-        width="100%"
-        style={{ maxWidth: width }}
+        width={width}
+        height={height}
+        style={{ display: "block" }}
         viewBox={`0 0 ${width} ${height}`}
         role="img"
         aria-label={`${title}：${points.length} 项`}
@@ -116,7 +120,7 @@ export function ScatterChart({
         {yTicks.map((v, i) => (
           <g key={`y${i}`}>
             <line x1={PAD_L} y1={sy(v)} x2={width - PAD_R} y2={sy(v)} stroke={GRID_LINE} />
-            <text x={PAD_L - 6} y={sy(v) + 4} textAnchor="end" fontSize="10" fill={AXIS_TEXT}>
+            <text x={PAD_L - 6} y={sy(v) + 4} textAnchor="end" fontSize="12" fill={AXIS_TEXT}>
               {formatY(v)}
             </text>
           </g>
@@ -129,7 +133,7 @@ export function ScatterChart({
             y={height - PAD_B + 16}
             // 最后一个刻度在右边缘：右对齐，日期不被 viewBox 截掉（评审 r1 L2）
             textAnchor={xTicks.length > 1 && i === xTicks.length - 1 ? "end" : "middle"}
-            fontSize="10"
+            fontSize="12"
             fill={AXIS_TEXT}
           >
             {formatX(v)}
@@ -158,5 +162,6 @@ export function ScatterChart({
         })}
       </svg>
     </ChartFrame>
+    </div>
   );
 }

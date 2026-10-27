@@ -1,3 +1,4 @@
+import { formatMoney } from "@/utils/money";
 // 单品投产列定义（7e R3，报表视图设计 2.3「页面与导出共用一份列定义」）。
 //
 // 同步来源：backend/app/modules/report/production_columns.py 的 PRODUCTION_COLUMNS（page=True 的列）。
@@ -104,7 +105,7 @@ export function productionColumnTitle(key: ProductionPageKey): string {
   return SPECS[key].title;
 }
 
-const money = (v: string | null) => (v == null ? "—" : `¥${v}`);
+const money = (v: string | null) => (v == null ? "—" : formatMoney(v));
 const pct = (v: string | null) => (v == null ? "—" : `${(Number(v) * 100).toFixed(1)}%`);
 const plain = (v: string | number | null) => (v == null ? "—" : String(v));
 
