@@ -23,8 +23,14 @@ pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
 
 async def test_primary_change_serializes_with_platform_replacement(
-    engine, session, flow_users, product_factory, blogger_factory, promotion_factory, monkeypatch
-):  # noqa: F811
+    engine,
+    session,  # noqa: F811
+    flow_users,
+    product_factory,
+    blogger_factory,
+    promotion_factory,
+    monkeypatch,
+):
     p = await promotion(product_factory, blogger_factory, promotion_factory, flow_users)
     pid, tid = p.id, p.tenant_id
     await session.commit()

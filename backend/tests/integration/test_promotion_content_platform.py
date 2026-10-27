@@ -78,6 +78,13 @@ async def test_platform_replace_is_atomic_and_primary_remains_authoritative(
     session, tenant_a, flow_users, product_factory, blogger_factory, promotion_factory
 ):
     p = await promotion(product_factory, blogger_factory, promotion_factory, flow_users)
+    from tests.integration.test_production_report_mapping import _goods, _link_style
+
+    gid = await _goods(session, tenant_a.id, code=f"F9-{uuid4().hex[:12]}")
+    await _link_style(session, tenant_a.id, gid, p.style_id)
+    p.goods_main_id = gid
+    p.content_category = "单篇"
+    await session.flush()
     svc = PromotionService(session)
     before = await svc.get_promotion(p.id, flow_users.pr)
     from app.modules.report.domain import resolve_time_range
@@ -97,6 +104,7 @@ async def test_platform_replace_is_atomic_and_primary_remains_authoritative(
     production_before = await production.get_report(
         tenant_a.id, (get_today(), get_today()), use_summary=False
     )
+    assert any(row.promo_cost > 0 for row in production_before.items)
     row = PlatformPostIn(platform="抖音", publish_url="https://example.com/post", like_count=999999)
     after = await svc.replace_platform_posts(p.id, [row], flow_users.pr)
     assert after.extra_platforms == ["抖音"] and after.platform_posts[0].like_count == 999999
@@ -136,6 +144,15 @@ async def test_platform_replace_is_atomic_and_primary_remains_authoritative(
         user=flow_users.pr,
     )
     assert page.total == 0
+    matched = await svc.list_promotions(
+        filters=PromotionListFilters(content_category="单篇"),
+        page=1,
+        page_size=20,
+        user=flow_users.pr,
+    )
+    assert matched.total == 1 and matched.items[0].id == p.id
+    assert matched.items[0].extra_platforms == ["抖音"]
+    assert matched.items[0].platform_posts == []
     assert not (await svc.replace_platform_posts(p.id, [], flow_users.pr)).platform_posts
     count = (
         await session.execute(
@@ -171,16 +188,36 @@ async def test_completed_posts_only_admin_can_edit(
 
 
 @pytest.mark.parametrize(
-    "category, expected", [("单篇", "单篇"), ("", "合集")], ids=["mapped", "fallback"]
+    "category, expected, custom",
+    [("单篇", "单篇", None), ("", "合集", None), ("单篇", "合集", False), ("单篇", "单篇", True)],
+    ids=["mapped", "fallback", "custom_without", "custom_with"],
 )
 async def test_import_category_uses_mapped_value_or_blogger(
-    session, tenant_a, flow_users, product_factory, blogger_factory, category, expected
+    session, tenant_a, flow_users, product_factory, blogger_factory, category, expected, custom
 ):
     style = await product_factory.style()
     blogger = await blogger_factory.blogger()
     blogger.content_category = "合集"
     await session.flush()
     adapter = PromotionImportAdapter()
+    from types import SimpleNamespace
+
+    mapping = None
+    if custom is not None:
+        columns = [
+            {"source_col": source, "target_field": target, "type": kind}
+            for source, target, kind in (
+                ("款式编码", "style_code", "str"),
+                ("小红书ID", "xiaohongshu_id", "str"),
+                ("报价金额", "quote_amount", "decimal"),
+                ("合作日期", "cooperation_date", "date"),
+            )
+        ]
+        if custom:
+            columns.append(
+                {"source_col": "合作形式", "target_field": "content_category", "type": "str"}
+            )
+        mapping = SimpleNamespace(mapping_config={"columns": columns})
     parsed = adapter.parse_row(
         {
             "款式编码": style.style_code,
@@ -189,7 +226,7 @@ async def test_import_category_uses_mapped_value_or_blogger(
             "报价金额": "1,234.50",
             "合作日期": "2026-10-20",
         },
-        None,
+        mapping,
     )
     assert not adapter.validate(parsed)
     pid, inserted = await adapter.upsert(

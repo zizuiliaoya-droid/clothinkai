@@ -17,12 +17,13 @@ async def test_platform_posts_isolate_real_app_tenants(
     own = await _promotion(product_factory, blogger_factory, promotion_factory, tenant_a)
     other = await _promotion(product_factory, blogger_factory, promotion_factory, tenant_b)
     insert = text(
-        "INSERT INTO promotion_platform_post(id,tenant_id,promotion_id,platform,like_count) VALUES (:id,:tenant,:promotion,'抖音',:likes)"
+        "INSERT INTO promotion_platform_post(id,tenant_id,promotion_id,platform,like_count) VALUES (:id,:tenant,:promotion,:platform,:likes)"
     )
     own_id, other_id = uuid4(), uuid4()
     for row_id, p, tenant in ((own_id, own, tenant_a), (other_id, other, tenant_b)):
         await session.execute(
-            insert, {"id": row_id, "tenant": tenant.id, "promotion": p.id, "likes": 5}
+            insert,
+            {"id": row_id, "tenant": tenant.id, "promotion": p.id, "likes": 5, "platform": "抖音"},
         )
     await _as_app(session, tenant_a.id)
     assert tuple(
@@ -38,16 +39,22 @@ async def test_platform_posts_isolate_real_app_tenants(
             {"own": own_id, "other": other_id},
         )
     ).scalars().all() == [own_id]
-    for tenant_id, promotion_id, likes in (
-        (tenant_b.id, other.id, 0),
-        (tenant_a.id, own.id, -1),
-        (tenant_a.id, own.id, 1),
+    for tenant_id, promotion_id, likes, platform in (
+        (tenant_b.id, other.id, 0, "B站"),
+        (tenant_a.id, own.id, -1, "B站"),
+        (tenant_a.id, own.id, 1, "抖音"),
     ):
         with pytest.raises(DBAPIError):
             async with session.begin_nested():
                 await session.execute(
                     insert,
-                    {"id": uuid4(), "tenant": tenant_id, "promotion": promotion_id, "likes": likes},
+                    {
+                        "id": uuid4(),
+                        "tenant": tenant_id,
+                        "promotion": promotion_id,
+                        "likes": likes,
+                        "platform": platform,
+                    },
                 )
     changed = (
         (

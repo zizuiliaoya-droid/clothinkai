@@ -1034,7 +1034,7 @@ class PromotionRepository:
             clauses.append("pr_id = :pr_id")
             params["pr_id"] = filters.pr_id
         if filters.content_category is not None:
-            clauses.append("content_category = :content_category")
+            clauses.append("content_category = CAST(:content_category AS varchar)")
             params["content_category"] = filters.content_category
         if filters.cooperation_date_from:
             clauses.append("cooperation_date >= :coop_from")

@@ -714,5 +714,6 @@ __all__ = [
     "Promotion",
     "PromotionAmountLog",
     "PromotionItem",
+    "PromotionPlatformPost",
     "PromotionSequence",
 ]

@@ -39,14 +39,14 @@ CASES = (
 def run(node, marker, phase):
     xml = ARTIFACTS / f"flow9-{marker}-{phase}.xml"
     with (ARTIFACTS / f"flow9-{marker}-{phase}.log").open("w", encoding="utf-8") as log:
-        result = subprocess.run(
+        result = subprocess.run(  # noqa: S603 fixed test nodes
             [sys.executable, "-m", "pytest", "-q", node, "--tb=short", f"--junitxml={xml}"],
             env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
             stdout=log,
             stderr=subprocess.STDOUT,
             timeout=180,
             check=False,
-        )  # noqa: S603 fixed test nodes
+        )
     cases = ET.parse(xml).findall(".//testcase")  # noqa: S314 own pytest output
     assert len(cases) == 1 and cases[0].attrib["name"] == node.split("::")[-1]
     case = cases[0]

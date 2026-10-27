@@ -525,7 +525,7 @@ class PlatformPostIn(BaseModel):
     platform: str = Field(min_length=1, max_length=16)
     publish_url: str | None = Field(default=None, max_length=512)
     actual_publish_date: date | None = None
-    like_count: int | None = Field(default=None, ge=0)
+    like_count: int | None = Field(default=None, ge=0, le=2147483647)
 
     @field_validator("publish_url")
     @classmethod

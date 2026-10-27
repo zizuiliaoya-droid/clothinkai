@@ -13,6 +13,7 @@ from app.modules.promotion.urge_calculator import get_today
     "patch",
     [
         {"like_count": -1},
+        {"like_count": 2147483648},
         {"publish_url": "javascript:alert(1)"},
         {"actual_publish_date": get_today() + timedelta(days=1)},
         {"platform": " "},
