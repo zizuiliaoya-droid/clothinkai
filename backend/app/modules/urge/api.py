@@ -15,7 +15,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, File, Form, Query, UploadFile
 
-from app.modules.auth.deps import CurrentActiveUser, SessionDep, require_permission
+from app.modules.auth.deps import CurrentActiveUser, CurrentPerms, SessionDep, require_permission
 from app.modules.urge.enums import UrgeTaskStatus
 from app.modules.urge.permissions import (
     SCOPE_URGE,
@@ -105,6 +105,7 @@ async def urge_dashboard(
 async def list_urge_tasks(
     session: SessionDep,
     user: CurrentActiveUser,
+    perms: CurrentPerms,
     task_status: Annotated[UrgeTaskStatus | None, Query(alias="status")] = None,
     pr_id: UUID | None = None,
     blogger_id: UUID | None = None,
@@ -131,7 +132,14 @@ async def list_urge_tasks(
         page=page,
         page_size=page_size,
     )
-    return UrgeTaskListResponse(items=items, total=total, page=page, page_size=page_size)
+    actions = {}
+    if perms.has(SCOPE_URGE, "write"):
+        actions["batch"] = {"state": "enabled"}
+    if perms.has(SCOPE_URGE_CONFIG, "write"):
+        actions["config"] = {"state": "enabled"}
+    return UrgeTaskListResponse(
+        items=items, total=total, page=page, page_size=page_size, ui={"actions": actions}
+    )
 
 
 @router.get(

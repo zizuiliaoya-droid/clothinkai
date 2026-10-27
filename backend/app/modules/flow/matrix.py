@@ -399,6 +399,12 @@ class StageIn(_AttrIn):
     attr = "stage"
 
 
+class PublishedStageIn(_AttrIn):
+    """已发布召回时，普通字段沿原D~F阶段；展示stage不变。"""
+
+    attr = "published_stage"
+
+
 class SettlementIn(_AttrIn):
     """结款单状态；``SettlementIn(None)`` = 还没有结款单。"""
 
@@ -830,7 +836,7 @@ def writable_fields(actor: FlowActor, doc: FlowDocBase) -> WritableFields:
 
 
 def ensure_patch_allowed(actor: FlowActor, doc: FlowDocBase, fields_set: Iterable[str]) -> None:
-    """过渡规则（5.4）：传入的字段里已入矩阵、但此刻写不了的，一次全列出来 403；没入矩阵的放行。
+    """白名单（5.4）：所有未登记或此刻不可写字段，一次全列出来 403。
 
     顺序按 ``patch_groups`` 的登记顺序（与博主 / SKU 按声明顺序一致），``field`` = 其中第一个。
     """
@@ -839,5 +845,6 @@ def ensure_patch_allowed(actor: FlowActor, doc: FlowDocBase, fields_set: Iterabl
     denied = [
         f for f in matrix_for(doc.kind).patch_groups if f in requested and f not in wf.allowed
     ]
+    denied.extend(sorted(requested - wf.managed))
     if denied:
         raise FieldPermissionDenied(fields=denied, entity=doc.kind)

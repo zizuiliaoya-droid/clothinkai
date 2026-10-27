@@ -36,6 +36,7 @@ _SELECT_COLUMNS = f"""
     g.goods_title AS goods_title,
     p.scheduled_publish_date,
     p.publish_status,
+    p.is_active AS promotion_active,
     -- 超期天数：只有排了期且已过期才算，否则 NULL（前端显示「—」）
     --
     -- 这里必须写 CAST(:today AS date) 而不是 :today::date —— 同一个参数名在一条

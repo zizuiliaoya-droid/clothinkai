@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -70,6 +71,8 @@ class UrgeRecordResponse(BaseModel):
 
 
 class UrgeTaskResponse(BaseModel):
+    ui: dict[str, Any] = Field(default_factory=lambda: {"actions": {}})
+
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
@@ -120,6 +123,8 @@ class UrgeTaskDetailResponse(UrgeTaskResponse):
 
 
 class UrgeTaskListResponse(BaseModel):
+    ui: dict[str, Any] = Field(default_factory=lambda: {"actions": {}})
+
     items: list[UrgeTaskResponse]
     total: int
     page: int = 1
