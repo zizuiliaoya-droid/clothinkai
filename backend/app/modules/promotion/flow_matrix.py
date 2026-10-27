@@ -221,6 +221,7 @@ _fill(_cooperation, "EFGH", Cell(edit=(_STAR,), read=(_READ_OR_FINANCE,)))
 _platform_posts: dict[str, Cell | tuple[Cell, ...]] = {}
 _fill(_platform_posts, "ABC", Cell(grey=(_READ,), hint="发布后可录其他平台"))
 _fill(_platform_posts, "DEF", Cell(edit=(_WRITE,), read=(_READ,)))
+_fill(_platform_posts, "G", Cell(edit=(_WRITE,), read=(_READ,), when=(PublishIn("已发布"),)))
 _fill(_platform_posts, "H", Cell(edit=(_STAR,), read=(_READ,)))
 
 # 合作模式（²³）：有值所有人读；空值主管 / 管理员可补一次（A ~ G），H 只有管理员。PR 一律读

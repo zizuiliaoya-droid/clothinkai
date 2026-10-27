@@ -357,7 +357,8 @@ _PROMOTION_ROWS: dict[tuple[str, str], list[tuple[list[str], str]]] = {
     ("field", "platform_posts"): [
         (_labels("ABC") + _labels("C", history=True), "灰灰灰隐灰隐"),
         (_labels("DEF") + _labels("DEF", history=True), "改改改隐读隐"),
-        (_labels("G"), "隐隐隐隐隐隐"),
+        (_labels("G", variants=False), "隐隐隐隐隐隐"),
+        ([_v("召回中", v) for v in VARIANTS["召回中"]], "改改改隐读隐"),
         (_labels("H"), "读读改隐读隐"),
     ],
     # 合作模式（²³）：有值所有人读；空值主管 / 管理员可补一次，H 只有管理员

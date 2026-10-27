@@ -627,13 +627,12 @@ class PromotionService(
                 actor_id=user.id,
                 rows=rows,
             )
-            await LineEventRepository(self._session).append(
-                tenant_id=user.tenant_id,
-                line_id=promotion.line_id,
-                event_type=LineEventType.PROMOTION_UPDATED,
-                actor_id=user.id,
-                promotion_id=promotion_id,
-                payload={"diff": {"platform_posts": {"before": before, "after": after}}},
+            await self._append_patch_events(
+                promotion,
+                user,
+                changes={"platform_posts": {"before": before, "after": after}},
+                mode_before=promotion.cooperation_mode,
+                amount_before=self._amount_snapshot(promotion),
             )
             await self._audit.log(
                 action="promotion.platform_posts",

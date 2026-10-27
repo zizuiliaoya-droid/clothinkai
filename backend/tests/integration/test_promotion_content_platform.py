@@ -187,6 +187,79 @@ async def test_completed_posts_only_admin_can_edit(
     assert result.extra_platforms == ["抖音"]
 
 
+@pytest.mark.parametrize("published", [True, False])
+async def test_recalling_platforms_detail_and_put_follow_publish_state(
+    session, flow_users, product_factory, blogger_factory, promotion_factory, published
+):
+    from tests.integration.test_promotion_shipping import _call
+
+    p = await promotion(product_factory, blogger_factory, promotion_factory, flow_users)
+    svc = PromotionService(session)
+    await svc.replace_platform_posts(p.id, [PlatformPostIn(platform="抖音")], flow_users.pr)
+    p.recall_status = "召回中"
+    p.publish_status = "已发布" if published else "已取消"
+    await session.commit()
+    path = f"/api/promotions/{p.id}"
+    for role in ("pr", "pr_manager", "admin", "operations"):
+        user = getattr(flow_users, role)
+        detail = await _call(session, user, "GET", path, None)
+        assert detail.status_code == 200, detail.text
+        assert detail.json()["extra_platforms"] == (["抖音"] if published else [])
+        assert len(detail.json()["platform_posts"]) == int(published)
+        changed = await _call(
+            session,
+            user,
+            "PUT",
+            path + "/platform-posts",
+            [{"platform": "抖音", "like_count": 9}],
+        )
+        assert changed.status_code == (
+            200 if published and role != "operations" else 403
+        ), changed.text
+
+
+async def test_maximum_platform_rows_create_and_update_keep_full_urls(
+    session, flow_users, product_factory, blogger_factory, promotion_factory
+):
+    from app.modules.flow.line_events import PAYLOAD_MAX_BYTES, payload_size
+    from tests.integration.test_promotion_shipping import _call
+
+    p = await promotion(product_factory, blogger_factory, promotion_factory, flow_users)
+    path = f"/api/promotions/{p.id}/platform-posts"
+    url = "https://example.com/" + "中" * (512 - len("https://example.com/"))
+    rows = [
+        {
+            "platform": f"{i}" + "平台" * 7 + "甲",
+            "publish_url": url,
+            "actual_publish_date": "2026-10-20",
+            "like_count": 2147483647,
+        }
+        for i in range(5)
+    ]
+    for likes in (2147483647, 2147483646):
+        rows[0]["like_count"] = likes
+        result = await _call(session, flow_users.pr, "PUT", path, rows)
+        assert result.status_code == 200, result.text
+        assert len(result.json()["platform_posts"]) == 5
+        assert all(row["publish_url"] == url for row in result.json()["platform_posts"])
+        assert result.json()["platform_posts"][0]["like_count"] == likes
+    payloads = (
+        (
+            await session.execute(
+                text(
+                    "SELECT payload FROM line_event WHERE promotion_id=:pid AND event_type='promotion.updated'"
+                ),
+                {"pid": p.id},
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(payloads) == 2
+    assert all(payload_size(payload) <= PAYLOAD_MAX_BYTES for payload in payloads)
+    assert all(payload == {"changed_fields": ["platform_posts"]} for payload in payloads)
+
+
 @pytest.mark.parametrize(
     "category, expected, custom",
     [("单篇", "单篇", None), ("", "合集", None), ("单篇", "合集", False), ("单篇", "单篇", True)],
