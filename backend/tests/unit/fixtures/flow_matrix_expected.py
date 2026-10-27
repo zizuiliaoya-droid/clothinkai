@@ -302,7 +302,8 @@ _PROMOTION_ROWS: dict[tuple[str, str], list[tuple[list[str], str]]] = {
     ],
     ("field", "publish_info"): [
         (_labels("ABC") + _labels("C", history=True), "改改改隐读隐"),
-        (_labels("D") + _labels("D", history=True), "读读改隐读隐"),
+        (_at("待主管审核"), "读读改隐读隐"),
+        (_at("推广驳回 · 待重提"), "改改改隐读隐"),
         (_labels("EFH") + _labels("EF", history=True), "读读改读读隐"),
         ([_v("召回中", v) for v in VARIANTS["召回中"]], "读读改读读隐"),
     ],

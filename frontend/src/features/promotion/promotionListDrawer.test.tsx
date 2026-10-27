@@ -193,7 +193,7 @@ function RouteProbe() {
   </>;
 }
 
-function renderPage(rows: Promotion[], detail: Promotion, pageUi: { actions: UiState["actions"] } = PAGE_UI_AMOUNT, url = "/promotions", fetchDetail?: (id: string) => Promise<Promotion>, fetchList?: (filters: PromotionListFilters) => Promise<PromotionPage>) {
+function renderPage(rows: Promotion[], detail: Promotion, pageUi: PromotionPage["ui"] = PAGE_UI_AMOUNT, url = "/promotions", fetchDetail?: (id: string) => Promise<Promotion>, fetchList?: (filters: PromotionListFilters) => Promise<PromotionPage>) {
   if (fetchList) api.listPromotions.mockImplementation(fetchList);
   else api.listPromotions.mockResolvedValue({ items: rows, total: rows.length, page: 1, page_size: 10, ui: pageUi });
   if (fetchDetail) api.getPromotion.mockImplementation(fetchDetail);
@@ -476,5 +476,32 @@ describe("PR10 阶段与按钮收尾", () => {
     expect(api.getPromotionStageCounts.mock.calls.at(-1)?.[0]).not.toHaveProperty("page");
     fireEvent.click(shortcut);
     await waitFor(() => expect(api.listPromotions.mock.calls.at(-1)?.[0].badge).toBeUndefined());
+  });
+});
+
+
+describe("PR10 R1 收件筛选", () => {
+  it("电话读取被个人撤销后只显示姓名入口", async () => {
+    renderPage([], promotion(), { actions: {}, fields: { receiver_name: { state: "read" } } });
+    expect(await screen.findByRole("searchbox", { name: "收件人前缀" })).toBeTruthy();
+    expect(screen.queryByRole("searchbox", { name: "电话前缀" })).toBeNull();
+  });
+  it("输入后权限被撤销时清掉被拒电话条件并恢复列表，保留其他筛选", async () => {
+    let revoked = false;
+    const fetch = async (filters: PromotionListFilters): Promise<PromotionPage> => {
+      if (filters.receiver_phone) {
+        revoked = true;
+        throw { response: { status: 403, data: { code: "FIELD_PERMISSION_DENIED", message: "电话不可读", details: { fields: ["receiver_phone"] } } } };
+      }
+      return { items: [], total: 0, page: 1, page_size: 10, ui: { actions: {}, fields: { receiver_name: { state: "read" }, ...(revoked ? {} : { receiver_phone: { state: "read" as const } }) } } };
+    };
+    renderPage([], promotion(), PAGE_UI_NONE, "/promotions?keyword=保留", undefined, fetch);
+    const phone = await screen.findByRole("searchbox", { name: "电话前缀" });
+    fireEvent.change(phone, { target: { value: "138" } });
+    fireEvent.keyDown(phone, { key: "Enter", code: "Enter", charCode: 13, keyCode: 13 });
+    await waitFor(() => expect(revoked).toBe(true));
+    await waitFor(() => expect(api.listPromotions.mock.calls.at(-1)?.[0]).toMatchObject({ receiver_phone: undefined, keyword: "保留", page: 1 }));
+    expect(await screen.findByRole("searchbox", { name: "收件人前缀" })).toBeTruthy();
+    expect(screen.queryByRole("searchbox", { name: "电话前缀" })).toBeNull();
   });
 });

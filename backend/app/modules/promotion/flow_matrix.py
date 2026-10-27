@@ -481,6 +481,7 @@ _fill(_other_info, "H", Cell(edit=(_STAR,), read=(_READ,)))
 _publish_info: dict[str, Cell | tuple[Cell, ...]] = {}
 _fill(_publish_info, "ABC", Cell(edit=(_WRITE,), read=(_READ,)))
 _fill(_publish_info, "D", Cell(edit=(_STAR,), read=(_READ,)))
+_publish_info["推广驳回 · 待重提"] = Cell(edit=(_WRITE,), read=(_READ,))
 _fill(_publish_info, "EFH", Cell(edit=(_STAR,), read=(_READ_OR_FINANCE,)))
 _fill(
     _publish_info, "G", Cell(edit=(_STAR,), read=(_READ_OR_FINANCE,), when=(PublishIn("已发布"),))
