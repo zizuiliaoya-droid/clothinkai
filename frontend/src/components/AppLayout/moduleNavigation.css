@@ -26,3 +26,7 @@
   .app-content { margin: 16px 12px; }
   .module-tabs { margin: 12px 12px 0; }
 }
+@media (max-width: 991px) {
+  /* Sider 的 lg 收起按钮宽40px；移动滚动容器边界，避免内容滚回按钮下。 */
+  .module-tabs { margin-inline-start: 48px; }
+}
