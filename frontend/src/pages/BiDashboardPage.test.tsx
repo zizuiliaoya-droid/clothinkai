@@ -6,7 +6,7 @@
 // 7e R6 S8：Tab2 单品分析（URL / 记忆带入 tab 与 goods_id、无有效选择取第一项不写记忆、切 Tab / 选商品写记忆、散点空态与截断）。
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   BiDashboard,
@@ -253,11 +253,20 @@ function LocationProbe() {
   return <div data-testid="location">{`${location.pathname}${location.search}`}</div>;
 }
 
-function renderPage(url = "/bi") {
+function SamePageLinks() {
+  const navigate = useNavigate();
+  return <>
+    <button onClick={() => navigate("/bi?tab=goods&goods_id=cccccccc-cccc-4ccc-8ccc-cccccccccccc")}>同页缺席商品</button>
+    <button onClick={() => navigate(`/bi?tab=goods&goods_id=${G2}`)}>同页商品二</button>
+  </>;
+}
+
+function renderPage(url = "/bi", samePageLinks = false) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={[url]}>
+        {samePageLinks && <SamePageLinks />}
         <Routes>
           <Route path="/bi" element={<BiDashboardPage />} />
           <Route path="*" element={<LocationProbe />} />
@@ -569,6 +578,24 @@ describe("BiDashboardPage 单品分析", () => {
     expect(await screen.findByText("¥800.00")).toBeTruthy();
     await waitDebounce();
     expect(savePrefMock).not.toHaveBeenCalled();
+  });
+
+  it("同页query切换更新商品与缺席提示，链接不写记忆，手动选择清URL后仍保留", async () => {
+    renderPage(`/bi?tab=goods&goods_id=${G1}`, true);
+    await waitFor(() => expect(goodsTrendMock).toHaveBeenCalledWith(G1, expect.anything()));
+    fireEvent.click(screen.getByRole("button", { name: "同页缺席商品" }));
+    expect(await screen.findByText("所选商品不在当前筛选范围或可见结果中")).toBeTruthy();
+    expect(goodsTrendMock.mock.calls.every((call) => call[0] === G1)).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "同页商品二" }));
+    await waitFor(() => expect(goodsTrendMock).toHaveBeenCalledWith(G2, expect.anything()));
+    expect(screen.queryByText("所选商品不在当前筛选范围或可见结果中")).toBeNull();
+    await waitDebounce();
+    expect(savePrefMock).not.toHaveBeenCalled();
+    await pickGoods("条纹上衣");
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "选择商品" }).closest(".ant-select")?.textContent).toContain("条纹上衣"));
+    await waitDebounce();
+    expect(savePrefMock).toHaveBeenLastCalledWith("bi_dashboard", expect.objectContaining({ goods_id: G1, tab: "goods" }));
+    expect(goodsTab().getAttribute("aria-selected")).toBe("true");
   });
 
   it("记忆里的 tab 与 goods_id 带入 Tab2", async () => {
