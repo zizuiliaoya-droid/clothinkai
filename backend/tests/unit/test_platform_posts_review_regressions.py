@@ -20,7 +20,11 @@ from tests.unit.test_flow_matrix import PERSONAS
     "role", ["pr", "pr_manager", "admin", "operations", "finance", "warehouse"]
 )
 def test_recalling_platforms_follow_publish_state(published, role):
-    doc = replace(DOCS["promotion"]["召回中"], publish_status="已发布" if published else "已取消")
+    doc = replace(
+        DOCS["promotion"]["召回中"],
+        publish_status="已发布" if published else "已取消",
+        published_stage="待主管审核" if published else None,
+    )
     fields = ui_for(PERSONAS[role], doc).to_dict(view="detail")["fields"]
     if not published or role in {"finance", "warehouse"}:
         assert "platform_posts" not in fields

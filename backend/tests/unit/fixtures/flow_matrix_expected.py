@@ -86,16 +86,19 @@ VARIANTS: dict[str, dict[str, dict[str, Any]]] = {
     "召回中": {
         "已付款": {
             "publish_status": "已发布",
+            "published_stage": "待传结款截图",
             "promotion_settlement_status": "已付款",
             "settlement_status": "已付款",
         },
         "已结款": {
             "publish_status": "已发布",
+            "published_stage": "待录 7 天数据",
             "promotion_settlement_status": "已结款",
             "settlement_status": "已付款",
         },
         "结款单待财务付款": {
             "publish_status": "已发布",
+            "published_stage": "待财务付款",
             "promotion_settlement_status": "待付款",
             "settlement_status": "待财务付款",
         },
@@ -290,6 +293,38 @@ DOCS: dict[str, dict[str, Any]] = {
 # ---------------------------------------------------------------------------
 
 _PROMOTION_ROWS: dict[tuple[str, str], list[tuple[list[str], str]]] = {
+    ("action", "publish"): [(_labels("ABC") + _labels("C", history=True), "改改改隐隐隐")],
+    ("action", "cancel"): [(_labels("ABC") + _labels("C", history=True), "改改改隐隐隐")],
+    ("action", "resubmit"): [(_at("推广驳回 · 待重提"), "改改改隐隐隐")],
+    ("field", "other_info"): [
+        (_labels("ABCDEFG") + _labels("CDEF", history=True), "改改改隐读隐"),
+        (_labels("H"), "读读改隐读隐"),
+    ],
+    ("field", "publish_info"): [
+        (_labels("ABC") + _labels("C", history=True), "改改改隐读隐"),
+        (_at("待主管审核"), "读读改隐读隐"),
+        (_at("推广驳回 · 待重提"), "改改改隐读隐"),
+        (_labels("EFH") + _labels("EF", history=True), "读读改读读隐"),
+        ([_v("召回中", v) for v in VARIANTS["召回中"]], "读读改读读隐"),
+    ],
+    ("field", "return_waybill"): [
+        (_labels("ABCD", mode_empty=False) + _labels("CD", history=True), "改改改隐读隐"),
+        (
+            _labels("EFH", mode_empty=False)
+            + _labels("EF", history=True)
+            + [_v("召回中", v) for v in VARIANTS["召回中"]],
+            "读读改隐读隐",
+        ),
+    ],
+    ("field", "review_result"): [
+        (_labels("D") + _labels("D", history=True), "读改改隐读隐"),
+        (
+            _labels("EFH")
+            + _labels("EF", history=True)
+            + [_v("召回中", v) for v in VARIANTS["召回中"]],
+            "读读读读读隐",
+        ),
+    ],
     # PR8专用动作逐格能力；具体状态是否显示仍由allowed_actions判。
     ("action", "recall_start"): [
         (_labels("AB"), "灰灰灰隐隐隐"),
@@ -305,7 +340,8 @@ _PROMOTION_ROWS: dict[tuple[str, str], list[tuple[list[str], str]]] = {
         (_labels("ABCDEFGH") + _labels("CDEF", history=True), "改改改隐隐隐")
     ],
     ("field", "recall_info"): [
-        (_labels("ABCDEFGH") + _labels("CDEF", history=True), "读读读隐读隐")
+        (_labels("G"), "改改改读读隐"),
+        (_labels("H", variants=False), "读读改读读隐"),
     ],
     ("field", "freight_payment"): [
         (_labels("ABCDEFGH") + _labels("CDEF", history=True), "读读读读读隐")
@@ -621,3 +657,32 @@ EXPECTED: dict[str, dict[tuple[str, str, str, str], str]] = {
         },
     ),
 }
+
+# PR10：设计5.3明定，已发布召回的普通格使用D~F的独立冻结期望；专用三组保留G期望。
+# 这里的对应关系是业务样例，未读取生产矩阵、阶段计算器或其生成结果。
+_PUBLISHED_RECALL_EXPECTED = {
+    "召回中·已付款": "待传结款截图",
+    "召回中·已结款": "待录 7 天数据",
+    "召回中·结款单待财务付款": "待财务付款",
+}
+for _recalling, _normal in _PUBLISHED_RECALL_EXPECTED.items():
+    for (_label, _persona, _kind, _key), _level in list(EXPECTED["promotion"].items()):
+        if _label != _normal:
+            continue
+        if _kind == "field" and _key not in {
+            "payment_qr",
+            "recall_info",
+            "freight_payment",
+            "retro",
+        }:
+            EXPECTED["promotion"][(_recalling, _persona, _kind, _key)] = _level
+        if _kind == "action" and _key in {
+            "review",
+            "resubmit",
+            "settlement_resubmit",
+            "settlement_chat",
+            "metrics",
+            "retro_write",
+            "retro_revise",
+        }:
+            EXPECTED["promotion"][(_recalling, _persona, _kind, _key)] = _level

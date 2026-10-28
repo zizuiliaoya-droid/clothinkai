@@ -22,8 +22,8 @@
 1. ``ui_for(actor, doc)`` → ``UiState``（``to_dict(view=...)`` 出 7.1 的 ``ui`` 形状）
 2. ``require(actor, doc, action)``：状态机 422 → 规则 403 ``FLOW_ACTION_FORBIDDEN`` → ★ 缺项 422 ``FLOW_GATE_MISSING``；
    端点 scope 已在路由层判过，这里不重复判
-3. ``writable_fields(actor, doc)`` / ``ensure_patch_allowed(...)``：过渡期只管已入矩阵的 PATCH 字段（``Matrix.patch_groups``），
-   没入矩阵的沿用现状
+3. ``writable_fields(actor, doc)`` / ``ensure_patch_allowed(...)``：PATCH 严格按 ``Matrix.patch_groups`` 白名单；
+   未登记或当前不可写字段统一拒绝
 
 PR-1 只有类型与三个出口；PR-2 起各单据模块在 import 时把自己的表 ``MATRICES.update(...)`` 进来
 （推广单 / 仓库行：``promotion/flow_matrix.py``，由 ``promotion/flow_doc.py`` import 保证注册；
@@ -397,6 +397,12 @@ class _AttrIn:
 
 class StageIn(_AttrIn):
     attr = "stage"
+
+
+class PublishedStageIn(_AttrIn):
+    """已发布召回时，普通字段沿原D~F阶段；展示stage不变。"""
+
+    attr = "published_stage"
 
 
 class SettlementIn(_AttrIn):
@@ -830,7 +836,7 @@ def writable_fields(actor: FlowActor, doc: FlowDocBase) -> WritableFields:
 
 
 def ensure_patch_allowed(actor: FlowActor, doc: FlowDocBase, fields_set: Iterable[str]) -> None:
-    """过渡规则（5.4）：传入的字段里已入矩阵、但此刻写不了的，一次全列出来 403；没入矩阵的放行。
+    """白名单（5.4）：所有未登记或此刻不可写字段，一次全列出来 403。
 
     顺序按 ``patch_groups`` 的登记顺序（与博主 / SKU 按声明顺序一致），``field`` = 其中第一个。
     """
@@ -839,5 +845,6 @@ def ensure_patch_allowed(actor: FlowActor, doc: FlowDocBase, fields_set: Iterabl
     denied = [
         f for f in matrix_for(doc.kind).patch_groups if f in requested and f not in wf.allowed
     ]
+    denied.extend(sorted(requested - wf.managed))
     if denied:
         raise FieldPermissionDenied(fields=denied, entity=doc.kind)

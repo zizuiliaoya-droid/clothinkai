@@ -307,11 +307,14 @@ jobs:
             tests/integration/test_publish_progress.py \
             tests/integration/test_line_timeline.py \
             tests/integration/test_stage_sql_parity.py \
+            tests/integration/test_flow10_stage_counts.py \
             tests/integration/test_import_settlement.py \
             tests/integration/test_settlement_routing.py \
             tests/integration/test_promotion_deactivate_concurrency.py
       - name: Controlled fault injection and restored-source green tests
         run: python -m scripts.ci_flow7_faults
+      - name: PR10 matrix, whitelist and SQL G1-G4 controlled faults
+        run: python -m scripts.ci_flow10_faults
       - name: Verify mandatory phases, test selection and zero skips
         run: python -m scripts.ci_flow7_pg18 verify-results --ci --output ci-artifacts/flow7-pg18-result.json
       - name: PR8 recall and freight services, ACL, rollback and independent connection races

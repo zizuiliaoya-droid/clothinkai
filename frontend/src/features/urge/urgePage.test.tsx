@@ -2,6 +2,7 @@
 // 催发页（流程线 8.7）：标记完成要截图、「只看我的」传 pr_id 并记住、已完成的催发先提示重开、抽屉显示完成截图。
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { Modal } from "antd";
 import type { ReactNode } from "react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UrgeTask, UrgeTaskDetail, UrgeTaskPage } from "./types";
@@ -64,6 +65,7 @@ beforeAll(() => {
 function task(over: Partial<UrgeTask> = {}): UrgeTask {
   return {
     id: "t-1",
+    ui: { actions: { urge: { state: "enabled" }, complete: { state: "enabled" }, close: { state: "enabled" } } },
     promotion_id: "p-1",
     promotion_internal_code: "TG-001",
     blogger_id: "b-1",
@@ -114,7 +116,7 @@ beforeEach(() => {
     isAuthenticated: true,
   });
 });
-afterEach(cleanup);
+afterEach(() => { Modal.destroyAll(); cleanup(); });
 
 function wrap(node: ReactNode) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -192,24 +194,22 @@ describe("UrgePage", () => {
   it("已完成的任务能催发但先提示会重开；其他原因关闭的不能催、都不能再标记完成", async () => {
     listMock.mockResolvedValue(
       page([
-        task({ id: "t-done", status: "已关闭", close_reason: "已完成" }),
-        task({ id: "t-pub", status: "已关闭", close_reason: "博主已发布" }),
+        task({ id: "t-done", status: "已关闭", close_reason: "已完成", ui: { actions: { urge: { state: "enabled" } } } }),
+        task({ id: "t-pub", status: "已关闭", close_reason: "博主已发布", ui: { actions: {} } }),
       ])
     );
     wrap(<UrgePage />);
     const urgeBtns = await screen.findAllByRole("button", { name: "催发" });
     expect((urgeBtns[0] as HTMLButtonElement).disabled).toBe(false);
-    expect((urgeBtns[1] as HTMLButtonElement).disabled).toBe(true);
-    for (const b of screen.getAllByRole("button", { name: "标记完成" })) {
-      expect((b as HTMLButtonElement).disabled).toBe(true);
-    }
+    expect(urgeBtns).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "标记完成" })).toBeNull();
     fireEvent.click(urgeBtns[0]);
     expect(await screen.findByText("这单已标记完成，催发后会重新打开任务")).toBeTruthy();
   });
 
   it("进行中的任务点「标记完成」打开截图弹窗；抽屉里已完成的显示完成截图", async () => {
     const detail: UrgeTaskDetail = {
-      ...task({ id: "t-done", status: "已关闭", close_reason: "已完成" }),
+      ...task({ id: "t-done", status: "已关闭", close_reason: "已完成", ui: { actions: { urge: { state: "enabled" } } } }),
       records: [],
       close_screenshot_url: "https://example.test/done.png",
     };
@@ -222,5 +222,22 @@ describe("UrgePage", () => {
     fireEvent.click(screen.getAllByRole("button", { name: "时间线" })[1]);
     const img = await screen.findByAltText("完成截图");
     expect(img.getAttribute("src")).toBe("https://example.test/done.png");
+  });
+});
+
+
+describe("PR10 催发能力", () => {
+  it("ui无写能力时管理员也没有行写按钮/批量/配置", async () => {
+    useAuthStore.setState({ user: { ...useAuthStore.getState().user!, roles: ["admin"] } });
+    listMock.mockResolvedValue({ ...page([task({ ui: { actions: {} } })]), ui: { actions: {} } });
+    wrap(<UrgePage />);
+    await screen.findByRole("button", { name: "时间线" });
+    for (const name of ["催发", "标记完成", "关闭", "按款式批量催发", "催发设置"]) expect(screen.queryByRole("button", { name })).toBeNull();
+  });
+  it("服务端授予独立配置能力时PR也显示配置入口", async () => {
+    listMock.mockResolvedValue({ ...page([task()]), ui: { actions: { config: { state: "enabled" }, batch: { state: "enabled" } } } });
+    wrap(<UrgePage />);
+    expect(await screen.findByRole("button", { name: /催发设置/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "按款式批量催发" })).toBeTruthy();
   });
 });
