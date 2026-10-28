@@ -57,39 +57,58 @@ async function openUser(index = 0) {
 }
 
 async function selectPermission(index = 0) {
-  const select = await screen.findByRole("combobox");
+  const select = await within(screen.getByRole("dialog")).findByRole("combobox");
+  await waitFor(() => expect(select.hasAttribute("disabled")).toBe(false));
   fireEvent.mouseDown(select);
   fireEvent.click(await screen.findByText(`${catalog[index].name}（${catalog[index].scope}）`, { selector: ".ant-select-item-option-content" }));
 }
 
 async function savePermission(index = 0, deny = false) {
   await selectPermission(index);
-  fireEvent.click(screen.getByRole("radio", { name: deny ? "拒绝" : "授予" }));
-  fireEvent.change(screen.getByLabelText("原因"), { target: { value: "  主管请假，手工交接  " } });
-  fireEvent.click(screen.getByRole("button", { name: "保存个人设置" }));
+  const dialog = within(screen.getByRole("dialog"));
+  fireEvent.click(dialog.getByRole("radio", { name: deny ? "拒绝" : "授予" }));
+  fireEvent.change(dialog.getByLabelText("原因"), { target: { value: "  主管请假，手工交接  " } });
+  fireEvent.click(dialog.getByRole("button", { name: "保存个人设置" }));
 }
 
 describe("用户管理个人权限闭环", () => {
-  it("按真实目录授权开放入口，分别授予并撤销两项临时代理权限", async () => {
+  it.each(scopes.map((scope, index) => ({ scope, index })))("按真实目录授予并恢复临时代理权限 $scope", async ({ scope, index }) => {
     mount();
-    await openUser();
-    expect(await screen.findByText("暂无个人覆盖，使用角色默认权限")).toBeTruthy();
-    expect(screen.getByText(/不会自动到期/)).toBeTruthy();
-    for (let index = 0; index < scopes.length; index += 1) {
-      await savePermission(index);
-      await waitFor(() => expect(changeUserPermission).toHaveBeenCalledWith("a", "grant", { scope: scopes[index], reason: "主管请假，手工交接" }));
-      expect(await screen.findByRole("button", { name: `恢复角色默认 ${scopes[index]}` })).toBeTruthy();
-      await waitFor(() => expect(screen.getByRole("button", { name: "保存个人设置" }).hasAttribute("disabled")).toBe(false));
-    }
-    expect(screen.getAllByText("个人授予")).toHaveLength(2);
-    for (const scope of scopes) {
-      fireEvent.click(screen.getByRole("button", { name: `恢复角色默认 ${scope}` }));
-      fireEvent.click(await screen.findByRole("button", { name: "确认恢复" }));
-      await waitFor(() => expect(changeUserPermission).toHaveBeenCalledWith("a", "reset", { scope, reason: "撤销个人覆盖，恢复角色默认" }));
-      await waitFor(() => expect(screen.queryByRole("button", { name: `恢复角色默认 ${scope}` })).toBeNull());
-    }
-    expect(await screen.findByText("暂无个人覆盖，使用角色默认权限")).toBeTruthy();
-    expect(getUserPermissions).toHaveBeenCalledTimes(5);
+    const dialog = within(await openUser());
+    expect(await dialog.findByText("暂无个人覆盖，使用角色默认权限")).toBeTruthy();
+    expect(dialog.getByText(/不会自动到期/)).toBeTruthy();
+    await savePermission(index);
+    await waitFor(() => expect(changeUserPermission).toHaveBeenCalledWith("a", "grant", { scope, reason: "主管请假，手工交接" }));
+    const reset = await dialog.findByRole("button", { name: `恢复角色默认 ${scope}` });
+    expect(dialog.getAllByText("个人授予")).toHaveLength(1);
+    await waitFor(() => expect(reset.hasAttribute("disabled")).toBe(false));
+    expect(dialog.getByRole("button", { name: "保存个人设置" }).hasAttribute("disabled")).toBe(false);
+    fireEvent.click(reset);
+    fireEvent.click(await screen.findByRole("button", { name: "确认恢复" }));
+    await waitFor(() => expect(changeUserPermission).toHaveBeenCalledWith("a", "reset", { scope, reason: "撤销个人覆盖，恢复角色默认" }));
+    await waitFor(() => expect(dialog.queryByRole("button", { name: `恢复角色默认 ${scope}` })).toBeNull());
+    expect(await dialog.findByText("暂无个人覆盖，使用角色默认权限")).toBeTruthy();
+    expect(getUserPermissions).toHaveBeenCalledTimes(3);
+  });
+
+  it("已有另一项覆盖时，新增及恢复当前权限不改动原覆盖", async () => {
+    snapshots.a.grants = [scopes[0]];
+    mount();
+    const dialog = within(await openUser());
+    await savePermission(1);
+    await waitFor(() => expect(changeUserPermission).toHaveBeenCalledWith("a", "grant", { scope: scopes[1], reason: "主管请假，手工交接" }));
+    const reset = await dialog.findByRole("button", { name: `恢复角色默认 ${scopes[1]}` });
+    expect(dialog.getAllByText("个人授予")).toHaveLength(2);
+    expect(dialog.getByRole("button", { name: `恢复角色默认 ${scopes[0]}` })).toBeTruthy();
+    await waitFor(() => expect(reset.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(reset);
+    fireEvent.click(await screen.findByRole("button", { name: "确认恢复" }));
+    await waitFor(() => expect(changeUserPermission).toHaveBeenCalledWith("a", "reset", { scope: scopes[1], reason: "撤销个人覆盖，恢复角色默认" }));
+    await waitFor(() => expect(dialog.queryByRole("button", { name: `恢复角色默认 ${scopes[1]}` })).toBeNull());
+    expect(dialog.getByRole("button", { name: `恢复角色默认 ${scopes[0]}` })).toBeTruthy();
+    expect(dialog.getAllByText("个人授予")).toHaveLength(1);
+    expect(dialog.queryByText("暂无个人覆盖，使用角色默认权限")).toBeNull();
+    expect(getUserPermissions).toHaveBeenCalledTimes(3);
   });
 
   it("拒绝走 revoke，已有 grant 更新为明确的个人拒绝状态", async () => {
