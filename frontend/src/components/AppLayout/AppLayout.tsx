@@ -22,6 +22,7 @@ import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useAuthStore } from "@/stores/authStore";
 import { logout as apiLogout } from "@/features/auth/api";
 import { useReportCapabilities } from "@/features/report/useReportCapabilities";
+import { ModuleNavigation } from "./ModuleNavigation";
 
 const { Header, Sider, Content } = Layout;
 
@@ -289,7 +290,7 @@ export function AppLayout() {
           items={visibleMenuItems}
         />
       </Sider>
-      <Layout>
+      <Layout className="app-workspace">
         <Header
           style={{
             background: "#fff",
@@ -309,8 +310,9 @@ export function AppLayout() {
             </Space>
           </Dropdown>
         </Header>
-        <Content style={{ margin: 24 }}>
-          <Outlet />
+        <ModuleNavigation productionAccess={reportCaps?.production} />
+        <Content className="app-content">
+          <Outlet key={`${user?.id ?? ""}:${[...roles].sort().join(",")}`} />
         </Content>
       </Layout>
     </Layout>
