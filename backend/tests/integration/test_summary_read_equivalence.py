@@ -1247,6 +1247,11 @@ def _recent7_tuple(row: Any) -> tuple[Any, ...]:
 class TestProductionRecent7:
     """7e R3 S3：近 7 天三列 + ``recent7_range``（默 10）。"""
 
+    @pytest.fixture(autouse=True)
+    def fixed_business_day(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # 样本按模块收集时的 TODAY 构造；执行跨北京时间午夜也须沿用同一天。
+        monkeypatch.setattr(production_mod, "get_today", lambda: TODAY)
+
     @pytest.mark.parametrize("exclude_brushing", [True, False])
     async def test_summary_equals_live_hand_computed(
         self,
