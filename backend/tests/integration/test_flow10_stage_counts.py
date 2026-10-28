@@ -37,6 +37,8 @@ async def test_counts_share_filters_exclude_stage_badge_and_other_tenant(
                 {"ship_status": "待发货"},
                 {
                     "publish_status": "已发布",
+                    # 正常发布进入待主管审核；沿用工厂「未核查」会落入状态异常。
+                    "settlement_status": "待核查",
                     "actual_publish_date": get_today() - timedelta(days=7),
                     "retro_status": "待复盘",
                 },
