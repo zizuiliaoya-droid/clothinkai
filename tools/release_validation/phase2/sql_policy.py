@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from types import ModuleType
 from urllib.parse import urlsplit
 
-PHASE1_SHA = "fb07f98f6e87fe85e93405a2f78d7df42346ca50ddbf0cec1589f376f1963fc1"
+PHASE1_SHA = "158d1063c2144c07798a72cb2d5671f7473b012bb5bcf36154f9970e6e003c2d"
 GUARD_SHA = "c66b9c2bccbc14f55686f507c043a8c0704aa88b28bc386c477796d88bf39b61"
 BEFORE = "067_retro_completion"
 AFTER = "069_remove_unused_shop_caches"

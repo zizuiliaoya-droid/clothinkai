@@ -6,32 +6,32 @@ import unittest
 import release_builder as builder
 import test_release_tools as fixtures
 
-# Independently captured from 55477c44 / index-JRFSXLaN.js, SHA256
-# 4549c43d3081a651dfe5664a6e19c0d978cadbe05f8e364370ad82b0acfa50e5.
+# Independently captured from 53c1c556 / index-eWLpoAiz.js, SHA256
+# 52dbf6a1720ca122a9e5b9b53891b6a5fe5a35e3753faf4bcc34b1115b285ff4.
 CONTEXT_0 = (
     'var m="(?:(?:[a-z]+:)?//)",p="(?:\\\\S+(?::\\\\S*)?@)?",h=d.v4().source,g=d.v6'
     '().source,y="(?:(?:[a-z\\\\u00a1-\\\\uffff0-9][-_]*)*[a-z\\\\u00a1-\\\\uffff0-9]+)'
     '",v="(?:\\\\.(?:[a-z\\\\u00a1-\\\\uffff0-9]-*)*[a-z\\\\u00a1-\\\\uffff0-9]+)*",b="(?'
     ':\\\\.(?:[a-z\\\\u00a1-\\\\uffff]{2,}))",x="(?::\\\\d{2,5})?",C=\'(?:[/?#][^\\\\s"]*)'
     '?\',S="(?:".concat(m,"|www\\\\.)").concat(p,"(?:localhost|").concat(h,"|").co'
-    'ncat(g,"|").concat(y).concat(v).concat(b,")").concat(x).concat(C);return K'
-    'p=new RegExp("(?:^".concat(S,"$)"),"i"),Kp}'
+    'ncat(g,"|").concat(y).concat(v).concat(b,")").concat(x).concat(C);return Y'
+    'p=new RegExp("(?:^".concat(S,"$)"),"i"),Yp}'
 ).encode("utf-8")
 
 CONTEXT_1 = (
-    'F$=typeof window<"u"&&typeof document<"u",EC=typeof navigator=="object"&&n'
-    'avigator||void 0,dve=F$&&(!EC||["ReactNative","NativeScript","NS"].indexOf'
-    '(EC.product)<0),fve=typeof WorkerGlobalScope<"u"&&self instanceof WorkerGl'
-    'obalScope&&typeof self.importScripts=="function",mve=F$&&window.location.h'
-    'ref||"http://localhost",pve=Object.freeze(Object.defineProperty({__proto__'
-    ":null,hasBrowserEnv:F$,hasStandardBrowserEnv:dve,hasStandardBrowserWebWork"
-    'erEnv:fve,navigator:EC,origin:mve},Symbol.toStringTag,{value:"Module"})),X'
-    "r={...pve,...uve};"
+    'W$=typeof window<"u"&&typeof document<"u",RC=typeof navigator=="object"&&n'
+    'avigator||void 0,$ve=W$&&(!RC||["ReactNative","NativeScript","NS"].indexOf'
+    '(RC.product)<0),Eve=typeof WorkerGlobalScope<"u"&&self instanceof WorkerGl'
+    'obalScope&&typeof self.importScripts=="function",_ve=W$&&window.location.h'
+    'ref||"http://localhost",Ive=Object.freeze(Object.defineProperty({__proto__'
+    ":null,hasBrowserEnv:W$,hasStandardBrowserEnv:$ve,hasStandardBrowserWebWork"
+    'erEnv:Eve,navigator:RC,origin:_ve},Symbol.toStringTag,{value:"Module"})),Q'
+    "r={...Ive,...wve};"
 ).encode("utf-8")
 
 CONTEXT_2 = (
     '{key:"forwarded_allow_ips",label:a("FORWARDED_ALLOW_IPS"),children:e.forwa'
-    'rded_allow_ips_set?f.jsx("span",{style:Kc,children:qF(e)}):"未设置（uvicorn 默认'
+    'rded_allow_ips_set?f.jsx("span",{style:Gc,children:sL(e)}):"未设置（uvicorn 默认'
     '只信任 127.0.0.1）"}];return f.jsxs(f.Fragment,'
 ).encode("utf-8")
 
@@ -41,7 +41,7 @@ CONTEXTS = (CONTEXT_0, CONTEXT_1, CONTEXT_2)
 class FrontendOriginContextTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        repo = Path(__file__).resolve().parents[4]
+        repo = Path(__file__).resolve().parents[3]
         cls.lock = builder.git(
             repo, "cat-file", "blob", "6684bbce496513b7b2abb31392c84bf68b650f6f"
         )
@@ -65,7 +65,7 @@ class FrontendOriginContextTests(unittest.TestCase):
 
     def test_context_variants_rejected(self):
         edits = [
-            (b"return Kp=new RegExp", b"return fetch"),
+            (b"return Yp=new RegExp", b"return fetch"),
             (b"window.location.href", b"window.location.origin"),
             ("默认只信任".encode(), "默认信任".encode()),
         ]
@@ -99,7 +99,7 @@ class FrontendOriginContextTests(unittest.TestCase):
     def test_request_inside_context_rejected(self):
         changed = copy.deepcopy(self.front)
         changed["assets/app.js"] = changed["assets/app.js"].replace(
-            b"origin:mve}", b'origin:fetch("http://localhost")}'
+            b"origin:_ve}", b'origin:fetch("http://localhost")}'
         )
         self.reject(changed)
 

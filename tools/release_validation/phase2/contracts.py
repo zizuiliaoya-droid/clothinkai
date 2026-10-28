@@ -5,7 +5,7 @@ import hashlib
 import json
 import re
 
-PHASE1_SHA = "fb07f98f6e87fe85e93405a2f78d7df42346ca50ddbf0cec1589f376f1963fc1"
+PHASE1_SHA = "158d1063c2144c07798a72cb2d5671f7473b012bb5bcf36154f9970e6e003c2d"
 BEFORE = "067_retro_completion"
 AFTER = "069_remove_unused_shop_caches"
 TARGET = {

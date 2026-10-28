@@ -473,8 +473,8 @@ def validate_html_assets(files):
     References().feed(files["index.html"].decode("utf-8"))
 
 
-# Exact non-request contexts: candidate 55477c44/index-JRFSXLaN.js SHA256
-# 4549c43d3081a651dfe5664a6e19c0d978cadbe05f8e364370ad82b0acfa50e5.
+# Exact non-request contexts: candidate 53c1c556/index-eWLpoAiz.js SHA256
+# 52dbf6a1720ca122a9e5b9b53891b6a5fe5a35e3753faf4bcc34b1115b285ff4.
 # async-validator 5.1.2 es/rule/url.js SHA256
 # 67b88ae8debf8b3045bad20b07c5bb7f43161f99580148ae2e3b46b2174c837d;
 # Axios 1.17.0 lib/platform/common/utils.js SHA256
@@ -492,27 +492,27 @@ _FRONTEND_NONREQUEST_CONTEXTS = (
             '9]+)*",b="(?:\\\\.(?:[a-z\\\\u00a1-\\\\uffff]{2,}))",x="(?::\\\\d{2,5})?",C=\'('
             '?:[/?#][^\\\\s"]*)?\',S="(?:".concat(m,"|www\\\\.)").concat(p,"(?:localhost'
             '|").concat(h,"|").concat(g,"|").concat(y).concat(v).concat(b,")").conc'
-            'at(x).concat(C);return Kp=new RegExp("(?:^".concat(S,"$)"),"i"),Kp}'
+            'at(x).concat(C);return Yp=new RegExp("(?:^".concat(S,"$)"),"i"),Yp}'
         ).encode("utf-8"),
     ),
     (
         'axios-browser-origin',
         (
-            'F$=typeof window<"u"&&typeof document<"u",EC=typeof navigator=="object'
-            '"&&navigator||void 0,dve=F$&&(!EC||["ReactNative","NativeScript","NS"]'
-            '.indexOf(EC.product)<0),fve=typeof WorkerGlobalScope<"u"&&self instanc'
-            'eof WorkerGlobalScope&&typeof self.importScripts=="function",mve=F$&&w'
-            'indow.location.href||"http://localhost",pve=Object.freeze(Object.defin'
-            'eProperty({__proto__:null,hasBrowserEnv:F$,hasStandardBrowserEnv:dve,h'
-            'asStandardBrowserWebWorkerEnv:fve,navigator:EC,origin:mve},Symbol.toSt'
-            'ringTag,{value:"Module"})),Xr={...pve,...uve};'
+            'W$=typeof window<"u"&&typeof document<"u",RC=typeof navigator=="object'
+            '"&&navigator||void 0,$ve=W$&&(!RC||["ReactNative","NativeScript","NS"]'
+            '.indexOf(RC.product)<0),Eve=typeof WorkerGlobalScope<"u"&&self instanc'
+            'eof WorkerGlobalScope&&typeof self.importScripts=="function",_ve=W$&&w'
+            'indow.location.href||"http://localhost",Ive=Object.freeze(Object.defin'
+            'eProperty({__proto__:null,hasBrowserEnv:W$,hasStandardBrowserEnv:$ve,h'
+            'asStandardBrowserWebWorkerEnv:Eve,navigator:RC,origin:_ve},Symbol.toSt'
+            'ringTag,{value:"Module"})),Qr={...Ive,...wve};'
         ).encode("utf-8"),
     ),
     (
         'trusted-proxy-explanation',
         (
             '{key:"forwarded_allow_ips",label:a("FORWARDED_ALLOW_IPS"),children:e.f'
-            'orwarded_allow_ips_set?f.jsx("span",{style:Kc,children:qF(e)}):"未设置（uv'
+            'orwarded_allow_ips_set?f.jsx("span",{style:Gc,children:sL(e)}):"未设置（uv'
             'icorn 默认只信任 127.0.0.1）"}];return f.jsxs(f.Fragment,'
         ).encode("utf-8"),
     ),

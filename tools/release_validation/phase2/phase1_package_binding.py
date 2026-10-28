@@ -10,8 +10,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from types import ModuleType
 
-PHASE1_PINS = "fb07f98f6e87fe85e93405a2f78d7df42346ca50ddbf0cec1589f376f1963fc1"
-BUILDER_SHA = "74f9ca3f5735b877090ad7bfa1669288adae62238ef283857dc496cf022584aa"
+PHASE1_PINS = "158d1063c2144c07798a72cb2d5671f7473b012bb5bcf36154f9970e6e003c2d"
+BUILDER_SHA = "876b77666cebc6efb1311e55953109b05d089843a63079184090c882773fa66a"
 PACKAGE_PINS_FILE = "implementation-pins-069-1028.json"
 
 
