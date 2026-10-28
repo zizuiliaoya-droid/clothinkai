@@ -3,7 +3,7 @@ import { StyleImageThumbnail } from "@/components/StyleImageThumbnail/StyleImage
 //
 // - 矩阵里已有的分组（商品归属与颜色尺码、收件、发货）按 ui.fields 出：不在 fields 里整块不渲染（运营看不到收件），
 //   edit 的分组右上角出「编辑」，打开列表页现有的弹窗
-// - 合作信息、发布两块矩阵还没有分组（随 PR-6 ~ PR-9 补），照详情接口给的值只读显示；报价读不到时接口给 null，整行不出
+// - 内容分类与其他平台按矩阵控制编辑；报价读不到时接口给 null，整行不出
 // - 不显示商品编码 / SKU 编码（规-1）
 import type { ReactNode } from "react";
 import { Button, Descriptions, Space, Spin, Tag, Typography } from "antd";
@@ -16,6 +16,8 @@ import { itemSpecLines, shipDetailLines } from "@/features/promotion/shipDisplay
 import type { Promotion } from "@/features/promotion/types";
 import { FlowAction } from "@/features/flow/FlowAction";
 import type { FreightModalMode } from "./FreightModal";
+import { ContentCategoryEditor } from "./ContentCategoryEditor";
+import { PlatformPostsEditor } from "./PlatformPostsEditor";
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -68,6 +70,7 @@ export function PromotionDetailPanel({
         <Descriptions size="small" column={{ xs: 1, sm: 2 }}>
           <Descriptions.Item label="合作模式">{dash(data.cooperation_mode)}</Descriptions.Item>
           <Descriptions.Item label="合作平台">{dash(data.platform)}</Descriptions.Item>
+          <Descriptions.Item label="内容分类"><ContentCategoryEditor promotion={data} /></Descriptions.Item>
           <Descriptions.Item label="合作日期">{dash(data.cooperation_date)}</Descriptions.Item>
           <Descriptions.Item label="预定发布日期">{dash(data.scheduled_publish_date)}</Descriptions.Item>
           {data.quote_amount != null && (
@@ -139,6 +142,7 @@ export function PromotionDetailPanel({
           </Descriptions.Item>
         </Descriptions>
       </Section>
+      <PlatformPostsEditor promotion={data} />
       <FieldBlock ui={ui} group="payment_qr" title="收款码">
         {data.payment_qr_signed_url ? <StyleImageThumbnail size={100} src={data.payment_qr_signed_url} alt="博主收款码" /> : <Typography.Text>{data.payment_qr_attachment_id ? "已上传收款码（暂时无法预览）" : "尚未上传收款码"}</Typography.Text>}
         {onPaymentQr && <Button onClick={() => onPaymentQr(data)}>{ui?.fields?.payment_qr?.state === "edit" ? "管理收款码" : "查看收款码"}</Button>}

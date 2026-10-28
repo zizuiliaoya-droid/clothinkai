@@ -1095,6 +1095,7 @@ class TestFlowUi:
                 "quote_amount": {"state": "read"},
                 "receiver": {"state": "edit"},
                 "shipping": {"state": "grey", "hint": "推送后由仓库回填"},
+                "platform_posts": {"state": "grey", "hint": "发布后可录其他平台"},
                 # PR-6：7 天数据与收款码入矩阵，没发布时都灰
                 "metrics": {"state": "grey", "hint": "已结款后可录"},
                 "payment_qr": {"state": "grey", "hint": "发布后上传"},
@@ -1123,6 +1124,7 @@ class TestFlowUi:
             "cooperation": {"state": "read"},
             "cooperation_mode": {"state": "read"},
             "shipping": {"state": "grey", "hint": "推送后由仓库回填"},
+            "platform_posts": {"state": "grey", "hint": "发布后可录其他平台"},
             # 运营看得到 7 天数据（灰），看不到收款码（字段规则 promotion.payment_qr）
             "metrics": {"state": "grey", "hint": "已结款后可录"},
             "recall_info": {"state": "read"},

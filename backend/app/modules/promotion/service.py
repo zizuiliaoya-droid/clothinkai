@@ -73,6 +73,7 @@ from app.modules.promotion.repository import (
 )
 from app.modules.promotion.schemas import (
     GoodsItemIn,
+    PlatformPostIn,
     PromotionCreate,
     PromotionDuplicateWarning,
     PromotionPage,
@@ -275,6 +276,9 @@ class PromotionService(
             cooperation_mode=payload.cooperation_mode.value,
             return_shipping_fee=payload.return_shipping_fee,
             platform=payload.platform,
+            content_category=payload.content_category
+            if "content_category" in payload.model_fields_set
+            else blogger.content_category,
             cooperation_date=cooperation_date,
             scheduled_publish_date=payload.scheduled_publish_date,
             note_title=payload.note_title,
@@ -429,6 +433,13 @@ class PromotionService(
         # 字段写权限；收件三项过写权限并规范化电话（之后的比对与落库都用规范化值）
         await self._check_amount_write_permission(payload, user)
         payload = await self._normalize_receiver(payload, user, check_write=True)
+        if payload.platform is not None and payload.platform != promotion.platform:
+            from app.modules.promotion.platform_posts import posts_by_promotion, validate_platforms
+
+            existing = (
+                await posts_by_promotion(self._session, [promotion_id], tenant_id=user.tenant_id)
+            ).get(promotion_id, [])
+            validate_platforms(existing, payload.platform)
 
         # 合作模式：空值可以补一次（历史导入数据没有这个信息），有值就锁死。
         # PRD 的「生成后不可修改」靠这里拦，不靠前端禁用 —— 接口直接传值一样挡住。
@@ -586,6 +597,52 @@ class PromotionService(
         await self._session.commit()
         return await self._to_response(promotion, user)
 
+    async def replace_platform_posts(
+        self, promotion_id: UUID, rows: list[PlatformPostIn], user: User
+    ) -> PromotionResponse:
+        from app.modules.promotion.platform_posts import (
+            posts_by_promotion,
+            replace_posts,
+            validate_platforms,
+        )
+
+        promotion = await self._writable_promotion(promotion_id, user)
+        actor = await self._flow_actor(user)
+        if (
+            cell_level(actor, await self._promotion_doc(promotion), "field", "platform_posts")
+            is not Level.EDIT
+        ):
+            raise FieldPermissionDenied(fields=["platform_posts"], entity="promotion")
+        validate_platforms(rows, promotion.platform)
+        old = (
+            await posts_by_promotion(self._session, [promotion_id], tenant_id=user.tenant_id)
+        ).get(promotion_id, [])
+        before = [p.model_dump(mode="json", exclude={"id"}) for p in old]
+        after = [p.model_dump(mode="json") for p in rows]
+        if before != after:
+            await replace_posts(
+                self._session,
+                promotion_id=promotion_id,
+                tenant_id=user.tenant_id,
+                actor_id=user.id,
+                rows=rows,
+            )
+            await self._append_patch_events(
+                promotion,
+                user,
+                changes={"platform_posts": {"before": before, "after": after}},
+                mode_before=promotion.cooperation_mode,
+                amount_before=self._amount_snapshot(promotion),
+            )
+            await self._audit.log(
+                action="promotion.platform_posts",
+                resource="promotion",
+                resource_id=promotion_id,
+                user_id=user.id,
+            )
+        await self._session.commit()
+        return await self._to_response(promotion, user)
+
     async def replace_items(
         self, promotion_id: UUID, items: list[GoodsItemIn], user: User
     ) -> PromotionResponse:
@@ -674,6 +731,7 @@ class PromotionService(
                 filters.settlement_status.value if filters.settlement_status else None
             ),
             platform=filters.platform,
+            content_category=filters.content_category,
             blogger_id=filters.blogger_id,
             style_id=filters.style_id,
             pr_id=filters.pr_id,
@@ -712,6 +770,9 @@ class PromotionService(
         )
         # 商品明细整页一次查（流程线 7.3）
         page_ids = [row.promotion.id for row in rows]
+        from app.modules.promotion.platform_posts import posts_by_promotion
+
+        page_posts = await posts_by_promotion(self._session, page_ids, tenant_id=user.tenant_id)
         freights = await ReturnFreightRepository(self._session).briefs(
             page_ids, tenant_id=user.tenant_id
         )
@@ -749,6 +810,7 @@ class PromotionService(
                 goods_short_name=row.goods_short_name,
                 goods_preloaded=True,
                 items=page_items.get(row.promotion.id, []),
+                platform_posts=page_posts.get(row.promotion.id, []),
                 actor=actor,
                 view="list",
                 stage=row.stage,

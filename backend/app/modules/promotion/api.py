@@ -37,6 +37,7 @@ from app.modules.promotion.enums import (
 from app.modules.promotion.filter_options import PromotionFilterOptions, list_filter_options
 from app.modules.promotion.schemas import (
     GoodsItemIn,
+    PlatformPostIn,
     PromotionAmountLogResponse,
     PromotionCancelRequest,
     PromotionCreate,
@@ -63,6 +64,20 @@ from app.modules.promotion.schemas import (
 )
 
 router = APIRouter(prefix="/api", tags=["promotion"])
+
+
+@router.put(
+    "/promotions/{promotion_id}/platform-posts",
+    response_model=PromotionResponse,
+    dependencies=[require_permission("promotion", "write")],
+)
+async def replace_platform_posts(
+    promotion_id: UUID,
+    rows: Annotated[list[PlatformPostIn], Body(max_length=5)],
+    user: CurrentActiveUser,
+    service: PromotionServiceDep,
+) -> PromotionResponse:
+    return await service.replace_platform_posts(promotion_id, rows, user)
 
 
 # ---------------------------------------------------------------------------
@@ -111,6 +126,7 @@ async def list_promotions(
     recall_status: RecallStatus | None = None,
     settlement_status: SettlementStatus | None = None,
     platform: Annotated[str | None, Query(max_length=16)] = None,
+    content_category: Annotated[str | None, Query(max_length=8)] = None,
     blogger_id: UUID | None = None,
     style_id: UUID | None = None,
     pr_id: UUID | None = None,
@@ -145,6 +161,7 @@ async def list_promotions(
         recall_status=recall_status,
         settlement_status=settlement_status,
         platform=platform,
+        content_category=content_category,
         blogger_id=blogger_id,
         style_id=style_id,
         pr_id=pr_id,
