@@ -95,7 +95,8 @@ def test_published_recall_keeps_stage_g_and_original_field_locks(
 @pytest.mark.parametrize("write", [False, True])
 def test_urge_ui_uses_effective_scope_and_exact_task_state(write):
     perms = EffectivePermissions(
-        user_id="synthetic", scopes=frozenset({"promotion.urge:write"} if write else {"promotion.urge:read"})
+        user_id="synthetic",
+        scopes=frozenset({"promotion.urge:write"} if write else {"promotion.urge:read"}),
     )
     row = {
         "id": uuid4(),
