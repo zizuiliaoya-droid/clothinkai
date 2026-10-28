@@ -4,6 +4,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getDrillPromotions } from "@/features/report/api";
 import type { DrillPromotionPage, DrillPromotionRow } from "@/features/report/types";
@@ -70,7 +71,7 @@ function page(items: DrillPromotionRow[], total = items.length, p = 1): DrillPro
 function renderModal(target: DrillPromotionTarget | null) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const wrap = (node: ReactNode) => (
-    <QueryClientProvider client={client}>{node}</QueryClientProvider>
+    <MemoryRouter><QueryClientProvider client={client}>{node}</QueryClientProvider></MemoryRouter>
   );
   return render(wrap(<DrillPromotionModal target={target} onClose={() => {}} />));
 }
@@ -185,15 +186,22 @@ describe("DrillPromotionModal", () => {
     expect(within(hidden).queryByText(/¥/)).toBeNull();
   });
 
-  it("不渲染任何链接（detail_url 有值也不渲染，R8 才接详情）", async () => {
+  it("只在后端给出detail_url时把推广编号渲染为键盘可达链接", async () => {
     vi.mocked(getDrillPromotions).mockResolvedValue(
       page([row({ detail_url: "/promotions?id=p1" })])
     );
     renderModal(TARGET);
     await screen.findByText("TG-001");
     const dialog = screen.getByRole("dialog");
-    expect(dialog.querySelector("a[href]")).toBeNull();
+    expect(within(dialog).getByRole("link", { name: "TG-001" }).getAttribute("href")).toBe("/promotions?id=p1");
     expect(within(dialog).queryByText("/promotions?id=p1")).toBeNull();
+  });
+
+  it("detail_url=null时编号仍是文本", async () => {
+    vi.mocked(getDrillPromotions).mockResolvedValue(page([row({ detail_url: null })]));
+    renderModal(TARGET);
+    await screen.findByText("TG-001");
+    expect(screen.queryByRole("link", { name: "TG-001" })).toBeNull();
   });
 
   it("翻页请求下一页，每页 20 条", async () => {

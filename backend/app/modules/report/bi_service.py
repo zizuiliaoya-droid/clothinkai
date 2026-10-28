@@ -17,7 +17,9 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security.field_permissions import FieldPermissionContext
+from app.core.security.permissions import EffectivePermissions
 from app.modules.product.goods_schemas import goods_display_name
+from app.modules.promotion.read_access import PromotionReadAccess
 from app.modules.report.advanced_repository import BiNotesRepository, TargetPlanningRepository
 from app.modules.report.advanced_schemas import (
     BiChartDatum,
@@ -93,6 +95,7 @@ class BiService:
         self._production = ProductionService(session)
         self._targets = TargetPlanningRepository(session)
         self._notes = BiNotesRepository(session)
+        self._read_access = PromotionReadAccess(session)
 
     async def get_dashboard(
         self,
@@ -186,6 +189,7 @@ class BiService:
         date_to: date,
         *,
         field_ctx: FieldPermissionContext,
+        perms: EffectivePermissions,
     ) -> BiGoodsNotes:
         """笔记散点：区间内合作、归属该商品、已发布且录过 7 天数据的单，按发布日期升序。
 
@@ -203,6 +207,9 @@ class BiService:
         truncated = len(rows) > MAX_NOTE_POINTS
         rows = rows[:MAX_NOTE_POINTS]
         cost_ok = promotion_amounts_visible(field_ctx)[1]
+        visible = await self._read_access.visible_ids(
+            [r["promotion_id"] for r in rows], tenant_id=tenant_id, perms=perms
+        )
         return BiGoodsNotes(
             goods_id=goods_id,
             date_from=date_from,
@@ -217,7 +224,9 @@ class BiService:
                     promo_cost=r["promo_cost"] if cost_ok else None,
                     blogger_nickname=r["blogger_nickname"],
                     platform=r["platform"],
-                    detail_url=None,
+                    detail_url=f"/promotions?id={r['promotion_id']}"
+                    if r["promotion_id"] in visible
+                    else None,
                 )
                 for r in reversed(rows)
             ],

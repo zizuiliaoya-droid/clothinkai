@@ -23,6 +23,12 @@ from app.modules.metric_config.settings import (
     hit_condition_sql,
 )
 from app.modules.promotion.display_name import display_short_name_sql
+from app.modules.promotion.goods_attribution import (
+    PROMO_GOODS_ID as _PROMO_GOODS_ID,
+)
+from app.modules.promotion.goods_attribution import (
+    PROMO_GOODS_LATERAL as _PROMO_GOODS_LATERAL,
+)
 from app.modules.promotion.urge_calculator import URGE_STATUS_SQL_EXPR, UrgeThresholds
 from app.modules.report.pr_scope import PrParam, PrScope, pr_scope_from_param
 
@@ -46,24 +52,6 @@ _URGE = URGE_STATUS_SQL_EXPR
 _REFUND_SUM = "COALESCE(SUM(q.refund_amount), 0)"
 
 _ADD_CART_SUM = "COALESCE(SUM(q.add_cart_count), 0)"
-
-# 推广单的商品归属：推广记录自己记了商品（PR 录入时指定，可人工纠正）就用它；
-# 为空时回落到「主商品」推定 —— 款式所在商品里非套装优先、货号次之。兜底只为兼容历史
-# 数据与「款式还没归到商品」的异常，不是常规路径。
-#
-# 用法：``FROM promotion p {_PROMO_GOODS_LATERAL}``，归属 = ``COALESCE(p.goods_main_id,
-# owner.goods_main_id)``。投产主表与报表下钻引用这一处（7e R1），口径不各写一份。
-_PROMO_GOODS_LATERAL = """
-LEFT JOIN LATERAL (
-  SELECT gi.goods_main_id
-  FROM goods_style_item gi
-  JOIN goods_main gg ON gg.id = gi.goods_main_id
-  WHERE gi.style_id = p.style_id AND gi.is_active = true
-  ORDER BY gg.is_suit, gg.goods_code
-  LIMIT 1
-) owner ON p.goods_main_id IS NULL"""
-
-_PROMO_GOODS_ID = "COALESCE(p.goods_main_id, owner.goods_main_id)"
 
 # 商品维度报表的「商品信息」列（投产主表与它的汇总表读取共用）
 GOODS_META_COLUMNS = """

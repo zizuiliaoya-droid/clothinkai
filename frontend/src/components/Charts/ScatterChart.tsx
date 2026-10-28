@@ -26,6 +26,7 @@ interface Props {
   formatSize?: (v: number) => string;
   /** 点击点（只鼠标；键盘走「查看数据」表格）。 */
   onSelect?: (d: ScatterDatum) => void;
+  canSelect?: (d: ScatterDatum) => boolean;
   renderLabel?: (d: ScatterDatum) => ReactNode;
   /** 悬停提示，默认「标签：x，y」。 */
   pointTitle?: (d: ScatterDatum) => string;
@@ -62,6 +63,7 @@ export function ScatterChart({
   formatY = defaultFormat,
   formatSize = defaultFormat,
   onSelect,
+  canSelect,
   renderLabel,
   pointTitle,
   emptyText = "暂无数据",
@@ -134,7 +136,7 @@ export function ScatterChart({
           </text>
         ))}
         {points.map((p) => {
-          const clickable = !!onSelect;
+          const clickable = !!onSelect && (canSelect?.(p) ?? true);
           return (
             <circle
               key={p.key}

@@ -19,7 +19,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import AppException
+from app.core.exceptions import AppException, PermissionDeniedError
 from app.modules.promotion.schemas import (
     PromotionPaymentQrBindRequest,
     PromotionPaymentQrUploadInitRequest,
@@ -507,8 +507,17 @@ class TestVisibilityAndRoute:
             settlement="待付款",
         )
         svc = PromotionService(session)
+        # 财务字段规则允许签名，不等于允许进入完整推广详情。保留两层独立断言。
+        with pytest.raises(PermissionDeniedError) as denied:
+            await svc.get_promotion(promo.id, flow_users.finance)
+        assert denied.value.details["required_scope"] == "promotion"
         for who in ("finance", "pr", "pr_manager", "admin"):
-            resp = await svc.get_promotion(promo.id, getattr(flow_users, who))
+            user = getattr(flow_users, who)
+            resp = (
+                await svc._to_response(promo, user)
+                if who == "finance"
+                else await svc.get_promotion(promo.id, user)
+            )
             assert resp.payment_qr_attachment_id == promo.payment_qr_attachment_id, who
             assert resp.payment_qr_signed_url is not None, who
         resp = await svc.get_promotion(promo.id, flow_users.operations)

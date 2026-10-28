@@ -17,6 +17,11 @@ const api = vi.hoisted(() => ({
   uploadPaymentQrFile: vi.fn(),
   removePaymentQr: vi.fn(),
   writeRetrospective: vi.fn(),
+  getPromotionFilterOptions: vi.fn(),
+}));
+vi.mock("@/features/preference/api", () => ({
+  getFilterPreference: vi.fn().mockResolvedValue({}),
+  saveFilterPreference: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("@/features/promotion/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/features/promotion/api")>()),
@@ -57,6 +62,7 @@ beforeAll(() => {
 afterEach(cleanup);
 beforeEach(() => {
   for (const fn of Object.values(api)) fn.mockReset();
+  api.getPromotionFilterOptions.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 50, selected: null, seasons: [] });
 });
 
 const ENABLED = { state: "enabled" as const };

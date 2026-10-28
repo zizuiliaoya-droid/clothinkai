@@ -38,6 +38,7 @@ from app.modules.promotion.display_name import (
 )
 from app.modules.promotion.enums import ShipStatus
 from app.modules.promotion.exceptions import SequenceOverflowError
+from app.modules.promotion.goods_attribution import PROMO_GOODS_ID, PROMO_GOODS_LATERAL
 from app.modules.promotion.models import BloggerRetrospective, Promotion, PromotionItem
 from app.modules.promotion.stage_calculator import PROMOTION_STAGES, STAGE_COLUMN, stage_sql_expr
 from app.modules.promotion.urge_calculator import URGE_STATUS_SQL_EXPR
@@ -67,6 +68,9 @@ class PromotionListFilters:
     """列表查询筛选条件（service 层从 PromotionListFilters Pydantic 转换而来）。"""
 
     keyword: str | None = None
+    goods_main_id: UUID | None = None
+    seasons: Sequence[str] | None = None
+    unassigned_only: bool = False
     publish_status: str | None = None
     recall_status: str | None = None
     settlement_status: str | None = None
@@ -951,9 +955,19 @@ class PromotionRepository:
             ``(rows, total)`` — rows 含 promotion + urge_status + dual_platform。
         """
         # ------ 构造 base CTE（含计算列）------
+        goods_join = ""
+        goods_columns = ""
+        if filters.goods_main_id is not None or filters.seasons:
+            goods_join = f"""{PROMO_GOODS_LATERAL}
+                LEFT JOIN goods_main filter_goods
+                  ON filter_goods.id = {PROMO_GOODS_ID}
+                 AND filter_goods.tenant_id = p.tenant_id"""
+            goods_columns = f"""{PROMO_GOODS_ID} AS filter_goods_main_id,
+                filter_goods.season AS filter_goods_season,"""
         base_sql = f"""
         WITH base AS (
             SELECT p.*,
+                   {goods_columns}
                    s.main_image_key AS style_main_image_key,
                    g.goods_code AS goods_code,
                    COALESCE(g.is_suit, false) AS goods_is_suit,
@@ -975,6 +989,7 @@ class PromotionRepository:
               ON s.id = p.style_id AND s.tenant_id = p.tenant_id
             LEFT JOIN goods_main g
               ON g.id = p.goods_main_id AND g.tenant_id = p.tenant_id
+            {goods_join}
             WHERE p.tenant_id = :tenant_id
         ),
         -- 阶段放在只有推广单列的这一层算：style 也有 is_active，放进上面的 JOIN 会歧义
@@ -1058,6 +1073,15 @@ class PromotionRepository:
                 clauses.append("stage = CAST(:ship_pending_stage AS text)")
                 params["ship_pending_stage"] = SHIP_PENDING_STAGE
 
+        if filters.goods_main_id is not None:
+            clauses.append("filter_goods_main_id = CAST(:filter_goods_main_id AS uuid)")
+            params["filter_goods_main_id"] = filters.goods_main_id
+        if filters.seasons:
+            clauses.append("filter_goods_season = ANY(CAST(:filter_seasons AS text[]))")
+            params["filter_seasons"] = list(filters.seasons)
+        if filters.unassigned_only:
+            clauses.append("pr_id IS NULL")
+
         where_extra = ""
         if clauses:
             where_extra = " AND " + " AND ".join(clauses)
@@ -1070,7 +1094,7 @@ class PromotionRepository:
         data_sql = (
             base_sql
             + where_extra
-            + " ORDER BY cooperation_date DESC, created_at DESC "
+            + " ORDER BY cooperation_date DESC, created_at DESC, id DESC "
             + " LIMIT :limit OFFSET :offset"
         )
         params["limit"] = page_size
