@@ -1,11 +1,10 @@
 """汇总表刷新：写进去的数字必须和实时聚合一字不差。
 
-本 PR 刻意**不切换读取路径** —— 先刷新 + 校验，确认汇总表的数字与实时查询逐分
-相等，再在下个 PR 切读。这组测试就是那个「确认」。
+069移除无人读取的周/月缓存；三张日汇总继续支撑当前读取路径。
 
 覆盖四件事：
 
-1. **刷新结果 == 实时聚合**（5 张表各一条）
+1. **刷新结果 == 实时聚合**（3 张表各一条）
 2. **幂等**：同一区间刷两次，行数与数字都不变
 3. **陈旧行清理**：源数据删掉后，汇总表对应的行要跟着消失（纯 upsert 会漏这个）
 4. **增量边界**：只刷 3 月不能动 4 月已有的汇总行
@@ -13,13 +12,12 @@
 第 3 条是最容易被漏掉的：只做 upsert 的实现跑完测试一样绿，上线后千牛日报一改
 货号，旧商品的汇总行就永远留在那里，区间求和偏高且无人察觉。
 
-周/月表另有一条单独的坑：区间只覆盖半个月时，必须把桶补全成整月再算，
-否则那一行只含半个月的数据。
+日表仍保留原来的完整周/月刷新窗口；第一次刷新也不能漏掉窗口外的月初。
 """
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date
 from decimal import Decimal
 from typing import Any
 from uuid import uuid4
@@ -44,8 +42,6 @@ from app.modules.report.summary_models import (
     ProductRoiSummary,
     PrWorkProgressSummary,
     ShopDailySummary,
-    ShopMonthSummary,
-    ShopWeekSummary,
 )
 from app.modules.report.summary_refresh_service import SummaryRefreshService
 from app.modules.urge.service import UrgeService
@@ -297,7 +293,7 @@ class TestRefreshMatchesLiveAggregation:
         finally:
             tenant_id_ctx.reset(tok)
 
-    async def test_shop_daily_equals_live_and_week_month_fold(
+    async def test_shop_daily_equals_live(
         self,
         session: AsyncSession,
         tenant_a: Any,
@@ -305,7 +301,7 @@ class TestRefreshMatchesLiveAggregation:
         blogger_factory: Any,
         promotion_factory: Any,
     ) -> None:
-        """店铺日汇总 == 实时聚合；周/月汇总 == 日汇总的加总。"""
+        """店铺日汇总 == 实时聚合。"""
         tok = tenant_id_ctx.set(tenant_a.id)
         try:
             await _seed(session, tenant_a, product_factory, blogger_factory, promotion_factory)
@@ -337,38 +333,6 @@ class TestRefreshMatchesLiveAggregation:
                 assert Decimal(got.pay_amount) == Decimal(row["pay_amount"] or 0)
                 assert got.pay_orders == (row["pay_orders"] or 0)
 
-            # 周 / 月必须等于日的加总
-            day_total = (
-                Decimal(sum(s.pay_amount for s in stored)),
-                sum(s.visitors for s in stored),
-                sum(s.pay_orders for s in stored),
-            )
-            for model in (ShopWeekSummary, ShopMonthSummary):
-                rows = (
-                    (await session.execute(select(model).where(model.tenant_id == tenant_a.id)))
-                    .scalars()
-                    .all()
-                )
-                assert rows, f"{model.__tablename__} 没有数据"
-                assert (
-                    Decimal(sum(r.pay_amount for r in rows)),
-                    sum(r.visitors for r in rows),
-                    sum(r.pay_orders for r in rows),
-                ) == day_total, f"{model.__tablename__} 合计与日表不一致"
-
-            # 桶真的分开了：3 月两个 ISO 周 + 4 月一天 → 至少 3 个周桶、2 个月桶
-            week_n = await session.scalar(
-                select(func.count())
-                .select_from(ShopWeekSummary)
-                .where(ShopWeekSummary.tenant_id == tenant_a.id)
-            )
-            month_n = await session.scalar(
-                select(func.count())
-                .select_from(ShopMonthSummary)
-                .where(ShopMonthSummary.tenant_id == tenant_a.id)
-            )
-            assert week_n >= 3
-            assert month_n == 2
         finally:
             tenant_id_ctx.reset(tok)
 
@@ -561,7 +525,7 @@ class TestRefreshIsRepeatableAndIncremental:
         finally:
             tenant_id_ctx.reset(tok)
 
-    async def test_half_month_refresh_still_writes_full_month_bucket(
+    async def test_half_month_refresh_keeps_full_month_daily_span(
         self,
         session: AsyncSession,
         tenant_a: Any,
@@ -569,11 +533,7 @@ class TestRefreshIsRepeatableAndIncremental:
         blogger_factory: Any,
         promotion_factory: Any,
     ) -> None:
-        """只刷半个月，月汇总那一行仍须是整月的数字。
-
-        漏了「把区间补全成桶」这一步的话，月汇总会只含被刷到的那几天 ——
-        数字偏小，而且因为行确实被更新了，看起来一切正常。
-        """
+        """只刷半个月仍保留既有整月日表窗口，周/月报表继续由日行分桶。"""
         tok = tenant_id_ctx.set(tenant_a.id)
         try:
             await _seed(session, tenant_a, product_factory, blogger_factory, promotion_factory)
@@ -583,9 +543,10 @@ class TestRefreshIsRepeatableAndIncremental:
             await svc.refresh(tenant_id=tenant_a.id, date_from=FULL_LO, date_to=FULL_HI)
             await session.commit()
             full_march = await session.scalar(
-                select(ShopMonthSummary.pay_amount).where(
-                    ShopMonthSummary.tenant_id == tenant_a.id,
-                    ShopMonthSummary.period_month == MAR_LO,
+                select(func.sum(ShopDailySummary.pay_amount)).where(
+                    ShopDailySummary.tenant_id == tenant_a.id,
+                    ShopDailySummary.stat_date >= MAR_LO,
+                    ShopDailySummary.stat_date <= MAR_HI,
                 )
             )
             assert full_march and full_march > Decimal("0")
@@ -597,12 +558,13 @@ class TestRefreshIsRepeatableAndIncremental:
             await session.commit()
 
             after = await session.scalar(
-                select(ShopMonthSummary.pay_amount).where(
-                    ShopMonthSummary.tenant_id == tenant_a.id,
-                    ShopMonthSummary.period_month == MAR_LO,
+                select(func.sum(ShopDailySummary.pay_amount)).where(
+                    ShopDailySummary.tenant_id == tenant_a.id,
+                    ShopDailySummary.stat_date >= MAR_LO,
+                    ShopDailySummary.stat_date <= MAR_HI,
                 )
             )
-            assert after == full_march, "月汇总被半个月的数据覆盖了"
+            assert after == full_march, "日汇总的整月窗口被缩成半个月了"
         finally:
             tenant_id_ctx.reset(tok)
 
@@ -648,9 +610,10 @@ class TestRefreshIsRepeatableAndIncremental:
             await session.commit()
 
             september = await session.scalar(
-                select(ShopMonthSummary.pay_amount).where(
-                    ShopMonthSummary.tenant_id == tenant_a.id,
-                    ShopMonthSummary.period_month == date(2026, 9, 1),
+                select(func.sum(ShopDailySummary.pay_amount)).where(
+                    ShopDailySummary.tenant_id == tenant_a.id,
+                    ShopDailySummary.stat_date >= date(2026, 9, 1),
+                    ShopDailySummary.stat_date < date(2026, 10, 1),
                 )
             )
             assert september == Decimal(
@@ -658,16 +621,17 @@ class TestRefreshIsRepeatableAndIncremental:
             ), f"9 月汇总 {september} 缺了 09-01 的 300 —— 窗口外的月初日汇总没被刷到"
             # 09-01 所在的周（08-31 起）同样要完整
             week = await session.scalar(
-                select(ShopWeekSummary.pay_amount).where(
-                    ShopWeekSummary.tenant_id == tenant_a.id,
-                    ShopWeekSummary.week_start == date(2026, 8, 31),
+                select(func.sum(ShopDailySummary.pay_amount)).where(
+                    ShopDailySummary.tenant_id == tenant_a.id,
+                    ShopDailySummary.stat_date >= date(2026, 8, 31),
+                    ShopDailySummary.stat_date < date(2026, 9, 7),
                 )
             )
             assert week == Decimal("300.00")
         finally:
             tenant_id_ctx.reset(tok)
 
-    async def test_first_half_month_refresh_week_month_rows_equal_day_sums(
+    async def test_first_half_month_refresh_daily_span_preserves_all_metrics(
         self,
         session: AsyncSession,
         tenant_a: Any,
@@ -675,11 +639,7 @@ class TestRefreshIsRepeatableAndIncremental:
         blogger_factory: Any,
         promotion_factory: Any,
     ) -> None:
-        """新租户不做前置刷新、直接刷半月：周 / 月行的 9 列 = 桶内日行之和（062 的 6 列也要折上去）。
-
-        数据都放在窗口外的月初（09-01）或窗口内，且各列来源分散在不同日子：
-        只有并集日期轴 + 周月按 SHOP_METRICS 二次聚合，月行才每列都对。
-        """
+        """首次半月刷新也保留窗口外月初以及九项日指标的各自来源。"""
         tok = tenant_id_ctx.set(tenant_a.id)
         try:
             style = await product_factory.style(style_code=f"HM{uuid4().hex[:6]}")
@@ -768,36 +728,21 @@ class TestRefreshIsRepeatableAndIncremental:
                     Decimal("0"),
                 )
 
-            month = await session.scalar(
-                select(ShopMonthSummary).where(
-                    ShopMonthSummary.tenant_id == tenant_a.id,
-                    ShopMonthSummary.period_month == date(2026, 9, 1),
-                )
-            )
-            assert month is not None
-            for metric in SHOP_METRICS:
-                got = Decimal(getattr(month, metric))
-                assert got == day_sum(date(2026, 9, 1), date(2026, 10, 1), metric), metric
-                assert got > 0, f"月行 {metric} 为 0，场景失效"
-            # 窗口外的月初 09-01 也折进来了
-            assert Decimal(month.pay_amount) == Decimal("500.00")
-
-            weeks = (
-                (
-                    await session.execute(
-                        select(ShopWeekSummary).where(ShopWeekSummary.tenant_id == tenant_a.id)
-                    )
-                )
-                .scalars()
-                .all()
-            )
-            assert weeks
-            for week in weeks:
-                end = week.week_start + timedelta(days=7)
-                for metric in SHOP_METRICS:
-                    assert Decimal(getattr(week, metric)) == day_sum(
-                        week.week_start, end, metric
-                    ), (week.week_start, metric)
+            expected = {
+                "visitors": 20,
+                "pay_amount": 500,
+                "pay_orders": 2,
+                "refund_amount": 50,
+                "brushing_amount": 100,
+                "ad_spend": 70,
+                "promo_cost": 400,
+                "live_pay_amount": 200,
+                "live_ad_spend": 20,
+            }
+            assert set(expected) == set(SHOP_METRICS)
+            for metric, total in expected.items():
+                assert day_sum(date(2026, 9, 1), date(2026, 10, 1), metric) == total, metric
+                assert day_sum(date(2026, 8, 31), date(2026, 9, 7), metric) == total, metric
         finally:
             tenant_id_ctx.reset(tok)
 
@@ -833,11 +778,7 @@ class TestRefreshIsRepeatableAndIncremental:
             ),
             key=lambda t: (t[0], t[1]),
         )
-        for key, model, bucket in (
-            ("day", ShopDailySummary, "stat_date"),
-            ("week", ShopWeekSummary, "week_start"),
-            ("month", ShopMonthSummary, "period_month"),
-        ):
+        for key, model, bucket in (("day", ShopDailySummary, "stat_date"),):
             out[key] = sorted(
                 (getattr(r, bucket), r.visitors, r.pay_amount, r.pay_orders)
                 for r in (await session.execute(select(model).where(model.tenant_id == tenant_id)))

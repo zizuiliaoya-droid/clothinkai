@@ -14,7 +14,6 @@
 | ``product_roi_summary`` | ``ProductionRepository.daily_trend_by_goods(goods_id=None)`` |
 | ``pr_work_progress_summary`` | ``WorkProgressRepository.aggregate_by_pr`` 逐日 |
 | ``shop_daily_summary`` | ``StoreDailyRepository.aggregate`` |
-| ``shop_week_summary`` / ``shop_month_summary`` | ``shop_daily_summary`` 二次聚合 |
 
 代价是 PR 进度要逐日调 N 次查询（生产实测单次 11ms，31 天约 340ms，每小时一次）。
 用这点开销换「刷新与实时读永远同一份 SQL」，值。
@@ -60,7 +59,7 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import Date, cast, delete, func, insert, select, text
+from sqlalchemy import delete, insert, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.metric_config.service import PlatformMetricSettingService
@@ -79,8 +78,6 @@ from app.modules.report.summary_models import (
     ProductRoiSummary,
     PrWorkProgressSummary,
     ShopDailySummary,
-    ShopMonthSummary,
-    ShopWeekSummary,
 )
 from app.modules.urge.service import UrgeService
 
@@ -97,7 +94,7 @@ _ROI_METRICS = ROI_METRICS
 _PR_COUNTERS = PR_PROGRESS_METRICS
 
 # 店铺三张表落盘的指标列，清单只在 summary_models.SHOP_METRICS 定义一次（062），
-# 日表刷新、周 / 月二次聚合与汇总读取共用。
+# 日表刷新与汇总读取共用。
 _SHOP_METRICS = SHOP_METRICS
 
 # 租户级刷新锁。键与覆盖失效 helper 共用（summary_lock_key），失效那边阻塞等这把锁。
@@ -148,17 +145,8 @@ def _next_bucket(bucket_start: date, period: str) -> date:
 def shop_daily_span(date_from: date, date_to: date) -> tuple[date, date]:
     """店铺日汇总要刷新的区间：把 ``[date_from, date_to]`` 扩到完整的周桶与月桶。
 
-    周/月汇总是从日汇总二次聚合的。如果只刷 ``[date_from, date_to]`` 的日汇总，
-    落在区间外、但和区间同属一个周/月的那几天就可能**从来没刷过** —— 周/月那一行
-    会缺掉它们。定时任务的窗口是「今天往前 31 天」，下沿几乎总是落在某个月中间，
-    所以每次都会撞上：窗口 09-02 起，9 月这一行就漏了 09-01。
-
-    店铺日汇总只有一条查询（实测 0.7ms），扩几天没有成本。
-
-    周和月的分桶互相交叠：09-02 所在的周从 08-31 开始，而 08-31 属于 8 月。所以扩出来
-    的几天会碰到区间外的桶（8 月）。那个桶也会被重算（见 ``refresh``），周/月行始终
-    等于桶内日汇总之和；但 8 月其余日子的日汇总本次没刷，8 月这一行的新鲜度取决于
-    它们上次被刷的时间 —— 与「历史数据只能手动刷新」（PRD 模块三）是同一类，不是新问题。
+    保留既有扩展窗口：例如09-02起的窗口仍会刷新09-01等桶内日行。
+    069只删除无人读取的周/月缓存，不改变日表刷新覆盖范围；周/月报表继续从日行分桶。
     """
     lo = min(_bucket_start(date_from, "week"), _bucket_start(date_from, "month"))
     hi = max(
@@ -169,9 +157,9 @@ def shop_daily_span(date_from: date, date_to: date) -> tuple[date, date]:
 
 
 class SummaryRefreshService:
-    """把实时聚合的结果固化进 5 张汇总表。
+    """把实时聚合的结果固化进 3 张日汇总表。
 
-    调用方负责 commit —— 刷新是一个整体，5 张表 + 覆盖记录要么一起更新要么一起回滚，
+    调用方负责 commit —— 刷新是一个整体，3 张表 + 覆盖记录要么一起更新要么一起回滚，
     中间状态（商品 ROI 刷了、店铺日报没刷）会让两张报表对不上账。commit 同时释放
     刷新锁（事务级 advisory lock）。
     """
@@ -207,19 +195,9 @@ class SummaryRefreshService:
             "pr_work_progress_summary": await self._refresh_pr_progress(
                 tenant_id, date_from, date_to, now
             ),
-            # 扩到完整周/月桶，周月二次聚合才不会缺天（见 shop_daily_span）
+            # 保留既有完整周/月窗口（见 shop_daily_span）
             "shop_daily_summary": await self._refresh_shop_daily(tenant_id, shop_lo, shop_hi, now),
         }
-        # 周月从日表二次聚合，必须排在日表之后。
-        # 区间传扩展后的 shop_lo / shop_hi 而不是原区间：这样**凡是刚刷过的日汇总
-        # 所在的周/月都会重算**，周/月行永远等于桶内日汇总之和 —— 月 → 周 → 日
-        # 下钻（PRD 投产模块）各层数字对得上。传原区间的话，扩出来的那几天所在的
-        # 桶（例如 08-31 所在的 8 月）不会重算，日汇总新了、月汇总还是旧的。
-        for period, key in (("week", "shop_week_summary"), ("month", "shop_month_summary")):
-            counts[key] = await self._refresh_shop_bucket(
-                tenant_id, shop_lo, shop_hi, now, period=period
-            )
-
         # 覆盖记录只记 [date_from, date_to]：这是三张日表**都**刷过的区间。
         # 店铺日表多刷的那几天不算 —— 读取侧拿覆盖记录判断能不能用汇总表，
         # 宁可保守（回退实时）也不能把只刷了一张表的日子当成完整。
@@ -357,77 +335,6 @@ class SummaryRefreshService:
             date_col=ShopDailySummary.stat_date,
             date_from=date_from,
             date_to=date_to,
-        )
-        return len(payload)
-
-    # ------------------------------------------------------------------ #
-    # shop_week_summary / shop_month_summary
-    # ------------------------------------------------------------------ #
-    async def _refresh_shop_bucket(
-        self,
-        tenant_id: UUID,
-        date_from: date,
-        date_to: date,
-        now: datetime,
-        *,
-        period: str,
-    ) -> int:
-        """从 ``shop_daily_summary`` 二次聚合出周/月。
-
-        不另写一条按周/月分桶的聚合 SQL：周月就是日的加总，SHOP_METRICS 都可加，
-        从已经校验过口径的日表再 SUM 一次，天然与日表一致 —— 下钻「月 → 周 → 日」时
-        各层数字对得上（PRD 投产模块要求的下钻）。
-
-        桶要完整：只刷 3/10~3/15 却写「3 月」那一行，这行就只含 6 天。所以按桶边界
-        重算，而桶里每一天的日汇总由 ``shop_daily_span`` 保证刚刚刷过。
-        """
-        if period == "week":
-            model: Any = ShopWeekSummary
-            bucket_col: Any = ShopWeekSummary.week_start
-            bucket_name = "week_start"
-        else:
-            model = ShopMonthSummary
-            bucket_col = ShopMonthSummary.period_month
-            bucket_name = "period_month"
-
-        # 区间两端所在的桶 —— 删除与重算都按这个范围，而不是原区间
-        bucket_lo = _bucket_start(date_from, period)
-        bucket_hi = _bucket_start(date_to, period)
-
-        bucket = cast(func.date_trunc(period, ShopDailySummary.stat_date), Date)
-        agg = (
-            select(
-                bucket.label("bucket"),
-                *(
-                    func.coalesce(func.sum(getattr(ShopDailySummary, m)), 0).label(m)
-                    for m in _SHOP_METRICS
-                ),
-            )
-            .where(
-                ShopDailySummary.tenant_id == tenant_id,
-                ShopDailySummary.stat_date >= bucket_lo,
-                ShopDailySummary.stat_date < _next_bucket(bucket_hi, period),
-            )
-            .group_by(bucket)
-        )
-        rows = (await self._s.execute(agg)).mappings().all()
-        payload = [
-            {
-                "id": uuid4(),
-                "tenant_id": tenant_id,
-                bucket_name: r["bucket"],
-                "refreshed_at": now,
-                **{m: r[m] for m in _SHOP_METRICS},
-            }
-            for r in rows
-        ]
-        await self._replace(
-            model,
-            payload,
-            tenant_id=tenant_id,
-            date_col=bucket_col,
-            date_from=bucket_lo,
-            date_to=bucket_hi,
         )
         return len(payload)
 
