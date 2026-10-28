@@ -210,7 +210,8 @@ function renderPage(rows: Promotion[], detail: Promotion, pageUi: PromotionPage[
 }
 
 async function openMenu(): Promise<string[]> {
-  fireEvent.click(await screen.findByRole("button", { name: /操作/ }));
+  const row = (await screen.findAllByText("XHS-20261009-001"))[0].closest("tr")!;
+  fireEvent.click(within(row).getByRole("button", { name: /操作/ }));
   const items = await screen.findAllByRole("menuitem");
   return items.map((el) => el.textContent ?? "");
 }
@@ -334,8 +335,8 @@ describe("PromotionListPage 主线抽屉", () => {
     expect(await d.findByText("这单金额没有改动过")).toBeTruthy();
   });
 
-  it("报价为空但页级 ui 有 amount_log（管理员 / 主管 / PR）：照样有金额改动页签与菜单项", async () => {
-    const row = promotion({ quote_amount: null });
+  it("行无写动作、报价为空但页级 ui 有 amount_log：照样有金额改动页签与菜单项", async () => {
+    const row = promotion({ quote_amount: null, ui: { actions: {}, edits: [] } });
     renderPage([row], { ...row, ui: DETAIL_UI });
     expect(await openMenu()).toContain("金额改动记录");
     fireEvent.click(screen.getByText("金额改动记录"));
@@ -437,7 +438,7 @@ describe("PromotionListPage 按 ui 出按钮与菜单项", () => {
   });
 
   it("催发按行 ui.actions.urge：没有就不出，可点就出，禁用带原因", async () => {
-    renderPage([promotion({ ui: { actions: {}, edits: [] } })], promotion({ ui: DETAIL_UI }));
+    renderPage([promotion({ ui: { actions: {}, edits: [] } })], promotion({ ui: DETAIL_UI }), PAGE_UI_NONE);
     await screen.findAllByText("XHS-20261009-001");
     expect(screen.queryByRole("button", { name: /操作/ })).toBeNull();
     cleanup();
