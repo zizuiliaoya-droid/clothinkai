@@ -808,7 +808,13 @@ class TestUploads:
         blogger_factory: Any,
         promotion_factory: Any,
     ) -> None:
-        promo = await _promo(flow_users, product_factory, blogger_factory, promotion_factory)
+        promo = await _promo(
+            flow_users,
+            product_factory,
+            blogger_factory,
+            promotion_factory,
+            cooperation_mode="寄拍",
+        )
         line_id, pid = promo.line_id, promo.id
         svc = PromotionService(session)
         for waybill in ("SF100", "SF100", "YT200"):
