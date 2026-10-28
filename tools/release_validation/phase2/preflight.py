@@ -130,11 +130,7 @@ def validate(observed, baseline, spec):
     require(
         frontend == observed["containers"]["prod-web"]["image"], "frontend_identity"
     )
-    require(
-        observed["external"]
-        == {"old_jobs_stopped": True, "github_zeabur_hooks_frozen": True},
-        "external_sources",
-    )
+    # Retired Zeabur is outside this release; current-host writers use freeze/session checks.
     require(
         observed["certificate"]["ip_match"] is True
         and observed["certificate"]["remaining_seconds"] >= 172800,

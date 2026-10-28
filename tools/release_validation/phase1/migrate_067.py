@@ -1,4 +1,4 @@
-"""Explicit one-step migration only. Permit issuance belongs to the later updater."""
+"""Explicit fixed 067 to 069 migration only. Permit issuance belongs to the later updater."""
 
 import argparse
 import asyncio
@@ -26,7 +26,9 @@ def verify_migration_tree():
     )
     scripts = ScriptDirectory.from_config(Config("/app/alembic.ini"))
     need(
-        scripts.get_heads() == [AFTER] and scripts.get_revision(AFTER).down_revision == BEFORE,
+        scripts.get_heads() == [AFTER]
+        and scripts.get_revision(AFTER).down_revision == "068_promotion_content_platform"
+        and scripts.get_revision("068_promotion_content_platform").down_revision == BEFORE,
         "migration_tree",
     )
 
@@ -119,7 +121,7 @@ def run(commit):
     config = load("migrate", commit)
     verify_migration_tree()
     asyncio.run(apply(config))
-    return {"status": "MIGRATION_067_VERIFIED", "source_commit": commit, "schema": AFTER}
+    return {"status": "MIGRATION_069_VERIFIED", "source_commit": commit, "schema": AFTER}
 
 
 def main():

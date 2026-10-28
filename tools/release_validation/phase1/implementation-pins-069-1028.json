@@ -1,0 +1,38 @@
+{
+  "files": {
+    "Dockerfile.backend.offline.in": {
+      "bytes": 1160,
+      "sha256": "1f27d077459d97b0a77e3057a7fb053bd98598d2f5262fac00d7a5edb903a3b7"
+    },
+    "Dockerfile.frontend.offline.in": {
+      "bytes": 547,
+      "sha256": "9b31f12a77e191db52e4f7b68f158f8273384f06a2a45e790c83918f988f57b6"
+    },
+    "migrate_067.py": {
+      "bytes": 4841,
+      "sha256": "362e46dd9ff62010d282479a0878141f25d6ad32c5c48897eab3261311759584"
+    },
+    "release-manifest.schema.json": {
+      "bytes": 5442,
+      "sha256": "dd8f234e74b6d0c5550ab998e013ebe134124d23ac57ac20b3a8ecd224d5fb4e"
+    },
+    "release_builder.py": {
+      "bytes": 26452,
+      "sha256": "74f9ca3f5735b877090ad7bfa1669288adae62238ef283857dc496cf022584aa"
+    },
+    "runtime_guard.py": {
+      "bytes": 9296,
+      "sha256": "c66b9c2bccbc14f55686f507c043a8c0704aa88b28bc386c477796d88bf39b61"
+    },
+    "schedule_pickle_guard.py": {
+      "bytes": 12557,
+      "sha256": "c7c5a9d619e8d32dd114004d79d197af47ee029e63d6404365027a81cb612ad9"
+    },
+    "start_067.py": {
+      "bytes": 7117,
+      "sha256": "8f775babdcc47802670906387d6240b1a202bc5223ceeaf3d1f2760af0ebe254"
+    }
+  },
+  "production_artifact": false,
+  "scope": "fixed-067-068-069-release-candidate-20261028"
+}

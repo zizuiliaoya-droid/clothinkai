@@ -3,7 +3,7 @@
 from copy import deepcopy
 
 from contracts import require, sha
-from dashboard_contract import with_external_network
+from dashboard_contract import CURRENT_RELEASE, with_external_network
 
 R = "/srv/clothinkai/production-20261018"
 APPS = ("api", "web", "worker", "beat")
@@ -13,6 +13,20 @@ BEAT_HEALTH = {
     "timeout": "5s",
     "retries": 5,
 }
+
+
+def candidate_mounts(old, role, release):
+    """Replace the fixed current release mounts; never stack a second guard."""
+    replacements = (
+        {CURRENT_RELEASE + "/web-control:/opt/production:ro": release + "/web-control:/opt/production:ro"}
+        if role == "web"
+        else {
+            CURRENT_RELEASE + "/guards/" + role + ":/run/release-guard:ro": release + "/guards/" + role + ":/run/release-guard:ro",
+            CURRENT_RELEASE + "/control:/opt/update:ro": release + "/control:/opt/update:ro",
+        }
+    )
+    require(all(old.count(v) == 1 for v in replacements), "current_release_mounts")
+    return [replacements.get(value, value) for value in old]
 
 
 def generate(base, commit, backend, frontend, beat_format):
@@ -28,16 +42,7 @@ def generate(base, commit, backend, frontend, beat_format):
         service["image"] = frontend if role == "web" else backend
         service["restart"] = "no"
         if role == "web":
-            require(
-                service["volumes"].count(R + "/build/control:/opt/production:ro") == 1,
-                "web_original_control_mount",
-            )
-            service["volumes"] = [
-                release + "/web-control:/opt/production:ro"
-                if value == R + "/build/control:/opt/production:ro"
-                else value
-                for value in service["volumes"]
-            ]
+            service["volumes"] = candidate_mounts(service["volumes"], role, release)
         else:
             service["command"] = [
                 "python",
@@ -46,10 +51,7 @@ def generate(base, commit, backend, frontend, beat_format):
                 "--expected-commit",
                 commit,
             ]
-            service["volumes"] += [
-                release + "/guards/" + role + ":/run/release-guard:ro",
-                release + "/control:/opt/update:ro",
-            ]
+            service["volumes"] = candidate_mounts(service["volumes"], role, release)
             if role == "worker":
                 service["healthcheck"] = {"disable": True}
             elif role == "beat":
@@ -98,10 +100,7 @@ def validate(candidate, base, commit):
         )
         sha(new["image"][7:])
         if role != "web":
-            expected = old["volumes"] + [
-                release + "/guards/" + role + ":/run/release-guard:ro",
-                release + "/control:/opt/update:ro",
-            ]
+            expected = candidate_mounts(old["volumes"], role, release)
             require(new["volumes"] == expected, "ops_mounts")
             require(
                 R + "/build/control:/opt/production:ro" in expected
@@ -135,13 +134,7 @@ def validate(candidate, base, commit):
                 "web_entry",
             )
             require(
-                new["volumes"]
-                == [
-                    release + "/web-control:/opt/production:ro"
-                    if v == R + "/build/control:/opt/production:ro"
-                    else v
-                    for v in old["volumes"]
-                ],
+                new["volumes"] == candidate_mounts(old["volumes"], role, release),
                 "web_mount",
             )
     require(
@@ -204,7 +197,7 @@ def recovery_compose(base):
     result = with_external_network(base)
     require(
         result["services"]["prod-web"]["volumes"].count(
-            R + "/build/control:/opt/production:ro"
+            CURRENT_RELEASE + "/web-control:/opt/production:ro"
         )
         == 1,
         "web_original_control_mount",

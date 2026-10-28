@@ -1,4 +1,4 @@
-"""Original phase1 contract plus pinned schedule and frontend permission corrections; no build/install."""
+"""Current 1028 phase1 contract, including schedule and frontend permission corrections; no build/install."""
 
 import ast
 import hashlib
@@ -10,26 +10,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from types import ModuleType
 
-PHASE1_PINS = "0cc34f4847dce14a3ffc7868f20b37a32500144a5895563228b9d84a66bbc0c0"
-BUILDER_SHA = "d728bdd2ce2ce93559ded9a9a13fe60bf94748935c7119cf02694e6a0cd9783f"
-PACKAGE_PINS_FILE = "implementation-pins-origin-1024.json"
-SCHEDULE_GUARD_BEFORE = {
-    "bytes": 11040,
-    "sha256": "e7c9692981ee8a64afc0bfce22273f96a406f36b3c8bfa13c0fc16eee0930dbc",
-}
-SCHEDULE_GUARD_AFTER = {
-    "bytes": 12557,
-    "sha256": "c7c5a9d619e8d32dd114004d79d197af47ee029e63d6404365027a81cb612ad9",
-}
-
-FRONTEND_RECIPE_BEFORE = {
-    "bytes": 418,
-    "sha256": "a063de4dca1822ad8d54929c43678a94792606d0373b403bd26d5a179f408d2b",
-}
-FRONTEND_RECIPE_AFTER = {
-    "bytes": 547,
-    "sha256": "9b31f12a77e191db52e4f7b68f158f8273384f06a2a45e790c83918f988f57b6",
-}
+PHASE1_PINS = "fb07f98f6e87fe85e93405a2f78d7df42346ca50ddbf0cec1589f376f1963fc1"
+BUILDER_SHA = "74f9ca3f5735b877090ad7bfa1669288adae62238ef283857dc496cf022584aa"
+PACKAGE_PINS_FILE = "implementation-pins-069-1028.json"
 
 
 class PackageRejected(ValueError):
@@ -46,14 +29,8 @@ def digest(raw):
 
 
 def current_control_pin(name, original):
-    """Require historical origins and only the two explicit corrected controls."""
-    if name == "Dockerfile.frontend.offline.in":
-        need(original == FRONTEND_RECIPE_BEFORE, "frontend_recipe_origin")
-        return dict(FRONTEND_RECIPE_AFTER)
-    if name != "schedule_pickle_guard.py":
-        return original
-    need(original == SCHEDULE_GUARD_BEFORE, "schedule_guard_origin")
-    return dict(SCHEDULE_GUARD_AFTER)
+    """The 1028 manifest pins current bytes directly; archived pins stay unchanged."""
+    return dict(original)
 
 
 def tool_bundle():
@@ -102,10 +79,6 @@ def tool_bundle():
         )
         result["frozen_phase1/" + name] = raw
     result["frozen_phase1/" + PACKAGE_PINS_FILE] = raw_pins
-    # Retain the historical SQL-guard pinfile; only the schedule pin has an exact delta.
-    result["frozen_phase1/implementation-pins.json"] = (
-        builder.HERE / "implementation-pins.json"
-    ).read_bytes()
     return result
 
 

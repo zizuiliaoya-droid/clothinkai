@@ -11,10 +11,10 @@ from dataclasses import dataclass, field
 from types import ModuleType
 from urllib.parse import urlsplit
 
-PHASE1_SHA = "bdee6b80fb53c83dda5ed69b6082ada68290c667c33631a120559608cf90f5ba"
-GUARD_SHA = "da3e0ed4e331cc6a3a41dba709a5c39bf4f6610fa565afcb4097423e59826201"
-BEFORE = "066_platform_metric_setting"
-AFTER = "067_retro_completion"
+PHASE1_SHA = "fb07f98f6e87fe85e93405a2f78d7df42346ca50ddbf0cec1589f376f1963fc1"
+GUARD_SHA = "c66b9c2bccbc14f55686f507c043a8c0704aa88b28bc386c477796d88bf39b61"
+BEFORE = "067_retro_completion"
+AFTER = "069_remove_unused_shop_caches"
 DATABASE = "clothing_erp_prod_20261018"
 LOCK_KEY = 1007067066
 TIMEOUTS = {
@@ -315,7 +315,7 @@ def _prepare_policy(data, artifacts, spec_type):
         need(node["down_revision"] == (revisions[-1] if index else None), "tree_chain")
         need(node["revision"] not in revisions, "tree_duplicate")
         revisions.append(node["revision"])
-    need(revisions[-2:] == [BEFORE, AFTER], "tree_head")
+    need(revisions[-3:] == [BEFORE, "068_promotion_content_platform", AFTER], "tree_head")
     return spec_type(canonical(data), tuple(sorted(artifacts.items())))
 
 

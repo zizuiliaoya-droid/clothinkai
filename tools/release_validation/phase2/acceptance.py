@@ -50,14 +50,14 @@ def _verify(observed, expected, mode):
         "app_bypassrls",
         "app_rls_checked",
         "role_access",
-        "cache_ttl_seconds",
+        "permissions_unchanged",
         "migration_tick",
         "observed_tick",
         "stable_ticks",
         "worker_count",
         "beat_count",
         "gate_closed",
-        "k7_errors",
+        "schema_errors",
         "k8_amount_delta_minor",
         "new_retro_samples",
         "r33_samples",
@@ -109,7 +109,6 @@ def _verify(observed, expected, mode):
         "role_access",
     )
     for key in (
-        "cache_ttl_seconds",
         "migration_tick",
         "observed_tick",
         "new_retro_samples",
@@ -117,14 +116,14 @@ def _verify(observed, expected, mode):
     ):
         require(type(observed[key]) is int and observed[key] >= 0, "integer_evidence")
     require(
-        observed["cache_ttl_seconds"] == expected["cache_ttl_seconds"] >= 300
-        and observed["observed_tick"] - observed["migration_tick"]
-        >= observed["cache_ttl_seconds"],
-        "permission_cache",
+        observed["permissions_unchanged"] is True
+        and expected["permissions_unchanged"] is True
+        and observed["observed_tick"] >= observed["migration_tick"],
+        "permissions_unchanged",
     )
     stable_ticks(observed["stable_ticks"])
     require(observed["stable_ticks"][-1] <= observed["observed_tick"], "future_window")
-    for key in ("worker_count", "beat_count", "k7_errors", "k8_amount_delta_minor"):
+    for key in ("worker_count", "beat_count", "schema_errors", "k8_amount_delta_minor"):
         require(
             type(observed[key]) is int and observed[key] == 0, "internal_acceptance"
         )

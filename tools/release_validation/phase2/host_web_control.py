@@ -10,7 +10,7 @@ import stat
 from pathlib import Path
 
 from contracts import require
-from dashboard_contract import ACTIVE_SHA, original_active, validate_routes
+from dashboard_contract import ACTIVE_SHA, CURRENT_RELEASE, original_active, validate_routes
 from fixed_host_transport import ROOT, _private_fixed_file
 from host_sequence import HostJournal
 from sql_policy import require_host_authority
@@ -25,7 +25,7 @@ TEMPLATE_PINS = {
 def _control_fd(spec, step):
     require(step in {"CLOSE_GATE", "REPLACE_WEB", "OPEN_GATE"}, "web_control_step")
     relative = (
-        ("build", "control")
+        tuple(Path(CURRENT_RELEASE).relative_to(ROOT).parts) + ("web-control",)
         if step == "CLOSE_GATE"
         else ("releases", spec.data["release_id"], "web-control")
     )

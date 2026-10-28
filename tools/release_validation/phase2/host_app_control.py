@@ -37,14 +37,15 @@ def _file(fd, name, raw):
 
 def host_compose(spec, journal):
     from compose_candidate import generate
+    from dashboard_contract import CURRENT_COMPOSE_SHA, CURRENT_RELEASE
 
-    base = parse(dict(spec._tools)["templates/original-compose.json"])
-    root = _directory(ROOT)
+    base = parse(dict(spec._tools)["templates/current-compose-067-1028.json"])
+    root = _directory(CURRENT_RELEASE)
     try:
         raw = _read(root, "compose.json", 65536)
         require(
             sha(raw)
-            == "5b23a8f8d87d0a044db6a41f97b3eef23cd5fd045e23badcb23861ae31b7bb09",
+            == CURRENT_COMPOSE_SHA,
             "app_original_compose_pin",
         )
         actual = parse(raw)

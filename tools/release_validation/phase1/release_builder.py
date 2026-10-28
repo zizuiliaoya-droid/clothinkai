@@ -19,8 +19,8 @@ from urllib.parse import urlsplit
 
 HERE = Path(__file__).resolve().parent
 ORIGIN = "https://47.110.76.9"
-BEFORE = "066_platform_metric_setting"
-AFTER = "067_retro_completion"
+BEFORE = "067_retro_completion"
+AFTER = "069_remove_unused_shop_caches"
 HEX40 = re.compile(r"[0-9a-f]{40}\Z")
 HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 MAX_FILE = 64 * 1024 * 1024
@@ -403,7 +403,11 @@ def migrations(files):
             "migration_graph",
         )
         graph[rev], names[rev] = down, name
-    require(AFTER in graph and graph[AFTER] == BEFORE, "migration_target_parent")
+    require(
+        graph.get(AFTER) == "068_promotion_content_platform"
+        and graph.get("068_promotion_content_platform") == BEFORE,
+        "migration_target_parent",
+    )
     require(
         all(down is None or down in graph for down in graph.values()), "migration_parent_missing"
     )

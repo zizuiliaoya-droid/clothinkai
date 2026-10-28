@@ -9,7 +9,7 @@ COPY backend/alembic/ /app/alembic/
 COPY backend/alembic.ini /app/alembic.ini
 COPY release.json /app/release.json
 COPY control/runtime_guard.py control/schedule_pickle_guard.py control/start_067.py control/migrate_067.py control/beat-expected.json /opt/release/
-LABEL org.opencontainers.image.revision="@SOURCE_COMMIT@" clothinkai.release.schema="067_retro_completion"
+LABEL org.opencontainers.image.revision="@SOURCE_COMMIT@" clothinkai.release.schema="069_remove_unused_shop_caches"
 # No default business start or implicit migration. The reviewed updater must select one.
 CMD ["python", "-c", "raise SystemExit('PHASE1_CANDIDATE_REQUIRES_REVIEWED_UPDATER')"]
 HEALTHCHECK --interval=10s --timeout=4s --start-period=30s --retries=3 CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready',timeout=3).close()"

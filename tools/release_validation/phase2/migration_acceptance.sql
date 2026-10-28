@@ -1,19 +1,24 @@
--- Candidate SELECT projections only; never executed. Retain full baseline IDs privately.
--- Compare exact row identity sets in migration_adapter; an equal count is insufficient.
+-- Fixed 068/069 changes only. Existing business data is compared to the 067 baseline.
 SELECT version_num FROM alembic_version;
-SELECT id, completed_at FROM promotion WHERE completed_at IS NOT NULL ORDER BY id;
-SELECT id, retro_status FROM promotion WHERE id=ANY(CAST(:pre_mapping_ids AS uuid[])) ORDER BY id;
-SELECT id, confirmed_at FROM blogger_retrospective WHERE id=ANY(CAST(:pre_unconfirmed_ids AS uuid[])) ORDER BY id;
-SELECT conname, pg_get_constraintdef(oid) FROM pg_constraint
- WHERE conrelid='promotion'::regclass AND conname='ck_promotion_ck_promotion_retro_status';
-SELECT indexname,indexdef FROM pg_indexes WHERE tablename='promotion' AND indexname='idx_promotion_completed';
-SELECT data_type FROM information_schema.columns WHERE table_schema='public'
- AND table_name='promotion' AND column_name='completed_at';
-SELECT p.scope,r.code FROM permission p LEFT JOIN role_permission rp ON rp.permission_id=p.id
- LEFT JOIN role r ON r.id=rp.role_id WHERE p.scope='promotion_retro:write' ORDER BY r.code;
--- Migration backfill does not create business completion events. Separate H1/H2 from H3.
-SELECT id,event_type,created_at FROM line_event WHERE created_at>=CAST(:migration_started_at AS timestamptz)
- AND created_at<=CAST(:migration_observed_at AS timestamptz) AND event_type='promotion.completed' ORDER BY id;
--- After actual open, observe real recall-completion events only; do not infer from updated_at.
-SELECT id,promotion_id,created_at FROM line_event WHERE event_type='promotion.completed'
- AND payload->>'completion_kind'='召回' AND created_at>=CAST(:opened_at AS timestamptz) ORDER BY id;
+SELECT id,content_category AS expected_category FROM promotion ORDER BY id;
+SELECT column_name,data_type,character_maximum_length,is_nullable,column_default
+FROM information_schema.columns WHERE table_schema='public' AND table_name='promotion'
+AND column_name='content_category' ORDER BY ordinal_position;
+SELECT column_name,data_type,character_maximum_length,is_nullable,column_default
+FROM information_schema.columns WHERE table_schema='public' AND table_name='promotion_platform_post'
+ORDER BY ordinal_position;
+SELECT pg_get_constraintdef(oid) AS definition FROM pg_constraint
+WHERE conrelid=to_regclass('public.promotion_platform_post') ORDER BY definition;
+SELECT indexdef FROM pg_indexes WHERE schemaname='public' AND tablename='promotion_platform_post' ORDER BY indexdef;
+SELECT pg_get_userbyid(relowner) AS owner,relrowsecurity,relforcerowsecurity,
+has_table_privilege('clothing_app',oid,'SELECT') AS app_select,
+has_table_privilege('clothing_app',oid,'INSERT') AS app_insert,
+has_table_privilege('clothing_app',oid,'UPDATE') AS app_update,
+has_table_privilege('clothing_app',oid,'DELETE') AS app_delete,
+has_table_privilege('clothing_app',oid,'TRUNCATE') AS app_truncate,
+has_table_privilege('clothing_app',oid,'REFERENCES') AS app_references,
+has_table_privilege('clothing_app',oid,'TRIGGER') AS app_trigger
+FROM pg_class WHERE oid=to_regclass('public.promotion_platform_post');
+SELECT policyname,permissive,roles,cmd,qual,with_check FROM pg_policies
+WHERE schemaname='public' AND tablename='promotion_platform_post' ORDER BY policyname;
+SELECT count(*) AS platform_post_count FROM promotion_platform_post;

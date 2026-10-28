@@ -4,7 +4,7 @@ import os
 import time
 
 from contracts import BEFORE, canonical, digest, exact, require
-from dashboard_contract import ERP_NETWORKS, NETWORK, NETWORK_ID, verify_members
+from dashboard_contract import CURRENT_RELEASE, ERP_NETWORKS, NETWORK, NETWORK_ID, verify_members
 from fixed_host_transport import ROLES, ROOT, collect
 from host_backup_control import PG_IMAGE, _directory, _mounts, _read, _script_pins, _sql
 from host_release_input import require_step, validate_release
@@ -23,7 +23,7 @@ ROLLBACK;
 
 
 def mount_contract(role, row):
-    """Exact legacy bind sources and destinations; nested overlays also fail."""
+    """Exact current 067 bind sources and destinations; nested overlays also fail."""
     expected = {
         "db": [
             ("data", "/var/lib/postgresql", True),
@@ -33,7 +33,7 @@ def mount_contract(role, row):
         ],
         "redis": [("redis", "/data", True)],
         "web": [
-            ("build/control", "/opt/production", False),
+            (CURRENT_RELEASE.removeprefix(ROOT + "/") + "/web-control", "/opt/production", False),
             ("acme", "/var/www/acme", False),
             ("letsencrypt", "/etc/letsencrypt", False),
         ],
@@ -44,7 +44,10 @@ def mount_contract(role, row):
         ("backups", "/run/backups", False),
     ]
     for name in ("api", "worker", "beat"):
-        expected[name] = app + (
+        expected[name] = app + [
+            (CURRENT_RELEASE.removeprefix(ROOT + "/") + "/control", "/opt/update", False),
+            (CURRENT_RELEASE.removeprefix(ROOT + "/") + "/guards/" + name, "/run/release-guard", False),
+        ] + (
             [("beat", "/var/lib/celery", True)] if name == "beat" else []
         )
     wanted = [

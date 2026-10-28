@@ -20,36 +20,13 @@ from host_backup_control import _sql
 from host_migration_control import _container, recorded_facts
 from host_release_input import require_step
 from migration_adapter import verify_acceptance
+from migration_069_acceptance import DAILY, projection, verify_schema_rows
 from sql_policy import parse
 
-TTL_OBSERVER = """import hashlib,json,os,sys
-try:
- sys.path.insert(0,'/opt/release')
- from runtime_guard import CONFIG,RELEASE,need,parse,read_protected,validate_config,validate_release
- from pathlib import Path
- commit,tree,config_sha=sys.argv[1:]
- need(os.geteuid()==0 and not Path('/app/.env').exists(),'runtime_identity')
- release=validate_release(parse(RELEASE.read_bytes()),commit)
- need(release['source_tree']==tree,'release_tree')
- raw=read_protected(CONFIG)
- need(hashlib.sha256(raw).hexdigest()==config_sha,'config_binding')
- config=validate_config(parse(raw))
- os.environ.clear()
- os.environ.update({'PATH':'/usr/local/bin:/usr/bin:/bin','LANG':'C.UTF-8','HOME':'/root',**config})
- os.chdir('/app');sys.path.insert(0,'/app')
- from app.core.config import settings
- ttl=settings.PERM_CACHE_TTL_SECONDS
- need(type(ttl) is int and 300<=ttl<=540,'cache_ttl')
- print(json.dumps({'permission_cache_ttl_seconds':ttl}))
-except BaseException:
- raise SystemExit(2) from None
-"""
-
-
 SQL_PINS = {
-    "baseline_queries.sql": "db648368f18ac1966533145cd69920a4bd205c842083a63acc0af20416f61403",
-    "migration_acceptance.sql": "bd079c6e9aaa197e433f99b2702af4515198eda4eb4d5e3565f5560f816ec4c9",
-    "acceptance_queries.sql": "b2baa2257f61c691d68ae9d084f3e267b390d11af3d20849bc532adb406f34e8",
+    "baseline_queries.sql": "678fd852f107731526acab467d8c7586c86bebe7866758adf0e535b798b985e4",
+    "migration_acceptance.sql": "81706b64e7ddf1c60e60bb4dbdecef61eadc85cd8614e91936c9910cbe71b2ec",
+    "acceptance_queries.sql": "b60e29e206167ff2c4152f365fc973283c58cb28e3ddf13e1c63216ba0cd91f3",
 }
 MAX_ROWS = 20000
 PAGE_ROWS = 16
@@ -78,12 +55,11 @@ def parse_private_receipt(raw):
 
 EXTRA = {
     # Preserve every promotion, including unpublished historical recall costs.
-    # Only the two fields deliberately changed by 067 are removed.
-    "promotions": "SELECT id,encode(sha256(convert_to((to_jsonb(p)-'retro_status'-'completed_at')::text,'UTF8')),'hex') AS stable FROM promotion p ORDER BY id",
-    "scopes": "SELECT to_jsonb(p) AS value FROM permission p WHERE scope<>'promotion_retro:write' ORDER BY id",
-    "role_scopes": "SELECT to_jsonb(rp) AS value FROM role_permission rp JOIN permission p ON p.id=rp.permission_id WHERE p.scope<>'promotion_retro:write' ORDER BY rp.role_id,rp.permission_id",
-    "overrides": "SELECT to_jsonb(o) AS value FROM user_permission_override o JOIN permission p ON p.id=o.permission_id WHERE p.scope<>'promotion_retro:write' ORDER BY o.id",
-    "new_overrides": "SELECT o.id FROM user_permission_override o JOIN permission p ON p.id=o.permission_id WHERE p.scope='promotion_retro:write' ORDER BY o.id",
+    # Preserve existing retro/completion data; only 068 content_category is new.
+    "promotions": "SELECT id,encode(sha256(convert_to((to_jsonb(p)-'content_category')::text,'UTF8')),'hex') AS stable FROM promotion p ORDER BY id",
+    "scopes": "SELECT to_jsonb(p) AS value FROM permission p ORDER BY id",
+    "role_scopes": "SELECT to_jsonb(rp) AS value FROM role_permission rp JOIN permission p ON p.id=rp.permission_id ORDER BY rp.role_id,rp.permission_id",
+    "overrides": "SELECT to_jsonb(o) AS value FROM user_permission_override o JOIN permission p ON p.id=o.permission_id ORDER BY o.id",
     "role_access": "SELECT r.code,p.scope FROM role r LEFT JOIN role_permission rp ON rp.role_id=r.id LEFT JOIN permission p ON p.id=rp.permission_id ORDER BY r.code,p.scope",
     "tenants": "SELECT id FROM tenant ORDER BY id",
     "tenant_data": "SELECT tenant_id,count(*) AS count FROM promotion GROUP BY tenant_id ORDER BY tenant_id",
@@ -96,10 +72,14 @@ EXTRA = {
     "freight_duplicates": "SELECT tenant_id,promotion_id,count(*) AS count FROM return_freight_payment GROUP BY tenant_id,promotion_id HAVING count(*)<>1 ORDER BY tenant_id,promotion_id",
     "freight_index": "SELECT indexdef FROM pg_indexes WHERE schemaname='public' AND tablename='return_freight_payment' AND indexname='uq_return_freight_promotion'",
 }
-CONSTRAINTS = {
-    "CHECK (((retro_status)::text = ANY ((ARRAY['未开始'::character varying, '待复盘'::character varying, '已完成'::character varying])::text[])))",
-}
-INDEX = "CREATE INDEX idx_promotion_completed ON public.promotion USING btree (tenant_id, completed_at DESC) WHERE (completed_at IS NOT NULL)"
+EXTRA["promotion_policy"] = "SELECT policyname,permissive,roles,cmd,qual,with_check FROM pg_policies WHERE schemaname='public' AND tablename='promotion' ORDER BY policyname"
+EXTRA["content_column"] = "SELECT column_name,data_type,character_maximum_length,is_nullable,column_default FROM information_schema.columns WHERE table_schema='public' AND table_name='promotion' AND column_name='content_category' ORDER BY ordinal_position"
+for _table in (*DAILY, "store_daily"):
+    EXTRA[_table] = (
+        "SELECT count(*) AS row_count,encode(sha256(convert_to(COALESCE("
+        "string_agg(to_jsonb(t)::text,chr(10) ORDER BY id),''),'UTF8')),'hex') AS stable "
+        f"FROM {_table} t"
+    )
 BUSINESS_PENDING = [
     "five_role_http_login_and_authorized_business_operations",
     "K7-4",
@@ -117,8 +97,8 @@ def _statements(spec, name):
         len(queries)
         == {
             "baseline_queries.sql": 7,
-            "migration_acceptance.sql": 10,
-            "acceptance_queries.sql": 5,
+            "migration_acceptance.sql": 9,
+            "acceptance_queries.sql": 4,
         }[name],
         "acceptance_sql_count",
     )
@@ -266,55 +246,7 @@ async def _base(spec, database_id, budget):
 
 
 def _before_projection(rows):
-    keys = (
-        "id",
-        "tenant_id",
-        "publish_status",
-        "settlement_status",
-        "recall_status",
-        "retro_status",
-        "metrics_recorded_at",
-    )
-    for row in rows["0"]:
-        exact(row, keys)
-        _uuid(row["tenant_id"])
-    _ids(rows["0"])
-    normal = [
-        r
-        for r in rows["0"]
-        if r["publish_status"] == "已发布"
-        and r["settlement_status"] == "已结款"
-        and r["metrics_recorded_at"] is not None
-        and r["retro_status"] == "已完成"
-    ]
-    recall = [
-        r
-        for r in rows["0"]
-        if r["publish_status"] == "已取消" and r["recall_status"] == "召回成功"
-    ]
-    for row in rows["1"]:
-        exact(row, ("id", "tenant_id", "confirmed_at"))
-        _uuid(row["tenant_id"])
-        require(row["confirmed_at"] is None, "acceptance_legacy_confirmed")
-    require(rows["new_overrides"] == [], "acceptance_new_scope_override")
-    _ids(rows["promotions"])
-    return {
-        "head": _head(rows["2"]),
-        "normal_ids": _ids(normal),
-        "recall_ids": _ids(recall),
-        "pending_ids": _ids([r for r in rows["0"] if r["retro_status"] == "待确认"]),
-        "published_unstarted_ids": _ids(
-            [
-                r
-                for r in rows["0"]
-                if r["publish_status"] == "已发布" and r["retro_status"] == "未开始"
-            ]
-        ),
-        "legacy_unconfirmed_ids": _ids(rows["1"]),
-        "old_scope_sha256": digest([rows["scopes"], rows["role_scopes"]]),
-        "old_override_sha256": digest(rows["overrides"]),
-        "roles_acl_sha256": digest([rows[str(i)] for i in range(3, 7)]),
-    }
+    return projection(rows)
 
 
 async def _quiet(spec, journal, baseline, *, api_stopped):
@@ -513,55 +445,23 @@ def _financial(before, after):
 
 
 def _roles(before, after):
-    def grouped(rows):
-        result = {}
-        for row in rows:
-            exact(row, ("code", "scope"))
-            require(
-                type(row["code"]) is str
-                and (row["scope"] is None or type(row["scope"]) is str),
-                "acceptance_role_shape",
-            )
-            scopes = result.setdefault(row["code"], set())
-            if row["scope"] is not None:
-                require(row["scope"] not in scopes, "acceptance_role_duplicate")
-                scopes.add(row["scope"])
-        return result
-
-    old, current = grouped(before["role_access"]), grouped(after["role_access"])
     require(
-        {"admin", "pr", "pr_manager", "finance", "operations"} <= old.keys(),
-        "acceptance_role_matrix_missing",
-    )
-    require(
-        all("promotion_retro:write" not in v for v in old.values()),
-        "acceptance_scope_preexisting",
-    )
-    expected = {code: set(scopes) for code, scopes in old.items()}
-    expected["pr_manager"].add("promotion_retro:write")
-    require(
-        current == expected
-        and after["new_overrides"] == []
+        before["role_access"] == after["role_access"]
+        and before["scopes"] == after["scopes"]
+        and before["role_scopes"] == after["role_scopes"]
         and before["overrides"] == after["overrides"],
         "acceptance_role_delta",
     )
-
-    def allowed(scopes):
-        return bool(
-            scopes
-            & {
-                "*",
-                "promotion_retro:write",
-                "promotion_retro.*:*",
-                "promotion_retro.*:write",
-            }
-        )
-
-    # The source permission algorithm treats promotion.*:* as a different
-    # prefix. Preserve genuine '*' grants; never claim these are HTTP probes.
-    observed = {code: allowed(scopes) for code, scopes in current.items()}
-    wanted = {code: allowed(scopes) for code, scopes in expected.items()}
-    return observed, wanted
+    grouped = {}
+    for row in after["role_access"]:
+        exact(row, ("code", "scope"))
+        grouped.setdefault(row["code"], set()).add(row["scope"])
+    require({"admin", "pr", "pr_manager", "finance", "operations"} <= grouped.keys(), "acceptance_role_matrix_missing")
+    values = {
+        code: bool(scopes & {"*", "promotion_retro:write", "promotion_retro.*:*", "promotion_retro.*:write"})
+        for code, scopes in grouped.items()
+    }
+    return values, dict(values)
 
 
 def _after_projection(before, base, rows, counts, window, gate):
@@ -573,101 +473,29 @@ def _after_projection(before, base, rows, counts, window, gate):
         and start <= finish,
         "acceptance_migration_window",
     )
-    current = _before_projection(base)
-    require(
-        base["promotions"] == before["rows"]["promotions"],
-        "acceptance_stable_promotions",
-    )
-    require(
-        current["legacy_unconfirmed_ids"]
-        == before["projection"]["legacy_unconfirmed_ids"],
-        "acceptance_all_legacy_ids",
-    )
     _financial(before["rows"], base)
-    expected_mapping = set(
-        before["projection"]["pending_ids"]
-        + before["projection"]["published_unstarted_ids"]
-    )
-    for row in rows["1"]:
-        exact(row, ("id", "completed_at"))
-        require(
-            start <= _timestamp(row["completed_at"]) <= finish,
-            "acceptance_completed_timestamp_window",
-        )
-    for row in rows["2"]:
-        exact(row, ("id", "retro_status"))
-        require(row["retro_status"] == "待复盘", "acceptance_mapping_status")
-    require(set(_ids(rows["2"])) == expected_mapping, "acceptance_mapping_ids")
-    for row in rows["3"]:
-        exact(row, ("id", "confirmed_at"))
-        require(row["confirmed_at"] is None, "acceptance_legacy_confirmation_changed")
-    require(
-        _ids(rows["3"]) == before["projection"]["legacy_unconfirmed_ids"],
-        "acceptance_legacy_ids",
-    )
-    for i, key in ((2, "old_status_count"), (3, "published_unstarted_count")):
-        require(len(counts[str(i)]) == 1, "acceptance_count_rows")
-        exact(counts[str(i)][0], (key,))
-        require(type(counts[str(i)][0][key]) is int, "acceptance_count_type")
+    verify_schema_rows(rows, base["promotion_policy"])
+    require(counts["2"] == [{"content_category_mismatch_count": 0}], "acceptance_content_backfill")
+    require(counts["3"] == [{"platform_post_count": 0}], "acceptance_platform_rows")
     return {
-        "head": _head(rows["0"]),
-        **{
-            k: current[k]
-            for k in (
-                "normal_ids",
-                "recall_ids",
-                "old_scope_sha256",
-                "old_override_sha256",
-                "roles_acl_sha256",
-            )
-        },
-        "mapped_ids": _ids(rows["2"]),
-        "all_completed_ids": _ids(rows["1"]),
-        "legacy_unconfirmed_ids": _ids(rows["3"]),
-        "new_scope_roles": [
-            r["code"] for r in rows["7"] if r["scope"] == "promotion_retro:write"
-        ],
-        "column_timestamptz": rows["6"] == [{"data_type": "timestamp with time zone"}],
-        "constraint_exact": len(rows["4"]) == 1
-        and rows["4"][0].get("conname") == "ck_promotion_ck_promotion_retro_status"
-        and rows["4"][0].get("pg_get_constraintdef") in CONSTRAINTS,
-        "partial_index_exact": rows["5"]
-        == [{"indexname": "idx_promotion_completed", "indexdef": INDEX}],
-        "old_status_count": counts["2"][0]["old_status_count"],
-        "published_unstarted_count": counts["3"][0]["published_unstarted_count"],
-        "migration_event_ids": _ids(rows["8"]),
+        **projection(base),
+        "categories_sha256": digest(rows["1"]),
+        "schema_verified": True,
         "started_tick": ticks[0],
         "observed_tick": ticks[1],
         "gate_closed": gate["gate_closed"],
         "business_sessions": 0,
         "old_processes": 0,
-        "unknown_fields": [],
     }
 
 
 async def _migration_rows(spec, database_id, before, window, budget):
     _utc(window["db_before_utc"])
     _utc(window["db_after_utc"])
-    substitutions = {
-        ":pre_mapping_ids": _array(
-            sorted(
-                set(
-                    before["projection"]["pending_ids"]
-                    + before["projection"]["published_unstarted_ids"]
-                )
-            )
-        ),
-        ":pre_unconfirmed_ids": _array(before["projection"]["legacy_unconfirmed_ids"]),
-        ":migration_started_at": "'" + window["db_before_utc"] + "'",
-        ":migration_observed_at": "'" + window["db_after_utc"] + "'",
+    return {
+        str(i): await _rows(database_id, query, budget)
+        for i, query in enumerate(_statements(spec, "migration_acceptance.sql"))
     }
-    rows = {}
-    # Statement 9 requires an actual OPEN_GATE time; never manufacture it here.
-    for i, query in enumerate(_statements(spec, "migration_acceptance.sql")[:9]):
-        for key, value in substitutions.items():
-            query = query.replace(key, value)
-        rows[str(i)] = await _rows(database_id, query, budget)
-    return rows
 
 
 async def verify_schema(spec, journal, baseline):
@@ -943,33 +771,8 @@ async def accept_internal(spec, journal, baseline):
         )
         replacements[role] = row
     async with asyncio.timeout(DEADLINE):
-        ttl = parse(
-            await _capture(
-                DOCKER
-                + (
-                    "exec",
-                    "--user",
-                    "0:0",
-                    replacements["api"]["new_container"]["id"],
-                    "python",
-                    "-I",
-                    "-B",
-                    "-c",
-                    TTL_OBSERVER,
-                    spec.data["source_commit"],
-                    spec.data["source_tree"],
-                    spec.data["config_sha256"],
-                )
-            )
-        )
-        exact(ttl, ("permission_cache_ttl_seconds",))
-        ttl = ttl["permission_cache_ttl_seconds"]
-        require(type(ttl) is int and 300 <= ttl <= 540, "acceptance_cache_ttl")
+        # 068/069 change no scope or grants: _roles below proves equality.
         migration_tick = migration["time_window"]["completed_monotonic_ns"] // 10**9
-        remaining = migration_tick + ttl - time.monotonic_ns() // 10**9
-        require(remaining <= ttl, "acceptance_future_migration_tick")
-        if remaining > 0:
-            await asyncio.sleep(remaining)
         first = await _runtime(spec, baseline, replacements, before)
         budget = _budget()
         base = await _base(spec, baseline["db"], budget)
@@ -994,8 +797,8 @@ async def accept_internal(spec, journal, baseline):
         actual_roles, expected_roles = _roles(before["rows"], base)
         require(
             _head(counts["1"]) == AFTER
-            and counts["2"] == [{"old_status_count": 0}]
-            and counts["3"] == [{"published_unstarted_count": 0}],
+            and counts["2"] == [{"content_category_mismatch_count": 0}]
+            and counts["3"] == [{"platform_post_count": 0}],
             "acceptance_internal_schema",
         )
         require(
@@ -1057,15 +860,15 @@ async def accept_internal(spec, journal, baseline):
         "app_bypassrls": counts["0"][0]["rolbypassrls"],
         "app_rls_checked": True,
         "role_access": actual_roles,
-        "cache_ttl_seconds": ttl,
+        "permissions_unchanged": True,
         "migration_tick": migration_tick,
         "observed_tick": observed_tick,
         "stable_ticks": [r["monotonic_ns"] // 10**9 for r in (first, second)],
         "worker_count": int(second["containers"]["worker"]["running"]),
         "beat_count": int(second["containers"]["beat"]["running"]),
         "gate_closed": True,
-        "k7_errors": counts["2"][0]["old_status_count"]
-        + counts["3"][0]["published_unstarted_count"],
+        "schema_errors": counts["2"][0]["content_category_mismatch_count"]
+        + counts["3"][0]["platform_post_count"],
         "k8_amount_delta_minor": financial["amount_delta_minor"],
         # No OPEN_GATE yet: no legitimate T_open sample exists. This is a
         # pending sample count, never a claim of a successful business action.

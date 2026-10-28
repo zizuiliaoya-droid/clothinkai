@@ -25,7 +25,7 @@ def migration_artifacts(spec, journal):
         "config": config,
         "permit": permit,
         "release": spec.artifact("release"),
-        "phase1_pins": tools["frozen_phase1/implementation-pins.json"],
+        "phase1_pins": tools["frozen_phase1/implementation-pins-069-1028.json"],
         "phase1_guard": tools["frozen_phase1/runtime_guard.py"],
         "env_py": spec.package.member("backend/alembic/env.py"),
     }

@@ -10,8 +10,8 @@ import re
 import stat
 from urllib.parse import urlsplit
 
-BEFORE = "066_platform_metric_setting"
-AFTER = "067_retro_completion"
+BEFORE = "067_retro_completion"
+AFTER = "069_remove_unused_shop_caches"
 ORIGIN = "https://47.110.76.9"
 DATABASE = "clothing_erp_prod_20261018"
 CONFIG = Path("/run/production/runtime-config.json")

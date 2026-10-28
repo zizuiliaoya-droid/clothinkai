@@ -1,6 +1,6 @@
 """Phase2 integration boundary; no live launcher or permit generation."""
 
-from contracts import AFTER, BEFORE, digest, exact, require, sha
+from contracts import BEFORE, digest, exact, require, sha
 
 
 def _ids(value):
@@ -14,114 +14,9 @@ def _ids(value):
 
 
 def verify_acceptance(before, after):
-    exact(
-        before,
-        (
-            "head",
-            "normal_ids",
-            "recall_ids",
-            "pending_ids",
-            "published_unstarted_ids",
-            "legacy_unconfirmed_ids",
-            "old_scope_sha256",
-            "old_override_sha256",
-            "roles_acl_sha256",
-        ),
-    )
-    exact(
-        after,
-        (
-            "head",
-            "normal_ids",
-            "recall_ids",
-            "mapped_ids",
-            "all_completed_ids",
-            "legacy_unconfirmed_ids",
-            "new_scope_roles",
-            "old_scope_sha256",
-            "old_override_sha256",
-            "roles_acl_sha256",
-            "column_timestamptz",
-            "constraint_exact",
-            "partial_index_exact",
-            "old_status_count",
-            "published_unstarted_count",
-            "migration_event_ids",
-            "started_tick",
-            "observed_tick",
-            "gate_closed",
-            "business_sessions",
-            "old_processes",
-            "unknown_fields",
-        ),
-    )
-    require(before["head"] == BEFORE and after["head"] == AFTER, "revision")
-    expected = {
-        key: _ids(before[key])
-        for key in (
-            "normal_ids",
-            "recall_ids",
-            "pending_ids",
-            "published_unstarted_ids",
-            "legacy_unconfirmed_ids",
-        )
-    }
-    require(not expected["normal_ids"] & expected["recall_ids"], "completion_overlap")
-    for key in ("normal_ids", "recall_ids", "legacy_unconfirmed_ids"):
-        require(_ids(after[key]) == expected[key], "stable_set_mismatch")
-    require(
-        _ids(after["all_completed_ids"])
-        == expected["normal_ids"] | expected["recall_ids"],
-        "completion_set",
-    )
-    require(
-        _ids(after["mapped_ids"])
-        == expected["pending_ids"] | expected["published_unstarted_ids"],
-        "mapping_set",
-    )
-    require(after["new_scope_roles"] == ["pr_manager"], "new_scope_roles")
-    for key in ("old_scope_sha256", "old_override_sha256", "roles_acl_sha256"):
-        sha(before[key])
-        require(after[key] == before[key], "legacy_privilege_changed")
-    for key in (
-        "column_timestamptz",
-        "constraint_exact",
-        "partial_index_exact",
-        "gate_closed",
-    ):
-        require(after[key] is True, "schema_or_gate")
-    for key in (
-        "old_status_count",
-        "published_unstarted_count",
-        "business_sessions",
-        "old_processes",
-    ):
-        require(
-            type(after[key]) is int and after[key] == 0, "unexpected_rows_or_writers"
-        )
-    require(
-        after["migration_event_ids"] == [] and after["unknown_fields"] == [],
-        "unknown_migration_effects",
-    )
-    require(
-        all(type(after[k]) is int for k in ("started_tick", "observed_tick"))
-        and 0 <= after["started_tick"] <= after["observed_tick"],
-        "migration_interval",
-    )
-    return {
-        "mode": "synthetic",
-        "live_verified": False,
-        "head": AFTER,
-        "normal_count": len(expected["normal_ids"]),
-        "recall_count": len(expected["recall_ids"]),
-        "mapping_count": len(_ids(after["mapped_ids"])),
-        "baseline_sha256": digest(before),
-        "acceptance_sha256": digest(after),
-        "migration_observation_interval": [
-            after["started_tick"],
-            after["observed_tick"],
-        ],
-    }
+    from migration_069_acceptance import verify
+
+    return verify(before, after)
 
 
 def verify_prerequisites(evidence):

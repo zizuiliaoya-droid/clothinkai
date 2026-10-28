@@ -47,10 +47,10 @@ def verify_processes(records, pid, commit, db_format):
 
 
 def _frozen_start():
-    from phase1_package_binding import current_control_pin, frozen_contract
+    from phase1_package_binding import PACKAGE_PINS_FILE, current_control_pin, frozen_contract
 
     builder = frozen_contract()
-    pins = builder.json_bytes((builder.HERE / "implementation-pins.json").read_bytes())[
+    pins = builder.json_bytes((builder.HERE / PACKAGE_PINS_FILE).read_bytes())[
         "files"
     ]
     saved = {

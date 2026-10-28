@@ -11,9 +11,11 @@ NETWORK_ID = "bb623b86f5c0dd8dccf5f7416492f5a92403023bfc6750c9a714a73cfdbda3d9"
 BOARD = "clothinkai-progress-20261024"
 BOARD_ID = "6445a72e527375f7161cc98baca5318781efcdea372d19861eba7fa9067977b7"
 BOARD_IMAGE = "sha256:04b257c436e2d331f5ff06a9c6f885c526805ade5fc793206bfec03b0e1533b6"
-OLD_WEB_ID = "e2e248c47c83adf65147664058c9a8c05b19ff7dc738c2ab867ca3ce96b80e96"
+OLD_WEB_ID = "54299ea8946c33eda4a07d845c9fe5685c522f0b12c07290f1139902b1148e93"
 WEB = "clothinkai-prod-web-20261018"
-ACTIVE_SHA = "4e9eeec6ebcca861e5861fd6306218750db5587d6c3c871afd65786162627fa8"
+CURRENT_RELEASE = "/srv/clothinkai/production-20261018/releases/flow78-78e95a95ed7c"
+CURRENT_COMPOSE_SHA = "9724478e7e5cd2f7c8b0738d250e04c49609990a69acfcb54d9111e18cea6059"
+ACTIVE_SHA = "89519863caaa05ed9e7e314bf7f912db240e2a8371ee26208c64579d98e05a93"
 ROUTES_SHA = "0397e6f075bdc0324648bfa9d7721992c16a8c3647be971c3b73f011bd419ac2"
 EXTERNAL = {"name": NETWORK, "external": True}
 ERP_NETWORKS = {
@@ -47,7 +49,7 @@ def validate_routes(raw):
 
 def original_active(raw):
     require(
-        validate_routes(raw) == ACTIVE_SHA and len(raw) == 2364,
+        validate_routes(raw) == ACTIVE_SHA and len(raw) == 2479,
         "dashboard_original_active",
     )
     return raw

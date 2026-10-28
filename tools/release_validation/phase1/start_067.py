@@ -1,4 +1,4 @@
-"""Explicit business start; requires updater-issued permit and existing schema067."""
+"""Explicit business start; requires updater-issued permit and existing schema069."""
 
 import argparse
 import asyncio

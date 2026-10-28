@@ -5,9 +5,9 @@ import hashlib
 import json
 import re
 
-PHASE1_SHA = "bdee6b80fb53c83dda5ed69b6082ada68290c667c33631a120559608cf90f5ba"
-BEFORE = "066_platform_metric_setting"
-AFTER = "067_retro_completion"
+PHASE1_SHA = "fb07f98f6e87fe85e93405a2f78d7df42346ca50ddbf0cec1589f376f1963fc1"
+BEFORE = "067_retro_completion"
+AFTER = "069_remove_unused_shop_caches"
 TARGET = {
     "instance": "i-bp13rq87f4kzz3aalaf7",
     "disk_uuid": "7338e100-eb5b-489a-b457-1579c5200e9b",
