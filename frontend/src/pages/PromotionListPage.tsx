@@ -254,7 +254,6 @@ export function PromotionListPage() {
     setFilters((current) => ({ ...current, ...(clearName ? { receiver_name: undefined } : {}), ...(clearPhone ? { receiver_phone: undefined } : {}), page: 1 }));
     message.warning("收件筛选权限已变化，已清除不可用条件");
   }, [listError, filters.receiver_name, filters.receiver_phone]);
-  const hasOperations = data?.items.some((row) => Object.keys(row.ui?.actions ?? {}).length > 0 || (row.ui?.edits?.length ?? 0) > 0 || Object.keys(row.freight_payment?.ui?.actions ?? {}).length > 0);
   const deactivateMutation = useMutation({
     mutationFn: deletePromotion,
     onSuccess: () => { message.success("已停用"); flowFeedback.refresh(); },
@@ -398,6 +397,8 @@ export function PromotionListPage() {
     }));
   }
 
+  // 列显隐与行菜单使用同一结果，也保留页级金额记录、只读收款码等查看入口。
+  const hasOperations = data?.items.some((row) => flowMenuItems(row).length > 0);
   const columns: ColumnsType<Promotion> = [
     { title: "内部编码", dataIndex: "internal_code", width: 150, fixed: screens.md ? "left" : undefined },
     { title: "当前阶段", key: "stage", width: 230, fixed: screens.md ? "left" : undefined, render: (_, row) => <PromotionStageCell row={row} /> },
