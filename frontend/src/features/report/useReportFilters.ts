@@ -1,7 +1,7 @@
 // 报表页筛选状态：URL 参数优先于筛选记忆（7e R1，设计 2.1）。
 //
 // 初始化顺序 URL → 记忆 → 页面默认。URL 带来的值不写回记忆；用户手动改筛选后才写记忆，
-// 并 replace 掉 URL 里本页 schema 的键（别人发来的链接只决定第一次打开时看到什么）。
+// 并 replace 掉 URL 里本页 schema 的键。默认只接首次进入；BI可接同页的新落点链接。
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
@@ -28,24 +28,27 @@ interface Result<T> {
 }
 
 /**
- * `schema` 与 `defaults` 请用模块级常量：只在挂载与记忆加载完时读一次。
+ * `schema` 与 `defaults` 请用模块级常量；followUrlChanges仅供需要同页链接跳转的页面启用。
  */
 export function useReportFilters<T extends object>(
   pageCode: FilterPageCode,
   schema: ReportFilterSchema<T>,
-  defaults: T
+  defaults: T,
+  followUrlChanges = false
 ): Result<T> {
   const [searchParams, setSearchParams] = useSearchParams();
   const searchParamsRef = useRef(searchParams);
   searchParamsRef.current = searchParams;
-  // URL 只在进入页面时读一次；之后以页面状态为准。
-  const [urlFilters] = useState(() => parseUrlFilters(searchParams, schema));
+  // 默认只读进入页的URL；BI允许同页落点链接重新覆盖，手动筛选清URL除外。
+  const searchKey = searchParams.toString();
+  const handledSearchRef = useRef(searchKey);
+  const urlFiltersRef = useRef(parseUrlFilters(searchParams, schema));
   const memory = useFilterMemory<T>(pageCode);
   const memoryRef = useRef(memory);
   memoryRef.current = memory;
 
   const [state, setState] = useState(() => ({
-    filters: initialFilters(urlFilters, {}, defaults),
+    filters: initialFilters(urlFiltersRef.current, {}, defaults),
     ready: false,
   }));
   const filtersRef = useRef(state.filters);
@@ -55,21 +58,24 @@ export function useReportFilters<T extends object>(
   const keptMemoryRef = useRef<Partial<T>>({});
 
   useEffect(() => {
+    if (followUrlChanges && handledSearchRef.current !== searchKey) {
+      handledSearchRef.current = searchKey;
+      urlFiltersRef.current = parseUrlFilters(new URLSearchParams(searchKey), schema);
+      initRef.current = false;
+    }
     if (!memory.ready || initRef.current) return;
     initRef.current = true;
     const { used, kept } = splitLandingMemory(
-      urlFilters,
+      urlFiltersRef.current,
       restoreMemoryFilters(memory.restored, schema),
       schema
     );
     keptMemoryRef.current = kept;
     setState({
-      filters: initialFilters(urlFilters, used, defaults),
+      filters: initialFilters(urlFiltersRef.current, used, defaults),
       ready: true,
     });
-    // schema / defaults 是模块常量，urlFilters 只算一次。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [memory.ready, memory.restored]);
+  }, [memory.ready, memory.restored, searchKey, followUrlChanges, schema, defaults]);
 
   const setFilters = useCallback(
     (patch: Partial<T>) => {
@@ -87,6 +93,8 @@ export function useReportFilters<T extends object>(
         (prev) => {
           const out = new URLSearchParams(prev);
           keys.forEach((k) => out.delete(k));
+          // 这是用户编辑后的URL清理，不是新的落点链接。
+          handledSearchRef.current = out.toString();
           return out;
         },
         { replace: true }

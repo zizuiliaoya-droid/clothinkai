@@ -329,6 +329,7 @@ describe("ProductionPage BI 下钻落点（7e R6 S7）", () => {
     );
     renderPage(LANDING);
     await waitRows();
+    expect(screen.getByText("链接指定的商品不在当前筛选范围或可见结果中")).toBeTruthy();
     expect(screen.queryByText(/投产趋势 ·/)).toBeNull();
     expect(trendMock).not.toHaveBeenCalled();
   });

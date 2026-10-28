@@ -1,3 +1,4 @@
+import { formatMoney } from "@/utils/money";
 import { useState } from "react";
 import {
   Button,
@@ -209,7 +210,7 @@ export function BloggerListPage() {
       title: "报价",
       dataIndex: "quote",
       width: 100,
-      render: (v: string | null) => (v == null ? "—" : `¥${v}`),
+      render: (v: string | null) => (v == null ? "—" : formatMoney(v)),
     },
     {
       // 与报价同一条字段权限，看不到报价的人收到 null

@@ -42,6 +42,10 @@ export function GoodsAnalysisTab({ data, loading, granularity, goodsId, onGoodsC
   const items = data?.goods.items ?? [];
   const optionLabels = goodsOptionLabels(items);
   const selected = items.find((g) => g.goods_id === goodsId) ?? items[0];
+  const missingSelection = !loading && !!data && !!goodsId && !items.some((item) => item.goods_id === goodsId);
+  const selectionNotice = missingSelection ? <Alert type="info" showIcon
+    message="所选商品不在当前筛选范围或可见结果中"
+    description={items.length ? "当前显示本区间第一项，可重新选择商品。" : "可调整筛选后查看。"} /> : null;
   const selectedId = selected?.goods_id;
   const dateFrom = data?.date_from;
   const dateTo = data?.date_to;
@@ -67,7 +71,7 @@ export function GoodsAnalysisTab({ data, loading, granularity, goodsId, onGoodsC
   });
 
   if (!loading && data && items.length === 0) {
-    return <Empty description="这段时间没有单品数据" />;
+    return <>{selectionNotice}<Empty description="这段时间没有单品数据" /></>;
   }
 
   const points = trendQuery.data?.points ?? [];
@@ -96,6 +100,7 @@ export function GoodsAnalysisTab({ data, loading, granularity, goodsId, onGoodsC
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {selectionNotice}
       <Space wrap size={8}>
         <span>商品：</span>
         <Select<string>
