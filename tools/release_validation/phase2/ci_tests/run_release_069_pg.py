@@ -6,7 +6,6 @@ import json
 import sys
 import time
 from contextlib import closing
-from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
@@ -178,6 +177,14 @@ def rls_probe(conn, app_dsn, pairs):
                 raise AssertionError("cross_tenant_insert_allowed")
 
 
+def database_clock(conn):
+    # Same UTC database-clock representation as the production migration collector.
+    return scalar(
+        conn,
+        """SELECT to_char(clock_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"')""",
+    )
+
+
 def main():
     values = environment()
     bootstrap(values)
@@ -189,12 +196,12 @@ def main():
         before_rows = baseline(conn)
         before = {"rows": before_rows, "projection": projection(before_rows)}
         window = {
-            "db_before_utc": datetime.now(timezone.utc).isoformat(),
+            "db_before_utc": database_clock(conn),
             "started_monotonic_ns": time.monotonic_ns(),
         }
         migrate(AFTER, "release069-upgrade")
         window.update(
-            db_after_utc=datetime.now(timezone.utc).isoformat(),
+            db_after_utc=database_clock(conn),
             completed_monotonic_ns=time.monotonic_ns(),
         )
         after_rows = baseline(conn)
