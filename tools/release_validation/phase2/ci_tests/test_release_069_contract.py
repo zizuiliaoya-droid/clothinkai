@@ -17,6 +17,7 @@ from compose_candidate import generate, recovery_compose
 from dashboard_contract import CURRENT_RELEASE, original_active
 from host_acceptance_control import SQL_PINS, _roles, _statements
 from host_preflight_control import mount_contract
+import migration_069_acceptance as schema069
 from migration_069_acceptance import ADDED, DAILY, REMOVED, projection, verify
 from phase1_package_binding import frozen_contract, tool_bundle
 from runtime_guard import validate_permit
@@ -126,6 +127,46 @@ class Release069Contracts(unittest.TestCase):
             {"_tools": tuple((name, (ROOT / name).read_bytes()) for name in SQL_PINS)},
         )()
         self.assertEqual([len(_statements(spec, n)) for n in SQL_PINS], [7, 9, 4])
+
+    def test_pg18_not_null_uses_exact_column_contract(self):
+        name = "migration_acceptance.sql"
+        spec = type("Spec", (), {"_tools": ((name, (ROOT / name).read_bytes()),)})()
+        self.assertIn("AND contype<>'n'", _statements(spec, name)[4])
+        policy = [
+            {
+                "policyname": "tenant_isolation",
+                "permissive": "PERMISSIVE",
+                "roles": ["clothing_app"],
+                "cmd": "ALL",
+                "qual": "tenant_predicate",
+                "with_check": "tenant_predicate",
+            }
+        ]
+        rows = {
+            "0": [{"version_num": AFTER}],
+            "2": copy.deepcopy(schema069.CONTENT_COLUMN),
+            "3": copy.deepcopy(schema069.PLATFORM_COLUMNS),
+            "4": [{"definition": d} for d in sorted(schema069.PLATFORM_CONSTRAINTS)],
+            "5": [{"indexdef": d} for d in sorted(schema069.PLATFORM_INDEXES)],
+            "6": [schema069.PLATFORM_ACCESS],
+            "7": policy,
+            "8": [{"platform_post_count": 0}],
+        }
+        schema069.verify_schema_rows(rows, policy)
+        # Excluding pg_constraint n must not accept a nullable tenant key.
+        tenant_column = next(c for c in rows["3"] if c["column_name"] == "tenant_id")
+        self.assertEqual(tenant_column["is_nullable"], "NO")
+        tenant_column["is_nullable"] = "YES"
+        with self.assertRaisesRegex(Rejected, "acceptance_platform_columns"):
+            schema069.verify_schema_rows(rows, policy)
+        tenant_column["is_nullable"] = "NO"
+        rows["4"] = [
+            r
+            for r in rows["4"]
+            if not r["definition"].startswith("FOREIGN KEY (tenant_id)")
+        ]
+        with self.assertRaisesRegex(Rejected, "acceptance_platform_constraints"):
+            schema069.verify_schema_rows(rows, policy)
 
     def test_fresh_phase1_pins_and_actual_source_chain(self):
         builder = frozen_contract()

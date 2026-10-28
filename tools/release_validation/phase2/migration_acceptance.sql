@@ -8,7 +8,7 @@ SELECT column_name,data_type,character_maximum_length,is_nullable,column_default
 FROM information_schema.columns WHERE table_schema='public' AND table_name='promotion_platform_post'
 ORDER BY ordinal_position;
 SELECT pg_get_constraintdef(oid) AS definition FROM pg_constraint
-WHERE conrelid=to_regclass('public.promotion_platform_post') ORDER BY definition;
+WHERE conrelid=to_regclass('public.promotion_platform_post') AND contype<>'n' ORDER BY definition;
 SELECT indexdef FROM pg_indexes WHERE schemaname='public' AND tablename='promotion_platform_post' ORDER BY indexdef;
 SELECT pg_get_userbyid(relowner) AS owner,relrowsecurity,relforcerowsecurity,
 has_table_privilege('clothing_app',oid,'SELECT') AS app_select,

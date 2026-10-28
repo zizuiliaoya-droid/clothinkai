@@ -25,7 +25,7 @@ from sql_policy import parse
 
 SQL_PINS = {
     "baseline_queries.sql": "678fd852f107731526acab467d8c7586c86bebe7866758adf0e535b798b985e4",
-    "migration_acceptance.sql": "81706b64e7ddf1c60e60bb4dbdecef61eadc85cd8614e91936c9910cbe71b2ec",
+    "migration_acceptance.sql": "50645b8a5bb029b37e7c9960ed18b7195fb859216e2db808b716e2e9b5cfd92d",
     "acceptance_queries.sql": "b60e29e206167ff2c4152f365fc973283c58cb28e3ddf13e1c63216ba0cd91f3",
 }
 MAX_ROWS = 20000
