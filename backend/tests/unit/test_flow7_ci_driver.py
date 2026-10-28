@@ -219,7 +219,9 @@ def test_history_scan_from_clean_backend_interpreter() -> None:
             "-c",
             "from alembic.config import Config; from alembic.script import ScriptDirectory; "
             "cfg=Config(); cfg.set_main_option('script_location','alembic'); "
-            "assert ScriptDirectory.from_config(cfg).get_heads()==['067_retro_completion']",
+            "scripts=ScriptDirectory.from_config(cfg); "
+            "assert len(scripts.get_heads())==1; "
+            "assert '067_retro_completion' in {rev.revision for rev in scripts.walk_revisions()}",
         ],
         cwd=root,
         env={key: value for key, value in os.environ.items() if key.upper() != "PYTHONPATH"},

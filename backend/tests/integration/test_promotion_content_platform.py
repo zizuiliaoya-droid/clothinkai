@@ -38,6 +38,8 @@ async def promotion(product_factory, blogger_factory, promotion_factory, flow_us
         pr=flow_users.pr,
         internal_code=f"F9{uuid4().hex}",
         publish_status="已发布",
+        # 已发布须进入待主管审核；沿用工厂的「未核查」会落入状态异常 H 列。
+        settlement_status="待核查",
         cooperation_date=get_today(),
         actual_publish_date=get_today() - timedelta(days=8),
         quote_amount=Decimal("500"),
@@ -87,6 +89,7 @@ async def test_platform_replace_is_atomic_and_primary_remains_authoritative(
     await session.flush()
     svc = PromotionService(session)
     before = await svc.get_promotion(p.id, flow_users.pr)
+    assert before.ui is not None and before.ui["column"] == "D"
     from app.modules.report.domain import resolve_time_range
     from app.modules.report.pr_scope import PR_SCOPE_ALL
     from app.modules.report.production_service import ProductionService
