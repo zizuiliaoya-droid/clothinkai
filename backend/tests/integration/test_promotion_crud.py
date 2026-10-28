@@ -31,10 +31,12 @@ from app.modules.promotion.exceptions import (
     InvalidStyleReferenceError,
     PromotionNotFoundError,
 )
+from app.modules.promotion.models import Promotion
 from app.modules.promotion.schemas import (
     PromotionCreate,
     PromotionListFilters,
     PromotionPublishRequest,
+    PromotionRecallStartRequest,
     PromotionReturnWaybillRequest,
     PromotionReviewRequest,
     PromotionUpdate,
@@ -897,6 +899,15 @@ class TestCooperationMode:
                 user,
             )
             assert created.total_promo_cost == Decimal("400.00")
+
+            # 首版寄回运费属于召回信息：先准备已发货单，再进入合法的召回阶段。
+            promotion = await session.get(Promotion, created.id)
+            assert promotion is not None
+            promotion.ship_status = "已发货"
+            await session.flush()
+            await svc.start_recall(
+                created.id, PromotionRecallStartRequest(recall_reason="寄拍召回"), user
+            )
 
             updated = await svc.update_promotion(
                 created.id,

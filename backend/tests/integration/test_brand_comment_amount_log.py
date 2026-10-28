@@ -348,6 +348,10 @@ class TestAmountLog:
                 code="AL_MULTI",
                 quote_amount=Decimal("500.00"),
                 cooperation_mode=CooperationMode.GIFT.value,
+                # 已发布召回沿用原 D 列的服务费权限；尚无 R33，可编辑召回运费。
+                publish_status="已发布",
+                settlement_status="待核查",
+                recall_status="召回中",
             )
             svc = PromotionService(session)
             await svc.update_promotion(
