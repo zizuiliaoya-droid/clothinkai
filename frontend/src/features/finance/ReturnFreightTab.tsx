@@ -1,3 +1,4 @@
+import { formatMoney } from "@/utils/money";
 import { StyleImageThumbnail } from "@/components/StyleImageThumbnail/StyleImageThumbnail";
 import { useState } from "react";
 import { Alert, Button, Input, Select, Space, Table, Tag } from "antd";
@@ -22,7 +23,7 @@ export function ReturnFreightTab() {
     { title: "推广编号", dataIndex: "promotion_internal_code", width: 190, render: (value, row) => <Button type="link" onClick={() => setLine(row)}>{value}</Button> },
     { title: "博主", dataIndex: "blogger_nickname", width: 130 },
     { title: "商品简称", dataIndex: "display_short_name", width: 150, render: (value) => value ?? "—" },
-    ...(rows.some((row) => row.amount !== null) ? [{ title: "金额", dataIndex: "amount", width: 110, render: (value: string | null) => value == null ? "—" : `¥${value}` }] : []),
+    ...(rows.some((row) => row.amount !== null) ? [{ title: "金额", dataIndex: "amount", width: 110, render: (value: string | null) => value == null ? "—" : formatMoney(value) }] : []),
     { title: "状态", dataIndex: "status", width: 100, render: (value) => <Tag>{value}</Tag> },
     { title: "提交人 / 时间", width: 180, render: (_, row) => <>{row.submitted_by_name ?? "—"}<br />{row.submitted_at.replace("T", " ").slice(0, 16)}</> },
     ...(rows.some((row) => row.payment_qr_attachment_id || row.payment_qr_signed_url) ? [{ title: "收款码快照", width: 110, render: (_: unknown, row: ReturnFreightPayment) => row.payment_qr_signed_url ? <StyleImageThumbnail size={48} src={row.payment_qr_signed_url} alt="收款码快照" /> : row.payment_qr_attachment_id ? "暂无法预览" : "—" }] : []),

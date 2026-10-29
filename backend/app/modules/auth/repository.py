@@ -180,6 +180,25 @@ class PermissionRepository:
         stmt = select(Permission).where(Permission.scope == scope)
         return (await self._session.execute(stmt)).scalar_one_or_none()
 
+    async def list_registered(self) -> Sequence[Permission]:
+        # 权限标识按固定字符序展示，不随数据库 locale 改变通配符与标点的顺序。
+        stmt = select(Permission).order_by(Permission.scope.collate("C"))
+        return (await self._session.execute(stmt)).scalars().all()
+
+    async def delete_override(self, user_id: UUID, permission_id: UUID) -> str | None:
+        """删除个人覆盖，恢复角色默认；与写入 revoke（个人拒绝）不同。"""
+        stmt = select(UserPermissionOverride).where(
+            UserPermissionOverride.user_id == user_id,
+            UserPermissionOverride.permission_id == permission_id,
+        )
+        existing = (await self._session.execute(stmt)).scalar_one_or_none()
+        if existing is None:
+            return None
+        previous_effect = existing.effect
+        await self._session.delete(existing)
+        await self._session.flush()
+        return previous_effect
+
     async def upsert_override(
         self,
         user_id: UUID,

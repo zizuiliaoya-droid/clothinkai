@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, Body, Path
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.modules.auth.deps import CurrentActiveUser
 from app.modules.report.deps import UserPreferenceServiceDep
@@ -20,6 +21,37 @@ from app.modules.report.user_preference_service import (
 router = APIRouter(prefix="/api/preferences", tags=["preference"])
 
 _PageCode = Annotated[str, Path(max_length=64, description="页面编码，如 product_roi")]
+
+_COLUMN_KEY = "columns:promotion_list"
+_ColumnId = Annotated[str, Field(min_length=1, max_length=64)]
+
+
+class PromotionColumnPreference(BaseModel):
+    """仅存列ID；可见权限始终由业务接口决定，不保存列数据。"""
+
+    model_config = ConfigDict(extra="forbid")
+    order: list[_ColumnId] = Field(default_factory=list, max_length=80)
+    hidden: list[_ColumnId] = Field(default_factory=list, max_length=80)
+
+
+@router.get("/columns/promotion_list")
+async def get_promotion_columns(
+    user: CurrentActiveUser,
+    service: UserPreferenceServiceDep,
+) -> PromotionColumnPreference:
+    return PromotionColumnPreference.model_validate(
+        await service.get_or_default(user.id, _COLUMN_KEY, {})
+    )
+
+
+@router.put("/columns/promotion_list")
+async def save_promotion_columns(
+    user: CurrentActiveUser,
+    service: UserPreferenceServiceDep,
+    preference: PromotionColumnPreference,
+) -> dict:
+    await service.upsert(user, _COLUMN_KEY, preference.model_dump())
+    return {"ok": True}
 
 
 @router.get("/filters/{page_code}")

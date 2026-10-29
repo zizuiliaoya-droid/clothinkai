@@ -4,6 +4,12 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { UserSummary } from "@/types";
 import { clearTokens, setTokens } from "@/services/apiClient";
+import { queryClient } from "@/services/queryClient";
+
+function sameIdentity(left: UserSummary | null, right: UserSummary) {
+  return left?.id === right.id &&
+    JSON.stringify([...left.roles].sort()) === JSON.stringify([...right.roles].sort());
+}
 
 interface AuthState {
   user: UserSummary | null;
@@ -28,6 +34,7 @@ export const useAuthStore = create<AuthState>()(
       mustChangePassword: false,
 
       setSession: (user, accessToken, refreshToken, mustChangePassword) => {
+        if (!sameIdentity(get().user, user)) queryClient.clear();
         setTokens(accessToken, refreshToken);
         set({
           user,
@@ -37,10 +44,12 @@ export const useAuthStore = create<AuthState>()(
       },
 
       setUser: (user) => {
+        if (!sameIdentity(get().user, user)) queryClient.clear();
         set({ user });
       },
 
       logout: () => {
+        queryClient.clear();
         clearTokens();
         set({
           user: null,

@@ -8,6 +8,7 @@ import { BarChart, type BarDatum } from "@/components/Charts/BarChart";
 import { PieChart, type PieDatum } from "@/components/Charts/PieChart";
 import { GoodsNameCell } from "@/components/GoodsNameCell/GoodsNameCell";
 import { MiniLineChart } from "@/components/MiniLineChart/MiniLineChart";
+import { ChartFrame } from "@/components/Charts/ChartFrame";
 import { StyleImageThumbnail } from "@/components/StyleImageThumbnail/StyleImageThumbnail";
 import { goodsDisplayName } from "@/features/product/api";
 import type {
@@ -298,6 +299,11 @@ export function StoreOverviewTab({ data, loading, caps }: Props) {
       </Card>
 
       <Card title="经营趋势" loading={loading}>
+        <ChartFrame title="经营趋势" columns={["期间", "支付金额", "退款金额", "实际销售额", "站内花费", "站外花费", "推广总额"]}
+          rows={trend.map((point) => ({ key: point.date_from, cells: [
+            `${point.date_from} 至 ${point.date_to}`, money(point.pay_amount), money(point.refund_amount),
+            money(point.actual_sales), money(point.internal_spend), money(point.external_spend), money(point.total_spend),
+          ] }))} empty={!trend.length} emptyText="暂无趋势数据">
         {/* 跟着卡片宽度画：375 宽不用横向滚动（评审 r1 L2） */}
         <MiniLineChart
           fluid
@@ -313,6 +319,7 @@ export function StoreOverviewTab({ data, loading, caps }: Props) {
             { name: "推广总额", color: "#7c3aed", data: trend.map((p) => Number(p.total_spend)) },
           ]}
         />
+        </ChartFrame>
       </Card>
 
       <Row gutter={[16, 16]}>

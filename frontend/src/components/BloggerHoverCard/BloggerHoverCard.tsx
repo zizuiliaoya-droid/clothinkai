@@ -1,3 +1,4 @@
+import { formatMoney } from "@/utils/money";
 import { useState } from "react";
 import {
   Divider,
@@ -151,12 +152,12 @@ export function BloggerHoverCard({
       dataIndex: "cpl",
       width: 90,
       align: "right",
-      render: (v: string | null) => (v == null ? "—" : `¥${Number(v).toFixed(2)}`),
+      render: (v: string | null) => (v == null ? "—" : formatMoney(Number(v).toFixed(2))),
     },
   ];
 
   const content = (
-    <div style={{ width: 560 }}>
+    <div style={{ width: "min(560px, calc(100vw - 48px))" }}>
       <Typography.Text strong>历史合作款式</Typography.Text>
       {data && (
         <Typography.Text type="secondary" style={{ marginLeft: 8 }}>
@@ -174,6 +175,7 @@ export function BloggerHoverCard({
             size="small"
             pagination={false}
             columns={columns}
+            scroll={{ x: 560 }}
             dataSource={data?.items ?? []}
           />
         )}

@@ -1,3 +1,4 @@
+import { formatMoney } from "@/utils/money";
 // 博主 hover 卡「谈款驳回记录」（流程线设计 8.7、7c-7）的纯函数。vitest 测。不显示款号（规-1）。
 
 import dayjs from "dayjs";
@@ -13,7 +14,7 @@ export function rejectionMetaLine(r: NegotiationRejectionItem): string {
     r.pr_name || "—",
     r.display_short_name || "—",
     r.platform || "—",
-    r.quote_amount == null ? "—" : `¥${Number(r.quote_amount).toFixed(2)}`,
+    r.quote_amount == null ? "—" : formatMoney(Number(r.quote_amount).toFixed(2)),
   ].join(" · ");
 }
 

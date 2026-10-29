@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { ChartFrame } from "./ChartFrame";
+import { useChartWidth } from "./useChartWidth";
 import {
   AXIS_TEXT,
   CHART_PALETTE,
@@ -53,10 +54,11 @@ export function BarChart({
   canSelect,
   renderLabel,
   emptyText = "暂无数据",
-  width = 640,
+  width: fallbackWidth = 640,
   color = CHART_PALETTE[0],
 }: Props) {
   const [hovered, setHovered] = useState<string | null>(null);
+  const { ref, width } = useChartWidth(fallbackWidth);
   const bars = data.filter((d): d is ValidBar => isFiniteNumber(d.value));
   const selectable = (d: BarDatum) => !!onSelect && (canSelect ? canSelect(d) : true);
 
@@ -69,6 +71,7 @@ export function BarChart({
   const zeroX = x(0);
 
   return (
+    <div ref={ref} style={{ width: "100%", minWidth: 0 }}>
     <ChartFrame
       title={title}
       columns={[labelHeader, valueLabel]}
@@ -80,8 +83,9 @@ export function BarChart({
       emptyText={emptyText}
     >
       <svg
-        width="100%"
-        style={{ maxWidth: width }}
+        width={width}
+        height={height}
+        style={{ display: "block" }}
         viewBox={`0 0 ${width} ${height}`}
         role="img"
         aria-label={`${title}：${bars.length} 项`}
@@ -125,5 +129,6 @@ export function BarChart({
         })}
       </svg>
     </ChartFrame>
+    </div>
   );
 }

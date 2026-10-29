@@ -205,6 +205,12 @@ class PermissionOverrideIn(BaseModel):
     reason: str | None = Field(default=None, max_length=512)
 
 
+class RegisteredPermissionView(BaseModel):
+    scope: str
+    name: str
+    category: str
+
+
 class EffectivePermissionsView(BaseModel):
     """有效权限视图（角色 scope + 自定义 grant/revoke + 合并结果）。"""
 

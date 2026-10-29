@@ -1,3 +1,4 @@
+import { formatMoney } from "@/utils/money";
 // 店铺日 / 周 / 月表格列（7e R4，设计 2.4）。三页共用一份，只有「日期 / 周期」一列按粒度显示。
 //
 // 列名：「访客数」改名「商品访客数合计」（默 16，悬停说明会重复计）；「支付订单数」改正为「支付件数」。
@@ -17,7 +18,7 @@ import { pct } from "./storeFormat";
 
 export const VISITORS_HINT = "按商品累加：同一访客看了多个商品会重复计";
 
-const money = (v: string | null) => (v == null ? "—" : `¥${v}`);
+const money = (v: string | null) => (v == null ? "—" : formatMoney(v));
 const roi = (v: string | null) => (v == null ? "—" : Number(v).toFixed(2));
 
 /** 某月最后一天的「DD」（"2026-02" → "28"）。 */
@@ -150,7 +151,7 @@ export function buildStoreColumns(
       "refund_only_amount",
       "仅退款",
       110,
-      (v) => (v == null ? "未录" : `¥${v}`),
+      (v) => (v == null ? "未录" : formatMoney(v)),
       edit
     ),
     {
