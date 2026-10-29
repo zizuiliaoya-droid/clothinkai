@@ -30,6 +30,7 @@ import app.modules.report.store_daily_service as store_mod
 import app.modules.report.work_progress_service as work_mod
 from app.core.config import settings
 from app.core.security.field_permissions import FieldPermissionContext
+from app.core.security.permissions import EffectivePermissions
 from app.core.tenancy import tenant_id_ctx
 from app.modules.collect.models import AdDaily, QianniuDaily
 from app.modules.finance.order_adjustment_models import OrderAdjustment
@@ -2119,6 +2120,7 @@ class TestWorkProgressGoods:
                 page=1,
                 page_size=100,
                 field_ctx=_SUPER_CTX,
+                perms=EffectivePermissions("summary-test", frozenset({"*"})),
             )
             assert drill.total == card.quote_count
             assert card.promo_cost == sum((i.total_promo_cost or Decimal(0)) for i in drill.items)

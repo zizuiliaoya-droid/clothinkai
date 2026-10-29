@@ -132,6 +132,19 @@ def _receiver_of(resp: Any) -> dict[str, Any]:
 
 @pytest.mark.usefixtures("tenant_ctx")
 class TestReceiverRead:
+    @pytest.mark.parametrize(
+        "who,detail_allowed,receiver_visible",
+        [
+            ("pr", True, True),
+            ("pr2", True, True),
+            ("pr_manager", True, True),
+            ("admin", True, True),
+            ("operations", True, False),
+            ("finance", False, False),
+            ("warehouse", False, True),
+        ],
+        ids=["pr", "pr2", "pr_manager", "admin", "operations", "finance", "warehouse"],
+    )
     async def test_detail_projection_by_role(
         self,
         session: AsyncSession,
@@ -139,18 +152,30 @@ class TestReceiverRead:
         product_factory: Any,
         blogger_factory: Any,
         promotion_factory: Any,
+        who: str,
+        detail_allowed: bool,
+        receiver_visible: bool,
     ) -> None:
         promo = await _promotion(
             flow_users, product_factory, blogger_factory, promotion_factory, **_RECEIVER
         )
         svc = PromotionService(session)
-        for who in ("pr", "pr_manager", "admin", "warehouse"):
-            resp = await svc.get_promotion(promo.id, getattr(flow_users, who))
-            assert _receiver_of(resp) == _RECEIVER, who
-        # 财务看不到收货地址（Q4），运营看不到收件（4.6）
-        for who in ("finance", "operations"):
-            resp = await svc.get_promotion(promo.id, getattr(flow_users, who))
-            assert _receiver_of(resp) == dict.fromkeys(_RECEIVER), who
+        user = getattr(flow_users, who)
+        # 明确规则，不按 fixture 实际权限动态决定预期：060 后仓库走专用接口，
+        # 财务仅有财务 / 报表等读取；两者均没有完整推广详情入口权限。
+        actor = await svc._flow_actor(user)
+        assert actor.perms.has("promotion", "read") is detail_allowed, who
+        if detail_allowed:
+            resp = await svc.get_promotion(promo.id, user)
+        else:
+            with pytest.raises(PermissionDeniedError) as denied:
+                await svc.get_promotion(promo.id, user)
+            assert denied.value.details["required_scope"] == "promotion"
+            # 入口拒绝不替代字段投影验证：保留仓库收件可见、财务收件全隐藏的原合同。
+            resp = await svc._to_response(promo, user)
+        assert _receiver_of(resp) == (
+            _RECEIVER if receiver_visible else dict.fromkeys(_RECEIVER)
+        ), who
 
     async def test_list_projection_by_role(
         self,
@@ -1104,7 +1129,11 @@ class TestFlowUi:
             "freight_payment": {"state": "read"},
             "timeline": {"state": "read"},
         }
-        assert (await svc.get_promotion(promo.id, flow_users.finance)).ui == {
+        # 默认财务过不了详情 gate；仍在投影层验证原有独立运费摘要矩阵。
+        with pytest.raises(PermissionDeniedError) as denied:
+            await svc.get_promotion(promo.id, flow_users.finance)
+        assert denied.value.details["required_scope"] == "promotion"
+        assert (await svc._to_response(promo, flow_users.finance)).ui == {
             "column": "A",
             "actions": {},
             "fields": {"freight_payment": {"state": "read"}},

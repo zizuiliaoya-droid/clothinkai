@@ -4,6 +4,7 @@ import { apiClient } from "@/services/apiClient";
 
 /** 允许记忆筛选的页面编码，需与后端 FILTER_PAGE_CODES 白名单一致。 */
 export type FilterPageCode =
+  | "promotion_list"
   | "urge_tasks"
   | "product_roi"
   | "pr_work_progress"

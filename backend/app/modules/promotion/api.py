@@ -24,6 +24,7 @@ from fastapi.responses import Response
 
 from app.modules.auth.deps import (
     CurrentActiveUser,
+    SessionDep,
     require_permission,
 )
 from app.modules.promotion.deps import PromotionServiceDep
@@ -33,6 +34,7 @@ from app.modules.promotion.enums import (
     SettlementStatus,
     ShipStatus,
 )
+from app.modules.promotion.filter_options import PromotionFilterOptions, list_filter_options
 from app.modules.promotion.schemas import (
     GoodsItemIn,
     PromotionAmountLogResponse,
@@ -52,6 +54,7 @@ from app.modules.promotion.schemas import (
     PromotionResubmitRequest,
     PromotionReturnWaybillRequest,
     PromotionReviewRequest,
+    PromotionSeason,
     PromotionSettlementResubmitRequest,
     PromotionUpdate,
     RetrospectiveResponse,
@@ -119,6 +122,9 @@ async def list_promotions(
     only_dual_platform: bool = False,
     is_hit: bool | None = None,
     ship_status: ShipStatusFilter | None = None,
+    goods_main_id: UUID | None = None,
+    seasons: Annotated[list[PromotionSeason] | None, Query(max_length=20)] = None,
+    unassigned_only: bool = False,
 ) -> PromotionPage:
     """EP05-S03 / S05 / S06 列表 + CTE 衍生字段（urge_status / dual_platform）.
 
@@ -131,6 +137,9 @@ async def list_promotions(
         return date.fromisoformat(s) if s else None
 
     filters = PromotionListFilters(
+        goods_main_id=goods_main_id,
+        seasons=seasons,
+        unassigned_only=unassigned_only,
         keyword=keyword,
         publish_status=publish_status,
         recall_status=recall_status,
@@ -149,6 +158,29 @@ async def list_promotions(
         ship_status=ship_status,
     )
     return await service.list_promotions(filters=filters, page=page, page_size=page_size, user=user)
+
+
+@router.get(
+    "/promotions/filter-options",
+    response_model=PromotionFilterOptions,
+    dependencies=[require_permission("promotion", "read")],
+)
+async def get_promotion_filter_options(
+    user: CurrentActiveUser,
+    session: SessionDep,
+    keyword: Annotated[str | None, Query(max_length=64)] = None,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 50,
+    selected_id: UUID | None = None,
+) -> PromotionFilterOptions:
+    return await list_filter_options(
+        session,
+        tenant_id=user.tenant_id,
+        keyword=keyword,
+        page=page,
+        page_size=page_size,
+        selected_id=selected_id,
+    )
 
 
 @router.get(

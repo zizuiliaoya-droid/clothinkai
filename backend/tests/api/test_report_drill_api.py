@@ -4,7 +4,7 @@
 
 - 判权：工作进度 read / read_own 或 ``report.bi:read`` 任一；只持 ``read_own`` 的 PR 服务端强制本人
   （传别人的 ``pr_id`` / ``unassigned`` 也忽略，不报错）
-- 响应字段 = ``DrillPromotionRow`` 白名单（不返回收件信息、备注、``source_extra``），``detail_url`` 恒 null
+- 响应字段 = ``DrillPromotionRow`` 白名单（不返回收件信息、备注、``source_extra``），``detail_url`` 按推广详情读取权限给出
 - F2 逐单金额：服务费要 ``quote_amount`` 可读，站外推广成本要 ``quote_amount`` 与 ``cost_snapshot`` 都可读
 - 商品归属 = ``COALESCE(p.goods_main_id, 主商品推定)``（``_PROMO_GOODS_LATERAL``，与投产同一片段）
 - 校验：跨度 > 366 天 ``REPORT_RANGE_TOO_LONG``；``from > to`` ``REPORT_INVALID_TIME_RANGE``；其余 422
@@ -206,7 +206,7 @@ class TestDrillPromotions:
         ]
         for row in body["items"]:
             assert set(row) == _WHITELIST
-            assert row["detail_url"] is None
+            assert row["detail_url"] == f"/promotions?id={row['id']}"
         for secret in _SECRETS:
             assert secret not in resp.text
         rows = {r["id"]: r for r in body["items"]}

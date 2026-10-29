@@ -145,7 +145,7 @@ class DrillPromotionRow(BaseModel):
     quote_amount: Decimal | None
     total_promo_cost: Decimal | None
     like_count: int | None
-    # R1 ~ R7 恒 null（详情抽屉随流程线 PR-4，R8 补）
+    # 仅当前用户可读取对应推广详情时提供链接
     detail_url: str | None = None
 
 
@@ -576,7 +576,7 @@ class BiNotePoint(BaseModel):
     """笔记散点一点 = 一张已发布、录过 7 天数据的推广单（7e R6，设计 2.6）。
 
     x = ``publish_date``（实际发布日期），y = ``like_count``（原始值），点大小 = ``promo_cost``
-    （站外推广成本，F2：读不到给 null，前端改用固定大小）。``detail_url`` R8 之前恒 null。
+    （站外推广成本，F2：读不到给 null，前端改用固定大小）。``detail_url`` 仅推广详情可读时提供。
     """
 
     promotion_id: UUID

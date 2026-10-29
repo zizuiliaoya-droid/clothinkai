@@ -639,10 +639,15 @@ class PromotionService(
     # ============================================================
 
     async def get_promotion(self, promotion_id: UUID, user: User) -> PromotionResponse:
-        promotion = await self._repo.get_by_id(promotion_id)
+        from app.modules.promotion.read_access import PromotionReadAccess
+
+        actor = await self._flow_actor(user)
+        promotion = await PromotionReadAccess(self._session).get(
+            promotion_id, tenant_id=user.tenant_id, perms=actor.perms
+        )
         if promotion is None:
             raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
-        return await self._to_response(promotion, user)
+        return await self._to_response(promotion, user, actor=actor)
 
     async def list_promotions(
         self,
@@ -659,6 +664,9 @@ class PromotionService(
         today = get_today()
 
         repo_filters = RepoPromotionListFilters(
+            goods_main_id=filters.goods_main_id,
+            seasons=filters.seasons,
+            unassigned_only=filters.unassigned_only,
             keyword=filters.keyword,
             publish_status=(filters.publish_status.value if filters.publish_status else None),
             recall_status=(filters.recall_status.value if filters.recall_status else None),
