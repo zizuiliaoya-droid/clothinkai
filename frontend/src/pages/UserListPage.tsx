@@ -1,5 +1,6 @@
 import { useState } from "react";
 import {
+  Alert,
   Button,
   Card,
   Form,
@@ -25,6 +26,9 @@ import {
 } from "@/features/user/api";
 import type { UserCreatePayload, UserListItem } from "@/features/user/api";
 import { extractErrorMessage } from "@/services/apiClient";
+import { useAuthStore } from "@/stores/authStore";
+import { listRegisteredPermissions } from "@/features/user/permissionsApi";
+import { UserPermissionsModal } from "@/features/user/UserPermissionsModal";
 
 const ROLE_OPTIONS = [
   "admin",
@@ -45,9 +49,20 @@ export function UserListPage() {
   const [page, setPage] = useState(1);
   const [open, setOpen] = useState(false);
   const [form] = Form.useForm<UserCreatePayload>();
+  const [permissionUser, setPermissionUser] = useState<{ user: UserListItem; viewerId: string } | null>(null);
+  const viewerId = useAuthStore((state) => state.user?.id);
+  // 后端实际权限决定入口，支持个人管理授权；不从角色推断。
+  const catalog = useQuery({
+    queryKey: ["permission-catalog", viewerId],
+    queryFn: listRegisteredPermissions,
+    enabled: Boolean(viewerId),
+    retry: false,
+  });
+  const canManagePermissions = Boolean(viewerId) && catalog.isSuccess;
+  const catalogForbidden = (catalog.error as { response?: { status?: number } } | null)?.response?.status === 403;
 
   const { data, isLoading } = useQuery({
-    queryKey: ["users", page],
+    queryKey: ["users", viewerId, page],
     queryFn: () => listUsers({ page, page_size: 20 }),
   });
 
@@ -126,8 +141,14 @@ export function UserListPage() {
     {
       title: "操作",
       width: 220,
+      fixed: "right",
       render: (_, r) => (
-        <Space>
+        <Space wrap>
+          {canManagePermissions && (
+            <Button type="link" size="small" onClick={() => viewerId && setPermissionUser({ user: r, viewerId })}>
+              个人权限
+            </Button>
+          )}
           <Button type="link" size="small" onClick={() => toggleMutation.mutate(r.id)}>
             {r.status === "active" ? "禁用" : "启用"}
           </Button>
@@ -165,8 +186,18 @@ export function UserListPage() {
         </Button>
       }
     >
+      {catalog.isError && !catalogForbidden && (
+        <Alert
+          type="error"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message={extractErrorMessage(catalog.error, "权限管理入口加载失败")}
+          action={<Button onClick={() => void catalog.refetch()}>重试</Button>}
+        />
+      )}
       <Table
         rowKey="id"
+        scroll={{ x: 1000 }}
         loading={isLoading}
         columns={columns}
         dataSource={data?.items ?? []}
@@ -178,6 +209,16 @@ export function UserListPage() {
           onChange: (p) => setPage(p),
         }}
       />
+
+      {permissionUser && viewerId === permissionUser.viewerId && canManagePermissions && (
+        <UserPermissionsModal
+          key={`${viewerId}:${permissionUser.user.id}`}
+          user={permissionUser.user}
+          viewerId={viewerId}
+          catalog={catalog.data ?? []}
+          onClose={() => setPermissionUser(null)}
+        />
+      )}
 
       <Modal
         title="新建用户"

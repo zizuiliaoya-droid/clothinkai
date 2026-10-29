@@ -16,6 +16,30 @@ from httpx import ASGITransport, AsyncClient
 @pytest.mark.api
 @pytest.mark.asyncio
 class TestPermissionApiContract:
+    @pytest.fixture(autouse=True)
+    def _disable_external_rate_limit(self, monkeypatch):
+        # 本文件只验权限端点契约，不依赖 Redis 限流服务。
+        from app.main import app
+
+        monkeypatch.setattr(app.state.limiter, "enabled", False)
+
+    async def test_catalog_requires_auth(self) -> None:
+        from app.main import app
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            resp = await ac.get("/api/permissions")
+        assert resp.status_code == 401
+
+    async def test_reset_requires_auth(self) -> None:
+        from app.main import app
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            resp = await ac.post(
+                f"/api/users/{uuid4()}/permissions/reset",
+                json={"scope": "negotiation_all:read"},
+            )
+        assert resp.status_code == 401
+
     async def test_grant_requires_auth(self) -> None:
         from app.main import app
 
@@ -56,3 +80,5 @@ class TestPermissionApiContract:
         assert "/api/users/{user_id}/permissions/grant" in paths
         assert "/api/users/{user_id}/permissions/revoke" in paths
         assert "/api/users/{user_id}/effective-permissions" in paths
+        assert "/api/permissions" in paths
+        assert "/api/users/{user_id}/permissions/reset" in paths

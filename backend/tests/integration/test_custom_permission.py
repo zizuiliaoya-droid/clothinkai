@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ResourceNotFoundError, ValidationError
 from app.core.tenancy import tenant_id_ctx
-from app.modules.auth.models import Permission
+from app.modules.auth.models import Permission, Role, RolePermission, UserPermissionOverride
 from app.modules.auth.service import PermissionService
 from app.modules.product.service import SkuService
 
@@ -52,6 +52,68 @@ async def _ensure_perm(session: AsyncSession, scope: str) -> Permission:
 @pytest.mark.integration
 @pytest.mark.asyncio
 class TestCustomFieldPermission:
+    @pytest.mark.parametrize("effect", ["grant", "revoke"])
+    async def test_reset_removes_override_and_restores_role_default(
+        self, session: AsyncSession, tenant_a: Any, factory: Any, effect: str
+    ) -> None:
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            scope = f"test.permission_{uuid4().hex}:read"
+            perm = await _ensure_perm(session, scope)
+            role = Role(id=uuid4(), code=f"test_{uuid4().hex[:12]}", name="权限测试")
+            session.add(role)
+            await session.flush()
+            if effect == "revoke":
+                session.add(RolePermission(role_id=role.id, permission_id=perm.id))
+                await session.flush()
+            target = await factory.user(tenant_a, roles=[role])
+            target_id, permission_id = target.id, perm.id
+            service = PermissionService(session)
+            await getattr(service, effect)(target_id, scope, actor_id=target_id, reason="测试覆盖")
+            overridden = await service.get_effective(target_id)
+            assert scope in overridden["grants" if effect == "grant" else "revokes"]
+            assert (scope in overridden["effective"]) is (effect == "grant")
+
+            await service.reset(target_id, scope, actor_id=target_id, reason="恢复默认")
+            restored = await service.get_effective(target_id)
+            assert restored["grants"] == [] and restored["revokes"] == []
+            assert restored["effective"] == restored["role_scopes"]
+            assert (scope in restored["effective"]) is (effect == "revoke")
+            assert (
+                await session.execute(
+                    select(UserPermissionOverride).where(
+                        UserPermissionOverride.user_id == target_id,
+                        UserPermissionOverride.permission_id == permission_id,
+                    )
+                )
+            ).scalar_one_or_none() is None
+            # 重复恢复幂等，不会重新创建 deny 或 grant。
+            await service.reset(target_id, scope, actor_id=target_id)
+            assert await service.get_effective(target_id) == restored
+            catalog = await service.list_registered()
+            assert {"scope": scope, "name": scope, "category": "field"} in catalog
+            assert [item["scope"] for item in catalog] == sorted(item["scope"] for item in catalog)
+        finally:
+            tenant_id_ctx.reset(token)
+
+    async def test_reset_cannot_remove_other_tenants_override(
+        self, session: AsyncSession, tenant_a: Any, tenant_b: Any, factory: Any
+    ) -> None:
+        token = tenant_id_ctx.set(tenant_b.id)
+        try:
+            await _ensure_perm(session, _COST_READ)
+            target = await factory.user(tenant_b)
+            target_id = target.id
+            service = PermissionService(session)
+            await service.grant(target_id, _COST_READ, actor_id=target_id)
+            tenant_id_ctx.set(tenant_a.id)
+            with pytest.raises(ResourceNotFoundError):
+                await service.reset(target_id, _COST_READ, actor_id=uuid4())
+            tenant_id_ctx.set(tenant_b.id)
+            assert _COST_READ in (await service.get_effective(target_id))["grants"]
+        finally:
+            tenant_id_ctx.reset(token)
+
     async def test_grant_makes_field_visible(
         self,
         session: AsyncSession,
