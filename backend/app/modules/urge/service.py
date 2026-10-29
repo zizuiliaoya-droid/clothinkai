@@ -28,7 +28,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.attachment import AttachmentService, attachment_service, check_image_payload
 from app.core.audit import AuditService
+from app.core.security.permissions import EffectivePermissions
 from app.modules.auth.models import User
+from app.modules.auth.service import AuthService
 from app.modules.flow.line_events import LineEventRepository, LineEventType
 from app.modules.promotion.urge_calculator import UrgeThresholds, get_today
 from app.modules.urge.enums import UrgeCloseReason, UrgeTaskStatus, UrgeTriggerType
@@ -41,6 +43,7 @@ from app.modules.urge.exceptions import (
     UrgeTaskNotFoundError,
 )
 from app.modules.urge.models import UrgeConfig, UrgeRecord
+from app.modules.urge.permissions import SCOPE_URGE
 from app.modules.urge.repository import (
     UrgeConfigRepository,
     UrgeRecordRepository,
@@ -197,7 +200,10 @@ class UrgeService:
             page=page,
             page_size=page_size,
         )
-        items = [self._row_to_task(r, max_urge_times=cfg["max_urge_times"]) for r in rows]
+        perms = await AuthService(self._session).load_effective_permissions(user.id)
+        items = [
+            self._row_to_task(r, max_urge_times=cfg["max_urge_times"], perms=perms) for r in rows
+        ]
         return items, total
 
     async def get_task_detail(self, task_id: UUID, user: User) -> UrgeTaskDetailResponse:
@@ -205,7 +211,8 @@ class UrgeService:
         row = await self._tasks.get_detail(task_id, today=get_today())
         if row is None:
             raise UrgeTaskNotFoundError(f"催发任务 {task_id} 不存在")
-        base = self._row_to_task(row, max_urge_times=cfg["max_urge_times"])
+        perms = await AuthService(self._session).load_effective_permissions(user.id)
+        base = self._row_to_task(row, max_urge_times=cfg["max_urge_times"], perms=perms)
         records = await self._records.list_by_task(tenant_id=user.tenant_id, task_id=task_id)
         shot_key = row.get("close_screenshot_key")
         return UrgeTaskDetailResponse(
@@ -857,9 +864,30 @@ class UrgeService:
                 extra={"attachment_id": str(attachment_id)},
             )
 
-    def _row_to_task(self, row: Mapping[str, Any], *, max_urge_times: int) -> UrgeTaskResponse:
+    def _row_to_task(
+        self,
+        row: Mapping[str, Any],
+        *,
+        max_urge_times: int,
+        perms: EffectivePermissions | None = None,
+    ) -> UrgeTaskResponse:
         overdue = row.get("overdue_days")
+        actions: dict[str, Any] = {}
+        if perms is not None and perms.has(SCOPE_URGE, "write"):
+            if (
+                row.get("promotion_active", True)
+                and row.get("publish_status") in _URGEABLE_PUBLISH_STATUS
+                and (
+                    row["status"] == "进行中"
+                    or row.get("close_reason") == UrgeCloseReason.COMPLETED.value
+                )
+            ):
+                actions["urge"] = {"state": "enabled"}
+            if row["status"] == "进行中":
+                actions["complete"] = {"state": "enabled"}
+                actions["close"] = {"state": "enabled"}
         return UrgeTaskResponse(
+            ui={"actions": actions},
             id=row["id"],
             promotion_id=row["promotion_id"],
             promotion_internal_code=row.get("promotion_internal_code"),

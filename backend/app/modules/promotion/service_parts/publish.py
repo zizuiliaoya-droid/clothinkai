@@ -11,6 +11,7 @@ from app.core.metrics import (
 )
 from app.modules.auth.models import User
 from app.modules.flow.line_events import LineEventRepository, LineEventType
+from app.modules.flow.matrix import Level, cell_level, require
 from app.modules.promotion.enums import (
     PublishStatus,
     RetroStatus,
@@ -23,6 +24,7 @@ from app.modules.promotion.events import (
 from app.modules.promotion.exceptions import (
     BrandCommentScreenshotRequiredError,
     CancelReasonRequiredError,
+    FieldPermissionDenied,
     PromotionNotFoundError,
     StateTransitionConflictError,
 )
@@ -71,6 +73,12 @@ class PromotionPublishMixin(PromotionServiceBase):
             from_state=promotion.publish_status,
             to_state=PublishStatus.PUBLISHED.value,
             action="publish",
+        )
+        require(
+            await self._flow_actor(user),
+            await self._promotion_doc(promotion),
+            "publish",
+            gates=False,
         )
         _assert_not_future_publish_date(payload.actual_publish_date)
 
@@ -195,6 +203,7 @@ class PromotionPublishMixin(PromotionServiceBase):
             to_state=PublishStatus.CANCELLED.value,
             action="cancel",
         )
+        require(await self._flow_actor(user), await self._promotion_doc(promotion), "cancel")
 
         updated = await self._repo.update_state(
             promotion_id=promotion_id,
@@ -281,14 +290,24 @@ class PromotionPublishMixin(PromotionServiceBase):
     ) -> PromotionResponse:
         """上传品牌词评论截图（PRD 改动 5，提交发布审核的前提）。
 
-        不限状态：PR 可能发布前就截好了，也可能被 ``publish`` 挡住之后才来补。
-        真正的门槛在 ``publish()`` 里 —— 没有截图就提交不了发布审核。
+        按发布信息矩阵判权：发布前可补，推广驳回待重提时可换图；
+        其余阶段保留原只读和完结锁。没有截图不能提交发布审核。
 
         后端代传 + 失败补偿删除 R2 对象，骨架与收款码、7 天数据截图一致。
         """
         from fastapi.concurrency import run_in_threadpool
 
         promotion = await self._writable_promotion(promotion_id, user)
+        if (
+            cell_level(
+                await self._flow_actor(user),
+                await self._promotion_doc(promotion),
+                "field",
+                "publish_info",
+            )
+            is not Level.EDIT
+        ):
+            raise FieldPermissionDenied(fields=["brand_comment_attachment_id"], entity="promotion")
         if promotion is None:
             raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
 

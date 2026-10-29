@@ -72,10 +72,6 @@ interface UrgeFilterMemory {
 }
 
 /** 已完成的任务还能手动催（会重开，3.9 U2）；其他原因关闭的不能。 */
-function canUrge(t: UrgeTask): boolean {
-  return t.status === "进行中" || t.close_reason === "已完成";
-}
-
 /**
  * 催发任务（PRD V1.4 改动 2）。
  *
@@ -88,9 +84,6 @@ function canUrge(t: UrgeTask): boolean {
 export function UrgePage() {
   const qc = useQueryClient();
   const user = useAuthStore((s) => s.user);
-  const canConfig = Boolean(
-    user?.roles.some((r) => ["admin", "platform_admin", "pr_manager"].includes(r))
-  );
 
   const [filters, setFilters] = useState<UrgeTaskFilters>({
     status: "进行中",
@@ -147,6 +140,9 @@ export function UrgePage() {
     queryFn: () => listUrgeTasks(listFilters),
     enabled: memoryApplied,
   });
+
+  const canConfig = data?.ui?.actions?.config?.state === "enabled";
+  const canBatch = data?.ui?.actions?.batch?.state === "enabled";
 
   const { data: detail, isLoading: detailLoading } = useQuery({
     queryKey: ["urge-task", detailId],
@@ -338,31 +334,31 @@ export function UrgePage() {
           <Button type="link" size="small" onClick={() => setDetailId(r.id)}>
             时间线
           </Button>
-          <Button
+          {r.ui?.actions?.urge && <Button
             type="link"
             size="small"
-            disabled={!canUrge(r)}
+            disabled={r.ui.actions.urge.state !== "enabled"}
             onClick={() => startUrge(r)}
           >
             催发
-          </Button>
-          <Button
+          </Button>}
+          {r.ui?.actions?.complete && <Button
             type="link"
             size="small"
-            disabled={r.status !== "进行中"}
+            disabled={r.ui.actions.complete.state !== "enabled"}
             onClick={() => setCompleteTarget(r)}
           >
             标记完成
-          </Button>
-          <Button
+          </Button>}
+          {r.ui?.actions?.close && <Button
             type="link"
             size="small"
             danger
-            disabled={r.status !== "进行中"}
+            disabled={r.ui.actions.close.state !== "enabled"}
             onClick={() => confirmClose(r)}
           >
             关闭
-          </Button>
+          </Button>}
         </Space>
       ),
     },
@@ -430,7 +426,7 @@ export function UrgePage() {
         }
         extra={
           <Space>
-            <Button onClick={() => setBatchOpen(true)}>按款式批量催发</Button>
+            {canBatch && <Button onClick={() => setBatchOpen(true)}>按款式批量催发</Button>}
             {canConfig && (
               <Button icon={<SettingOutlined />} onClick={() => void openConfig()}>
                 催发设置

@@ -265,7 +265,9 @@ async def test_freight_list_filters_and_tenant_hidden(
 async def test_promotion_list_freight_summary_is_batched_and_clipped(
     session, freight_promotion, flow_users, product_factory, blogger_factory, promotion_factory
 ):
-    from sqlalchemy import event
+    from sqlalchemy import Select, event
+
+    from app.modules.promotion.freight_models import ReturnFreightPayment
 
     p = freight_promotion
     await ReturnFreightService(session).submit(p.id, FreightSubmitRequest(), flow_users.pr)
@@ -275,9 +277,12 @@ async def test_promotion_list_freight_summary_is_batched_and_clipped(
     queries = []
 
     def capture(conn, cursor, statement, parameters, context, executemany):
-        if (
-            statement.lstrip().lower().startswith("select")
-            and "return_freight_payment" in statement
+        # 只数独立 R33 读取；列表统计/分页里的状态关联子查询不是逐行查询。
+        compiled = context.compiled
+        query = compiled.statement if compiled is not None else None
+        if isinstance(query, Select) and any(
+            source.is_derived_from(ReturnFreightPayment.__table__)
+            for source in query.get_final_froms()
         ):
             queries.append(statement)
 
@@ -299,6 +304,7 @@ async def test_promotion_list_freight_summary_is_batched_and_clipped(
         and result["recall_waybill_signed_url"] is None
     )
     assert len(queries) == 1, "每页只批量读取一次R33，不按推广逐行查询"
+    assert "promotion_id IN (" in queries[0], "R33 摘要按本页推广 ID 批量读取"
 
 
 async def test_review_reject_and_finance_reject_require_reason_and_keep_id(

@@ -553,6 +553,8 @@ class PlatformPostResponse(BaseModel):
 
 
 class PromotionResponse(BaseModel):
+    stage: str | None = None
+
     """推广响应。
 
     敏感字段（quote_amount / cost_snapshot / cpl）按角色过滤
@@ -732,6 +734,13 @@ class PromotionResponse(BaseModel):
     ui: dict[str, Any] | None = None
 
 
+class PromotionStageCounts(BaseModel):
+    stages: dict[str, int]
+    badges: dict[str, int]
+    completed: int
+    total: int
+
+
 class PromotionPage(BaseModel):
     items: list[PromotionResponse]
     total: int
@@ -756,6 +765,11 @@ PromotionSeason = Annotated[
 ]
 
 
+PromotionBadge = Literal[
+    "missing_qr", "metrics_due", "metrics_wait_settle", "retro_due", "freight_open"
+]
+
+
 class PromotionListFilters(BaseModel):
     """列表过滤入参（query string 解析后构造）。"""
 
@@ -764,6 +778,21 @@ class PromotionListFilters(BaseModel):
     goods_main_id: UUID | None = None
     seasons: list[PromotionSeason] | None = Field(default=None, max_length=20)
     unassigned_only: bool = False
+
+    stage: str | None = None
+    badge: PromotionBadge | None = None
+    completed: bool | None = None
+    receiver_name: str | None = Field(default=None, max_length=32)
+    receiver_phone: str | None = Field(default=None, max_length=32)
+
+    @field_validator("stage")
+    @classmethod
+    def _known_stage(cls, value: str | None) -> str | None:
+        from app.modules.promotion.stage_calculator import PROMOTION_STAGES
+
+        if value is not None and value not in PROMOTION_STAGES:
+            raise ValueError("未知推广阶段")
+        return value
 
     keyword: str | None = Field(default=None, max_length=64)
     publish_status: PublishStatus | None = None

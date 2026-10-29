@@ -9,6 +9,7 @@ import type {
   PromotionCreate,
   PromotionListFilters,
   PromotionPage,
+  PromotionStageCounts,
   PromotionPublishRequest,
   PromotionRecallStartRequest,
   PromotionRecallSuccessRequest,
@@ -29,6 +30,10 @@ export async function listPromotions(
     params: filters,
   });
   return resp.data;
+}
+
+export async function getPromotionStageCounts(filters: PromotionListFilters = {}): Promise<PromotionStageCounts> {
+  return (await apiClient.get<PromotionStageCounts>("/api/promotions/stage-counts", { params: filters })).data;
 }
 
 export interface PromotionGoodsOption { id: string; display_name: string }
