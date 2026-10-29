@@ -538,6 +538,7 @@ _PURGE_PROMOTION_STEPS: tuple[str, ...] = (
     f"DELETE FROM negotiation_item WHERE negotiation_id IN {_NEGOTIATIONS_OF_PROMOTIONS}",
     "DELETE FROM negotiation WHERE promotion_id = ANY(CAST(:ids AS uuid[]))",
     "DELETE FROM promotion_item WHERE promotion_id = ANY(CAST(:ids AS uuid[]))",
+    "DELETE FROM promotion_platform_post WHERE promotion_id = ANY(CAST(:ids AS uuid[]))",
     "DELETE FROM settlement_extra_item WHERE settlement_id IN "
     "(SELECT id FROM settlement WHERE promotion_id = ANY(CAST(:ids AS uuid[])))",
     "DELETE FROM settlement WHERE promotion_id = ANY(CAST(:ids AS uuid[]))",
@@ -600,6 +601,7 @@ async def promotion_factory(session: AsyncSession, tenant_a: Any) -> Any:
     """U04 测试数据工厂."""
     from datetime import date as _date
     from decimal import Decimal
+    from itertools import count
 
     from sqlalchemy import text as sa_text
 
@@ -638,6 +640,7 @@ async def promotion_factory(session: AsyncSession, tenant_a: Any) -> Any:
                     "like_count",
                     "completed_at",
                     "metrics_recorded_at",
+                    "content_category",
                     "source_extra",
                     "cooperation_mode",
                     "return_shipping_fee",
@@ -677,6 +680,8 @@ async def promotion_factory(session: AsyncSession, tenant_a: Any) -> Any:
 
         def __init__(self, default_tenant: Any) -> None:
             self.default_tenant = default_tenant
+            # 每个测试工厂独立递增，避免截短 UUID 偶发碰撞；显式编码仍由调用者指定。
+            self._internal_code_sequence = count(1)
 
         async def promotion(
             self,
@@ -702,7 +707,7 @@ async def promotion_factory(session: AsyncSession, tenant_a: Any) -> Any:
                     pr_id=kw.get("pr_id", pr.id if pr else None),
                     internal_code=kw.get(
                         "internal_code",
-                        f"DE2605260{uuid4().hex[:3].upper()}",
+                        f"DE260526{next(self._internal_code_sequence):04d}",
                     ),
                     style_code_snapshot=kw.get(
                         "style_code_snapshot",
@@ -716,6 +721,7 @@ async def promotion_factory(session: AsyncSession, tenant_a: Any) -> Any:
                     quote_amount=kw.get("quote_amount", Decimal("500.00")),
                     cost_snapshot=kw.get("cost_snapshot"),
                     platform=kw.get("platform", "小红书"),
+                    content_category=kw.get("content_category"),
                     cooperation_date=kw.get("cooperation_date", _date(2026, 5, 26)),
                     scheduled_publish_date=kw.get("scheduled_publish_date"),
                     actual_publish_date=kw.get("actual_publish_date"),

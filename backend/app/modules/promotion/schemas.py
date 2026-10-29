@@ -73,6 +73,7 @@ class PromotionBase(BaseModel):
     """
     blogger_id: UUID
     platform: str = Field(min_length=1, max_length=16)
+    content_category: str | None = Field(default=None, max_length=8)
     cooperation_date: date | None = None
     """合作日期。
 
@@ -158,6 +159,7 @@ class PromotionUpdate(BaseModel):
     return_shipping_fee: _FeeField | None = None
     return_shipping_payer: Literal["博主垫付", "到付"] | None = None
     platform: str | None = Field(default=None, min_length=1, max_length=16)
+    content_category: str | None = Field(default=None, max_length=8)
     scheduled_publish_date: date | None = None
     quote_amount: _QuoteField | None = None
     note_title: str | None = Field(default=None, max_length=255)
@@ -517,6 +519,39 @@ class PromotionSettlementBlock(BaseModel):
     """结款单最近一次驳回的原因（F5）；没驳回过为 None。"""
 
 
+class PlatformPostIn(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    platform: str = Field(min_length=1, max_length=16)
+    publish_url: str | None = Field(default=None, max_length=512)
+    actual_publish_date: date | None = None
+    like_count: int | None = Field(default=None, ge=0, le=2147483647)
+
+    @field_validator("publish_url")
+    @classmethod
+    def valid_url(cls, value: str | None) -> str | None:
+        return _check_publish_url(value) if value else None
+
+    @field_validator("actual_publish_date")
+    @classmethod
+    def not_future(cls, value: date | None) -> date | None:
+        from app.modules.promotion.urge_calculator import get_today
+
+        if value is not None and value > get_today():
+            raise ValueError("发布日期不能晚于今天")
+        return value
+
+
+class PlatformPostResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    platform: str
+    publish_url: str | None = None
+    actual_publish_date: date | None = None
+    like_count: int | None = None
+
+
 class PromotionResponse(BaseModel):
     """推广响应。
 
@@ -578,6 +613,9 @@ class PromotionResponse(BaseModel):
 
     # 业务字段
     platform: str
+    content_category: str | None = None
+    extra_platforms: list[str] = Field(default_factory=list)
+    platform_posts: list[PlatformPostResponse] = Field(default_factory=list)
     cooperation_date: date
     scheduled_publish_date: date | None = None
     actual_publish_date: date | None = None
@@ -732,6 +770,7 @@ class PromotionListFilters(BaseModel):
     recall_status: RecallStatus | None = None
     settlement_status: SettlementStatus | None = None
     platform: str | None = Field(default=None, max_length=16)
+    content_category: str | None = Field(default=None, max_length=8)
     blogger_id: UUID | None = None
     style_id: UUID | None = None
     pr_id: UUID | None = None

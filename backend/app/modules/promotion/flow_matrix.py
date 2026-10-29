@@ -218,6 +218,12 @@ _cooperation: dict[str, Cell | tuple[Cell, ...]] = {}
 _fill(_cooperation, "ABCD", Cell(edit=_MANAGER_EDIT, read=(_READ,)))
 _fill(_cooperation, "EFGH", Cell(edit=(_STAR,), read=(_READ_OR_FINANCE,)))
 
+_platform_posts: dict[str, Cell | tuple[Cell, ...]] = {}
+_fill(_platform_posts, "ABC", Cell(grey=(_READ,), hint="发布后可录其他平台"))
+_fill(_platform_posts, "DEF", Cell(edit=(_WRITE,), read=(_READ,)))
+_fill(_platform_posts, "G", Cell(edit=(_WRITE,), read=(_READ,), when=(PublishIn("已发布"),)))
+_fill(_platform_posts, "H", Cell(edit=(_STAR,), read=(_READ,)))
+
 # 合作模式（²³）：有值所有人读；空值主管 / 管理员可补一次（A ~ G），H 只有管理员。PR 一律读
 _MODE_EMPTY = (ModeIn(None),)
 _cooperation_mode: dict[str, Cell | tuple[Cell, ...]] = {}
@@ -489,6 +495,7 @@ PROMOTION_MATRIX = Matrix(
         Row("goods", "field", _goods),
         Row("goods_items", "field", _goods_items),
         Row("cooperation", "field", _cooperation),
+        Row("platform_posts", "field", _platform_posts),
         Row("cooperation_mode", "field", _cooperation_mode),
         Row("quote_amount", "field", _quote_amount),
         Row("receiver", "field", _receiver),
@@ -511,6 +518,7 @@ PROMOTION_MATRIX = Matrix(
         "sku_id": "goods_items",
         "goods_main_id": "goods",
         "platform": "cooperation",
+        "content_category": "cooperation",
         "scheduled_publish_date": "cooperation",
         "remark": "cooperation",
         "cooperation_mode": "cooperation_mode",

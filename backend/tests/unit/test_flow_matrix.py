@@ -1087,6 +1087,7 @@ def test_real_ui_shape() -> None:
         "quote_amount": {"state": "edit"},
         "receiver": {"state": "edit"},
         "shipping": {"state": "grey", "hint": "推送后由仓库回填"},
+        "platform_posts": {"state": "grey", "hint": "发布后可录其他平台"},
         "metrics": {"state": "grey", "hint": "已结款后可录"},
         "payment_qr": {"state": "grey", "hint": "发布后上传"},
         "recall_info": {"state": "read"},
@@ -1141,7 +1142,7 @@ def test_receiver_follows_field_rules() -> None:
 
 def test_real_writable_fields() -> None:
     receiver = {"receiver_name", "receiver_phone", "receiver_address"}
-    cooperation = {"platform", "scheduled_publish_date", "remark"}
+    cooperation = {"platform", "scheduled_publish_date", "remark", "content_category"}
     # PR-5 入矩阵：归属商品、合作信息、合作模式、服务费、停用（is_active 归动作 deactivate）
     pr5 = {"goods_main_id", *cooperation, "cooperation_mode", "quote_amount", "is_active"}
     # PR-6 入矩阵：like_count 归 7 天数据（metrics）

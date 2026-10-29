@@ -12,6 +12,7 @@ export function buildCreatePayload(values: Record<string, unknown>): PromotionCr
     blogger_id: values.blogger_id as string,
     cooperation_mode: values.cooperation_mode as string,
     platform: values.platform as string,
+    ...(typeof values.content_category === "string" && values.content_category.trim() ? { content_category: values.content_category.trim() } : {}),
     cooperation_date: dayjs(values.cooperation_date as dayjs.Dayjs).format("YYYY-MM-DD"),
     quote_amount: values.quote_amount != null ? String(values.quote_amount) : null,
     note_title: (values.note_title as string) || null,

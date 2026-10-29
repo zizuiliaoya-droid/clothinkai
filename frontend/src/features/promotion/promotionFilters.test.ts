@@ -5,6 +5,12 @@ import { PROMOTION_FILTER_SCHEMA, promotionDimensionParams, promotionIdFromUrl }
 const ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 
 describe("推广筛选URL与API合同", () => {
+  it("分类随URL与记忆保留，不影响商品与详情落点", () => {
+    const parsed = parseUrlFilters(new URLSearchParams(`content_category=合集&goods_id=${ID}&id=${ID}`), PROMOTION_FILTER_SCHEMA);
+    expect(parsed).toEqual({ content_category: "合集", goods_id: ID });
+    expect(promotionDimensionParams({ season: [], ...parsed })).toMatchObject({ content_category: "合集", goods_main_id: ID });
+    expect(pickMemoryFilters({ season: [], ...parsed }, PROMOTION_FILTER_SCHEMA)).toMatchObject({ content_category: "合集" });
+  });
   it("规范URL映射到三个API字段，未分配不传PR UUID", () => {
     const parsed = parseUrlFilters(new URLSearchParams(`goods_id=${ID}&season=春&season=夏&pr_id=unassigned&id=${ID}&page=9`), PROMOTION_FILTER_SCHEMA);
     expect(promotionDimensionParams({ season: [], ...parsed })).toEqual({ goods_main_id: ID, seasons: ["春", "夏"], unassigned_only: true, pr_id: undefined });

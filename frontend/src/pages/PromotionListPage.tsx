@@ -46,7 +46,7 @@ import {
 import { goodsDisplayName } from "@/features/product/api";
 import {
   COOPERATION_MODE_HINT,
-  SOURCE_FIELD_NAMES,
+  PROMOTION_IMPORT_COLUMNS,
   SOURCE_LIST_COLUMNS,
   recallColor,
 } from "@/features/promotion/listConstants";
@@ -433,7 +433,8 @@ export function PromotionListPage() {
           </Tooltip>
         ),
     },
-    { title: "合作平台", dataIndex: "platform", width: 90 },
+    { title: "合作平台", dataIndex: "platform", width: 150, render: (value: string, row: Promotion) => <Space size={2} wrap><span>{value}</span>{row.extra_platforms?.map((p) => <Tag key={p}>＋{p}</Tag>)}</Space> },
+    { title: "内容分类", dataIndex: "content_category", width: 100, render: (v: string | null) => v || "—" },
     { title: "合作日期", dataIndex: "cooperation_date", width: 110 },
     {
       title: "预定发布日期",
@@ -685,7 +686,7 @@ export function PromotionListPage() {
                 source="manual_promotion"
                 label="导入站外推广"
                 invalidateKeys={[["promotions"]]}
-                templateColumns={SOURCE_FIELD_NAMES}
+                templateColumns={PROMOTION_IMPORT_COLUMNS}
               />
             )}
             {canCreate && (
