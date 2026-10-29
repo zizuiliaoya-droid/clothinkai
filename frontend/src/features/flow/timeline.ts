@@ -1,3 +1,4 @@
+import { formatMoney } from "@/utils/money";
 // 主线时间线：响应类型、事件文案、「改了什么」的展开文字、留言校验（流程线设计 6.5、6.6、8.1）。纯函数，vitest 测。
 //
 // 事件类型照抄后端 flow/line_events.py 的 LineEventType；timeline.test.ts 拿 flow_keys.snapshot.json 的 EVENT_GROUP
@@ -257,7 +258,7 @@ function formatValue(key: string, value: unknown): string {
   if (ITEMS_KEYS.has(key)) return formatItems(value);
   if (MONEY_KEYS.has(key)) {
     const n = Number(value);
-    return Number.isFinite(n) ? `¥${n.toFixed(2)}` : String(value);
+    return Number.isFinite(n) ? formatMoney(n.toFixed(2)) : String(value);
   }
   if (TIME_KEYS.has(key) && typeof value === "string") return formatTime(value);
   if (key === "system" && typeof value === "string") return SYSTEM_LABELS[value] ?? value;

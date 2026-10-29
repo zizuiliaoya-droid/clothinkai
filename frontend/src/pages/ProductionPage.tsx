@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  Alert,
   Button,
   Card,
   Modal,
@@ -204,6 +205,9 @@ export function ProductionPage() {
         />
       }
     >
+      {landingGoodsId && data && !isLoading && !error && !data.items.some((row) => row.goods_id === landingGoodsId) &&
+        <Alert type="info" showIcon message="链接指定的商品不在当前筛选范围或可见结果中"
+          description="可调整筛选后查看。" style={{ marginBottom: 16 }} />}
       <Space style={{ marginBottom: 16 }} wrap>
         <ReportTimeRangeFilter
           preset={preset}

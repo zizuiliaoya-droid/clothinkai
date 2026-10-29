@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from "react";
 import { Empty } from "antd";
 import { isFiniteNumber } from "@/components/Charts/chartUtils";
+import { useChartWidth } from "@/components/Charts/useChartWidth";
 
 export interface Series {
   name: string;
@@ -21,8 +21,6 @@ interface Props {
   fluid?: boolean;
 }
 
-/** fluid 时的最小宽度：再窄就横向滚动。 */
-const FLUID_MIN_WIDTH = 240;
 /** 横轴一个标签至少占的宽度（「YYYY-MM-DD」10 号字约 50px）。 */
 const X_LABEL_MIN_SPACE = 64;
 
@@ -39,22 +37,14 @@ export function MiniLineChart({
   formatValue = (v) => Math.round(v).toLocaleString(),
   fluid = false,
 }: Props) {
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const [measured, setMeasured] = useState<number | null>(null);
   // 空数据时渲染 Empty、没有容器：有数据后再量
   const hasData = labels.length > 0 && series.length > 0;
-  useEffect(() => {
-    const el = wrapRef.current;
-    if (!fluid || !el || typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(([entry]) => setMeasured(Math.floor(entry.contentRect.width)));
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [fluid, hasData]);
+  const { ref: wrapRef, width: measured } = useChartWidth(width, fluid && hasData);
 
   if (!hasData) {
     return <Empty description="暂无趋势数据" />;
   }
-  const chartWidth = fluid && measured ? Math.max(FLUID_MIN_WIDTH, Math.min(width, measured)) : width;
+  const chartWidth = fluid ? Math.min(width, measured) : width;
   const padL = 48;
   const padR = 16;
   const padT = 16;

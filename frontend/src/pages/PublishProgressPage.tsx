@@ -1,3 +1,4 @@
+import { formatMoney } from "@/utils/money";
 import { useState } from "react";
 import {
   Card,
@@ -25,7 +26,7 @@ const PRESETS = [
 ];
 const pct = (v: string | null) =>
   v == null ? "—" : `${(Number(v) * 100).toFixed(1)}%`;
-const money = (v: string | null) => (v == null ? "—" : `¥${v}`);
+const money = (v: string | null) => (v == null ? "—" : formatMoney(v));
 
 export function PublishProgressPage() {
   const [preset, setPreset] = useState("last_30d");
