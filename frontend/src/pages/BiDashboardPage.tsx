@@ -82,7 +82,8 @@ export function BiDashboardPage() {
   const { filters, ready, setFilters } = useReportFilters(
     "bi_dashboard",
     BI_FILTER_SCHEMA,
-    BI_FILTER_DEFAULTS
+    BI_FILTER_DEFAULTS,
+    true // 同一 /bi 路径的新query也是新落点，不写筛选记忆。
   );
   const { preset, granularity, exclude_brushing: excludeBrushing, tab } = filters;
   const range = toDateRange(filters.date_from, filters.date_to);

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
@@ -38,8 +38,15 @@ from app.modules.promotion.display_name import (
 )
 from app.modules.promotion.enums import ShipStatus
 from app.modules.promotion.exceptions import SequenceOverflowError
+from app.modules.promotion.goods_attribution import PROMO_GOODS_ID, PROMO_GOODS_LATERAL
 from app.modules.promotion.models import BloggerRetrospective, Promotion, PromotionItem
-from app.modules.promotion.stage_calculator import PROMOTION_STAGES, STAGE_COLUMN, stage_sql_expr
+from app.modules.promotion.stage_calculator import (
+    BADGES,
+    PROMOTION_STAGES,
+    STAGE_COLUMN,
+    badge_sql_conditions,
+    stage_sql_expr,
+)
 from app.modules.promotion.urge_calculator import URGE_STATUS_SQL_EXPR
 
 # 「待发货」筛选只回的那个阶段：A 列（待推送仓库）只有它一个
@@ -66,11 +73,20 @@ _RECONSTRUCT_COLUMNS: tuple[str, ...] = tuple(
 class PromotionListFilters:
     """列表查询筛选条件（service 层从 PromotionListFilters Pydantic 转换而来）。"""
 
+    stage: str | None = None
+    badge: str | None = None
+    completed: bool | None = None
+    receiver_name: str | None = None
+    receiver_phone: str | None = None
     keyword: str | None = None
+    goods_main_id: UUID | None = None
+    seasons: Sequence[str] | None = None
+    unassigned_only: bool = False
     publish_status: str | None = None
     recall_status: str | None = None
     settlement_status: str | None = None
     platform: str | None = None
+    content_category: str | None = None
     blogger_id: UUID | None = None
     style_id: UUID | None = None
     pr_id: UUID | None = None
@@ -928,32 +944,33 @@ class PromotionRepository:
 
     # ----------------------- list_with_cte (FB8 + Pattern P-U04-04) ----------------------- #
 
-    async def list_with_cte(
+    def _list_query(
         self,
         *,
         tenant_id: UUID,
         filters: PromotionListFilters,
-        page: int,
-        page_size: int,
         today: date,
         urge_threshold_days: int,
         important_threshold_days: int,
         metric_settings: PlatformMetricSettings,
-    ) -> tuple[list[PromotionListRow], int]:
-        """列表查询，CTE 注入 ``urge_status`` / ``dual_platform`` / ``stage`` 计算列。
-
-        关键点（FB8）：
-        - ``today`` 由 service 层 ``get_today()`` 注入；SQL 不用 ``CURRENT_DATE``
-        - ``urge_threshold_days`` / ``important_threshold_days`` 由 service 注入
-        - ``metric_settings``：租户的平台指标，``is_hit`` 筛选按平台阈值判（7e R7）
-
-        Returns:
-            ``(rows, total)`` — rows 含 promotion + urge_status + dual_platform。
-        """
+    ) -> tuple[str, dict[str, Any]]:
+        """列表与计数共用的租户/商品/状态筛选，只生成SQL，不做分页。"""
         # ------ 构造 base CTE（含计算列）------
+        goods_join = ""
+        goods_columns = ""
+        if filters.goods_main_id is not None or filters.seasons:
+            goods_join = f"""{PROMO_GOODS_LATERAL}
+                LEFT JOIN goods_main filter_goods
+                  ON filter_goods.id = {PROMO_GOODS_ID}
+                 AND filter_goods.tenant_id = p.tenant_id"""
+            goods_columns = f"""{PROMO_GOODS_ID} AS filter_goods_main_id,
+                filter_goods.season AS filter_goods_season,"""
         base_sql = f"""
         WITH base AS (
             SELECT p.*,
+                   (SELECT f.status FROM return_freight_payment f
+                    WHERE f.promotion_id=p.id AND f.tenant_id=p.tenant_id) AS freight_status,
+                   {goods_columns}
                    s.main_image_key AS style_main_image_key,
                    g.goods_code AS goods_code,
                    COALESCE(g.is_suit, false) AS goods_is_suit,
@@ -975,6 +992,7 @@ class PromotionRepository:
               ON s.id = p.style_id AND s.tenant_id = p.tenant_id
             LEFT JOIN goods_main g
               ON g.id = p.goods_main_id AND g.tenant_id = p.tenant_id
+            {goods_join}
             WHERE p.tenant_id = :tenant_id
         ),
         -- 阶段放在只有推广单列的这一层算：style 也有 is_active，放进上面的 JOIN 会歧义
@@ -1017,6 +1035,9 @@ class PromotionRepository:
         if filters.pr_id:
             clauses.append("pr_id = :pr_id")
             params["pr_id"] = filters.pr_id
+        if filters.content_category is not None:
+            clauses.append("content_category = CAST(:content_category AS varchar)")
+            params["content_category"] = filters.content_category
         if filters.cooperation_date_from:
             clauses.append("cooperation_date >= :coop_from")
             params["coop_from"] = filters.cooperation_date_from
@@ -1058,19 +1079,76 @@ class PromotionRepository:
                 clauses.append("stage = CAST(:ship_pending_stage AS text)")
                 params["ship_pending_stage"] = SHIP_PENDING_STAGE
 
+        if filters.goods_main_id is not None:
+            clauses.append("filter_goods_main_id = CAST(:filter_goods_main_id AS uuid)")
+            params["filter_goods_main_id"] = filters.goods_main_id
+        if filters.seasons:
+            clauses.append("filter_goods_season = ANY(CAST(:filter_seasons AS text[]))")
+            params["filter_seasons"] = list(filters.seasons)
+        if filters.unassigned_only:
+            clauses.append("pr_id IS NULL")
+
+        if filters.stage:
+            clauses.append("stage = CAST(:stage AS text)")
+            params["stage"] = filters.stage
+        if filters.badge:
+            clauses.append("(" + badge_sql_conditions()[filters.badge] + ")")
+        if filters.completed is not None:
+            clauses.append(
+                "completed_at IS NOT NULL" if filters.completed else "completed_at IS NULL"
+            )
+        for field in ("receiver_name", "receiver_phone"):
+            value = getattr(filters, field)
+            if value:
+                clauses.append(f"{field} ILIKE CAST(:{field} AS text)")
+                params[field] = (
+                    value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+                )
         where_extra = ""
         if clauses:
             where_extra = " AND " + " AND ".join(clauses)
 
+        return base_sql + where_extra, params
+
+    async def list_with_cte(
+        self,
+        *,
+        tenant_id: UUID,
+        filters: PromotionListFilters,
+        page: int,
+        page_size: int,
+        today: date,
+        urge_threshold_days: int,
+        important_threshold_days: int,
+        metric_settings: PlatformMetricSettings,
+    ) -> tuple[list[PromotionListRow], int]:
+        """列表查询，CTE 注入 ``urge_status`` / ``dual_platform`` / ``stage`` 计算列。
+
+        关键点（FB8）：
+        - ``today`` 由 service 层 ``get_today()`` 注入；SQL 不用 ``CURRENT_DATE``
+        - ``urge_threshold_days`` / ``important_threshold_days`` 由 service 注入
+        - ``metric_settings``：租户的平台指标，``is_hit`` 筛选按平台阈值判（7e R7）
+
+        Returns:
+            ``(rows, total)`` — rows 含 promotion + urge_status + dual_platform。
+        """
+        filtered_sql, params = self._list_query(
+            tenant_id=tenant_id,
+            filters=filters,
+            today=today,
+            urge_threshold_days=urge_threshold_days,
+            important_threshold_days=important_threshold_days,
+            metric_settings=metric_settings,
+        )
+
         # ------ 1. count ------
-        count_sql = f"SELECT COUNT(*) FROM ({base_sql}{where_extra}) AS c"
+        count_sql = f"SELECT COUNT(*) FROM ({filtered_sql}) AS c"
         total = int((await self._session.execute(text(count_sql), params)).scalar_one())
 
         # ------ 2. data ------
         data_sql = (
-            base_sql
-            + where_extra
-            + " ORDER BY cooperation_date DESC, created_at DESC "
+            filtered_sql
+            + " ORDER BY cooperation_date DESC, created_at DESC, id DESC "
             + " LIMIT :limit OFFSET :offset"
         )
         params["limit"] = page_size
@@ -1101,6 +1179,40 @@ class PromotionRepository:
                 )
             )
         return rows, total
+
+    async def stage_counts(
+        self,
+        *,
+        tenant_id: UUID,
+        filters: PromotionListFilters,
+        today: date,
+        urge_threshold_days: int,
+        important_threshold_days: int,
+        metric_settings: PlatformMetricSettings,
+    ) -> dict[str, Any]:
+        sql, params = self._list_query(
+            tenant_id=tenant_id,
+            filters=replace(filters, stage=None, badge=None),
+            today=today,
+            urge_threshold_days=urge_threshold_days,
+            important_threshold_days=important_threshold_days,
+            metric_settings=metric_settings,
+        )
+        badge_counts = ", ".join(
+            f"COUNT(*) FILTER (WHERE {condition}) AS {name}"
+            for name, condition in badge_sql_conditions().items()
+        )
+        statement = f"SELECT stage, COUNT(*) AS n, COUNT(*) FILTER (WHERE completed_at IS NOT NULL) AS completed, {badge_counts} FROM ({sql}) AS filtered GROUP BY stage"
+        rows = (await self._session.execute(text(statement), params)).mappings().all()
+        return {
+            "stages": {
+                stage: next((int(row["n"]) for row in rows if row["stage"] == stage), 0)
+                for stage in PROMOTION_STAGES
+            },
+            "badges": {badge: sum(int(row[badge]) for row in rows) for badge in BADGES},
+            "completed": sum(int(row["completed"]) for row in rows),
+            "total": sum(int(row["n"]) for row in rows),
+        }
 
     # ----------------------- 仓库页（流程线 7.4） ----------------------- #
 

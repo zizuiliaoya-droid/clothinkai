@@ -1,9 +1,11 @@
+import { formatMoney } from "@/utils/money";
 import { useMemo, useState } from "react";
 import {
   Badge,
   Button,
   Card,
   Dropdown,
+  Grid,
   Input,
   Select,
   Space,
@@ -92,6 +94,7 @@ export type NegotiationDialog = {
  * 页面不按角色码判断。可见范围（只看自己的 / 看全部）由后端定。
  */
 export function NegotiationPage() {
+  const screens = Grid.useBreakpoint();
   const { token } = theme.useToken();
   const { refresh: invalidate, notifySubmitted } = useNegotiationFeedback();
 
@@ -198,7 +201,7 @@ export function NegotiationPage() {
       title: "主图",
       key: "images",
       width: 148,
-      fixed: "left",
+      fixed: screens.md ? "left" : undefined,
       // 点图看大图、悬停博主看 hover 卡，都不开抽屉
       className: LINE_ROW_IGNORE_CLASS,
       render: (_, row) => (
@@ -213,7 +216,7 @@ export function NegotiationPage() {
       title: "博主",
       dataIndex: "blogger_nickname",
       width: 140,
-      fixed: "left",
+      fixed: screens.md ? "left" : undefined,
       className: LINE_ROW_IGNORE_CLASS,
       render: (name: string | null, row) => (
         <BloggerHoverCard bloggerId={row.blogger_id} bloggerName={name}>
@@ -266,7 +269,7 @@ export function NegotiationPage() {
       dataIndex: "quote_amount",
       width: 100,
       align: "right",
-      render: (v: string | null) => (v == null ? "—" : `¥${Number(v).toFixed(2)}`),
+      render: (v: string | null) => (v == null ? "—" : formatMoney(Number(v).toFixed(2))),
     },
     { title: "对接PR", dataIndex: "pr_name", width: 100, render: (v) => v || "—" },
     {
@@ -307,7 +310,7 @@ export function NegotiationPage() {
       title: "操作",
       key: "operations",
       width: 100,
-      fixed: "right",
+      fixed: screens.md ? "right" : undefined,
       className: LINE_ROW_IGNORE_CLASS,
       render: (_, record) => {
         const items = menus.get(record.id) ?? [];

@@ -1,3 +1,4 @@
+import { formatMoney } from "@/utils/money";
 import { useMemo, useState } from "react";
 import {
   Button,
@@ -59,7 +60,7 @@ const CARD_HEAD_STYLE = {
   whiteSpace: "normal",
 } as const;
 
-const money = (v: string | null) => (v == null ? "—" : `¥${v}`);
+const money = (v: string | null) => (v == null ? "—" : formatMoney(v));
 
 const SOURCING_TYPES: SourcingType[] = ["自产", "外采", "混合"];
 

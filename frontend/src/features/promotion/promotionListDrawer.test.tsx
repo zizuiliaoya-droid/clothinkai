@@ -1,25 +1,35 @@
 // @vitest-environment jsdom
 // 推广列表点一行开主线抽屉（流程线 8.4）：页签 单据详情 / 金额改动 / 催发记录；「金额改动记录」菜单切到金额改动页签；
 // 金额改动页签与菜单只看页级 ui.actions.amount_log（运营没有），不看报价值；详情按 ui.fields 出分组；不出商品编码。
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UiState } from "@/features/flow/keys";
-import type { Promotion } from "./types";
+import type { Promotion, PromotionListFilters, PromotionPage } from "./types";
 
 const api = vi.hoisted(() => ({
   listPromotions: vi.fn(),
+  getPromotionStageCounts: vi.fn(),
   getPromotion: vi.fn(),
   promotionAmountLog: vi.fn(),
   listPromotionUrgeRecords: vi.fn(),
   getLineEvents: vi.fn(),
+  getPromotionFilterOptions: vi.fn(),
+  getFilterPreference: vi.fn(),
+  saveFilterPreference: vi.fn(),
 }));
 vi.mock("@/features/promotion/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/features/promotion/api")>()),
   listPromotions: api.listPromotions,
+  getPromotionStageCounts: api.getPromotionStageCounts,
   getPromotion: api.getPromotion,
   promotionAmountLog: api.promotionAmountLog,
+  getPromotionFilterOptions: api.getPromotionFilterOptions,
+}));
+vi.mock("@/features/preference/api", () => ({
+  getFilterPreference: api.getFilterPreference,
+  saveFilterPreference: api.saveFilterPreference,
 }));
 vi.mock("@/features/urge/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/features/urge/api")>()),
@@ -32,6 +42,12 @@ vi.mock("@/features/flow/api", () => ({
   postLineComment: vi.fn(),
 }));
 
+import { useAuthStore } from "@/stores/authStore";
+import { getPromotionColumnPreference, savePromotionColumnPreference } from "@/features/preference/columnPreference";
+vi.mock("@/features/preference/columnPreference", async (original) => ({
+  ...await original<typeof import("@/features/preference/columnPreference")>(),
+  getPromotionColumnPreference: vi.fn(), savePromotionColumnPreference: vi.fn(),
+}));
 import { PromotionListPage } from "@/pages/PromotionListPage";
 
 beforeAll(() => {
@@ -147,7 +163,14 @@ function promotion(over: Partial<Promotion> = {}): Promotion {
 }
 
 beforeEach(() => {
+  useAuthStore.setState({ user: null, isAuthenticated: false });
+  vi.mocked(getPromotionColumnPreference).mockReset().mockResolvedValue({ order: [], hidden: [] });
+  vi.mocked(savePromotionColumnPreference).mockReset().mockResolvedValue();
   for (const fn of Object.values(api)) fn.mockReset();
+  api.getFilterPreference.mockResolvedValue({});
+  api.getPromotionStageCounts.mockResolvedValue({ stages: {}, badges: {}, completed: 0, total: 0 });
+  api.saveFilterPreference.mockResolvedValue(undefined);
+  api.getPromotionFilterOptions.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 50, selected: null, seasons: [] });
   api.getLineEvents.mockResolvedValue({
     line_id: "L1",
     negotiation: null,
@@ -167,21 +190,37 @@ beforeEach(() => {
 const PAGE_UI_AMOUNT = { actions: { amount_log: { state: "enabled" as const } } };
 const PAGE_UI_NONE = { actions: {} };
 
-function renderPage(rows: Promotion[], detail: Promotion, pageUi: { actions: UiState["actions"] } = PAGE_UI_AMOUNT) {
-  api.listPromotions.mockResolvedValue({ items: rows, total: rows.length, page: 1, page_size: 10, ui: pageUi });
-  api.getPromotion.mockResolvedValue(detail);
+const TARGET_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const TARGET_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+
+function RouteProbe() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  return <><output data-testid="location">{location.search}</output>
+    <button onClick={() => navigate(`/promotions?id=${TARGET_B}`)}>切换目标B</button>
+    <button onClick={() => navigate("/promotions?keyword=保留")}>移除URL目标</button>
+  </>;
+}
+
+function renderPage(rows: Promotion[], detail: Promotion, pageUi: PromotionPage["ui"] = PAGE_UI_AMOUNT, url = "/promotions", fetchDetail?: (id: string) => Promise<Promotion>, fetchList?: (filters: PromotionListFilters) => Promise<PromotionPage>) {
+  if (fetchList) api.listPromotions.mockImplementation(fetchList);
+  else api.listPromotions.mockResolvedValue({ items: rows, total: rows.length, page: 1, page_size: 10, ui: pageUi });
+  if (fetchDetail) api.getPromotion.mockImplementation(fetchDetail);
+  else api.getPromotion.mockResolvedValue(detail);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[url]}>
       <QueryClientProvider client={client}>
         <PromotionListPage />
+        <RouteProbe />
       </QueryClientProvider>
     </MemoryRouter>
   );
 }
 
 async function openMenu(): Promise<string[]> {
-  fireEvent.click(await screen.findByRole("button", { name: /操作/ }));
+  const row = (await screen.findAllByText("XHS-20261009-001"))[0].closest("tr")!;
+  fireEvent.click(within(row).getByRole("button", { name: /操作/ }));
   const items = await screen.findAllByRole("menuitem");
   return items.map((el) => el.textContent ?? "");
 }
@@ -191,6 +230,87 @@ function drawer(): HTMLElement {
 }
 
 describe("PromotionListPage 主线抽屉", () => {
+  it("id 落点独立取详情，目标不在列表页也打开", async () => {
+    const id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    renderPage([], promotion({ id, ui: DETAIL_UI }), PAGE_UI_AMOUNT, `/promotions?id=${id}`);
+    await waitFor(() => expect(drawer()).toBeTruthy());
+    expect(api.getPromotion).toHaveBeenCalledWith(id);
+    expect(within(drawer()).getByText("单据详情")).toBeTruthy();
+  });
+
+  it("筛选变化清筛选URL但保留id，关闭抽屉只移除id", async () => {
+    renderPage([], promotion({ id: TARGET_A, ui: DETAIL_UI }), PAGE_UI_AMOUNT,
+      `/promotions?id=${TARGET_A}&goods_id=${TARGET_B}&season=春&keyword=保留`);
+    await waitFor(() => expect(drawer()).toBeTruthy());
+    fireEvent.click(screen.getByRole("checkbox", { name: "未分配 PR" }));
+    await waitFor(() => expect(screen.getByTestId("location").textContent).toContain(`id=${TARGET_A}`));
+    expect(screen.getByTestId("location").textContent).not.toContain("goods_id");
+    expect(screen.getByTestId("location").textContent).toContain("keyword=");
+    fireEvent.click(drawer().querySelector(".ant-drawer-close")!);
+    await waitFor(() => expect(screen.getByTestId("location").textContent).not.toContain("id="));
+    expect(screen.getByTestId("location").textContent).toContain("keyword=");
+  });
+
+  it("id A慢B快时旧响应不覆盖当前B", async () => {
+    let resolveA!: (value: Promotion) => void;
+    const pendingA = new Promise<Promotion>((resolve) => { resolveA = resolve; });
+    renderPage([], promotion(), PAGE_UI_NONE, `/promotions?id=${TARGET_A}`,
+      (id) => id === TARGET_A ? pendingA : Promise.resolve(promotion({ id: TARGET_B, line_id: "L-B", display_short_name: "目标B" })));
+    await waitFor(() => expect(api.getPromotion).toHaveBeenCalledWith(TARGET_A));
+    fireEvent.click(screen.getByRole("button", { name: "切换目标B" }));
+    await waitFor(() => expect(drawer()?.textContent).toContain("目标B"));
+    await act(async () => { resolveA(promotion({ id: TARGET_A, display_short_name: "旧目标A" })); });
+    expect(drawer()?.textContent).toContain("目标B");
+    expect(drawer()?.textContent).not.toContain("旧目标A");
+  });
+
+  it("移除URL目标后迟到响应不重开", async () => {
+    let resolve!: (value: Promotion) => void;
+    const pending = new Promise<Promotion>((done) => { resolve = done; });
+    renderPage([], promotion(), PAGE_UI_NONE, `/promotions?id=${TARGET_A}`, () => pending);
+    await waitFor(() => expect(api.getPromotion).toHaveBeenCalledWith(TARGET_A));
+    fireEvent.click(screen.getByRole("button", { name: "移除URL目标" }));
+    await act(async () => { resolve(promotion({ id: TARGET_A })); });
+    expect(drawer()).toBeNull();
+  });
+
+  it.each([403, 404])("详情%d保持列表并提示无法打开", async (status) => {
+    renderPage([], promotion(), PAGE_UI_NONE, `/promotions?id=${TARGET_A}`,
+      () => Promise.reject({ response: { status } }));
+    expect(await screen.findByText(/无法打开推广详情/)).toBeTruthy();
+    expect(drawer()).toBeNull();
+  });
+
+  it("坏id不请求详情，合法季节和keyword仍用于列表", async () => {
+    renderPage([], promotion(), PAGE_UI_NONE, "/promotions?id=bad&season=春&keyword=原入口");
+    expect(await screen.findByText("推广编号无效")).toBeTruthy();
+    await waitFor(() => expect(api.listPromotions).toHaveBeenCalledWith(expect.objectContaining({ keyword: "原入口", seasons: ["春"] })));
+    expect(api.getPromotion).not.toHaveBeenCalled();
+  });
+
+  it("URL覆盖记忆且初始不保存，手改新维度才写记忆", async () => {
+    api.getFilterPreference.mockResolvedValue({ goods_id: TARGET_A, season: ["记忆季"], pr_id: TARGET_A });
+    renderPage([], promotion(), PAGE_UI_NONE, `/promotions?goods_id=${TARGET_B}&season=链接季`);
+    await waitFor(() => expect(api.listPromotions).toHaveBeenCalledWith(expect.objectContaining({ goods_main_id: TARGET_B, seasons: ["链接季"], pr_id: undefined })));
+    expect(api.saveFilterPreference).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("checkbox", { name: "未分配 PR" }));
+    await waitFor(() => expect(api.saveFilterPreference).toHaveBeenCalledWith("promotion_list", { goods_id: TARGET_B, season: ["链接季"], pr_id: "unassigned" }), { timeout: 2000 });
+    expect(api.listPromotions).toHaveBeenLastCalledWith(expect.objectContaining({ page: 1, unassigned_only: true, pr_id: undefined }));
+  });
+
+  it("列表A慢B快，切换筛选后A不能覆盖新结果", async () => {
+    let resolveA!: (value: PromotionPage) => void;
+    const pendingA = new Promise<PromotionPage>((resolve) => { resolveA = resolve; });
+    const newPage: PromotionPage = { items: [promotion({ internal_code: "NEW-B" })], total: 1, page: 1, page_size: 10, ui: PAGE_UI_NONE };
+    renderPage([], promotion(), PAGE_UI_NONE, "/promotions", undefined,
+      (filters) => filters.unassigned_only ? Promise.resolve(newPage) : pendingA);
+    await waitFor(() => expect(api.listPromotions).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole("checkbox", { name: "未分配 PR" }));
+    expect(await screen.findByText("NEW-B")).toBeTruthy();
+    await act(async () => { resolveA({ ...newPage, items: [promotion({ internal_code: "OLD-A" })] }); });
+    expect(screen.queryByText("OLD-A")).toBeNull();
+    expect(screen.getByText("NEW-B")).toBeTruthy();
+  });
   it("点一行开抽屉：三个页签，默认单据详情，详情按 ui.fields 出分组；不出商品编码", async () => {
     renderPage([promotion()], promotion({ ui: DETAIL_UI }));
     fireEvent.click((await screen.findAllByText("XHS-20261009-001"))[0]);
@@ -224,8 +344,8 @@ describe("PromotionListPage 主线抽屉", () => {
     expect(await d.findByText("这单金额没有改动过")).toBeTruthy();
   });
 
-  it("报价为空但页级 ui 有 amount_log（管理员 / 主管 / PR）：照样有金额改动页签与菜单项", async () => {
-    const row = promotion({ quote_amount: null });
+  it("行无写动作、报价为空但页级 ui 有 amount_log：照样有金额改动页签与菜单项", async () => {
+    const row = promotion({ quote_amount: null, ui: { actions: {}, edits: [] } });
     renderPage([row], { ...row, ui: DETAIL_UI });
     expect(await openMenu()).toContain("金额改动记录");
     fireEvent.click(screen.getByText("金额改动记录"));
@@ -243,7 +363,9 @@ describe("PromotionListPage 主线抽屉", () => {
       { ...opsRow, quote_amount: null, ui: { actions: {}, fields: { goods_items: { state: "read" }, shipping: { state: "read" } } } },
       PAGE_UI_NONE
     );
-    expect(await openMenu()).not.toContain("金额改动记录");
+    await screen.findAllByText("XHS-20261009-001");
+    expect(screen.queryByRole("columnheader", { name: "操作" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /操作/ })).toBeNull();
     fireEvent.click((await screen.findAllByText("XHS-20261009-001"))[0]);
     await waitFor(() => expect(drawer()).toBeTruthy());
     const d = within(drawer());
@@ -325,8 +447,9 @@ describe("PromotionListPage 按 ui 出按钮与菜单项", () => {
   });
 
   it("催发按行 ui.actions.urge：没有就不出，可点就出，禁用带原因", async () => {
-    renderPage([promotion({ ui: { actions: {}, edits: [] } })], promotion({ ui: DETAIL_UI }));
-    expect((await openMenu()).filter((l) => l.startsWith("催发"))).toEqual([]);
+    renderPage([promotion({ ui: { actions: {}, edits: [] } })], promotion({ ui: DETAIL_UI }), PAGE_UI_NONE);
+    await screen.findAllByText("XHS-20261009-001");
+    expect(screen.queryByRole("button", { name: /操作/ })).toBeNull();
     cleanup();
     renderPage([promotion({ ui: { actions: { urge: ENABLED }, edits: [] } })], promotion({ ui: DETAIL_UI }));
     expect(await openMenu()).toContain("催发");
@@ -337,4 +460,80 @@ describe("PromotionListPage 按 ui 出按钮与菜单项", () => {
     );
     expect(await openMenu()).toContain("催发（已发布不用催）");
   });
+});
+
+
+describe("PR10 阶段与按钮收尾", () => {
+  it("菜单只消费ui，保留禁用原因，隐藏的取消/重提不因状态合适而出现", async () => {
+    const row = promotion({ ui: { actions: { publish: { state: "enabled" }, deactivate: { state: "disabled", reason: "寄回运费尚未结清" } }, edits: ["other_info", "return_waybill"] } });
+    renderPage([row], row, PAGE_UI_NONE);
+    const labels = await openMenu();
+    expect(labels).toEqual(["标记发布", "停用（寄回运费尚未结清）", "填寄回单号", "其他信息"]);
+    expect(screen.getByRole("menuitem", { name: "停用（寄回运费尚未结清）" }).getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("阶段列/可录文字与蓝底一致，快捷筛选切换列表但计数不带stage/badge/分页", async () => {
+    api.getPromotionStageCounts.mockResolvedValue({ stages: {}, badges: { metrics_due: 2 }, completed: 0, total: 2 });
+    const row = promotion({ stage: "待录 7 天数据", badges: ["metrics_due"], ui: { actions: {}, edits: [] } });
+    renderPage([row], row, PAGE_UI_NONE, "/promotions?keyword=定位");
+    const cell = await screen.findByText("满 7 天 · 可录");
+    expect(cell.closest("tr")?.classList.contains("promotion-metrics-due")).toBe(true);
+    expect(screen.getByRole("columnheader", { name: "当前阶段" })).toBeTruthy();
+    const shortcut = await screen.findByRole("button", { name: "满 7 天可录（2）" });
+    fireEvent.click(shortcut);
+    await waitFor(() => expect(api.listPromotions.mock.calls.at(-1)?.[0]).toMatchObject({ badge: "metrics_due", page: 1, keyword: "定位" }));
+    expect(api.getPromotionStageCounts.mock.calls.at(-1)?.[0]).not.toHaveProperty("badge");
+    expect(api.getPromotionStageCounts.mock.calls.at(-1)?.[0]).not.toHaveProperty("page");
+    fireEvent.click(shortcut);
+    await waitFor(() => expect(api.listPromotions.mock.calls.at(-1)?.[0].badge).toBeUndefined());
+  });
+});
+
+
+describe("PR10 R1 收件筛选", () => {
+  it("电话读取被个人撤销后只显示姓名入口", async () => {
+    renderPage([], promotion(), { actions: {}, fields: { receiver_name: { state: "read" } } });
+    expect(await screen.findByRole("searchbox", { name: "收件人前缀" })).toBeTruthy();
+    expect(screen.queryByRole("searchbox", { name: "电话前缀" })).toBeNull();
+  });
+  it("输入后权限被撤销时清掉被拒电话条件并恢复列表，保留其他筛选", async () => {
+    let revoked = false;
+    const fetch = async (filters: PromotionListFilters): Promise<PromotionPage> => {
+      if (filters.receiver_phone) {
+        revoked = true;
+        throw { response: { status: 403, data: { code: "FIELD_PERMISSION_DENIED", message: "电话不可读", details: { fields: ["receiver_phone"] } } } };
+      }
+      return { items: [], total: 0, page: 1, page_size: 10, ui: { actions: {}, fields: { receiver_name: { state: "read" }, ...(revoked ? {} : { receiver_phone: { state: "read" as const } }) } } };
+    };
+    renderPage([], promotion(), PAGE_UI_NONE, "/promotions?keyword=保留", undefined, fetch);
+    const phone = await screen.findByRole("searchbox", { name: "电话前缀" });
+    fireEvent.change(phone, { target: { value: "138" } });
+    fireEvent.keyDown(phone, { key: "Enter", code: "Enter", charCode: 13, keyCode: 13 });
+    await waitFor(() => expect(revoked).toBe(true));
+    await waitFor(() => expect(api.listPromotions.mock.calls.at(-1)?.[0]).toMatchObject({ receiver_phone: undefined, keyword: "保留", page: 1 }));
+    expect(await screen.findByRole("searchbox", { name: "收件人前缀" })).toBeTruthy();
+    expect(screen.queryByRole("searchbox", { name: "电话前缀" })).toBeNull();
+  });
+});
+
+it("列偏好接入当前阶段和分类，未知/无权限操作列不回填，保存后表格按新顺序显示", async () => {
+  useAuthStore.setState({ user: { id: "column-user", username: "a", display_name: null, email: null, status: "active", roles: [] }, isAuthenticated: true });
+  vi.mocked(getPromotionColumnPreference).mockResolvedValue({ order: ["content_category", "stage", "unknown", "actions"], hidden: ["quote_amount"] });
+  const row = promotion({ content_category: "测评", ui: { actions: {}, edits: [] } });
+  renderPage([row], row, PAGE_UI_NONE);
+  await screen.findByText("测评");
+  await waitFor(() => expect(screen.queryByRole("columnheader", { name: "报价" })).toBeNull());
+  expect(screen.getAllByRole("columnheader").slice(0, 2).map((cell) => cell.textContent)).toEqual(["内容分类", "当前阶段"]);
+  expect(screen.queryByRole("columnheader", { name: "操作" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "列设置" }));
+  const dialog = screen.getByRole("dialog");
+  expect(within(dialog).queryByLabelText("操作")).toBeNull();
+  expect(within(dialog).queryByText("unknown")).toBeNull();
+  fireEvent.click(within(dialog).getByRole("button", { name: "上移当前阶段" }));
+  fireEvent.click(within(dialog).getByRole("checkbox", { name: "内容分类" }));
+  fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+  await waitFor(() => expect(savePromotionColumnPreference).toHaveBeenCalled());
+  await waitFor(() => expect(screen.getAllByRole("columnheader")[0].textContent).toBe("当前阶段"));
+  expect(screen.queryByRole("columnheader", { name: "内容分类" })).toBeNull();
+  expect(api.saveFilterPreference).not.toHaveBeenCalled();
 });

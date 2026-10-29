@@ -71,6 +71,7 @@ async def list_drill_promotions(
         page=page,
         page_size=page_size,
         field_ctx=await build_field_perm_context(user.id, session),
+        perms=perms,
     )
 
 

@@ -6,7 +6,7 @@
 // 7e R6 S8：Tab2 单品分析（URL / 记忆带入 tab 与 goods_id、无有效选择取第一项不写记忆、切 Tab / 选商品写记忆、散点空态与截断）。
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   BiDashboard,
@@ -253,11 +253,20 @@ function LocationProbe() {
   return <div data-testid="location">{`${location.pathname}${location.search}`}</div>;
 }
 
-function renderPage(url = "/bi") {
+function SamePageLinks() {
+  const navigate = useNavigate();
+  return <>
+    <button onClick={() => navigate("/bi?tab=goods&goods_id=cccccccc-cccc-4ccc-8ccc-cccccccccccc")}>同页缺席商品</button>
+    <button onClick={() => navigate(`/bi?tab=goods&goods_id=${G2}`)}>同页商品二</button>
+  </>;
+}
+
+function renderPage(url = "/bi", samePageLinks = false) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={[url]}>
+        {samePageLinks && <SamePageLinks />}
         <Routes>
           <Route path="/bi" element={<BiDashboardPage />} />
           <Route path="*" element={<LocationProbe />} />
@@ -571,6 +580,24 @@ describe("BiDashboardPage 单品分析", () => {
     expect(savePrefMock).not.toHaveBeenCalled();
   });
 
+  it("同页query切换更新商品与缺席提示，链接不写记忆，手动选择清URL后仍保留", async () => {
+    renderPage(`/bi?tab=goods&goods_id=${G1}`, true);
+    await waitFor(() => expect(goodsTrendMock).toHaveBeenCalledWith(G1, expect.anything()));
+    fireEvent.click(screen.getByRole("button", { name: "同页缺席商品" }));
+    expect(await screen.findByText("所选商品不在当前筛选范围或可见结果中")).toBeTruthy();
+    expect(goodsTrendMock.mock.calls.every((call) => call[0] === G1)).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "同页商品二" }));
+    await waitFor(() => expect(goodsTrendMock).toHaveBeenCalledWith(G2, expect.anything()));
+    expect(screen.queryByText("所选商品不在当前筛选范围或可见结果中")).toBeNull();
+    await waitDebounce();
+    expect(savePrefMock).not.toHaveBeenCalled();
+    await pickGoods("条纹上衣");
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "选择商品" }).closest(".ant-select")?.textContent).toContain("条纹上衣"));
+    await waitDebounce();
+    expect(savePrefMock).toHaveBeenLastCalledWith("bi_dashboard", expect.objectContaining({ goods_id: G1, tab: "goods" }));
+    expect(goodsTab().getAttribute("aria-selected")).toBe("true");
+  });
+
   it("记忆里的 tab 与 goods_id 带入 Tab2", async () => {
     getPrefMock.mockResolvedValue({ tab: "goods", goods_id: G2 });
     renderPage();
@@ -583,6 +610,7 @@ describe("BiDashboardPage 单品分析", () => {
     renderPage(`/bi?tab=goods&goods_id=cccccccc-cccc-4ccc-8ccc-cccccccccccc`);
     await waitFor(() => expect(goodsTrendMock).toHaveBeenCalled());
     expect(goodsTrendMock.mock.calls[0][0]).toBe(G1);
+    expect(screen.getByText("所选商品不在当前筛选范围或可见结果中")).toBeTruthy();
     await waitDebounce();
     expect(savePrefMock).not.toHaveBeenCalled();
   });
@@ -622,7 +650,7 @@ describe("BiDashboardPage 单品分析", () => {
     expect(screen.queryByText(/只显示最近 500 篇/)).toBeNull();
   });
 
-  it("散点截断：提示「只显示最近 500 篇」；点不可点、悬停说明详情页随时间线上线；promo_cost 为空也画", async () => {
+  it("散点截断：提示「只显示最近 500 篇」；点不可点、悬停说明无可访问详情；promo_cost 为空也画", async () => {
     goodsNotesMock.mockResolvedValue(
       notes({
         truncated: true,
@@ -653,8 +681,32 @@ describe("BiDashboardPage 单品分析", () => {
     const pts = await screen.findAllByTestId("point");
     expect(pts).toHaveLength(2);
     expect(pts[0].getAttribute("style") ?? "").toContain("cursor: default");
-    expect(pts[0].querySelector("title")?.textContent).toContain("详情页随推广单时间线上线");
+    expect(pts[0].querySelector("title")?.textContent).toContain("暂无可访问的推广详情");
     expect(screen.queryByText("还没有录 7 天数据的笔记")).toBeNull();
+  });
+
+  it.each(["point", "table"])("散点与数据表逐点按URL可见性跳转：%s", async (mode) => {
+    goodsNotesMock.mockResolvedValue(notes({ points: [
+      { promotion_id: "p1", publish_date: "2026-10-01", like_count: 120, promo_cost: null, blogger_nickname: "可见博主", platform: "小红书", detail_url: "/promotions?id=p1" },
+      { promotion_id: "p2", publish_date: "2026-10-02", like_count: 80, promo_cost: null, blogger_nickname: "隐藏详情博主", platform: "抖音", detail_url: null },
+    ] }));
+    renderPage("/bi?tab=goods");
+    const pts = await screen.findAllByTestId("point");
+    expect(pts[0].getAttribute("style")).toContain("cursor: pointer");
+    expect(pts[1].getAttribute("style")).toContain("cursor: default");
+    fireEvent.click(pts[1]);
+    expect(screen.queryByTestId("location")).toBeNull();
+    if (mode === "point") fireEvent.click(pts[0]);
+    else {
+      openAllTables();
+      const link = screen.getByRole("link", { name: "可见博主（小红书）" });
+      expect(link.getAttribute("href")).toBe("/promotions?id=p1");
+      expect(screen.queryByRole("link", { name: "隐藏详情博主（抖音）" })).toBeNull();
+      link.focus();
+      expect(document.activeElement).toBe(link);
+      fireEvent.click(link);
+    }
+    expect(await screen.findByTestId("location")).toHaveProperty("textContent", "/promotions?id=p1");
   });
 
   it("金额趋势 / 净投产趋势跟着卡片宽度画，不按固定 720 画（窄卡里不用横向滚动，第 2 轮浏览器复核）", async () => {
@@ -787,4 +839,16 @@ describe("BiDashboardPage 导出图片", () => {
     expect(shots[0].nodeText).toContain("目标篇数");
     expect(document.querySelector("[data-bi-watermark]")).toBeNull();
   });
+});
+
+it("经营趋势可查看同一数据源的明细并切回图表", async () => {
+  renderPage(); await waitData();
+  const card = screen.getByText("经营趋势").closest(".ant-card") as HTMLElement;
+  fireEvent.click(within(card).getByRole("button", { name: "查看数据" }));
+  const table = within(card).getByRole("table", { name: "经营趋势" });
+  expect(within(table).getByRole("columnheader", { name: "期间" })).toBeTruthy();
+  expect(within(table).getByText("¥1,000.00")).toBeTruthy();
+  expect(within(table).getByText("¥200.00")).toBeTruthy();
+  fireEvent.click(within(card).getByRole("button", { name: "查看数据" }));
+  expect(within(card).queryByRole("table")).toBeNull();
 });

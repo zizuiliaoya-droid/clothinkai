@@ -3,11 +3,13 @@
 import { apiClient } from "@/services/apiClient";
 import type {
   GoodsItemIn,
+  PlatformPostInput,
   Promotion,
   PromotionCancelRequest,
   PromotionCreate,
   PromotionListFilters,
   PromotionPage,
+  PromotionStageCounts,
   PromotionPublishRequest,
   PromotionRecallStartRequest,
   PromotionRecallSuccessRequest,
@@ -28,6 +30,26 @@ export async function listPromotions(
     params: filters,
   });
   return resp.data;
+}
+
+export async function getPromotionStageCounts(filters: PromotionListFilters = {}): Promise<PromotionStageCounts> {
+  return (await apiClient.get<PromotionStageCounts>("/api/promotions/stage-counts", { params: filters })).data;
+}
+
+export interface PromotionGoodsOption { id: string; display_name: string }
+export interface PromotionFilterOptions {
+  items: PromotionGoodsOption[];
+  total: number;
+  page: number;
+  page_size: number;
+  selected: PromotionGoodsOption | null;
+  seasons: string[];
+}
+
+export async function getPromotionFilterOptions(params: {
+  keyword?: string; page?: number; page_size?: number; selected_id?: string;
+}): Promise<PromotionFilterOptions> {
+  return (await apiClient.get<PromotionFilterOptions>("/api/promotions/filter-options", { params })).data;
 }
 
 /** 推广详情的 query key：在 ["promotions"] 前缀下，列表页弹窗成功 invalidate ["promotions"] 时一起重拉。 */
@@ -66,6 +88,10 @@ export interface PaymentQrUploadInit {
   attachment_id: string;
   presigned_url: string;
   expires_in_seconds: number;
+}
+
+export async function replacePlatformPosts(id: string, rows: PlatformPostInput[]): Promise<Promotion> {
+  return (await apiClient.put<Promotion>(`/api/promotions/${id}/platform-posts`, rows)).data;
 }
 
 export async function initPaymentQrUpload(

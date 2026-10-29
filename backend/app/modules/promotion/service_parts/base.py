@@ -727,13 +727,14 @@ class PromotionServiceBase:
         *,
         today: date | None = None,
         thresholds: UrgeThresholds | None = None,
+        recall_status_override: str | None = None,
     ) -> str:
         """Python 版派生阶段（3.8；列表用 CTE 里的 SQL 版，两份由对拍测试守）。"""
         if thresholds is None:
             thresholds = await UrgeService(self._session).get_urge_thresholds(promotion.tenant_id)
         return compute_stage(
             publish_status=promotion.publish_status,
-            recall_status=promotion.recall_status,
+            recall_status=recall_status_override or promotion.recall_status,
             settlement_status=promotion.settlement_status,
             ship_status=promotion.ship_status,
             is_active=promotion.is_active,
@@ -751,6 +752,8 @@ class PromotionServiceBase:
         promotion: Promotion,
         *,
         stage: str | None = None,
+        today: date | None = None,
+        thresholds: UrgeThresholds | None = None,
         items: builtins.list[PromotionItemView] | None = None,
         negotiators: Mapping[UUID, UUID] | None = None,
         members_by_goods: Mapping[UUID, builtins.list[UUID]] | None = None,
@@ -764,7 +767,10 @@ class PromotionServiceBase:
         ``attachment_refs`` 带结款单状态（列表整页一次查好）。
         """
         if stage is None:
-            stage = await self._compute_stage(promotion)
+            thresholds = thresholds or await UrgeService(self._session).get_urge_thresholds(
+                promotion.tenant_id
+            )
+            stage = await self._compute_stage(promotion, today=today, thresholds=thresholds)
         if items is None:
             items = (await self._items_repo.list_by_promotions([promotion.id])).get(
                 promotion.id, []
@@ -787,6 +793,13 @@ class PromotionServiceBase:
         return build_promotion_doc(
             promotion,
             stage=stage,
+            published_stage=(
+                await self._compute_stage(
+                    promotion, today=today, thresholds=thresholds, recall_status_override="未召回"
+                )
+            )
+            if stage == "召回中" and promotion.publish_status == "已发布"
+            else None,
             negotiator_id=negotiators.get(promotion.id),
             items_complete=goods_items_complete((i.style_id for i in items), members),
             settlement_status=(
@@ -801,6 +814,7 @@ class PromotionServiceBase:
         user: User,
         *,
         today: Any = None,
+        urge_thresholds: UrgeThresholds | None = None,
         urge_status_override: str | None = None,
         dual_platform_override: bool | None = None,
         attachment_refs: PromotionAttachmentRefs | None = None,
@@ -813,6 +827,7 @@ class PromotionServiceBase:
         goods_short_name: str | None = None,
         goods_preloaded: bool = False,
         items: builtins.list[PromotionItemView] | None = None,
+        platform_posts: builtins.list[Any] | None = None,
         actor: FlowActor | None = None,
         view: View = "detail",
         stage: str | None = None,
@@ -950,7 +965,7 @@ class PromotionServiceBase:
         # 衍生字段计算
         if today is None:
             today = get_today()
-        thresholds: UrgeThresholds | None = None
+        thresholds = urge_thresholds
         if urge_status_override is not None:
             urge_status = urge_status_override
         else:
@@ -1022,6 +1037,8 @@ class PromotionServiceBase:
         doc = await self._promotion_doc(
             promotion,
             stage=stage,
+            today=today,
+            thresholds=thresholds,
             items=items,
             negotiators=negotiators,
             members=members,
@@ -1029,6 +1046,14 @@ class PromotionServiceBase:
             freights=freights,
         )
         ui = ui_for(actor, doc).to_dict(view=view)
+        if cell_level(actor, doc, "field", "platform_posts") is Level.HIDDEN:
+            platform_posts = []
+        elif platform_posts is None:
+            from app.modules.promotion.platform_posts import posts_by_promotion
+
+            platform_posts = (
+                await posts_by_promotion(self._session, [promotion.id], tenant_id=user.tenant_id)
+            ).get(promotion.id, [])
         settlement_block = (
             await self._settlement_block(promotion, ctx, ui) if view != "list" else None
         )
@@ -1103,6 +1128,9 @@ class PromotionServiceBase:
             ),
             return_waybill=promotion.return_waybill,
             platform=promotion.platform,
+            content_category=promotion.content_category,
+            extra_platforms=[p.platform for p in platform_posts],
+            platform_posts=platform_posts if view != "list" else [],
             cooperation_date=promotion.cooperation_date,
             scheduled_publish_date=promotion.scheduled_publish_date,
             actual_publish_date=promotion.actual_publish_date,
@@ -1136,6 +1164,7 @@ class PromotionServiceBase:
             settled_at=promotion.settled_at,
             metrics_available_from=metrics_available_from(promotion.actual_publish_date),
             badges=badges,
+            stage=stage,
             is_active=promotion.is_active,
             created_at=promotion.created_at,
             updated_at=promotion.updated_at,

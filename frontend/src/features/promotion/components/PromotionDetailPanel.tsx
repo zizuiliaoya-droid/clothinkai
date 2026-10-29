@@ -3,7 +3,7 @@ import { StyleImageThumbnail } from "@/components/StyleImageThumbnail/StyleImage
 //
 // - 矩阵里已有的分组（商品归属与颜色尺码、收件、发货）按 ui.fields 出：不在 fields 里整块不渲染（运营看不到收件），
 //   edit 的分组右上角出「编辑」，打开列表页现有的弹窗
-// - 合作信息、发布两块矩阵还没有分组（随 PR-6 ~ PR-9 补），照详情接口给的值只读显示；报价读不到时接口给 null，整行不出
+// - 内容分类与其他平台按矩阵控制编辑；报价读不到时接口给 null，整行不出
 // - 不显示商品编码 / SKU 编码（规-1）
 import type { ReactNode } from "react";
 import { Button, Descriptions, Space, Spin, Tag, Typography } from "antd";
@@ -16,15 +16,8 @@ import { itemSpecLines, shipDetailLines } from "@/features/promotion/shipDisplay
 import type { Promotion } from "@/features/promotion/types";
 import { FlowAction } from "@/features/flow/FlowAction";
 import type { FreightModalMode } from "./FreightModal";
-
-function Section({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <section aria-label={title}>
-      <Typography.Text strong>{title}</Typography.Text>
-      <div>{children}</div>
-    </section>
-  );
-}
+import { ContentCategoryEditor } from "./ContentCategoryEditor";
+import { PlatformPostsEditor } from "./PlatformPostsEditor";
 
 const dash = (v: ReactNode) => (v == null || v === "" ? "—" : v);
 
@@ -33,6 +26,8 @@ export function PromotionDetailPanel({
   onEditReceiver,
   onEditItems,
   onEditRetro,
+  onEditOther,
+  onEditWaybill,
   onRecallStart,
   onRecallWaybill,
   onRecallResult,
@@ -45,6 +40,8 @@ export function PromotionDetailPanel({
   /** 打开「改颜色尺码」弹窗（ui.fields.goods_items = edit 时出按钮）。 */
   onEditItems?: (row: Promotion) => void;
   onEditRetro?: (row: Promotion) => void;
+  onEditOther?: (row: Promotion) => void;
+  onEditWaybill?: (row: Promotion) => void;
   onRecallStart?: (row: Promotion) => void;
   onRecallWaybill?: (row: Promotion) => void;
   onRecallResult?: (row: Promotion) => void;
@@ -64,20 +61,18 @@ export function PromotionDetailPanel({
   return (
     <Space direction="vertical" size={16} style={{ width: "100%" }}>
       {data.completed_at && <Tag color="green">已完结 · {data.completed_at.slice(0, 10)}</Tag>}
-      <Section title="合作信息">
+      <FieldBlock ui={ui} group="cooperation" title="合作信息">
         <Descriptions size="small" column={{ xs: 1, sm: 2 }}>
           <Descriptions.Item label="合作模式">{dash(data.cooperation_mode)}</Descriptions.Item>
           <Descriptions.Item label="合作平台">{dash(data.platform)}</Descriptions.Item>
+          <Descriptions.Item label="内容分类"><ContentCategoryEditor promotion={data} /></Descriptions.Item>
           <Descriptions.Item label="合作日期">{dash(data.cooperation_date)}</Descriptions.Item>
           <Descriptions.Item label="预定发布日期">{dash(data.scheduled_publish_date)}</Descriptions.Item>
           {data.quote_amount != null && (
             <Descriptions.Item label="报价">¥{data.quote_amount}</Descriptions.Item>
           )}
-          {data.cooperation_mode === "寄拍" && (
-            <Descriptions.Item label="寄回单号">{dash(data.return_waybill)}</Descriptions.Item>
-          )}
         </Descriptions>
-      </Section>
+      </FieldBlock>
       <FieldBlock
         ui={ui}
         group="goods_items"
@@ -123,7 +118,7 @@ export function PromotionDetailPanel({
           <Typography.Text type="secondary">未进发货流程</Typography.Text>
         )}
       </FieldBlock>
-      <Section title="发布">
+      <FieldBlock ui={ui} group="publish_info" title="发布">
         <Descriptions size="small" column={1}>
           <Descriptions.Item label="发布状态">{data.publish_status}</Descriptions.Item>
           <Descriptions.Item label="实际发布日期">{dash(data.actual_publish_date)}</Descriptions.Item>
@@ -138,7 +133,24 @@ export function PromotionDetailPanel({
             )}
           </Descriptions.Item>
         </Descriptions>
-      </Section>
+      </FieldBlock>
+      <FieldBlock ui={ui} group="return_waybill" title="寄回单号" onEdit={onEditWaybill ? () => onEditWaybill(data) : undefined}>
+        {dash(data.return_waybill)}
+      </FieldBlock>
+      <FieldBlock ui={ui} group="other_info" title="其他信息" onEdit={onEditOther ? () => onEditOther(data) : undefined}>
+        <Descriptions size="small" column={1}>
+          <Descriptions.Item label="笔记标题">{dash(data.note_title)}</Descriptions.Item>
+          {Object.entries(data.source_extra ?? {}).map(([key, value]) => <Descriptions.Item key={key} label={key}>{dash(value == null ? null : String(value))}</Descriptions.Item>)}
+        </Descriptions>
+      </FieldBlock>
+      <PlatformPostsEditor promotion={data} />
+      <FieldBlock ui={ui} group="review_result" title="审核结果">
+        <Descriptions size="small" column={1}>
+          <Descriptions.Item label="审核结果">{data.review_action === "approve" ? "审核通过" : data.review_action === "reject" ? "已驳回" : "待审核"}</Descriptions.Item>
+          <Descriptions.Item label="审核时间">{dash(data.reviewed_at)}</Descriptions.Item>
+          <Descriptions.Item label="审核说明">{dash(data.review_reason)}</Descriptions.Item>
+        </Descriptions>
+      </FieldBlock>
       <FieldBlock ui={ui} group="payment_qr" title="收款码">
         {data.payment_qr_signed_url ? <StyleImageThumbnail size={100} src={data.payment_qr_signed_url} alt="博主收款码" /> : <Typography.Text>{data.payment_qr_attachment_id ? "已上传收款码（暂时无法预览）" : "尚未上传收款码"}</Typography.Text>}
         {onPaymentQr && <Button onClick={() => onPaymentQr(data)}>{ui?.fields?.payment_qr?.state === "edit" ? "管理收款码" : "查看收款码"}</Button>}

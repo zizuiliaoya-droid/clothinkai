@@ -30,6 +30,7 @@ import app.modules.report.store_daily_service as store_mod
 import app.modules.report.work_progress_service as work_mod
 from app.core.config import settings
 from app.core.security.field_permissions import FieldPermissionContext
+from app.core.security.permissions import EffectivePermissions
 from app.core.tenancy import tenant_id_ctx
 from app.modules.collect.models import AdDaily, QianniuDaily
 from app.modules.finance.order_adjustment_models import OrderAdjustment
@@ -2124,6 +2125,7 @@ class TestWorkProgressGoods:
                 page=1,
                 page_size=100,
                 field_ctx=_SUPER_CTX,
+                perms=EffectivePermissions("summary-test", frozenset({"*"})),
             )
             assert drill.total == card.quote_count
             assert card.promo_cost == sum((i.total_promo_cost or Decimal(0)) for i in drill.items)
@@ -3289,6 +3291,113 @@ class TestBiDashboard:
             assert dead == [], f"这些字段全是 0 / None，场景失效：{dead}"
             assert any(r.target_count for r in via_summary.store.workload), "目标篇数没读到"
             assert any(r.pr_id is None for r in via_summary.store.workload), "未分配行没进来"
+        finally:
+            tenant_id_ctx.reset(tok)
+
+    @pytest.mark.parametrize("exclude_brushing", [True, False])
+    async def test_year_cross_year_summary_equals_live(
+        self,
+        session: AsyncSession,
+        tenant_a: Any,
+        product_factory: Any,
+        blogger_factory: Any,
+        promotion_factory: Any,
+        factory: Any,
+        recorder: _SourceRecorder,
+        monkeypatch: pytest.MonkeyPatch,
+        exclude_brushing: bool,
+    ) -> None:
+        """跨年两天均有成交、退款、站内/站外花费；year 桶与整页 JSON 两路相等。"""
+        lo, hi = date(TODAY.year - 2, 12, 31), date(TODAY.year - 1, 1, 1)
+        tok = tenant_id_ctx.set(tenant_a.id)
+        try:
+            style = await product_factory.style(style_code=f"YEAR{uuid4().hex[:6]}")
+            goods = await _goods(session, tenant_a, style, code=f"YG{uuid4().hex[:6]}", season="冬")
+            qn = await _pp(session, tenant_a, style, goods)
+            ad = await _pp(session, tenant_a, style, goods, platform="万相台")
+            pr = await factory.user(tenant_a)
+            blogger = await blogger_factory.blogger()
+            for day, scale in ((lo, 1), (hi, 3)):
+                session.add_all(
+                    [
+                        _qn(
+                            tenant_a,
+                            qn,
+                            day,
+                            str(100 * scale),
+                            refund=str(10 * scale),
+                            add_cart=scale,
+                        ),
+                        AdDaily(
+                            tenant_id=tenant_a.id,
+                            platform_product_id=ad.id,
+                            platform_id_snapshot=ad.platform_id,
+                            date=day,
+                            cost=Decimal(10 * scale),
+                            extra={},
+                        ),
+                        OrderAdjustment(
+                            tenant_id=tenant_a.id,
+                            order_type="刷单",
+                            style_id=style.id,
+                            amount=Decimal(5 * scale),
+                            order_date=day,
+                        ),
+                        TargetPlanning(
+                            tenant_id=tenant_a.id,
+                            pr_id=pr.id,
+                            style_id=style.id,
+                            period_month=f"{day:%Y-%m}",
+                            min_target=2 * scale,
+                        ),
+                    ]
+                )
+                await promotion_factory.promotion(
+                    style=style,
+                    blogger=blogger,
+                    pr=pr,
+                    goods_main_id=goods.id,
+                    cooperation_date=day,
+                    publish_status="已发布",
+                    quote_amount=Decimal(20 * scale),
+                    cost_snapshot=Decimal(5 * scale),
+                    like_count=100 * scale,
+                    internal_code=f"YEAR{uuid4().hex[:10].upper()}",
+                )
+            await session.commit()
+            await _refresh(session, tenant_a, lo, hi)
+            svc = BiService(session)
+            kwargs: dict[str, Any] = {
+                "granularity": "year",
+                "exclude_brushing": exclude_brushing,
+                "field_ctx": _SUPER_CTX,
+            }
+            via_summary = await svc.get_dashboard(tenant_a.id, (lo, hi), **kwargs)
+            assert recorder.calls == [(label, "summary") for label in _BI_LABELS]
+            monkeypatch.setattr(settings, "REPORT_SUMMARY_READS_ENABLED", False)
+            via_live = await svc.get_dashboard(tenant_a.id, (lo, hi), **kwargs)
+            assert recorder.calls[3:] == [(label, "live") for label in _BI_LABELS]
+            assert _dump(via_summary) == _dump(via_live)
+            trend = via_summary.store.trend
+            assert len(trend) == 2
+            assert {point.date_from.year for point in trend} == {lo.year, hi.year}
+            for point in trend:
+                assert all(
+                    getattr(point, field) > 0
+                    for field in (
+                        "pay_amount",
+                        "refund_amount",
+                        "actual_sales",
+                        "internal_spend",
+                        "external_spend",
+                        "total_spend",
+                        "net_roi",
+                    )
+                )
+            assert any(
+                row.target_count > 0 and row.quote_count > 0 for row in via_summary.store.workload
+            )
+            assert via_summary.goods.items
         finally:
             tenant_id_ctx.reset(tok)
 

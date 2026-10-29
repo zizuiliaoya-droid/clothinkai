@@ -1,3 +1,4 @@
+import { formatMoney } from "@/utils/money";
 import { useState } from "react";
 import {
   Button,
@@ -46,7 +47,7 @@ const IMPORT_SOURCE: Record<"拍单" | "刷单", string> = {
 const IMPORT_COLUMNS_TAO = ["日期", "订单号", "博主ID", "货号", "金额", "备注"];
 const IMPORT_COLUMNS_BRUSH = [...IMPORT_COLUMNS_TAO, "是否剔除ROI"];
 
-const money = (v: string | null) => (v == null ? "—" : `¥${v}`);
+const money = (v: string | null) => (v == null ? "—" : formatMoney(v));
 
 /**
  * 拍单 / 刷单合并页（后端本来就是同一张 order_adjustment 表，order_type 区分）。

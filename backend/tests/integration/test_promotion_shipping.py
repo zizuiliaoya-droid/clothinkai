@@ -132,6 +132,19 @@ def _receiver_of(resp: Any) -> dict[str, Any]:
 
 @pytest.mark.usefixtures("tenant_ctx")
 class TestReceiverRead:
+    @pytest.mark.parametrize(
+        "who,detail_allowed,receiver_visible",
+        [
+            ("pr", True, True),
+            ("pr2", True, True),
+            ("pr_manager", True, True),
+            ("admin", True, True),
+            ("operations", True, False),
+            ("finance", False, False),
+            ("warehouse", False, True),
+        ],
+        ids=["pr", "pr2", "pr_manager", "admin", "operations", "finance", "warehouse"],
+    )
     async def test_detail_projection_by_role(
         self,
         session: AsyncSession,
@@ -139,18 +152,30 @@ class TestReceiverRead:
         product_factory: Any,
         blogger_factory: Any,
         promotion_factory: Any,
+        who: str,
+        detail_allowed: bool,
+        receiver_visible: bool,
     ) -> None:
         promo = await _promotion(
             flow_users, product_factory, blogger_factory, promotion_factory, **_RECEIVER
         )
         svc = PromotionService(session)
-        for who in ("pr", "pr_manager", "admin", "warehouse"):
-            resp = await svc.get_promotion(promo.id, getattr(flow_users, who))
-            assert _receiver_of(resp) == _RECEIVER, who
-        # 财务看不到收货地址（Q4），运营看不到收件（4.6）
-        for who in ("finance", "operations"):
-            resp = await svc.get_promotion(promo.id, getattr(flow_users, who))
-            assert _receiver_of(resp) == dict.fromkeys(_RECEIVER), who
+        user = getattr(flow_users, who)
+        # 明确规则，不按 fixture 实际权限动态决定预期：060 后仓库走专用接口，
+        # 财务仅有财务 / 报表等读取；两者均没有完整推广详情入口权限。
+        actor = await svc._flow_actor(user)
+        assert actor.perms.has("promotion", "read") is detail_allowed, who
+        if detail_allowed:
+            resp = await svc.get_promotion(promo.id, user)
+        else:
+            with pytest.raises(PermissionDeniedError) as denied:
+                await svc.get_promotion(promo.id, user)
+            assert denied.value.details["required_scope"] == "promotion"
+            # 入口拒绝不替代字段投影验证：保留仓库收件可见、财务收件全隐藏的原合同。
+            resp = await svc._to_response(promo, user)
+        assert _receiver_of(resp) == (
+            _RECEIVER if receiver_visible else dict.fromkeys(_RECEIVER)
+        ), who
 
     async def test_list_projection_by_role(
         self,
@@ -1057,6 +1082,8 @@ class TestFlowUi:
         assert pr == {
             "column": "A",
             "actions": {
+                "publish": {"state": "enabled"},
+                "cancel": {"state": "enabled"},
                 "ship_push": {"state": "disabled", "reason": "需管理员或 PR 主管确认"},
                 "recall_start": {"state": "grey", "hint": "尚未发货，直接取消即可"},
                 "urge": {"state": "enabled"},
@@ -1070,11 +1097,13 @@ class TestFlowUi:
                 "quote_amount": {"state": "read"},
                 "receiver": {"state": "edit"},
                 "shipping": {"state": "grey", "hint": "推送后由仓库回填"},
+                "publish_info": {"state": "edit"},
+                "platform_posts": {"state": "grey", "hint": "发布后可录其他平台"},
                 # PR-6：7 天数据与收款码入矩阵，没发布时都灰
                 "metrics": {"state": "grey", "hint": "已结款后可录"},
                 "payment_qr": {"state": "grey", "hint": "发布后上传"},
-                "recall_info": {"state": "read"},
                 "freight_payment": {"state": "read"},
+                "other_info": {"state": "edit"},
                 "timeline": {"state": "read"},
             },
         }
@@ -1082,6 +1111,8 @@ class TestFlowUi:
         manager = (await svc.get_promotion(promo.id, flow_users.pr_manager)).ui
         assert manager is not None
         assert manager["actions"] == {
+            "publish": {"state": "enabled"},
+            "cancel": {"state": "enabled"},
             "ship_push": {"state": "enabled", "missing": _ALL_GATES},
             "recall_start": {"state": "grey", "hint": "尚未发货，直接取消即可"},
             "urge": {"state": "enabled"},
@@ -1098,13 +1129,19 @@ class TestFlowUi:
             "cooperation": {"state": "read"},
             "cooperation_mode": {"state": "read"},
             "shipping": {"state": "grey", "hint": "推送后由仓库回填"},
+            "publish_info": {"state": "read"},
+            "platform_posts": {"state": "grey", "hint": "发布后可录其他平台"},
             # 运营看得到 7 天数据（灰），看不到收款码（字段规则 promotion.payment_qr）
             "metrics": {"state": "grey", "hint": "已结款后可录"},
-            "recall_info": {"state": "read"},
             "freight_payment": {"state": "read"},
+            "other_info": {"state": "read"},
             "timeline": {"state": "read"},
         }
-        assert (await svc.get_promotion(promo.id, flow_users.finance)).ui == {
+        # 默认财务过不了详情 gate；仍在投影层验证原有独立运费摘要矩阵。
+        with pytest.raises(PermissionDeniedError) as denied:
+            await svc.get_promotion(promo.id, flow_users.finance)
+        assert denied.value.details["required_scope"] == "promotion"
+        assert (await svc._to_response(promo, flow_users.finance)).ui == {
             "column": "A",
             "actions": {},
             "fields": {"freight_payment": {"state": "read"}},
@@ -1158,6 +1195,8 @@ class TestFlowUi:
         assert rows[partial.id] is not None and rows[full.id] is not None
         assert rows[partial.id]["actions"] == got["actions"]
         assert rows[full.id]["actions"] == {
+            "publish": {"state": "enabled"},
+            "cancel": {"state": "enabled"},
             "ship_push": {"state": "enabled"},
             "recall_start": {"state": "grey", "hint": "尚未发货，直接取消即可"},
             "urge": {"state": "enabled"},
@@ -1181,14 +1220,25 @@ class TestFlowUi:
             filters=PromotionListFilters(), page=1, page_size=100, user=flow_users.pr
         )
         rows = {p.id: p.ui for p in page.items}
-        # 两者都在 C 列且可召回；旧 NULL 发货单保留收件编辑例外，已发货单只读
+        # 两者都在 C 列且可召回；旧 NULL 发货单保留收件编辑例外，已发货单的收件只读。
+        # PR10 的发布信息、其他信息仍按 C 列可改，与收件权限独立。
         actions = {
+            "publish": {"state": "enabled"},
+            "cancel": {"state": "enabled"},
             "recall_start": {"state": "enabled"},
             "urge": {"state": "enabled"},
             "comment": {"state": "enabled"},
         }
-        assert rows[history.id] == {"column": "C", "actions": actions, "edits": ["receiver"]}
-        assert rows[shipped.id] == {"column": "C", "actions": actions, "edits": []}
+        assert rows[history.id] == {
+            "column": "C",
+            "actions": actions,
+            "edits": ["receiver", "publish_info", "other_info"],
+        }
+        assert rows[shipped.id] == {
+            "column": "C",
+            "actions": actions,
+            "edits": ["publish_info", "other_info"],
+        }
         manager = await PromotionService(session).list_promotions(
             filters=PromotionListFilters(), page=1, page_size=100, user=flow_users.pr_manager
         )
@@ -1196,6 +1246,8 @@ class TestFlowUi:
         assert row.ui == {
             "column": "C",
             "actions": {
+                "publish": {"state": "enabled"},
+                "cancel": {"state": "enabled"},
                 "ship_include": {"state": "enabled"},
                 "recall_start": {"state": "enabled"},
                 "urge": {"state": "enabled"},
@@ -1210,6 +1262,8 @@ class TestFlowUi:
                 "cooperation_mode",
                 "quote_amount",
                 "receiver",
+                "publish_info",
+                "other_info",
             ],
         }
 
@@ -1826,6 +1880,8 @@ class TestShipPush:
         assert resp.ui is not None
         assert resp.ui["column"] == "B"
         assert resp.ui["actions"] == {
+            "publish": {"state": "enabled"},
+            "cancel": {"state": "enabled"},
             "ship_withdraw": {"state": "enabled"},
             "recall_start": {"state": "grey", "hint": "尚未发货，直接取消即可"},
             "urge": {"state": "enabled"},

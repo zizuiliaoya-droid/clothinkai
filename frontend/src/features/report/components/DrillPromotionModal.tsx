@@ -1,7 +1,9 @@
+import { formatMoney } from "@/utils/money";
 // 报表下钻弹窗（7e R1，报表视图设计 2.1 / 2.5）：工作进度表点 PR 行 → 该 PR 在区间内的推广单；
 // R5 起也按商品 / 季节 / 周取单，表格单独导出给周明细的行展开用。
-// 字段是后端白名单；金额读不到（字段权限）显示「—」；detail_url R1 ~ R7 恒 null，不渲染链接（R8 再接详情抽屉）。
+// 字段是后端白名单；金额读不到显示「—」；只按后端详情可见性提供链接。
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { Alert, Modal, Table, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
@@ -15,11 +17,12 @@ import {
 import type { DrillPromotionRow } from "@/features/report/types";
 import { extractErrorMessage } from "@/services/apiClient";
 
-const money = (v: string | null) => (v == null ? "—" : `¥${v}`);
+const money = (v: string | null) => (v == null ? "—" : formatMoney(v));
 const text = (v: string | null) => v ?? "—";
 
 const COLUMNS: ColumnsType<DrillPromotionRow> = [
-  { title: "推广编号", dataIndex: "internal_code", width: 130, fixed: "left" },
+  { title: "推广编号", dataIndex: "internal_code", width: 130, fixed: "left",
+    render: (value: string, row) => row.detail_url ? <Link to={row.detail_url}>{value}</Link> : value },
   { title: "合作日期", dataIndex: "cooperation_date", width: 110 },
   { title: "约定发布", dataIndex: "scheduled_publish_date", width: 110, render: text },
   { title: "发布日期", dataIndex: "actual_publish_date", width: 110, render: text },

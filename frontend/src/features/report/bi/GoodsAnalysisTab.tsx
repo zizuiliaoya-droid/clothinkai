@@ -3,6 +3,7 @@
 // 区间用 BI 响应的实际起止，单品块与趋势跟刷单开关；不显示商品编码（补充 2）。
 import { Alert, Card, Col, Empty, Row, Select, Space, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
+import { Link, useNavigate } from "react-router-dom";
 import dayjs from "dayjs";
 import { ScatterChart, type ScatterDatum } from "@/components/Charts/ScatterChart";
 import { MiniLineChart } from "@/components/MiniLineChart/MiniLineChart";
@@ -15,8 +16,7 @@ import { KpiCard, MUTED } from "./StoreOverviewTab";
 const NOTES_EMPTY_TEXT = "还没有录 7 天数据的笔记";
 /** 散点超 500 篇时后端只回最近 500 篇。 */
 const NOTES_TRUNCATED_TEXT = "只显示最近 500 篇";
-/** 散点点不了：详情页（detail_url）R8 才有。 */
-const NOTE_DETAIL_HINT = "详情页随推广单时间线上线";
+const NOTE_DETAIL_HINT = "暂无可访问的推广详情";
 
 /** 趋势横轴：点上是桶首日；月 / 年取前缀。 */
 function trendLabel(date: string, granularity: TimeGranularity): string {
@@ -38,9 +38,14 @@ interface Props {
 }
 
 export function GoodsAnalysisTab({ data, loading, granularity, goodsId, onGoodsChange }: Props) {
+  const navigate = useNavigate();
   const items = data?.goods.items ?? [];
   const optionLabels = goodsOptionLabels(items);
   const selected = items.find((g) => g.goods_id === goodsId) ?? items[0];
+  const missingSelection = !loading && !!data && !!goodsId && !items.some((item) => item.goods_id === goodsId);
+  const selectionNotice = missingSelection ? <Alert type="info" showIcon
+    message="所选商品不在当前筛选范围或可见结果中"
+    description={items.length ? "当前显示本区间第一项，可重新选择商品。" : "可调整筛选后查看。"} /> : null;
   const selectedId = selected?.goods_id;
   const dateFrom = data?.date_from;
   const dateTo = data?.date_to;
@@ -66,12 +71,13 @@ export function GoodsAnalysisTab({ data, loading, granularity, goodsId, onGoodsC
   });
 
   if (!loading && data && items.length === 0) {
-    return <Empty description="这段时间没有单品数据" />;
+    return <>{selectionNotice}<Empty description="这段时间没有单品数据" /></>;
   }
 
   const points = trendQuery.data?.points ?? [];
   const labels = points.map((p) => trendLabel(p.date, granularity));
   const notes = notesQuery.data;
+  const detailUrls = new Map((notes?.points ?? []).map((p) => [p.promotion_id, p.detail_url]));
   const scatter: ScatterDatum[] = (notes?.points ?? []).map((p) => ({
     key: p.promotion_id,
     label: `${p.blogger_nickname}（${p.platform}）`,
@@ -94,6 +100,7 @@ export function GoodsAnalysisTab({ data, loading, granularity, goodsId, onGoodsC
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {selectionNotice}
       <Space wrap size={8}>
         <span>商品：</span>
         <Select<string>
@@ -179,8 +186,14 @@ export function GoodsAnalysisTab({ data, loading, granularity, goodsId, onGoodsC
               formatX={formatDay}
               formatY={(v) => Math.round(v).toLocaleString("zh-CN")}
               formatSize={moneyNumber}
+              canSelect={(d) => Boolean(detailUrls.get(d.key))}
+              onSelect={(d) => { const url = detailUrls.get(d.key); if (url) navigate(url); }}
+              renderLabel={(d) => {
+                const url = detailUrls.get(d.key);
+                return url ? <Link to={url}>{d.label}</Link> : d.label;
+              }}
               pointTitle={(d) =>
-                `${d.label}：${formatDay(d.x as number)}，点赞 ${d.y}（${NOTE_DETAIL_HINT}）`
+                `${d.label}：${formatDay(d.x as number)}，点赞 ${d.y}（${detailUrls.get(d.key) ? "查看推广详情" : NOTE_DETAIL_HINT}）`
               }
               emptyText={NOTES_EMPTY_TEXT}
             />

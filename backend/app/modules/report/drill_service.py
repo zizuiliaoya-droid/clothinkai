@@ -15,6 +15,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ValidationError
 from app.core.security.field_permissions import FieldPermissionContext
+from app.core.security.permissions import EffectivePermissions
+from app.modules.promotion.read_access import PromotionReadAccess
 from app.modules.report.advanced_repository import DrillFilters, DrillRepository
 from app.modules.report.advanced_schemas import DrillPromotionPage, DrillPromotionRow
 from app.modules.report.exceptions import ReportInvalidTimeRangeError, ReportRangeTooLongError
@@ -49,6 +51,7 @@ def validate_seasons(seasons: Sequence[str] | None) -> None:
 class DrillService:
     def __init__(self, session: AsyncSession) -> None:
         self._repo = DrillRepository(session)
+        self._read_access = PromotionReadAccess(session)
 
     async def list_promotions(
         self,
@@ -63,6 +66,7 @@ class DrillService:
         page: int,
         page_size: int,
         field_ctx: FieldPermissionContext,
+        perms: EffectivePermissions,
     ) -> DrillPromotionPage:
         """``pr_scope`` / ``field_ctx`` 不给默认值：漏传直接报错，不悄悄放成「全部可见」。"""
         validate_drill_range(date_from, date_to)
@@ -79,15 +83,23 @@ class DrillService:
         total = await self._repo.count(filters)
         rows = await self._repo.page(filters, limit=page_size, offset=(page - 1) * page_size)
         quote_ok, cost_ok = promotion_amounts_visible(field_ctx)
+        visible = await self._read_access.visible_ids(
+            [r["id"] for r in rows], tenant_id=tenant_id, perms=perms
+        )
         return DrillPromotionPage(
-            items=[_to_row(r, quote_ok=quote_ok, cost_ok=cost_ok) for r in rows],
+            items=[
+                _to_row(r, quote_ok=quote_ok, cost_ok=cost_ok, detail_visible=r["id"] in visible)
+                for r in rows
+            ],
             total=total,
             page=page,
             page_size=page_size,
         )
 
 
-def _to_row(r: Mapping[str, Any], *, quote_ok: bool, cost_ok: bool) -> DrillPromotionRow:
+def _to_row(
+    r: Mapping[str, Any], *, quote_ok: bool, cost_ok: bool, detail_visible: bool
+) -> DrillPromotionRow:
     # 逐个字段取：投影是白名单，SQL 多取了列也不会漏进响应
     return DrillPromotionRow(
         id=r["id"],
@@ -106,7 +118,7 @@ def _to_row(r: Mapping[str, Any], *, quote_ok: bool, cost_ok: bool) -> DrillProm
         quote_amount=r["quote_amount"] if quote_ok else None,
         total_promo_cost=r["total_promo_cost"] if cost_ok else None,
         like_count=r["like_count"],
-        detail_url=None,
+        detail_url=f"/promotions?id={r['id']}" if detail_visible else None,
     )
 
 

@@ -409,7 +409,7 @@ def test_real_matrices_match_expected() -> None:
         grid = render_grid(matrix, DOCS[kind], PERSONAS)
         assert grid.keys() == EXPECTED[kind].keys(), kind
         diff = {k: (grid[k], EXPECTED[kind][k]) for k in grid if grid[k] != EXPECTED[kind][k]}
-        assert diff == {}, kind
+        assert diff == {}, "FLOW7_FAULT_EXPECTED:matrix_cell"
     # 场景有效性：四种取值都出现过，每个 persona 至少有一格不是「隐」
     promotion_grid = render_grid(MATRICES["promotion"], DOCS["promotion"], PERSONAS)
     assert set(promotion_grid.values()) == {"改", "读", "灰", "隐"}
@@ -847,9 +847,10 @@ def test_writable_fields(toy: Matrix) -> None:
 
 
 def test_ensure_patch_allowed(toy: Matrix) -> None:
-    # 没入矩阵的字段放行（过渡规则）
-    ensure_patch_allowed(PERSONAS["pr"], TOY_DOCS["待推送"], {"quote_amount", "note_title"})
-    ensure_patch_allowed(PERSONAS["operations"], TOY_DOCS["待推送"], {"note_title"})
+    # PR10白名单：未登记字段也拒绝。
+    ensure_patch_allowed(PERSONAS["pr"], TOY_DOCS["待推送"], {"quote_amount"})
+    with pytest.raises(FieldPermissionDenied):
+        ensure_patch_allowed(PERSONAS["operations"], TOY_DOCS["待推送"], {"note_title"})
     # 越权的一次全列出来（G2）
     with pytest.raises(FieldPermissionDenied) as exc:
         ensure_patch_allowed(
@@ -859,7 +860,7 @@ def test_ensure_patch_allowed(toy: Matrix) -> None:
         )
     assert exc.value.code == "FIELD_PERMISSION_DENIED"
     # 顺序按 patch_groups 的登记顺序（不是字母序），field = 第一个
-    assert exc.value.details["fields"] == ["quote_amount", "payment_qr_attachment_id"]
+    assert exc.value.details["fields"] == ["quote_amount", "payment_qr_attachment_id", "note_title"]
     assert exc.value.details["field"] == "quote_amount"
     assert exc.value.details["entity"] == "promotion"
     with pytest.raises(FieldPermissionDenied) as exc:
@@ -1017,6 +1018,8 @@ def test_ship_state_machine() -> None:
 
     history = P_DOCS["催发·历史单"]
     assert _real_ui(pm, history).actions == {
+        "publish": mx.UiAction("enabled"),
+        "cancel": mx.UiAction("enabled"),
         "ship_include": mx.UiAction("enabled"),
         "recall_start": mx.UiAction("enabled"),
         "urge": mx.UiAction("enabled"),
@@ -1024,6 +1027,8 @@ def test_ship_state_machine() -> None:
         "deactivate": mx.UiAction("enabled"),
     }
     assert _real_ui("pr", history).actions == {
+        "publish": mx.UiAction("enabled"),
+        "cancel": mx.UiAction("enabled"),
         "recall_start": mx.UiAction("enabled"),
         "urge": mx.UiAction("enabled"),
         "comment": mx.UiAction("enabled"),
@@ -1071,13 +1076,24 @@ def test_real_ui_shape() -> None:
     assert a.to_dict(view="list") == {
         "column": "A",
         "actions": {
+            "publish": {"state": "enabled"},
+            "cancel": {"state": "enabled"},
             "ship_push": {"state": "enabled"},
             "recall_start": {"state": "grey", "hint": "尚未发货，直接取消即可"},
             "urge": {"state": "enabled"},
             "comment": {"state": "enabled"},
             "deactivate": {"state": "enabled"},
         },
-        "edits": ["goods", "goods_items", "cooperation", "quote_amount", "receiver"],
+        "edits": [
+            "goods",
+            "goods_items",
+            "cooperation",
+            "quote_amount",
+            "receiver",
+            "publish_info",
+            "return_waybill",
+            "other_info",
+        ],
     }
     assert a.to_dict(view="detail")["fields"] == {
         "goods": {"state": "edit"},
@@ -1087,14 +1103,22 @@ def test_real_ui_shape() -> None:
         "quote_amount": {"state": "edit"},
         "receiver": {"state": "edit"},
         "shipping": {"state": "grey", "hint": "推送后由仓库回填"},
+        "platform_posts": {"state": "grey", "hint": "发布后可录其他平台"},
         "metrics": {"state": "grey", "hint": "已结款后可录"},
         "payment_qr": {"state": "grey", "hint": "发布后上传"},
-        "recall_info": {"state": "read"},
+        "publish_info": {"state": "edit"},
+        "return_waybill": {"state": "edit"},
+        "other_info": {"state": "edit"},
         "freight_payment": {"state": "read"},
         "timeline": {"state": "read"},
     }
     # PR：合作信息、归属商品、服务费都只读（11-16），只能改收件
-    assert _real_ui("pr", P_DOCS["待推送仓库"]).to_dict(view="list")["edits"] == ["receiver"]
+    assert _real_ui("pr", P_DOCS["待推送仓库"]).to_dict(view="list")["edits"] == [
+        "receiver",
+        "publish_info",
+        "return_waybill",
+        "other_info",
+    ]
     # 财务在 C 列什么都看不到；E 列读颜色尺码与收款码、改结款单（PR-6），结款聊天截图付款后才有
     assert _real_ui("finance", P_DOCS["催发"]).to_dict(view="detail") == {
         "column": "C",
@@ -1102,6 +1126,8 @@ def test_real_ui_shape() -> None:
         "fields": {"freight_payment": {"state": "read"}},
     }
     assert _real_ui("finance", P_DOCS["待财务付款"]).to_dict(view="detail")["fields"] == {
+        "publish_info": {"state": "read"},
+        "review_result": {"state": "read"},
         "goods": {"state": "read"},
         "goods_items": {"state": "read"},
         "cooperation": {"state": "read"},
@@ -1141,38 +1167,48 @@ def test_receiver_follows_field_rules() -> None:
 
 def test_real_writable_fields() -> None:
     receiver = {"receiver_name", "receiver_phone", "receiver_address"}
-    cooperation = {"platform", "scheduled_publish_date", "remark"}
+    cooperation = {"platform", "scheduled_publish_date", "remark", "content_category"}
     # PR-5 入矩阵：归属商品、合作信息、合作模式、服务费、停用（is_active 归动作 deactivate）
     pr5 = {"goods_main_id", *cooperation, "cooperation_mode", "quote_amount", "is_active"}
     # PR-6 入矩阵：like_count 归 7 天数据（metrics）
-    managed = receiver | {"sku_id"} | pr5 | {"like_count"}
+    other = {"note_title", "source_extra"}
+    freight = {"return_shipping_fee", "return_shipping_payer"}
+    managed = receiver | {"sku_id"} | pr5 | {"like_count"} | other | freight
     wf = writable_fields(PERSONAS["pr"], P_DOCS["催发"])
     assert wf.managed == managed
     # 已发货的 C 列：PR 全都只读；历史单按 A 列，PR 能改收件，颜色尺码、归属商品仍读
-    assert wf.allowed == frozenset()
-    assert writable_fields(PERSONAS["pr"], P_DOCS["催发·历史单"]).allowed == receiver
-    assert writable_fields(PERSONAS["pr"], P_DOCS["待推送仓库·模式空"]).allowed == receiver
+    assert wf.allowed == other
+    assert writable_fields(PERSONAS["pr"], P_DOCS["催发·历史单"]).allowed == receiver | other
+    assert writable_fields(PERSONAS["pr"], P_DOCS["待推送仓库·模式空"]).allowed == receiver | other
     # 7 天数据（D13）：PR 只在待录 7 天数据时能写点赞；录过之后（待复盘）只有管理员
-    assert writable_fields(PERSONAS["pr"], P_DOCS["待录 7 天数据"]).allowed == {"like_count"}
+    assert (
+        writable_fields(PERSONAS["pr"], P_DOCS["待录 7 天数据"]).allowed == {"like_count"} | other
+    )
     for label in ("待满 7 天", "待复盘", "待传结款截图"):
         assert "like_count" not in writable_fields(PERSONAS["pr"], P_DOCS[label]).allowed, label
     # 主管：合作模式有值只读、空值可补
     pm = PERSONAS["pr_manager"]
-    assert writable_fields(pm, P_DOCS["待推送仓库"]).allowed == managed - {
+    assert writable_fields(pm, P_DOCS["待推送仓库"]).allowed == managed - freight - {
         "cooperation_mode",
         "like_count",
     }
-    assert writable_fields(pm, P_DOCS["待推送仓库·模式空"]).allowed == managed - {"like_count"}
-    assert writable_fields(pm, P_DOCS["待仓库发货"]).allowed == managed - {
+    assert writable_fields(pm, P_DOCS["待推送仓库·模式空"]).allowed == managed - freight - {
+        "like_count"
+    }
+    assert writable_fields(pm, P_DOCS["待仓库发货"]).allowed == managed - freight - {
         "cooperation_mode",
         "sku_id",
         "like_count",
     }
     # 结款单生成后（E 列）：服务费所有人只读，合作信息与停用只有管理员
-    assert writable_fields(pm, P_DOCS["待财务付款·模式空"]).allowed == {
-        "goods_main_id",
-        "cooperation_mode",
-    }
+    assert (
+        writable_fields(pm, P_DOCS["待财务付款·模式空"]).allowed
+        == {
+            "goods_main_id",
+            "cooperation_mode",
+        }
+        | other
+    )
     for label, doc in P_DOCS.items():
         expected = set(managed)
         if doc.column in "EFGH":
@@ -1181,6 +1217,10 @@ def test_real_writable_fields() -> None:
             expected.discard("cooperation_mode")
         if doc.stage not in ("待录 7 天数据", "待复盘") and doc.column != "H":
             expected.discard("like_count")
+        if doc.recall_status not in ("召回中", "召回成功", "召回失败"):
+            expected -= freight
+        if doc.published_stage == "待录 7 天数据":
+            expected.add("like_count")
         assert writable_fields(PERSONAS["admin"], doc).allowed == expected, label
         assert writable_fields(PERSONAS["operations"], doc).allowed == frozenset(), label
 
@@ -1201,7 +1241,7 @@ def test_real_writable_fields() -> None:
     with pytest.raises(FieldPermissionDenied) as exc:
         ensure_patch_allowed(PERSONAS["pr"], P_DOCS["待复盘"], {"like_count", "note_title"})
     assert exc.value.details["fields"] == ["like_count"]
-    # 没入矩阵的字段照旧放行
+    # 其他信息已入矩阵，PR在未完结阶段可写
     ensure_patch_allowed(PERSONAS["pr"], P_DOCS["催发"], {"note_title", "source_extra"})
 
 
@@ -1427,10 +1467,10 @@ def test_settlement_resubmit_and_chat() -> None:
     with pytest.raises(AppException) as exc:
         require(PERSONAS["operations"], paid, "settlement_chat")
     assert _code(exc) == "PERMISSION_DENIED"
-    # 已发布后召回（G 列）不出这两个按钮
-    for label in ("召回中·已付款", "召回中"):
-        acts = _real_ui("admin", P_DOCS[label]).actions
-        assert "settlement_chat" not in acts and "settlement_resubmit" not in acts, label
+    # 已发布召回沿原E列，未发布召回不进入结款链。
+    assert _real_ui("admin", P_DOCS["召回中·已付款"]).actions["settlement_chat"].state == "enabled"
+    acts = _real_ui("admin", P_DOCS["召回中"]).actions
+    assert "settlement_chat" not in acts and "settlement_resubmit" not in acts
 
 
 def test_metrics_action_hints() -> None:
