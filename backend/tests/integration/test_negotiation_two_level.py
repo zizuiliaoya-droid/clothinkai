@@ -1700,6 +1700,8 @@ class TestFinalize:
         套装 2 行明细、``promotion.sku_id`` = 主款式那行、8 项照抄、合作日期 = 确认当天；事件 finalized + created。
         之后推送仓库不用再补选（B8：不复制明细 → 推送缺颜色尺码）；改推广单收件不回写谈款。
         """
+        world.blogger.content_category = "合集"
+        await session.flush()
         n = await negotiation_factory.negotiation(
             style=suit.top,
             blogger=world.blogger,
@@ -1725,6 +1727,22 @@ class TestFinalize:
             "13812345678",
         )
         assert resp.receiver_confirmed_at is not None
+        assert (
+            await session.scalar(
+                sa_text("SELECT content_category FROM promotion WHERE id=:p"),
+                {"p": resp.promotion_id},
+            )
+            == "合集"
+        )
+        world.blogger.content_category = "单篇"
+        await session.flush()
+        assert (
+            await session.scalar(
+                sa_text("SELECT content_category FROM promotion WHERE id=:p"),
+                {"p": resp.promotion_id},
+            )
+            == "合集"
+        )
         row = await _promotion_row(session, resp.promotion_id)
         assert tuple(row) == (
             flow_users.pr.id,

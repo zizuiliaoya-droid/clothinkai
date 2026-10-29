@@ -291,7 +291,8 @@ class TestGate:
             ("未开始", "未开始", att_id)
         ]
 
-    async def test_recalling_stage_illegal(
+    @pytest.mark.parametrize("publish_status", ["已发布", "已取消"])
+    async def test_recalling_metrics_follow_publish_state(
         self,
         session: AsyncSession,
         flow_users: Any,
@@ -299,8 +300,9 @@ class TestGate:
         blogger_factory: Any,
         promotion_factory: Any,
         fake_r2: _FakeS3,
+        publish_status: str,
     ) -> None:
-        """门槛都满足、但阶段是「召回中」（G 列，矩阵里录数是隐）→ ``require`` 按状态机拒绝 422。"""
+        """5.3：已发布召回沿原 F 列录数；未发布即取消的召回仍是 G 隐格，不能上传。"""
         promo = await _published(
             flow_users,
             product_factory,
@@ -308,10 +310,26 @@ class TestGate:
             promotion_factory,
             recall_status="召回中",
         )
-        with pytest.raises(AppException) as exc:
-            await PromotionService(session).record_metrics(
-                promo.id, _METRICS, flow_users.pr, screenshot=_SHOT
+        # 两例都具备结款和天数条件，只比较召回前是否发布，不让前置门槛掩盖矩阵。
+        promo.publish_status = publish_status
+        await session.flush()
+        svc = PromotionService(session)
+        if publish_status == "已发布":
+            before = await svc.get_promotion(promo.id, flow_users.pr)
+            assert before.stage == "召回中"
+            assert before.ui is not None and before.ui["actions"]["metrics"]["state"] == "enabled"
+            resp = await svc.record_metrics(promo.id, _METRICS, flow_users.pr, screenshot=_SHOT)
+            like, collect, comment, att_id, recorded_at, retro = await _metrics_state(
+                session, promo.id
             )
+            assert (like, collect, comment, retro) == (120, 30, 8, "未开始")
+            assert att_id is not None and recorded_at is not None
+            assert resp.stage == "召回中" and resp.publish_status == "已发布"
+            assert resp.ui is not None and "metrics" not in resp.ui["actions"]
+            assert len(fake_r2.puts) == 1
+            return
+        with pytest.raises(AppException) as exc:
+            await svc.record_metrics(promo.id, _METRICS, flow_users.pr, screenshot=_SHOT)
         assert (exc.value.status_code, exc.value.code) == (422, "ILLEGAL_STATE_TRANSITION")
         assert exc.value.details["from_state"] == "召回中"
         assert await _metrics_state(session, promo.id) == _untouched()

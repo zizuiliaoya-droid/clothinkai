@@ -13,7 +13,7 @@ from app.core.metrics import (
 from app.modules.auth.models import User
 from app.modules.flow.exceptions import FlowActionForbiddenError
 from app.modules.flow.line_events import LineEventRepository, LineEventType
-from app.modules.flow.matrix import ensure_gates, require
+from app.modules.flow.matrix import Level, cell_level, ensure_gates, require
 from app.modules.promotion.enums import (
     PublishStatus,
     ReviewAction,
@@ -23,6 +23,7 @@ from app.modules.promotion.events import (
     SettlementRequested,
 )
 from app.modules.promotion.exceptions import (
+    FieldPermissionDenied,
     PromotionNotFoundError,
     RejectReasonCategoryRequiredError,
     ReviewReasonRequiredError,
@@ -304,6 +305,7 @@ class PromotionReviewMixin(PromotionServiceBase):
                 "仅「已发布」状态的推广可重新提交审核",
                 details={"publish_status": promotion.publish_status},
             )
+        require(await self._flow_actor(user), await self._promotion_doc(promotion), "resubmit")
         _assert_not_future_publish_date(payload.actual_publish_date)
 
         before: dict[str, Any] = {"settlement_status": SettlementStatus.REJECTED.value}
@@ -389,6 +391,16 @@ class PromotionReviewMixin(PromotionServiceBase):
         真正的门槛在 ``review()`` 里 —— 没有单号就通不过审核。
         """
         promotion = await self._writable_promotion(promotion_id, user)
+        if (
+            cell_level(
+                await self._flow_actor(user),
+                await self._promotion_doc(promotion),
+                "field",
+                "return_waybill",
+            )
+            is not Level.EDIT
+        ):
+            raise FieldPermissionDenied(fields=["return_waybill"], entity="promotion")
         if promotion is None:
             raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
 

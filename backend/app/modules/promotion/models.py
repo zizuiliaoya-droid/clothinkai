@@ -149,6 +149,7 @@ class Promotion(TenantScopedModel):
 
     # --- 业务字段 ---
     platform: Mapped[str] = mapped_column(String(16), nullable=False)
+    content_category: Mapped[str | None] = mapped_column(String(8), nullable=True)
     cooperation_date: Mapped[date] = mapped_column(Date, nullable=False)
     scheduled_publish_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     actual_publish_date: Mapped[date | None] = mapped_column(Date, nullable=True)
@@ -469,6 +470,27 @@ class Promotion(TenantScopedModel):
 # ---------------------------------------------------------------------------
 
 
+class PromotionPlatformPost(TenantScopedModel):
+    """其他平台只记录，不进入主平台报表、结款或完结条件。"""
+
+    __tablename__ = "promotion_platform_post"
+    promotion_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("promotion.id", ondelete="RESTRICT"), nullable=False
+    )
+    platform: Mapped[str] = mapped_column(String(16), nullable=False)
+    publish_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    actual_publish_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    like_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    sort_order: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default=text("0"))
+    created_by: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("user.id", ondelete="SET NULL"), nullable=True
+    )
+    __table_args__ = (
+        Index("uq_platform_post", "tenant_id", "promotion_id", "platform", unique=True),
+        CheckConstraint("like_count >= 0", name="ck_platform_post_like_nonnegative"),
+    )
+
+
 class PromotionSequence(TenantScopedModel):
     """internal_code 序列号表（按 (tenant_id, date_key) 累计）。
 
@@ -692,5 +714,6 @@ __all__ = [
     "Promotion",
     "PromotionAmountLog",
     "PromotionItem",
+    "PromotionPlatformPost",
     "PromotionSequence",
 ]

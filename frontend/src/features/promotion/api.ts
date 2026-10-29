@@ -3,11 +3,13 @@
 import { apiClient } from "@/services/apiClient";
 import type {
   GoodsItemIn,
+  PlatformPostInput,
   Promotion,
   PromotionCancelRequest,
   PromotionCreate,
   PromotionListFilters,
   PromotionPage,
+  PromotionStageCounts,
   PromotionPublishRequest,
   PromotionRecallStartRequest,
   PromotionRecallSuccessRequest,
@@ -28,6 +30,10 @@ export async function listPromotions(
     params: filters,
   });
   return resp.data;
+}
+
+export async function getPromotionStageCounts(filters: PromotionListFilters = {}): Promise<PromotionStageCounts> {
+  return (await apiClient.get<PromotionStageCounts>("/api/promotions/stage-counts", { params: filters })).data;
 }
 
 export interface PromotionGoodsOption { id: string; display_name: string }
@@ -82,6 +88,10 @@ export interface PaymentQrUploadInit {
   attachment_id: string;
   presigned_url: string;
   expires_in_seconds: number;
+}
+
+export async function replacePlatformPosts(id: string, rows: PlatformPostInput[]): Promise<Promotion> {
+  return (await apiClient.put<Promotion>(`/api/promotions/${id}/platform-posts`, rows)).data;
 }
 
 export async function initPaymentQrUpload(

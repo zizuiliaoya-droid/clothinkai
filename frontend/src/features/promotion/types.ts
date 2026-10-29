@@ -1,6 +1,7 @@
 // U04 promotion feature 类型定义。
 
 import type { UiState } from "@/features/flow/keys";
+import type { PromotionStage } from "@/features/flow/stageStyle";
 
 export type PublishStatus =
   | "未发布"
@@ -30,6 +31,14 @@ export type SettlementStatus =
   | "已结款";
 
 export type ReviewAction = "approve" | "reject";
+
+export interface PlatformPostInput {
+  platform: string;
+  publish_url?: string | null;
+  actual_publish_date?: string | null;
+  like_count?: number | null;
+}
+export interface PlatformPost extends PlatformPostInput { id: string }
 
 /**
  * 审核通过的去向（7.3，只在审核通过的响应里有）：settlement_created 已生成结款单（待财务付款）、
@@ -112,6 +121,9 @@ export type UrgeStatus =
  * 字段可见性由后端字段级权限矩阵过滤，当前角色无权查看时返回 null。
  */
 export interface Promotion {
+  content_category?: string | null;
+  extra_platforms?: string[];
+  platform_posts?: PlatformPost[];
   id: string;
   internal_code: string;
   style_id: string;
@@ -209,6 +221,7 @@ export interface Promotion {
   metrics_available_from?: string | null;
   /** 行角标：复盘列的「待录数据」「满 7 天 · 待结款」读它。 */
   badges?: string[];
+  stage?: PromotionStage | null;
   /** 结款聊天截图签名 URL：只在详情与动作返回里签，列表为 null。 */
   settlement_chat_signed_url?: string | null;
   /** 结款块：只在详情与动作返回里有；没有结款单或看不到为 null。 */
@@ -262,6 +275,7 @@ export interface PromotionDuplicateWarning {
 }
 
 export interface PromotionCreate {
+  content_category?: string | null;
   style_id: string;
   sku_id?: string | null;
   /** 这次推广归属的商品。不传由后端取主商品（非套装优先）。 */
@@ -287,6 +301,7 @@ export interface PromotionCreate {
 }
 
 export interface PromotionUpdate {
+  content_category?: string | null;
   sku_id?: string | null;
   /** 商品归属可改：录错、或套装是推广录完之后才建的。 */
   goods_main_id?: string | null;
@@ -410,10 +425,24 @@ export interface PromotionPage {
    * 页级 ui.actions：amount_log 能读金额改动接口才有，「金额改动」页签与菜单只看它；
    * create（持 promotion_create:write）/ import（能上传站外推广）有才出「新建推广」「导入站外推广」（流程线 PR-5）。
    */
-  ui: Pick<UiState, "actions">;
+  ui: Pick<UiState, "actions"> & { fields?: UiState["fields"] };
+}
+
+export type PromotionBadge = "missing_qr" | "metrics_due" | "metrics_wait_settle" | "retro_due" | "freight_open";
+export interface PromotionStageCounts {
+  stages: Record<PromotionStage, number>;
+  badges: Record<PromotionBadge, number>;
+  completed: number;
+  total: number;
 }
 
 export interface PromotionListFilters {
+  stage?: PromotionStage;
+  badge?: PromotionBadge;
+  completed?: boolean;
+  receiver_name?: string;
+  receiver_phone?: string;
+  content_category?: string;
   goods_main_id?: string;
   seasons?: string[];
   unassigned_only?: boolean;

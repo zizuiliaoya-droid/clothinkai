@@ -108,11 +108,11 @@ class TestPromotionImportEndToEnd:
 
         suffix = uuid4().hex[:8]
         csv_bytes = (
-            "款式编码,小红书ID,报价金额,平台,合作日期\n"
-            f"ST{suffix}A,xhs{suffix}A,500.00,小红书,2026-06-01\n"
-            f"ST{suffix}A,xhs{suffix}A,600,小红书,2026-06-01\n"
-            f"ST{suffix}X,xhs{suffix}A,100,小红书,2026-06-01\n"
-            f"ST{suffix}A,,100,小红书,2026-06-01\n"
+            "款式编码,小红书ID,报价金额,平台,合作日期,合作形式\n"
+            f"ST{suffix}A,xhs{suffix}A,500.00,小红书,2026-06-01,单篇\n"
+            f"ST{suffix}A,xhs{suffix}A,600,小红书,2026-06-01,单篇\n"
+            f"ST{suffix}X,xhs{suffix}A,100,小红书,2026-06-01,单篇\n"
+            f"ST{suffix}A,,100,小红书,2026-06-01,单篇\n"
         ).encode()
 
         import app.core.attachment as att_mod
@@ -143,6 +143,28 @@ class TestPromotionImportEndToEnd:
                     )
                 ).fetchall()
                 assert len(promos) == 2
+                categories = (
+                    (
+                        await check.execute(
+                            text(
+                                "SELECT content_category FROM promotion WHERE style_code_snapshot=:code"
+                            ),
+                            {"code": f"ST{suffix}A"},
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                assert categories == ["单篇", "单篇"]
+                assert (
+                    await check.scalar(
+                        text(
+                            "SELECT count(*) FROM line_event WHERE event_type='promotion.imported' AND payload->>'batch_id'=CAST(:batch AS text)"
+                        ),
+                        {"batch": str(batch_id)},
+                    )
+                    == 2
+                )
                 # internal_code 连续（同 cooperation_date，序号 +1）
                 codes = [p[0] for p in promos]
                 assert codes[0][:-4] == codes[1][:-4]  # 前缀+日期相同

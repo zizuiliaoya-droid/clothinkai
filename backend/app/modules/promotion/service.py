@@ -27,6 +27,7 @@ from uuid import UUID
 from app.core.metrics import (
     promotion_search_results_count,
 )
+from app.core.security.field_permissions import can_read_field
 from app.modules.auth.models import User
 from app.modules.flow.line_events import (
     PROMOTION_SOURCE_DIRECT,
@@ -34,7 +35,7 @@ from app.modules.flow.line_events import (
     LineEventRepository,
     LineEventType,
 )
-from app.modules.flow.matrix import Level, cell_level, ensure_patch_allowed, require
+from app.modules.flow.matrix import FlowActor, Level, cell_level, ensure_patch_allowed, require
 from app.modules.importer.access import SCOPE_PROMOTION_CREATE
 from app.modules.importer.access import can_write as can_import_write
 from app.modules.metric_config.service import PlatformMetricSettingService
@@ -63,7 +64,6 @@ from app.modules.promotion.exceptions import (
     PublishUrlRequiredError,
     StateTransitionConflictError,
 )
-from app.modules.promotion.flow_matrix import PROMOTION_MATRIX
 from app.modules.promotion.freight_repository import ReturnFreightRepository
 from app.modules.promotion.models import (
     Promotion,
@@ -73,10 +73,12 @@ from app.modules.promotion.repository import (
 )
 from app.modules.promotion.schemas import (
     GoodsItemIn,
+    PlatformPostIn,
     PromotionCreate,
     PromotionDuplicateWarning,
     PromotionPage,
     PromotionResponse,
+    PromotionStageCounts,
     PromotionUpdate,
 )
 from app.modules.promotion.schemas import (
@@ -275,6 +277,9 @@ class PromotionService(
             cooperation_mode=payload.cooperation_mode.value,
             return_shipping_fee=payload.return_shipping_fee,
             platform=payload.platform,
+            content_category=payload.content_category
+            if "content_category" in payload.model_fields_set
+            else blogger.content_category,
             cooperation_date=cooperation_date,
             scheduled_publish_date=payload.scheduled_publish_date,
             note_title=payload.note_title,
@@ -401,7 +406,7 @@ class PromotionService(
                     "已有寄回运费单，金额仅能在驳回后重提时修改，承担方固定"
                 )
             ensure_freight_amount_write(await self._flow_actor(user))
-        managed = PROMOTION_MATRIX.patch_groups.keys() & payload.model_fields_set
+        managed = set(payload.model_fields_set)
         if "cooperation_mode" in managed:
             attempted = payload.cooperation_mode.value if payload.cooperation_mode else None
             if attempted is not None and promotion.cooperation_mode not in (None, attempted):
@@ -429,6 +434,13 @@ class PromotionService(
         # 字段写权限；收件三项过写权限并规范化电话（之后的比对与落库都用规范化值）
         await self._check_amount_write_permission(payload, user)
         payload = await self._normalize_receiver(payload, user, check_write=True)
+        if payload.platform is not None and payload.platform != promotion.platform:
+            from app.modules.promotion.platform_posts import posts_by_promotion, validate_platforms
+
+            existing = (
+                await posts_by_promotion(self._session, [promotion_id], tenant_id=user.tenant_id)
+            ).get(promotion_id, [])
+            validate_platforms(existing, payload.platform)
 
         # 合作模式：空值可以补一次（历史导入数据没有这个信息），有值就锁死。
         # PRD 的「生成后不可修改」靠这里拦，不靠前端禁用 —— 接口直接传值一样挡住。
@@ -586,6 +598,52 @@ class PromotionService(
         await self._session.commit()
         return await self._to_response(promotion, user)
 
+    async def replace_platform_posts(
+        self, promotion_id: UUID, rows: list[PlatformPostIn], user: User
+    ) -> PromotionResponse:
+        from app.modules.promotion.platform_posts import (
+            posts_by_promotion,
+            replace_posts,
+            validate_platforms,
+        )
+
+        promotion = await self._writable_promotion(promotion_id, user)
+        actor = await self._flow_actor(user)
+        if (
+            cell_level(actor, await self._promotion_doc(promotion), "field", "platform_posts")
+            is not Level.EDIT
+        ):
+            raise FieldPermissionDenied(fields=["platform_posts"], entity="promotion")
+        validate_platforms(rows, promotion.platform)
+        old = (
+            await posts_by_promotion(self._session, [promotion_id], tenant_id=user.tenant_id)
+        ).get(promotion_id, [])
+        before = [p.model_dump(mode="json", exclude={"id"}) for p in old]
+        after = [p.model_dump(mode="json") for p in rows]
+        if before != after:
+            await replace_posts(
+                self._session,
+                promotion_id=promotion_id,
+                tenant_id=user.tenant_id,
+                actor_id=user.id,
+                rows=rows,
+            )
+            await self._append_patch_events(
+                promotion,
+                user,
+                changes={"platform_posts": {"before": before, "after": after}},
+                mode_before=promotion.cooperation_mode,
+                amount_before=self._amount_snapshot(promotion),
+            )
+            await self._audit.log(
+                action="promotion.platform_posts",
+                resource="promotion",
+                resource_id=promotion_id,
+                user_id=user.id,
+            )
+        await self._session.commit()
+        return await self._to_response(promotion, user)
+
     async def replace_items(
         self, promotion_id: UUID, items: list[GoodsItemIn], user: User
     ) -> PromotionResponse:
@@ -649,6 +707,33 @@ class PromotionService(
             raise PromotionNotFoundError(f"推广 {promotion_id} 不存在")
         return await self._to_response(promotion, user, actor=actor)
 
+    async def _list_actor(self, filters: ApiPromotionListFilters, user: User) -> FlowActor:
+        actor = await self._flow_actor(user)
+        denied = [
+            field
+            for field in ("receiver_name", "receiver_phone")
+            if getattr(filters, field) and not can_read_field("promotion", field, actor.field_ctx)
+        ]
+        if denied:
+            raise FieldPermissionDenied(fields=denied, entity="promotion")
+        return actor
+
+    async def stage_counts(
+        self, filters: ApiPromotionListFilters, user: User
+    ) -> PromotionStageCounts:
+        await self._list_actor(filters, user)
+        thresholds = await UrgeService(self._session).get_urge_thresholds(user.tenant_id)
+        settings = await PlatformMetricSettingService(self._session).get_settings(user.tenant_id)
+        result = await self._repo.stage_counts(
+            tenant_id=user.tenant_id,
+            filters=RepoPromotionListFilters(**filters.model_dump()),
+            today=get_today(),
+            urge_threshold_days=thresholds.urge_days,
+            important_threshold_days=thresholds.important_days,
+            metric_settings=settings,
+        )
+        return PromotionStageCounts(**result)
+
     async def list_promotions(
         self,
         *,
@@ -663,29 +748,8 @@ class PromotionService(
         """
         today = get_today()
 
-        repo_filters = RepoPromotionListFilters(
-            goods_main_id=filters.goods_main_id,
-            seasons=filters.seasons,
-            unassigned_only=filters.unassigned_only,
-            keyword=filters.keyword,
-            publish_status=(filters.publish_status.value if filters.publish_status else None),
-            recall_status=(filters.recall_status.value if filters.recall_status else None),
-            settlement_status=(
-                filters.settlement_status.value if filters.settlement_status else None
-            ),
-            platform=filters.platform,
-            blogger_id=filters.blogger_id,
-            style_id=filters.style_id,
-            pr_id=filters.pr_id,
-            cooperation_date_from=filters.cooperation_date_from,
-            cooperation_date_to=filters.cooperation_date_to,
-            scheduled_publish_date_from=filters.scheduled_publish_date_from,
-            scheduled_publish_date_to=filters.scheduled_publish_date_to,
-            is_active=filters.is_active,
-            only_dual_platform=filters.only_dual_platform,
-            is_hit=filters.is_hit,
-            ship_status=filters.ship_status,
-        )
+        actor = await self._list_actor(filters, user)
+        repo_filters = RepoPromotionListFilters(**filters.model_dump())
 
         # 阈值读租户配置（后台可改），整页共用一次查询
         thresholds = await UrgeService(self._session).get_urge_thresholds(user.tenant_id)
@@ -712,12 +776,14 @@ class PromotionService(
         )
         # 商品明细整页一次查（流程线 7.3）
         page_ids = [row.promotion.id for row in rows]
+        from app.modules.promotion.platform_posts import posts_by_promotion
+
+        page_posts = await posts_by_promotion(self._session, page_ids, tenant_id=user.tenant_id)
         freights = await ReturnFreightRepository(self._session).briefs(
             page_ids, tenant_id=user.tenant_id
         )
         page_items = await self._items_repo.list_by_promotions(page_ids)
         # 矩阵 ui 只用本页数据算（7.1）：当前用户、谈款人、套装成员各一次
-        actor = await self._flow_actor(user)
         negotiators = await self._repo.negotiator_ids(page_ids)
         members_by_goods = await self._items_repo.members_by_goods(
             list({r.promotion.goods_main_id for r in rows if r.promotion.goods_main_id is not None})
@@ -738,6 +804,7 @@ class PromotionService(
                 user,
                 today=today,
                 urge_status_override=row.urge_status,
+                urge_thresholds=thresholds,
                 dual_platform_override=row.dual_platform,
                 attachment_refs=attachment_refs.get(row.promotion.id),
                 style_main_image_key=row.style_main_image_key,
@@ -749,6 +816,7 @@ class PromotionService(
                 goods_short_name=row.goods_short_name,
                 goods_preloaded=True,
                 items=page_items.get(row.promotion.id, []),
+                platform_posts=page_posts.get(row.promotion.id, []),
                 actor=actor,
                 view="list",
                 stage=row.stage,
@@ -775,7 +843,14 @@ class PromotionService(
             total=total,
             page=page,
             page_size=page_size,
-            ui={"actions": page_actions},
+            ui={
+                "actions": page_actions,
+                "fields": {
+                    field: {"state": "read"}
+                    for field in ("receiver_name", "receiver_phone")
+                    if can_read_field("promotion", field, actor.field_ctx)
+                },
+            },
         )
 
     # ============================================================

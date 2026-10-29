@@ -19,7 +19,7 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Body, File, Form, Query, UploadFile, status
+from fastapi import APIRouter, Body, Depends, File, Form, Query, UploadFile, status
 from fastapi.responses import Response
 
 from app.modules.auth.deps import (
@@ -37,7 +37,9 @@ from app.modules.promotion.enums import (
 from app.modules.promotion.filter_options import PromotionFilterOptions, list_filter_options
 from app.modules.promotion.schemas import (
     GoodsItemIn,
+    PlatformPostIn,
     PromotionAmountLogResponse,
+    PromotionBadge,
     PromotionCancelRequest,
     PromotionCreate,
     PromotionListFilters,
@@ -56,13 +58,29 @@ from app.modules.promotion.schemas import (
     PromotionReviewRequest,
     PromotionSeason,
     PromotionSettlementResubmitRequest,
+    PromotionStageCounts,
     PromotionUpdate,
     RetrospectiveResponse,
     RetrospectiveWriteRequest,
     ShipStatusFilter,
 )
+from app.modules.promotion.stage_calculator import PROMOTION_STAGES
 
 router = APIRouter(prefix="/api", tags=["promotion"])
+
+
+@router.put(
+    "/promotions/{promotion_id}/platform-posts",
+    response_model=PromotionResponse,
+    dependencies=[require_permission("promotion", "write")],
+)
+async def replace_platform_posts(
+    promotion_id: UUID,
+    rows: Annotated[list[PlatformPostIn], Body(max_length=5)],
+    user: CurrentActiveUser,
+    service: PromotionServiceDep,
+) -> PromotionResponse:
+    return await service.replace_platform_posts(promotion_id, rows, user)
 
 
 # ---------------------------------------------------------------------------
@@ -96,21 +114,18 @@ async def create_promotion(
     )
 
 
-@router.get(
-    "/promotions/",
-    response_model=PromotionPage,
-    dependencies=[require_permission("promotion", "read")],
-)
-async def list_promotions(
-    user: CurrentActiveUser,
-    service: PromotionServiceDep,
-    page: Annotated[int, Query(ge=1)] = 1,
-    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+def promotion_list_filters(
+    stage: Annotated[str | None, Query(pattern="^(" + "|".join(PROMOTION_STAGES) + ")$")] = None,
+    badge: PromotionBadge | None = None,
+    completed: bool | None = None,
+    receiver_name: Annotated[str | None, Query(max_length=32)] = None,
+    receiver_phone: Annotated[str | None, Query(max_length=32)] = None,
     keyword: Annotated[str | None, Query(max_length=64)] = None,
     publish_status: PublishStatus | None = None,
     recall_status: RecallStatus | None = None,
     settlement_status: SettlementStatus | None = None,
     platform: Annotated[str | None, Query(max_length=16)] = None,
+    content_category: Annotated[str | None, Query(max_length=8)] = None,
     blogger_id: UUID | None = None,
     style_id: UUID | None = None,
     pr_id: UUID | None = None,
@@ -125,7 +140,7 @@ async def list_promotions(
     goods_main_id: UUID | None = None,
     seasons: Annotated[list[PromotionSeason] | None, Query(max_length=20)] = None,
     unassigned_only: bool = False,
-) -> PromotionPage:
+) -> PromotionListFilters:
     """EP05-S03 / S05 / S06 列表 + CTE 衍生字段（urge_status / dual_platform）.
 
     ``ship_status``：待发货（只算阶段「待推送仓库」）/ 待打单 / 已发货 / ``none``（历史单）。
@@ -137,6 +152,11 @@ async def list_promotions(
         return date.fromisoformat(s) if s else None
 
     filters = PromotionListFilters(
+        stage=stage,
+        badge=badge,
+        completed=completed,
+        receiver_name=receiver_name,
+        receiver_phone=receiver_phone,
         goods_main_id=goods_main_id,
         seasons=seasons,
         unassigned_only=unassigned_only,
@@ -145,6 +165,7 @@ async def list_promotions(
         recall_status=recall_status,
         settlement_status=settlement_status,
         platform=platform,
+        content_category=content_category,
         blogger_id=blogger_id,
         style_id=style_id,
         pr_id=pr_id,
@@ -157,7 +178,35 @@ async def list_promotions(
         is_hit=is_hit,
         ship_status=ship_status,
     )
+    return filters
+
+
+@router.get(
+    "/promotions/",
+    response_model=PromotionPage,
+    dependencies=[require_permission("promotion", "read")],
+)
+async def list_promotions(
+    user: CurrentActiveUser,
+    service: PromotionServiceDep,
+    filters: Annotated[PromotionListFilters, Depends(promotion_list_filters)],
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+) -> PromotionPage:
     return await service.list_promotions(filters=filters, page=page, page_size=page_size, user=user)
+
+
+@router.get(
+    "/promotions/stage-counts",
+    response_model=PromotionStageCounts,
+    dependencies=[require_permission("promotion", "read")],
+)
+async def stage_counts(
+    user: CurrentActiveUser,
+    service: PromotionServiceDep,
+    filters: Annotated[PromotionListFilters, Depends(promotion_list_filters)],
+) -> PromotionStageCounts:
+    return await service.stage_counts(filters, user)
 
 
 @router.get(

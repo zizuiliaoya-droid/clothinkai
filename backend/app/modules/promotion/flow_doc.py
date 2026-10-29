@@ -67,6 +67,7 @@ class PromotionDoc(FlowDocBase):
     metrics_available_from: date | None
     """7 天数据可以录的第一天（发布日 + 7），灰格提示用；没有发布日为 None。"""
 
+    published_stage: str | None = None
     retro_status: str = "未开始"
     completed_at: datetime | None = None
     freight_status: str | None = None
@@ -87,6 +88,11 @@ class PromotionDoc(FlowDocBase):
         """
         allowed: set[str] = {"comment"}
         active = self.is_active and self.publish_status != "已删除"
+        if active and self.completed_at is None:
+            if self.publish_status == "未发布":
+                allowed.update({"publish", "cancel"})
+            if self.publish_status == "已发布" and self.promotion_settlement_status == "已驳回":
+                allowed.add("resubmit")
         if active:
             if self.recall_status in ("未召回", "召回失败") and (
                 self.publish_status in ("已发布", "已取消")
@@ -114,7 +120,7 @@ class PromotionDoc(FlowDocBase):
                 allowed.add("retro_write")
             if self.retro_status == "已完成":
                 allowed.add("retro_revise")
-        stage_action = _STAGE_ACTIONS.get(self.stage)
+        stage_action = _STAGE_ACTIONS.get(self.published_stage or self.stage)
         if stage_action is not None:
             allowed.add(stage_action)
         return frozenset(allowed)
@@ -147,6 +153,7 @@ def build_promotion_doc(
     items_complete: bool,
     settlement_status: str | None,
     freight_status: str | None,
+    published_stage: str | None = None,
 ) -> PromotionDoc:
     """``negotiator_id``：这张单谈款的 PR；没有谈款（导入、主管补录）回落到负责 PR（L1）。
 
@@ -154,6 +161,7 @@ def build_promotion_doc(
     """
     return PromotionDoc(
         stage=stage,
+        published_stage=published_stage,
         state=stage,
         column=STAGE_COLUMN[stage],
         owner_id=promotion.pr_id,

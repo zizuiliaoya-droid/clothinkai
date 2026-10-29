@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Alert,
   Button,
   Card,
   Dropdown,
+  Grid,
   Input,
   Modal,
   Select,
@@ -21,7 +22,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnsType } from "antd/es/table";
 import dayjs from "dayjs";
 import { useSearchParams } from "react-router-dom";
-import { getPromotion, promotionDetailKey, listPromotions, reviewPromotion, shipInclude } from "@/features/promotion/api";
+import { getPromotion, promotionDetailKey, listPromotions, getPromotionStageCounts, deletePromotion, reviewPromotion, shipInclude } from "@/features/promotion/api";
 import { useReportFilters } from "@/features/report/useReportFilters";
 import { PROMOTION_FILTER_DEFAULTS, PROMOTION_FILTER_SCHEMA, promotionDimensionParams, promotionIdFromUrl, type PromotionDimensions } from "@/features/promotion/promotionFilters";
 import { PromotionDimensionFilters } from "@/features/promotion/components/PromotionDimensionFilters";
@@ -32,11 +33,12 @@ import { LINE_ROW_CLASS, LINE_ROW_IGNORE_CLASS, lineRowProps } from "@/features/
 import type {
   Promotion,
   PromotionListFilters,
+  PromotionBadge,
   RetroStatus,
   ShipStatusFilter,
 } from "@/features/promotion/types";
 import { itemSpecLines, promotionImages, shipDetailLines } from "@/features/promotion/shipDisplay";
-import { promotionSettlementStyle, shipStatusStyle } from "@/features/flow/stageStyle";
+import { promotionSettlementStyle, shipStatusStyle, PROMOTION_STAGES, type PromotionStage } from "@/features/flow/stageStyle";
 import {
   approveConfirmText,
   expandReviewItem,
@@ -46,7 +48,7 @@ import {
 import { goodsDisplayName } from "@/features/product/api";
 import {
   COOPERATION_MODE_HINT,
-  SOURCE_FIELD_NAMES,
+  PROMOTION_IMPORT_COLUMNS,
   SOURCE_LIST_COLUMNS,
   recallColor,
 } from "@/features/promotion/listConstants";
@@ -87,6 +89,11 @@ import { GoodsImages } from "@/components/GoodsImages/GoodsImages";
 import { DisplayNameCell } from "@/components/DisplayNameCell/DisplayNameCell";
 import { UrgeModal } from "@/components/UrgeModal/UrgeModal";
 import { PLATFORMS } from "@/features/common/platforms";
+import { isApiError } from "@/services/apiClient";
+
+import { PromotionQuickFilters, PromotionStageCell } from "@/features/promotion/components/PromotionStages";
+import { BADGE_LABELS, stageCountParams } from "@/features/promotion/promotionStages";
+import "./PromotionListPage.css";
 
 const PUBLISH_STATUS = ["未发布", "已发布", "已取消", "异常", "已删除"];
 
@@ -125,6 +132,7 @@ const statusColor: Record<string, string> = {
 
 export function PromotionListPage() {
   const qc = useQueryClient();
+  const screens = Grid.useBreakpoint();
   const { token } = theme.useToken();
   // 谈款定稿后「去推广管理」带 ?keyword=内部编码 过来（流程线 8.3）
   const [searchParams, setSearchParams] = useSearchParams();
@@ -206,6 +214,8 @@ export function PromotionListPage() {
           onEditReceiver={setReceiverTarget}
           onEditItems={setItemsTarget}
           onEditRetro={setRetroTarget}
+          onEditOther={setExtraTarget}
+          onEditWaybill={setWaybillTarget}
           onRecallStart={setRecallTarget}
           onRecallWaybill={setRecallWaybillTarget}
           onRecallResult={setRecallResultTarget}
@@ -220,10 +230,34 @@ export function PromotionListPage() {
     { key: "urge", label: "催发记录", children: <UrgeRecordsPanel promotionId={row.id} /> },
   ];
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error: listError } = useQuery({
     queryKey: ["promotions", queryFilters],
     queryFn: () => listPromotions(queryFilters),
     enabled: dimensions.ready,
+  });
+  const countParams = stageCountParams(queryFilters);
+  const countsQuery = useQuery({
+    queryKey: ["promotions", "stage-counts", countParams],
+    queryFn: () => getPromotionStageCounts(countParams),
+    enabled: dimensions.ready,
+  });
+  const canSearchReceiverName = Boolean(data?.ui?.fields?.receiver_name);
+  const canSearchReceiverPhone = Boolean(data?.ui?.fields?.receiver_phone);
+  // 权限可能在输入后被撤销；只清除服务端明确拒绝的收件条件，避免输入框消失后卡在403。
+  useEffect(() => {
+    if (!isApiError(listError) || listError.response.data.code !== "FIELD_PERMISSION_DENIED") return;
+    const fields = listError.response.data.details?.fields;
+    if (!Array.isArray(fields)) return;
+    const clearName = fields.includes("receiver_name") && filters.receiver_name !== undefined;
+    const clearPhone = fields.includes("receiver_phone") && filters.receiver_phone !== undefined;
+    if (!clearName && !clearPhone) return;
+    setFilters((current) => ({ ...current, ...(clearName ? { receiver_name: undefined } : {}), ...(clearPhone ? { receiver_phone: undefined } : {}), page: 1 }));
+    message.warning("收件筛选权限已变化，已清除不可用条件");
+  }, [listError, filters.receiver_name, filters.receiver_phone]);
+  const deactivateMutation = useMutation({
+    mutationFn: deletePromotion,
+    onSuccess: () => { message.success("已停用"); flowFeedback.refresh(); },
+    onError: (error) => flowFeedback.handleError(error),
   });
   // 「金额改动」页签与菜单只看页级标记（与金额改动接口同一判定），不看行上的报价值
   const canAmountLog = Boolean(data?.ui?.actions?.amount_log);
@@ -275,6 +309,14 @@ export function PromotionListPage() {
   function flowMenuItems(record: Promotion): NonNullable<MenuProps["items"]> {
     const built = buildMenuItems("promotion", record.ui, {
       actions: {
+        publish: { label: "标记发布", onClick: () => { setPublishTarget(record); setPublishOpen(true); } },
+        cancel: { label: "取消", onClick: () => setCancelTarget(record) },
+        resubmit: { label: "重新提交", onClick: () => setResubmitTarget(record) },
+        deactivate: { label: "停用", danger: true, onClick: () => Modal.confirm({
+          title: `停用推广 · ${record.internal_code}`, content: "停用后不再出现在默认启用列表中。",
+          okText: "停用", okButtonProps: { danger: true }, cancelText: "取消",
+          onOk: () => deactivateMutation.mutateAsync(record.id).catch(() => undefined),
+        }) },
         recall_start: { label: "发起召回", onClick: () => setRecallTarget(record) },
         recall_waybill: { label: "上传召回寄回截图", onClick: () => setRecallWaybillTarget(record) },
         recall_result: { label: "登记召回结果", onClick: () => setRecallResultTarget(record) },
@@ -319,6 +361,8 @@ export function PromotionListPage() {
         comment: { label: "留言", onClick: () => openLine(record) },
       },
       edits: {
+        other_info: { label: "其他信息", onClick: () => setExtraTarget(record) },
+        return_waybill: { label: record.return_waybill ? "改寄回单号" : "填寄回单号", onClick: () => setWaybillTarget(record) },
         // PR-5 起归属商品只有主管、管理员能改（11-53），PR 的 edits 里没有 goods
         goods: { label: "改归属商品", onClick: () => setGoodsTarget(record) },
         receiver: { label: "改收件信息", onClick: () => setReceiverTarget(record) },
@@ -334,7 +378,7 @@ export function PromotionListPage() {
       freight_reject_payment: { label: "驳回寄回运费付款", onClick: () => setFreightTarget({ row: record, mode: "reject" }) },
     } }));
     // 换不了收款码（锁定 / 只读）但看得到、也传过：给一个只看的入口，弹窗里写为什么锁
-    if (!record.ui?.edits?.includes("payment_qr") && record.payment_qr_attachment_id) {
+    if (record.ui?.fields?.payment_qr && !record.ui?.edits?.includes("payment_qr") && record.payment_qr_attachment_id) {
       items.push({
         key: "payment_qr_view",
         label: "查看收款码",
@@ -342,6 +386,7 @@ export function PromotionListPage() {
         onClick: () => setPaymentQrTarget(record),
       });
     }
+    if (record.line_id && canAmountLog) items.push({ key: "amount-log", label: "金额改动记录", disabled: false, onClick: () => openLine(record, "amount") });
     // FlowMenuItem 是 interface（没有 antd MenuItemType 的 data-* 索引签名），逐项转成字面量
     return items.map(({ key, label, disabled, danger, onClick }) => ({
       key,
@@ -352,8 +397,11 @@ export function PromotionListPage() {
     }));
   }
 
+  // 列显隐与行菜单使用同一结果，也保留页级金额记录、只读收款码等查看入口。
+  const hasOperations = data?.items.some((row) => flowMenuItems(row).length > 0);
   const columns: ColumnsType<Promotion> = [
-    { title: "内部编码", dataIndex: "internal_code", width: 150, fixed: "left" },
+    { title: "内部编码", dataIndex: "internal_code", width: 150, fixed: screens.md ? "left" : undefined },
+    { title: "当前阶段", key: "stage", width: 230, fixed: screens.md ? "left" : undefined, render: (_, row) => <PromotionStageCell row={row} /> },
     {
       // 7c-15：成员款式主图并排（套装每个成员 1 张，缺图不占位，都没有显示「暂无主图」），64px；宽度放得下 2 张
       title: "主图",
@@ -433,7 +481,8 @@ export function PromotionListPage() {
           </Tooltip>
         ),
     },
-    { title: "合作平台", dataIndex: "platform", width: 90 },
+    { title: "合作平台", dataIndex: "platform", width: 150, render: (value: string, row: Promotion) => <Space size={2} wrap><span>{value}</span>{row.extra_platforms?.map((p) => <Tag key={p}>＋{p}</Tag>)}</Space> },
+    { title: "内容分类", dataIndex: "content_category", width: 100, render: (v: string | null) => v || "—" },
     { title: "合作日期", dataIndex: "cooperation_date", width: 110 },
     {
       title: "预定发布日期",
@@ -596,73 +645,13 @@ export function PromotionListPage() {
     })),
     {
       title: "操作",
+      key: "actions",
       width: 110,
-      fixed: "right",
+      fixed: screens.md ? "right" : undefined,
       className: LINE_ROW_IGNORE_CLASS,
       render: (_, record) => {
-        const flowItems = flowMenuItems(record);
-        const legacyItems = [
-          {
-            key: "extra",
-            // 收款码已移到「收款码」菜单项（PaymentQrModal），这里只剩订单号等
-            label: "其他信息",
-            onClick: () => setExtraTarget(record),
-          },
-          {
-            key: "publish",
-            label: "标记发布",
-            disabled: record.publish_status !== "未发布",
-            onClick: () => {
-              setPublishTarget(record);
-              setPublishOpen(true);
-            },
-          },
-          {
-            key: "cancel",
-            label: "取消",
-            disabled: record.publish_status !== "未发布",
-            onClick: () => setCancelTarget(record),
-          },
-          // 寄拍的审核门槛是寄回单号，所以单独给一个录入口，不用翻到「录入信息」里找
-          ...(record.cooperation_mode === "寄拍"
-            ? [
-                {
-                  key: "waybill",
-                  label: record.return_waybill ? "改寄回单号" : "填寄回单号",
-                  onClick: () => setWaybillTarget(record),
-                },
-              ]
-            : []),
-          {
-            // 驳回后 PR 改完重新交给主管（已驳回 → 待核查）。后端还要求「已发布」
-            // （否则进了待核查也批不了），这里对齐，免得点了得到 409
-            key: "resubmit",
-            label: "重新提交",
-            disabled:
-              record.settlement_status !== "已驳回" ||
-              record.publish_status !== "已发布",
-            onClick: () => setResubmitTarget(record),
-          },
-          // 金额改动记录 = 主线抽屉的一个页签（8.4）：打开抽屉并切过去。
-          // 页级 ui.actions.amount_log 没有（读不到金额改动接口）就没有这个页签，菜单项也不出
-          ...(record.line_id && canAmountLog
-            ? [
-                {
-                  key: "amount-log",
-                  label: "金额改动记录",
-                  onClick: () => openLine(record, "amount"),
-                },
-              ]
-            : []),
-        ];
-        // 已完结H列只有真正*能编辑合作信息；沿用后端矩阵能力守住尚未纳入PR-10的旧写菜单。
-        const completedReadonly = !!record.completed_at && !record.ui?.edits?.includes("cooperation");
-        const guardedLegacy = legacyItems.map((item) => completedReadonly && item.key !== "amount-log"
-          ? { ...item, label: `${item.label}（已完结，只读）`, disabled: true, onClick: undefined }
-          : item);
-        const items: MenuProps["items"] = flowItems.length
-          ? [...flowItems, { type: "divider" as const }, ...guardedLegacy]
-          : guardedLegacy;
+        const items = flowMenuItems(record);
+        if (!items.length) return null;
         return (
           <Dropdown menu={{ items }} trigger={["click"]}>
             <Button type="link" size="small">
@@ -685,7 +674,7 @@ export function PromotionListPage() {
                 source="manual_promotion"
                 label="导入站外推广"
                 invalidateKeys={[["promotions"]]}
-                templateColumns={SOURCE_FIELD_NAMES}
+                templateColumns={PROMOTION_IMPORT_COLUMNS}
               />
             )}
             {canCreate && (
@@ -701,13 +690,25 @@ export function PromotionListPage() {
         ) : undefined
       }
     >
+      <PromotionQuickFilters filters={queryFilters} counts={countsQuery.data} error={countsQuery.isError} onChange={(patch) => setFilters((current) => ({ ...current, ...patch }))} />
       <PromotionDimensionFilters value={dimensions.filters} onChange={changeDimensions} />
-      <Space style={{ marginBottom: 16 }} wrap>
+      <Space className="promotion-filters" style={{ marginBottom: 16, width: "100%" }} wrap>
+        <Select<PromotionStage> aria-label="当前阶段" placeholder="当前阶段" allowClear style={{ width: 190 }} value={filters.stage}
+          options={PROMOTION_STAGES.map((stage) => ({ label: stage, value: stage }))} onChange={(stage) => setFilters((f) => ({ ...f, stage, page: 1 }))} />
+        <Select<PromotionBadge> aria-label="角标" placeholder="角标" allowClear style={{ width: 190 }} value={filters.badge}
+          options={Object.entries(BADGE_LABELS).map(([value, label]) => ({ value, label }))} onChange={(badge) => setFilters((f) => ({ ...f, badge, page: 1 }))} />
+        <Select aria-label="完结" placeholder="完结" allowClear style={{ width: 130 }} value={filters.completed === undefined ? undefined : String(filters.completed)}
+          options={[{ value: "true", label: "已完结" }, { value: "false", label: "未完结" }]} onChange={(value) => setFilters((f) => ({ ...f, completed: value === undefined ? undefined : value === "true", page: 1 }))} />
+        <Select aria-label="启用状态" style={{ width: 130 }} value={String(filters.is_active ?? true)}
+          options={[{ value: "true", label: "只看启用" }, { value: "false", label: "只看停用" }]} onChange={(value) => setFilters((f) => ({ ...f, is_active: value === "true", page: 1 }))} />
+        {canSearchReceiverName && <Input.Search aria-label="收件人前缀" placeholder="收件人前缀" defaultValue={filters.receiver_name} allowClear maxLength={32} style={{ width: 150 }} onSearch={(value) => setFilters((f) => ({ ...f, receiver_name: value || undefined, page: 1 }))} />}
+        {canSearchReceiverPhone && <Input.Search aria-label="电话前缀" placeholder="电话前缀" defaultValue={filters.receiver_phone} allowClear maxLength={32} style={{ width: 150 }} onSearch={(value) => setFilters((f) => ({ ...f, receiver_phone: value || undefined, page: 1 }))} />}
+
         <Input.Search
           placeholder="搜索内部编码 / 货号 / 商品简称 / 商品编码"
           defaultValue={initialKeyword}
           allowClear
-          style={{ width: 300 }}
+          style={{ width: 300, maxWidth: "100%" }}
           onSearch={(v) =>
             setFilters((f) => ({ ...f, keyword: v || undefined, page: 1 }))
           }
@@ -749,12 +750,12 @@ export function PromotionListPage() {
       <Table
         rowKey="id"
         loading={isLoading}
-        columns={columns}
+        columns={hasOperations ? columns : columns.filter((column) => column.key !== "actions")}
         dataSource={data?.items ?? []}
         // 点一行（操作列、主图、按钮链接以外）或 Enter 开主线抽屉（8.4）
-        rowClassName={(r) => (r.line_id ? LINE_ROW_CLASS : "")}
+        rowClassName={(r) => [r.line_id ? LINE_ROW_CLASS : "", r.badges?.includes("metrics_due") ? "promotion-metrics-due" : ""].filter(Boolean).join(" ")}
         onRow={(r) => (r.line_id ? lineRowProps(() => openLine(r)) : {})}
-        scroll={{ x: 2530 }}
+        scroll={{ x: 2760 }}
         pagination={{
           current: data?.page ?? 1,
           pageSize: data?.page_size ?? 10,

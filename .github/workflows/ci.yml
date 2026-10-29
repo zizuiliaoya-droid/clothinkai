@@ -247,6 +247,20 @@ jobs:
           alembic upgrade 066_platform_metric_setting
       - name: Synthetic M5 migration round trip (066 to 067 to 066 to 067)
         run: python -m scripts.ci_flow7_pg18 drill --ci --output ci-artifacts/flow7-pg18-drill.json
+      - name: PR9 synthetic migration round trip (067 to 068 to 067 to 068)
+        run: python -m scripts.ci_flow9_pg18 drill
+      - name: PR9 snapshots, imports, primary reports, true RLS and concurrent platform writes
+        run: |
+          python -m pytest -q --junitxml=ci-artifacts/flow9-pg18-tests.xml \
+            tests/integration/test_migration_068_state.py \
+            tests/integration/test_promotion_content_platform.py \
+            tests/integration/test_platform_posts_rls.py \
+            tests/integration/test_platform_posts_concurrency.py \
+            tests/integration/test_import_promotion.py \
+            tests/integration/test_negotiation_two_level.py \
+            tests/integration/test_promotion_patch_groups.py
+          python -m scripts.ci_flow9_faults
+          python -m scripts.ci_flow9_pg18 verify
       - name: R8 filters, detail ACL, preferences, reports and real app-role RLS
         run: |
           python -m pytest -q \
@@ -293,11 +307,14 @@ jobs:
             tests/integration/test_publish_progress.py \
             tests/integration/test_line_timeline.py \
             tests/integration/test_stage_sql_parity.py \
+            tests/integration/test_flow10_stage_counts.py \
             tests/integration/test_import_settlement.py \
             tests/integration/test_settlement_routing.py \
             tests/integration/test_promotion_deactivate_concurrency.py
       - name: Controlled fault injection and restored-source green tests
         run: python -m scripts.ci_flow7_faults
+      - name: PR10 matrix, whitelist and SQL G1-G4 controlled faults
+        run: python -m scripts.ci_flow10_faults
       - name: Verify mandatory phases, test selection and zero skips
         run: python -m scripts.ci_flow7_pg18 verify-results --ci --output ci-artifacts/flow7-pg18-result.json
       - name: PR8 recall and freight services, ACL, rollback and independent connection races

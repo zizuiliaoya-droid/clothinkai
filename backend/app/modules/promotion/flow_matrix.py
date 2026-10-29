@@ -30,12 +30,15 @@ from app.modules.flow.matrix import (
     Cell,
     FieldRead,
     FieldWrite,
+    FreightIn,
     Gate,
     Matrix,
     ModeIn,
     NotPrOwner,
     PromotionSettlementIn,
+    PublishedStageIn,
     PublishIn,
+    RecallIn,
     RetroIn,
     Row,
     Scope,
@@ -217,6 +220,12 @@ _fill(_goods, "H", Cell(edit=(_STAR,), read=(_READ_OR_WAREHOUSE_OR_FINANCE,)))
 _cooperation: dict[str, Cell | tuple[Cell, ...]] = {}
 _fill(_cooperation, "ABCD", Cell(edit=_MANAGER_EDIT, read=(_READ,)))
 _fill(_cooperation, "EFGH", Cell(edit=(_STAR,), read=(_READ_OR_FINANCE,)))
+
+_platform_posts: dict[str, Cell | tuple[Cell, ...]] = {}
+_fill(_platform_posts, "ABC", Cell(grey=(_READ,), hint="发布后可录其他平台"))
+_fill(_platform_posts, "DEF", Cell(edit=(_WRITE,), read=(_READ,)))
+_fill(_platform_posts, "G", Cell(edit=(_WRITE,), read=(_READ,), when=(PublishIn("已发布"),)))
+_fill(_platform_posts, "H", Cell(edit=(_STAR,), read=(_READ,)))
 
 # 合作模式（²³）：有值所有人读；空值主管 / 管理员可补一次（A ~ G），H 只有管理员。PR 一律读
 _MODE_EMPTY = (ModeIn(None),)
@@ -465,10 +474,97 @@ for _stage in PROMOTION_STAGES:
     _freight_payment[_stage] = Cell(read=(_READ_OR_FINANCE,))
 _fill(_recall_start, "AB", Cell(grey=(_WRITE,), hint="尚未发货，直接取消即可"))
 
+# PR10：剩余字段与入口统一从矩阵投影。
+_other_info: dict[str, Cell | tuple[Cell, ...]] = {}
+_fill(_other_info, "ABCDEFG", Cell(edit=(_WRITE,), read=(_READ,)))
+_fill(_other_info, "H", Cell(edit=(_STAR,), read=(_READ,)))
+_publish_info: dict[str, Cell | tuple[Cell, ...]] = {}
+_fill(_publish_info, "ABC", Cell(edit=(_WRITE,), read=(_READ,)))
+_fill(_publish_info, "D", Cell(edit=(_STAR,), read=(_READ,)))
+_publish_info["推广驳回 · 待重提"] = Cell(edit=(_WRITE,), read=(_READ,))
+_fill(_publish_info, "EFH", Cell(edit=(_STAR,), read=(_READ_OR_FINANCE,)))
+_fill(
+    _publish_info, "G", Cell(edit=(_STAR,), read=(_READ_OR_FINANCE,), when=(PublishIn("已发布"),))
+)
+_return_waybill: dict[str, Cell | tuple[Cell, ...]] = {}
+_fill(_return_waybill, "ABCD", Cell(edit=(_WRITE,), read=(_READ,), when=(ModeIn("寄拍"),)))
+_fill(_return_waybill, "EFH", Cell(edit=(_STAR,), read=(_READ,), when=(ModeIn("寄拍"),)))
+_fill(
+    _return_waybill,
+    "G",
+    Cell(edit=(_STAR,), read=(_READ,), when=(ModeIn("寄拍"), PublishIn("已发布"))),
+)
+_review_info: dict[str, Cell | tuple[Cell, ...]] = {}
+_fill(_review_info, "D", Cell(edit=(_REVIEW, NotPrOwner()), read=(_READ,)))
+_fill(_review_info, "EFH", Cell(read=(_READ_OR_FINANCE,)))
+_fill(_review_info, "G", Cell(read=(_READ_OR_FINANCE,), when=(PublishIn("已发布"),)))
+_publish: dict[str, Cell | tuple[Cell, ...]] = {}
+_cancel: dict[str, Cell | tuple[Cell, ...]] = {}
+_fill(_publish, "ABC", Cell(edit=(_WRITE,)))
+_fill(_cancel, "ABC", Cell(edit=(_WRITE,)))
+_resubmit: dict[str, Cell | tuple[Cell, ...]] = {"推广驳回 · 待重提": Cell(edit=(_WRITE,))}
+for _stage in PROMOTION_STAGES:
+    _recall_info[_stage] = (
+        Cell(edit=(_WRITE,), read=(_READ_OR_FINANCE,), when=(RecallIn("召回中"), FreightIn(None))),
+        Cell(
+            edit=(_STAR,),
+            read=(_READ_OR_FINANCE,),
+            when=(RecallIn("召回成功", "召回失败"), FreightIn(None)),
+        ),
+        Cell(read=(_READ_OR_FINANCE,), when=(RecallIn("召回中", "召回成功", "召回失败"),)),
+    )
+
+# 已发布召回仍显示G；普通格复用原D~F格及谓词，二维码/召回/R33继续走专用锁。
+for _cells in (
+    _goods,
+    _goods_items,
+    _cooperation,
+    _cooperation_mode,
+    _quote_amount,
+    _receiver,
+    _shipping,
+    _publish_info,
+    _platform_posts,
+    _metrics,
+    _return_waybill,
+    _review_info,
+    _settlement,
+    _settlement_chat,
+    _retro,
+    _timeline,
+    _other_info,
+    _review,
+    _resubmit,
+    _settlement_resubmit,
+    _settlement_chat_action,
+    _metrics_action,
+    _retro_write,
+    _retro_revise,
+):
+    _original = _cells.get("召回中", ())
+    _original = (_original,) if isinstance(_original, Cell) else _original
+    _recalled = [
+        replace(cell, when=(*cell.when, PublishIn("未发布", "异常", "已取消", "已删除")))
+        for cell in _original
+    ]
+    for _published_stage in _stages("D", "E", "F"):
+        _source = _cells.get(_published_stage, ())
+        for _cell in (_source,) if isinstance(_source, Cell) else _source:
+            _recalled.append(
+                replace(
+                    _cell,
+                    when=(*_cell.when, PublishIn("已发布"), PublishedStageIn(_published_stage)),
+                )
+            )
+    _cells["召回中"] = tuple(_recalled)
+
 PROMOTION_MATRIX = Matrix(
     kind="promotion",
     stages=PROMOTION_STAGES,
     rows=(
+        Row("publish", "action", _publish),
+        Row("cancel", "action", _cancel),
+        Row("resubmit", "action", _resubmit),
         Row("ship_include", "action", _ship_include),
         Row("ship_push", "action", _ship_push),
         Row("ship_withdraw", "action", _ship_withdraw),
@@ -486,9 +582,14 @@ PROMOTION_MATRIX = Matrix(
         Row("metrics", "action", _metrics_action),
         Row("retro_write", "action", _retro_write),
         Row("retro_revise", "action", _retro_revise),
+        Row("other_info", "field", _other_info),
+        Row("publish_info", "field", _publish_info),
+        Row("return_waybill", "field", _return_waybill),
+        Row("review_result", "field", _review_info),
         Row("goods", "field", _goods),
         Row("goods_items", "field", _goods_items),
         Row("cooperation", "field", _cooperation),
+        Row("platform_posts", "field", _platform_posts),
         Row("cooperation_mode", "field", _cooperation_mode),
         Row("quote_amount", "field", _quote_amount),
         Row("receiver", "field", _receiver),
@@ -503,7 +604,7 @@ PROMOTION_MATRIX = Matrix(
         Row("freight_payment", "field", _freight_payment),
     ),
     # 5.4 PATCH 字段归属：PR-2 入矩阵的收件三项与 sku_id，PR-5 入矩阵的归属商品、合作信息、合作模式、服务费与停用，
-    # PR-6 入矩阵的点赞（7 天数据）；其余 PATCH 字段（note_title、source_extra 等）沿用现状。顺序 = 403 里 fields 的顺序
+    # PR10 全部字段纳入白名单。顺序 = 403 里 fields 的顺序
     patch_groups={
         "receiver_name": "receiver",
         "receiver_phone": "receiver",
@@ -511,11 +612,16 @@ PROMOTION_MATRIX = Matrix(
         "sku_id": "goods_items",
         "goods_main_id": "goods",
         "platform": "cooperation",
+        "content_category": "cooperation",
         "scheduled_publish_date": "cooperation",
         "remark": "cooperation",
         "cooperation_mode": "cooperation_mode",
         "quote_amount": "quote_amount",
         "like_count": "metrics",
+        "note_title": "other_info",
+        "source_extra": "other_info",
+        "return_shipping_fee": "recall_info",
+        "return_shipping_payer": "recall_info",
         "is_active": "deactivate",
     },
 )

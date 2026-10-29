@@ -326,6 +326,19 @@ def compute_badges(
     return [name for name in BADGES if flags[name]]
 
 
+def badge_sql_conditions() -> dict[str, str]:
+    """与 compute_badges 对拍；用于同一列表CTE的筛选和计数。"""
+    reached = "(actual_publish_date IS NULL OR CAST(:today AS date) >= actual_publish_date + 7)"
+    unrecorded = "metrics_recorded_at IS NULL"
+    return {
+        "missing_qr": "stage = '待主管审核' AND COALESCE(quote_amount, 0) > 0 AND payment_qr_attachment_id IS NULL",
+        "metrics_due": f"settlement_status = '已结款' AND {unrecorded} AND {reached}",
+        "metrics_wait_settle": f"publish_status = '已发布' AND settlement_status <> '已结款' AND {unrecorded} AND {reached}",
+        "retro_due": "publish_status = '已发布' AND retro_status <> '已完成'",
+        "freight_open": "freight_status IN ('待审核', '待付款', '已驳回')",
+    }
+
+
 __all__ = [
     "BADGES",
     "BY_URGE",

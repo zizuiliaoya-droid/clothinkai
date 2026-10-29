@@ -52,6 +52,7 @@ _DEFAULT_COLUMNS: list[dict[str, Any]] = [
     {"source_col": "报价金额", "target_field": "quote_amount", "type": "decimal"},
     {"source_col": "成本快照", "target_field": "cost_snapshot", "type": "decimal"},
     {"source_col": "平台", "target_field": "platform", "type": "str"},
+    {"source_col": "合作形式", "target_field": "content_category", "type": "str"},
     {"source_col": "合作日期", "target_field": "cooperation_date", "type": "date"},
     {
         "source_col": "计划发布日期",
@@ -71,6 +72,7 @@ _MAX_LEN: tuple[tuple[str, int], ...] = (
     ("sku_code", 64),
     ("xiaohongshu_id", 64),
     ("platform", 16),
+    ("content_category", 8),
     ("note_title", 255),
 )
 
@@ -231,6 +233,7 @@ class PromotionImportAdapter:
             quote_amount=parsed["quote_amount"],
             cost_snapshot=parsed.get("cost_snapshot"),
             platform=parsed.get("platform") or "小红书",
+            content_category=parsed.get("content_category") or blogger.content_category,
             cooperation_date=parsed["cooperation_date"],
             scheduled_publish_date=parsed.get("scheduled_publish_date"),
             note_title=parsed.get("note_title"),
