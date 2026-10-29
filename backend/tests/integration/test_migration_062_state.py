@@ -44,7 +44,7 @@ _NEW_COLUMNS: dict[tuple[str, str], tuple[str, int | None, int | None, str, str 
     ("pr_work_progress_summary", "goods_main_id"): ("uuid", None, None, "YES", None),
     ("store_daily", "refund_only_amount"): ("numeric", 12, 2, "YES", None),
 }
-for _t in ("shop_daily_summary", "shop_week_summary", "shop_month_summary"):
+for _t in ("shop_daily_summary",):  # 069删除无人读取的周/月缓存；062历史迁移保留。
     # 退款不限精度（同 054），其余 numeric(16,2)
     _NEW_COLUMNS[(_t, "refund_amount")] = ("numeric", None, None, "NO", "0")
     for _c in ("brushing_amount", "ad_spend", "promo_cost", "live_pay_amount", "live_ad_spend"):

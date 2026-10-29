@@ -261,6 +261,31 @@ jobs:
             tests/integration/test_promotion_patch_groups.py
           python -m scripts.ci_flow9_faults
           python -m scripts.ci_flow9_pg18 verify
+      - name: Report cache cleanup 068-069 roundtrip, empty rollback, RLS and ACL
+        run: python -m scripts.ci_report_cache_cleanup_pg18
+      - name: Report daily refresh, coverage and concurrency after cache removal
+        run: |
+          python -m pytest -q --junitxml=ci-artifacts/report-cleanup-pg18-tests.xml \
+            tests/integration/test_migration_062_state.py \
+            tests/integration/test_summary_refresh.py \
+            tests/integration/test_summary_import_refresh.py \
+            tests/integration/test_summary_refresh_concurrency.py
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          from xml.etree import ElementTree as ET
+
+          root = ET.parse("ci-artifacts/report-cleanup-pg18-tests.xml").getroot()
+          cases = root.findall(".//testcase")
+          assert cases, "Report cache cleanup did not execute any tests"
+          assert not any(root.findall(f".//{tag}") for tag in ("failure", "error", "skipped"))
+          drill = json.loads(Path("ci-artifacts/report-cleanup-pg18-drill.json").read_text())
+          assert drill["passed"] and drill["revision"] == "069_remove_unused_shop_caches"
+          result = {"passed": True, "tests": len(cases), "skipped": 0, "head_sha": os.getenv("GITHUB_SHA")}
+          Path("ci-artifacts/report-cleanup-pg18-result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
+          print(json.dumps(result))
+          PY
       - name: R8 filters, detail ACL, preferences, reports and real app-role RLS
         run: |
           python -m pytest -q \

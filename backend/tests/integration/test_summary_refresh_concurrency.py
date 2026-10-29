@@ -39,8 +39,6 @@ _CLEANUP_TABLES = (
     "product_roi_summary",
     "pr_work_progress_summary",
     "shop_daily_summary",
-    "shop_week_summary",
-    "shop_month_summary",
     "qianniu_daily",
 )
 
@@ -108,8 +106,6 @@ class TestRefreshLock:
                 "product_roi_summary",
                 "pr_work_progress_summary",
                 "shop_daily_summary",
-                "shop_week_summary",
-                "shop_month_summary",
             }
         finally:
             await _drop_tenant(maker, tid)

@@ -29,8 +29,6 @@ _COUNTS = {
     "product_roi_summary": 3,
     "pr_work_progress_summary": 2,
     "shop_daily_summary": 31,
-    "shop_week_summary": 5,
-    "shop_month_summary": 2,
 }
 
 
