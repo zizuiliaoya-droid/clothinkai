@@ -5,7 +5,11 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { TenantListPage } from "./TenantListPage";
 import { createTenant, listTenants, setTenantStatus } from "@/features/tenant/api";
 import { useAuthStore } from "@/stores/authStore";
+import { createSupportSession } from "@/features/tenant/supportApi";
+import { useSupportStore } from "@/stores/supportStore";
+import { MemoryRouter } from "react-router-dom";
 
+vi.mock("@/features/tenant/supportApi", () => ({ createSupportSession: vi.fn() }));
 vi.mock("@/features/tenant/api", () => ({ createTenant: vi.fn(), listTenants: vi.fn(), setTenantStatus: vi.fn() }));
 
 const tenant = { id: "a", name: "客户 A", code: "client-a", status: "active", created_at: "2026-10-31T10:00:00Z" };
@@ -16,16 +20,17 @@ beforeAll(() => {
 });
 beforeEach(() => {
   vi.clearAllMocks();
+  useSupportStore.getState().end();
   useAuthStore.setState({ user: { id: "platform", username: "admin", display_name: null, email: null, status: "active", roles: ["admin", "platform_admin"] }, isAuthenticated: true });
   vi.mocked(listTenants).mockResolvedValue({ items: [{ ...tenant, id: "default", name: "平台", code: "default" }, tenant], meta: { page: 1, page_size: 20, total: 2 } });
   vi.mocked(createTenant).mockResolvedValue({ tenant, admin_username: "admin", initial_password: "test-one-time-password", must_change_password: true });
   vi.mocked(setTenantStatus).mockResolvedValue({ ...tenant, status: "disabled" });
 });
-afterEach(cleanup);
+afterEach(() => { cleanup(); useSupportStore.getState().end(); });
 
 function mount() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  render(<QueryClientProvider client={client}><TenantListPage /></QueryClientProvider>);
+  render(<QueryClientProvider client={client}><MemoryRouter><TenantListPage /></MemoryRouter></QueryClientProvider>);
   return client;
 }
 async function fillCreate() {
@@ -78,4 +83,23 @@ describe("租户管理", () => {
     await waitFor(() => expect(screen.queryByText("test-one-time-password")).toBeNull());
     expect(screen.getByText("仅平台管理员可管理租户")).toBeTruthy();
   });
+});
+
+it("选择客户签发短时只读 token，不替换平台登录，停用客户不能进入", async () => {
+  vi.mocked(listTenants).mockResolvedValue({ items: [tenant, { ...tenant, id: "b", name: "客户 B", status: "disabled" }], meta: { page: 1, page_size: 20, total: 2 } });
+  vi.mocked(createSupportSession).mockResolvedValue({ access_token: "support-test", expires_in: 900, tenant });
+  mount();
+  const buttons = await screen.findAllByRole("button", { name: "只读排查" });
+  expect((buttons[1] as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(buttons[0]);
+  await waitFor(() => expect(createSupportSession).toHaveBeenCalledWith("a"));
+  await waitFor(() => expect(useSupportStore.getState().session?.tenant.id).toBe("a"));
+  expect(useAuthStore.getState().user?.id).toBe("platform");
+});
+it("签发失败停留平台并展示错误", async () => {
+  vi.mocked(createSupportSession).mockRejectedValue(new Error("客户已停用"));
+  mount();
+  fireEvent.click((await screen.findAllByRole("button", { name: "只读排查" }))[1]);
+  expect(await screen.findByText("客户已停用")).toBeTruthy();
+  expect(useSupportStore.getState().session).toBeNull();
 });

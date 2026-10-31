@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Alert, Button, Card, Form, Input, Modal, Popconfirm, Space, Table, Tag, Typography, message } from "antd";
 import { PlusOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -7,15 +8,20 @@ import { createTenant, listTenants, setTenantStatus } from "@/features/tenant/ap
 import type { TenantCreate, TenantCreated, TenantItem } from "@/features/tenant/api";
 import { useAuthStore } from "@/stores/authStore";
 import { extractErrorMessage } from "@/services/apiClient";
+import { createSupportSession } from "@/features/tenant/supportApi";
+import { useSupportStore } from "@/stores/supportStore";
+import { isPlatformSession } from "@/features/auth/sessionMode";
 
 export function TenantListPage() {
   const user = useAuthStore((state) => state.user);
-  if (!user?.roles.includes("platform_admin")) return <Alert type="warning" message="仅平台管理员可管理租户" />;
+  if (!user || !isPlatformSession(user)) return <Alert type="warning" message="仅平台管理员可管理租户" />;
   // 退出/换账号时整个表单与一次性凭据状态随身份销毁。
   return <TenantManager key={user.id} viewerId={user.id} />;
 }
 
 function TenantManager({ viewerId }: { viewerId: string }) {
+  const navigate = useNavigate();
+  const [supportTarget, setSupportTarget] = useState<string | null>(null);
   const client = useQueryClient();
   const [page, setPage] = useState(1);
   const [open, setOpen] = useState(false);
@@ -40,16 +46,29 @@ function TenantManager({ viewerId }: { viewerId: string }) {
     },
     onError: (error) => void message.error(extractErrorMessage(error, "修改租户状态失败")),
   });
+  async function inspectTenant(tenant: TenantItem) {
+    setSupportTarget(tenant.id);
+    try {
+      const grant = await createSupportSession(tenant.id);
+      if (!useAuthStore.getState().isAuthenticated || useAuthStore.getState().user?.id !== viewerId) return;
+      useSupportStore.getState().start(grant);
+      navigate("/goods");
+    } catch (error) {
+      void message.error(extractErrorMessage(error, "无法开始只读排查"));
+    } finally { setSupportTarget(null); }
+  }
   const columns: ColumnsType<TenantItem> = [
     { title: "租户名称", dataIndex: "name" },
     { title: "租户代码", dataIndex: "code", render: (code: string) => <Typography.Text code>{code}</Typography.Text> },
     { title: "状态", dataIndex: "status", render: (status: string) => <Tag color={status === "active" ? "green" : "default"}>{status === "active" ? "启用" : "停用"}</Tag> },
     { title: "创建时间", dataIndex: "created_at", render: (value: string) => value.replace("T", " ").slice(0, 19) },
-    { title: "操作", render: (_, row) => row.code === "default" ? <Typography.Text type="secondary">平台管理租户</Typography.Text> : <Space>
+    { title: "操作", render: (_, row) => <Space wrap>
+      <Button type="link" disabled={row.status !== "active" || supportTarget !== null} loading={supportTarget === row.id} onClick={() => void inspectTenant(row)}>只读排查</Button>
       <Typography.Link href={`/login?tenant=${encodeURIComponent(row.code)}`} target="_blank" rel="noopener noreferrer">登录链接</Typography.Link>
+      {row.code === "default" ? <Typography.Text type="secondary">原客户，暂不支持停用</Typography.Text> :
       <Popconfirm title={row.status === "active" ? `停用“${row.name}”？` : `启用“${row.name}”？`} description={row.status === "active" ? "该租户所有账号将无法登录，业务数据保留。" : "客户需要重新登录。"} onConfirm={() => changeStatus.mutateAsync({ id: row.id, status: row.status === "active" ? "disabled" : "active" })}>
         <Button type="link" danger={row.status === "active"} loading={changeStatus.isPending && changeStatus.variables?.id === row.id}>{row.status === "active" ? "停用" : "启用"}</Button>
-      </Popconfirm>
+      </Popconfirm>}
     </Space> },
   ];
   function closeCredentials() { setCredentials(null); create.reset(); }

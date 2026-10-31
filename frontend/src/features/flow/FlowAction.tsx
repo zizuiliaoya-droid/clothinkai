@@ -1,3 +1,4 @@
+import { useReadOnlySupport } from "@/stores/supportStore";
 // 按 `ui.actions[actionKey]` 渲染一个流程按钮（流程线设计 8.1、8.2）。
 //
 // - 没有这个键 → 不渲染（矩阵里「隐」）
@@ -21,10 +22,11 @@ export interface FlowActionProps {
 }
 
 export function FlowAction({ ui, actionKey, label, onClick, showReasonBelow, buttonProps }: FlowActionProps) {
+  const readOnly = useReadOnlySupport();
   const { token } = theme.useToken();
   const noteId = useId();
   const action = ui?.actions?.[actionKey];
-  if (!action) return null;
+  if (readOnly || !action) return null;
 
   if (action.state === "enabled") {
     return (

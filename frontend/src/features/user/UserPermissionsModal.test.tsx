@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { useSupportStore } from "@/stores/supportStore";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -26,6 +27,7 @@ beforeAll(() => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  useSupportStore.getState().end();
   vi.mocked(getUserManagementCapabilities).mockResolvedValue({ can_assign_roles: false, can_create_users: false });
   useAuthStore.setState({ user: { id: "manager", username: "管理员", display_name: null, email: null, status: "active", roles: ["designer"] }, isAuthenticated: true });
   vi.mocked(listUsers).mockResolvedValue({
@@ -44,7 +46,7 @@ beforeEach(() => {
   });
 });
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); useSupportStore.getState().end(); });
 
 function mount() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
@@ -197,4 +199,17 @@ describe("用户管理个人权限闭环", () => {
     await savePermission();
     await waitFor(() => expect(changeUserPermission).toHaveBeenCalledWith("b", "grant", expect.objectContaining({ scope: scopes[0] })));
   });
+});
+
+it("客户只读模式保留权限详情，不展示任何账号或个人授权写入口", async () => {
+  vi.mocked(getUserManagementCapabilities).mockResolvedValue({ can_assign_roles: true, can_create_users: true });
+  snapshots.a.grants = [scopes[0]];
+  useSupportStore.getState().start({ access_token: "support", expires_in: 900, tenant: { id: "a", code: "a", name: "客户 A" } });
+  mount();
+  fireEvent.click((await screen.findAllByRole("button", { name: "查看权限" }))[0]);
+  expect(await screen.findByText("个人授予")).toBeTruthy();
+  for (const name of ["新建用户", "修改角色", "禁用", "重置密码", "保存个人设置", `恢复角色默认 ${scopes[0]}`]) {
+    expect(screen.queryByRole("button", { name })).toBeNull();
+  }
+  expect(changeUserPermission).not.toHaveBeenCalled();
 });

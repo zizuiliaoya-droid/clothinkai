@@ -1,3 +1,4 @@
+import { useReadOnlySupport } from "@/stores/supportStore";
 import { useEffect, useMemo, useState } from "react";
 import {
   Button,
@@ -83,6 +84,7 @@ function styleLabel(s: Pick<Style, "style_code" | "style_name">): string {
  * 列表里用标签区分即可。成员款式可以从这里直接打开编辑，挑成员时搜不到的款式可以就地新建。
  */
 export function GoodsPanel() {
+  const readOnly = useReadOnlySupport();
   const qc = useQueryClient();
   const [filters, setFilters] = useState<GoodsFilters>({
     page: 1,
@@ -284,7 +286,7 @@ export function GoodsPanel() {
         ) : (
           <Space size={0} wrap split={<span aria-hidden="true">+</span>}>
             {row.items.map((i) => (
-              <Tooltip key={i.style_id} title={i.style_name ? `编辑款式：${i.style_name}` : "编辑款式"}>
+              readOnly ? <span key={i.style_id}>{i.style_code ?? "?"}</span> : <Tooltip key={i.style_id} title={i.style_name ? `编辑款式：${i.style_name}` : "编辑款式"}>
                 <Button
                   type="link"
                   size="small"
@@ -346,6 +348,7 @@ export function GoodsPanel() {
     },
     {
       title: "操作",
+      key: "actions",
       width: 190,
       fixed: "right",
       render: (_, record) => (
@@ -446,16 +449,16 @@ export function GoodsPanel() {
             <span>含停用</span>
           </Space>
         </Space>
-        <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+        {!readOnly && <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
           新建商品
-        </Button>
+        </Button>}
       </Space>
 
       <Table
         rowKey="id"
         size="small"
         loading={isLoading}
-        columns={columns}
+        columns={readOnly ? columns.filter((column) => column.key !== "actions") : columns}
         dataSource={data?.items ?? []}
         scroll={{ x: 1700 }}
         pagination={{

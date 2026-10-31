@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { LoginForm } from "./LoginForm";
 
@@ -49,4 +49,13 @@ describe("租户登录", () => {
     await screen.findByText("仅支持字母、数字、下划线和短横线");
     expect(mocks.login).not.toHaveBeenCalled();
   });
+});
+
+it("正常平台登录直接进入独立平台页", async () => {
+  mocks.login.mockResolvedValue({ access_token: "fake-access", refresh_token: "fake-refresh", must_change_password: false });
+  mocks.getMe.mockResolvedValue({ id: "owner", username: "platform_owner", roles: ["platform_admin"], session_mode: "platform" });
+  function Location() { return <output data-testid="path">{useLocation().pathname}</output>; }
+  render(<MemoryRouter initialEntries={["/login"]}><LoginForm /><Location /></MemoryRouter>);
+  await submit();
+  await waitFor(() => expect(screen.getByTestId("path").textContent).toBe("/platform"));
 });

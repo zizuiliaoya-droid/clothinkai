@@ -452,6 +452,9 @@ def create_app() -> FastAPI:
     # ----- 路由挂载 -----
     app.include_router(auth_router, prefix="/api")
     app.include_router(tenant_router)
+    from app.modules.auth.support_api import router as support_router
+
+    app.include_router(support_router)
     app.include_router(product_router)  # product router 已含 /api 前缀
     app.include_router(dict_router)  # 可维护字典 /api/dict-items
     app.include_router(blogger_router)  # blogger router 已含 /api 前缀

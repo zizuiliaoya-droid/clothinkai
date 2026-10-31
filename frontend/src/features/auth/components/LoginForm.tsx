@@ -5,6 +5,7 @@ import { login, getMe } from "../api";
 import { useAuthStore } from "@/stores/authStore";
 import { extractErrorMessage } from "@/services/apiClient";
 import type { LoginRequest } from "@/types";
+import { isPlatformSession } from "@/features/auth/sessionMode";
 
 export function LoginForm() {
   const navigate = useNavigate();
@@ -32,7 +33,7 @@ export function LoginForm() {
       if (tokens.must_change_password) {
         navigate("/change-password", { replace: true });
       } else {
-        navigate("/", { replace: true });
+        navigate(isPlatformSession(user) ? "/platform" : "/", { replace: true });
       }
     } catch (err) {
       void message.error(extractErrorMessage(err, "登录失败"));

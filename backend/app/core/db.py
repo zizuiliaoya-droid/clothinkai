@@ -30,10 +30,11 @@ from sqlalchemy.sql.elements import ColumnElement
 
 from app.core.config import settings
 from app.core.exceptions import (
+    PermissionDeniedError,
     TenantContextMismatchError,
     TenantContextMissingError,
 )
-from app.core.tenancy import bypass_rls_ctx, tenant_id_ctx
+from app.core.tenancy import bypass_rls_ctx, support_readonly_ctx, tenant_id_ctx
 
 # ---------------------------------------------------------------------------
 # 命名约定（约束与索引名规范化）
@@ -151,6 +152,8 @@ async def get_session() -> AsyncIterator[AsyncSession]:
     """FastAPI Depends：根据 contextvars 选择 engine + 设置 SET LOCAL。"""
     bypass = bypass_rls_ctx.get()
     tid = tenant_id_ctx.get()
+    if support_readonly_ctx.get() and bypass:
+        raise PermissionDeniedError("只读排查必须使用客户隔离会话", code="SUPPORT_READ_ONLY")
 
     if bypass:
         async with AsyncSessionBypass() as session:
@@ -178,6 +181,8 @@ async def get_bypass_session() -> AsyncIterator[AsyncSession]:
     无法满足 RLS ``app.tenant_id`` 策略。这类请求显式走 bypass 引擎，
     安全性由 AuthService 内的密码校验 + 限流 + 锁定逻辑兜底。
     """
+    if support_readonly_ctx.get():
+        raise PermissionDeniedError("只读排查不能使用管理会话", code="SUPPORT_READ_ONLY")
     token = bypass_rls_ctx.set(True)
     try:
         async with AsyncSessionBypass() as session:
@@ -201,6 +206,8 @@ def _apply_tenant_guc(session: Session, _transaction: Any, connection: Any) -> N
     ``app.tenant_id`` 已丢失，RLS 策略 ``current_setting('app.tenant_id', true)::uuid``
     对空串 ``''::uuid`` 转换报错。此处保证每个事务都带租户上下文。
     """
+    if support_readonly_ctx.get() and not _transaction.nested:
+        connection.exec_driver_sql("SET TRANSACTION READ ONLY")
     if bypass_rls_ctx.get():
         connection.exec_driver_sql("SET LOCAL app.bypass_rls = 'on'")
         return

@@ -1,6 +1,7 @@
 """真实 PostgreSQL：平台身份不能从客户管理权限升级，开户与启停。"""
 
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
@@ -57,11 +58,11 @@ async def users(session, factory, tenant_a, admin_role):
     )
 
 
-async def request(session, actor, method, path, payload=None):
+async def request(session, actor, method, path, payload=None, *, bypass=True):
     from app.main import app
 
     async def shared():
-        with context(actor):
+        with context(actor, bypass=bypass):
             yield session
 
     app.dependency_overrides[get_session] = shared
@@ -73,6 +74,124 @@ async def request(session, actor, method, path, payload=None):
     finally:
         for dependency in (get_session, get_bypass_session, get_current_user_active):
             app.dependency_overrides.pop(dependency, None)
+
+
+async def visibility_users(session, factory, tenant_a, admin_role):
+    accounts = await users(session, factory, tenant_a, admin_role)
+    marker = "visibility_" + uuid4().hex[:8]
+    with context(accounts.ordinary):
+        default = await session.get(Tenant, accounts.ordinary.tenant_id)
+        accounts.platform.display_name = marker + " platform"
+        accounts.ordinary.display_name = marker + " customer"
+        business = await factory.user(
+            default,
+            username="platform_owner_" + uuid4().hex[:8],
+            display_name=marker + " business",
+        )
+    return accounts, business, marker
+
+
+async def test_customer_admin_star_cannot_list_search_or_count_platform_users(
+    session, factory, tenant_a, admin_role
+):
+    accounts, business, marker = await visibility_users(session, factory, tenant_a, admin_role)
+    actor = accounts.ordinary
+    with context(actor):
+        star = (
+            await session.execute(select(Permission).where(Permission.scope == "*"))
+        ).scalar_one()
+        session.add(
+            UserPermissionOverride(
+                tenant_id=actor.tenant_id, user_id=actor.id, permission_id=star.id, effect="grant"
+            )
+        )
+        await session.flush()
+
+    # 与真实用户管理接口一样使用当前租户 SessionDep，不启用 bypass。
+    seen = set()
+    for page in (1, 2, 3):
+        response = await request(
+            session,
+            actor,
+            "GET",
+            f"/api/users/?search={marker}&page={page}&page_size=1",
+            bypass=False,
+        )
+        assert response.status_code == 200, response.text
+        result = response.json()
+        assert result["meta"]["total"] == 2
+        assert len(result["items"]) == (1 if page < 3 else 0)
+        seen.update(item["id"] for item in result["items"])
+    assert seen == {str(actor.id), str(business.id)}
+
+    listing = await request(session, actor, "GET", "/api/users/?page_size=100", bypass=False)
+    assert listing.status_code == 200, listing.text
+    ids = {item["id"] for item in listing.json()["items"]}
+    assert str(accounts.platform.id) not in ids
+    # 名字像平台账号的普通业务用户仍然可见。
+    assert str(business.id) in ids
+    assert str(accounts.customer.id) not in ids
+    for search in (accounts.platform.username, marker + "%20platform"):
+        response = await request(
+            session, actor, "GET", f"/api/users/?search={search}", bypass=False
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["items"] == [] and response.json()["meta"]["total"] == 0
+    detail = await request(
+        session,
+        actor,
+        "GET",
+        f"/api/users/{accounts.platform.id}/effective-permissions",
+        bypass=False,
+    )
+    assert detail.status_code == 403, detail.text
+
+
+async def test_actual_platform_admin_can_see_self_and_business_users(
+    session, factory, tenant_a, admin_role
+):
+    accounts, business, marker = await visibility_users(session, factory, tenant_a, admin_role)
+    response = await request(
+        session, accounts.platform, "GET", f"/api/users/?search={marker}", bypass=False
+    )
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["meta"]["total"] == 3
+    assert {item["id"] for item in result["items"]} == {
+        str(accounts.platform.id),
+        str(accounts.ordinary.id),
+        str(business.id),
+    }
+    detail = await request(
+        session,
+        accounts.platform,
+        "GET",
+        f"/api/users/{accounts.platform.id}/effective-permissions",
+        bypass=False,
+    )
+    assert detail.status_code == 200, detail.text
+
+
+@pytest.mark.parametrize("state", ["disabled", "locked"])
+async def test_disabled_or_locked_platform_members_stay_hidden(
+    session, factory, tenant_a, admin_role, state
+):
+    accounts = await users(session, factory, tenant_a, admin_role)
+    with context(accounts.ordinary):
+        if state == "disabled":
+            accounts.platform.status = "disabled"
+        else:
+            accounts.platform.locked_at = datetime.now(UTC)
+        await session.flush()
+    response = await request(
+        session,
+        accounts.ordinary,
+        "GET",
+        f"/api/users/?search={accounts.platform.username}&status={accounts.platform.status}",
+        bypass=False,
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["items"] == [] and response.json()["meta"]["total"] == 0
 
 
 @pytest.mark.parametrize("kind", ["ordinary", "customer"])
