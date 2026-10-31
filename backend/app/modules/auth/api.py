@@ -209,7 +209,7 @@ async def list_users(
 ) -> UserListResponse:
     user_service = UserService(session)
     items, total = await user_service.list(
-        page=page, page_size=page_size, status=status_filter, search=search
+        page=page, page_size=page_size, status=status_filter, search=search, actor_id=_user.id
     )
     from app.modules.auth.repository import RoleRepository
 
