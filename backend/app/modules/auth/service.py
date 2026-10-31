@@ -79,8 +79,11 @@ def _utcnow() -> datetime:
     return datetime.now(UTC)
 
 
-def _login_fail_key(ip: str, username: str) -> str:
-    return f"login:fail:{ip}:{username}"
+def _login_fail_key(ip: str, username: str, tenant_code: str = "default") -> str:
+    # 保留旧客户已有计数，新增租户使用独立命名空间。
+    if tenant_code == "default":
+        return f"login:fail:{ip}:{username}"
+    return f"login:fail:tenant:{tenant_code}:{ip}:{username}"
 
 
 # ---------------------------------------------------------------------------
@@ -129,14 +132,15 @@ class AuthService:
         username = payload.username
         # schema 已 strip 并限 64 字；截断只是防御，限流计数仍用完整 username
         audit_username = username[:64]
-        fail_key = _login_fail_key(ip, username)
+        fail_key = _login_fail_key(ip, username, payload.tenant_code)
+        tenant = await self._tenants.get_by_code(payload.tenant_code)
+        audit_tid = tenant.id if tenant is not None else await self._login_tenant_id(None)
 
-        # L3: (IP, username) 维度限流
+        # L3: (tenant, IP, username) 维度限流
         fail_count = int(await cache.get(fail_key) or 0)
         if fail_count >= settings.LOGIN_FAIL_LIMIT_PER_IP_USERNAME:
             ttl = await cache.ttl(fail_key)
-            # 只为审计定租户多查一次：不计数、不改返回码
-            limited_user = await self._users.get_by_username(username)
+            # 使用已确定的租户归属；限流分支不再增加失败计数
             await self._audit.log(
                 action="login_rate_limited",
                 actor_type="unknown",
@@ -145,13 +149,17 @@ class AuthService:
                 purpose=f"ip+username over {settings.LOGIN_FAIL_LIMIT_PER_IP_USERNAME}/15min",
                 ip=ip,
                 user_agent=user_agent,
-                tenant_id=await self._login_tenant_id(limited_user),
+                tenant_id=audit_tid,
             )
             await self._session.commit()
             raise RateLimitedError(retry_after_seconds=max(ttl, 1))
 
         # 加载用户
-        user = await self._users.get_by_username(username)
+        user = (
+            await self._users.get_by_username(username, tenant_id=tenant.id)
+            if tenant is not None and tenant.status == "active"
+            else None
+        )
 
         # 用户不存在分支（BR-AUTH-003 仍计数，避免用户名探测）
         if user is None:
@@ -163,7 +171,7 @@ class AuthService:
                 after={"username": audit_username},
                 ip=ip,
                 user_agent=user_agent,
-                tenant_id=await self._login_tenant_id(None),
+                tenant_id=audit_tid,
             )
             await self._session.commit()
             raise InvalidCredentialsError()
@@ -312,6 +320,9 @@ class AuthService:
         user = await self._users.get_by_id(token_record.user_id)
         if user is None or user.deleted_at or user.status != "active" or user.locked_at:
             raise TokenInvalidError("用户状态异常")
+
+        if not await self._tenants.is_active(user.tenant_id):
+            raise TokenInvalidError("租户不可用")
 
         # 滑动续期：吊销旧的，签发新的
         await self._tokens.revoke_jti(str(jti))

@@ -85,7 +85,7 @@ class TestLogin:
             ):
                 svc = AuthService(session)
                 access, refresh, ret_user, must_change = await svc.login(
-                    LoginRequest(username="alice", password=PASSWORD),
+                    LoginRequest(tenant_code=tenant_a.code, username="alice", password=PASSWORD),
                     ip="127.0.0.1",
                     user_agent="pytest",
                 )
@@ -113,7 +113,9 @@ class TestLogin:
                 svc = AuthService(session)
                 with pytest.raises(InvalidCredentialsError):
                     await svc.login(
-                        LoginRequest(username="bob", password="WrongPwd123"),
+                        LoginRequest(
+                            tenant_code=tenant_a.code, username="bob", password="WrongPwd123"
+                        ),
                         ip="127.0.0.1",
                     )
         finally:
@@ -147,13 +149,19 @@ class TestLogin:
                 for _ in range(5):
                     with pytest.raises(InvalidCredentialsError):
                         await svc.login(
-                            LoginRequest(username="charlie", password="WrongPwd123"),
+                            LoginRequest(
+                                tenant_code=tenant_a.code,
+                                username="charlie",
+                                password="WrongPwd123",
+                            ),
                             ip="1.2.3.4",
                         )
                 # 第 6 次应限流
                 with pytest.raises(RateLimitedError):
                     await svc.login(
-                        LoginRequest(username="charlie", password=PASSWORD),
+                        LoginRequest(
+                            tenant_code=tenant_a.code, username="charlie", password=PASSWORD
+                        ),
                         ip="1.2.3.4",
                     )
         finally:
@@ -178,7 +186,9 @@ class TestLogin:
                 for i in range(10):
                     with pytest.raises(InvalidCredentialsError):
                         await svc.login(
-                            LoginRequest(username="dave", password="WrongPwd123"),
+                            LoginRequest(
+                                tenant_code=tenant_a.code, username="dave", password="WrongPwd123"
+                            ),
                             ip=f"10.0.0.{i}",
                         )
 
@@ -191,7 +201,7 @@ class TestLogin:
                 svc2 = AuthService(session)
                 with pytest.raises(AccountLockedError):
                     await svc2.login(
-                        LoginRequest(username="dave", password=PASSWORD),
+                        LoginRequest(tenant_code=tenant_a.code, username="dave", password=PASSWORD),
                         ip="10.0.1.1",
                     )
         finally:
@@ -216,7 +226,7 @@ class TestLogin:
                 svc = AuthService(session)
                 with pytest.raises(AccountDisabledError):
                     await svc.login(
-                        LoginRequest(username="eve", password=PASSWORD),
+                        LoginRequest(tenant_code=tenant_a.code, username="eve", password=PASSWORD),
                         ip="127.0.0.1",
                     )
         finally:
@@ -290,7 +300,9 @@ class TestLoginAuditAccountAndTenant:
         )
         with _login_ctx():
             access, refresh, ret_user, must_change = await AuthService(session).login(
-                LoginRequest(username=uname, password=PASSWORD), ip="10.0.0.1", user_agent="pytest"
+                LoginRequest(tenant_code=tenant_a.code, username=uname, password=PASSWORD),
+                ip="10.0.0.1",
+                user_agent="pytest",
             )
         assert access
         assert refresh
@@ -325,7 +337,8 @@ class TestLoginAuditAccountAndTenant:
         user = await factory.user(tenant_a, username=uname)  # type: ignore[attr-defined]
         with _login_ctx(), pytest.raises(InvalidCredentialsError) as exc_info:
             await AuthService(session).login(
-                LoginRequest(username=uname, password=WRONG_PASSWORD), ip="10.0.0.3"
+                LoginRequest(tenant_code=tenant_a.code, username=uname, password=WRONG_PASSWORD),
+                ip="10.0.0.3",
             )
         assert exc_info.value.status_code == 401
         assert exc_info.value.code == "INVALID_CREDENTIALS"
@@ -344,7 +357,8 @@ class TestLoginAuditAccountAndTenant:
         await session.flush()
         with _login_ctx(), pytest.raises(AccountLockedError) as exc_info:
             await AuthService(session).login(
-                LoginRequest(username=uname, password=PASSWORD), ip="10.0.0.4"
+                LoginRequest(tenant_code=tenant_a.code, username=uname, password=PASSWORD),
+                ip="10.0.0.4",
             )
         assert exc_info.value.status_code == 423
         assert exc_info.value.code == "ACCOUNT_LOCKED"
@@ -362,7 +376,8 @@ class TestLoginAuditAccountAndTenant:
         )
         with _login_ctx(), pytest.raises(AccountDisabledError) as exc_info:
             await AuthService(session).login(
-                LoginRequest(username=uname, password=PASSWORD), ip="10.0.0.5"
+                LoginRequest(tenant_code=tenant_a.code, username=uname, password=PASSWORD),
+                ip="10.0.0.5",
             )
         assert exc_info.value.status_code == 401
         assert exc_info.value.code == "ACCOUNT_DISABLED"
@@ -382,7 +397,10 @@ class TestLoginAuditAccountAndTenant:
             for i in range(10):
                 with pytest.raises(InvalidCredentialsError):
                     await svc.login(
-                        LoginRequest(username=uname, password=WRONG_PASSWORD), ip=f"10.0.0.{i}"
+                        LoginRequest(
+                            tenant_code=tenant_a.code, username=uname, password=WRONG_PASSWORD
+                        ),
+                        ip=f"10.0.0.{i}",
                     )
         await session.refresh(user)
         assert user.locked_at is not None
@@ -410,9 +428,17 @@ class TestLoginAuditAccountAndTenant:
         with _login_ctx():
             for _ in range(5):
                 with pytest.raises(InvalidCredentialsError):
-                    await svc.login(LoginRequest(username=uname, password=WRONG_PASSWORD), ip=ip)
+                    await svc.login(
+                        LoginRequest(
+                            tenant_code=tenant_a.code, username=uname, password=WRONG_PASSWORD
+                        ),
+                        ip=ip,
+                    )
             with pytest.raises(RateLimitedError) as exc_info:
-                await svc.login(LoginRequest(username=uname, password=PASSWORD), ip=ip)
+                await svc.login(
+                    LoginRequest(tenant_code=tenant_a.code, username=uname, password=PASSWORD),
+                    ip=ip,
+                )
         assert exc_info.value.status_code == 429
         assert exc_info.value.code == "RATE_LIMITED"
         assert exc_info.value.details["retry_after_seconds"] == 900
@@ -421,7 +447,7 @@ class TestLoginAuditAccountAndTenant:
         assert row.tenant_id == tenant_a.id
         assert row.actor_type == "unknown"
         # L3 计数仍是 5、L4 计数仍是 5：限流分支只多查了一次用户，没有计数
-        assert await stub_cache.get(f"login:fail:{ip}:{uname}") == "5"
+        assert await stub_cache.get(f"login:fail:tenant:{tenant_a.code}:{ip}:{uname}") == "5"
         await session.refresh(user)
         assert user.failed_login_count == 5
 
@@ -460,7 +486,10 @@ class TestLoginAuditAccountAndTenant:
         assert default_id not in {tenant_a.id, tenant_b.id}
         svc = AuthService(session)
         with _login_ctx(stale_tenant_id=tenant_b.id):
-            await svc.login(LoginRequest(username=uname, password=PASSWORD), ip="10.0.2.1")
+            await svc.login(
+                LoginRequest(tenant_code=tenant_a.code, username=uname, password=PASSWORD),
+                ip="10.0.2.1",
+            )
             with pytest.raises(InvalidCredentialsError):
                 await svc.login(LoginRequest(username=ghost, password="x"), ip="10.0.2.1")
 

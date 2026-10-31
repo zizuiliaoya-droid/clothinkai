@@ -9,6 +9,8 @@ from uuid import UUID
 from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import TenantContextMissingError
+from app.core.tenancy import tenant_id_ctx
 from app.modules.auth.models import (
     AuditLog,
     Permission,
@@ -35,6 +37,16 @@ class TenantRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
+    async def get_by_code(self, code: str) -> Tenant | None:
+        stmt = select(Tenant).where(Tenant.code == code, Tenant.deleted_at.is_(None))
+        return (await self._session.execute(stmt)).scalar_one_or_none()
+
+    async def is_active(self, tenant_id: UUID) -> bool:
+        stmt = select(Tenant.id).where(
+            Tenant.id == tenant_id, Tenant.status == "active", Tenant.deleted_at.is_(None)
+        )
+        return (await self._session.execute(stmt)).scalar_one_or_none() is not None
+
     async def get_id_by_code(self, code: str) -> UUID | None:
         """按租户 code 取 id。
 
@@ -57,8 +69,10 @@ class UserRepository:
     async def get_by_id(self, user_id: UUID) -> User | None:
         return await self._session.get(User, user_id)
 
-    async def get_by_username(self, username: str) -> User | None:
+    async def get_by_username(self, username: str, *, tenant_id: UUID | None = None) -> User | None:
         stmt = select(User).where(User.username == username, User.deleted_at.is_(None))
+        if tenant_id is not None:
+            stmt = stmt.where(User.tenant_id == tenant_id)
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
 
@@ -327,8 +341,12 @@ class AuditLogRepository:
         page: int = 1,
         page_size: int = 50,
     ) -> tuple[Sequence[AuditLog], int]:
-        stmt = select(AuditLog)
-        count_stmt = select(func.count()).select_from(AuditLog)
+        tid = tenant_id_ctx.get()
+        if tid is None:
+            raise TenantContextMissingError()
+        # audit_log 不继承租户基类，也没有 RLS；记录和总数均须显式限定。
+        stmt = select(AuditLog).where(AuditLog.tenant_id == tid)
+        count_stmt = select(func.count()).select_from(AuditLog).where(AuditLog.tenant_id == tid)
         if action:
             stmt = stmt.where(AuditLog.action == action)
             count_stmt = count_stmt.where(AuditLog.action == action)
