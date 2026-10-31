@@ -400,7 +400,10 @@ class AuthService:
     # 加载有效权限（供 deps 使用）
     # ------------------------------------------------------------------ #
     async def load_effective_permissions(self, user_id: UUID) -> EffectivePermissions:
+        from app.core.tenancy import with_support_revokes
+
         role_scopes, grants, revokes = await self._permissions.list_scopes_for_user(user_id)
+        revokes = set(with_support_revokes(revokes))
         scopes = merge_permissions(role_scopes, grants, revokes)
         return EffectivePermissions(user_id=str(user_id), scopes=scopes, revokes=frozenset(revokes))
 

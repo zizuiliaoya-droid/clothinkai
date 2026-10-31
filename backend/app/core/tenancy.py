@@ -8,7 +8,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Set
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from uuid import UUID
@@ -22,6 +22,23 @@ tenant_id_ctx: ContextVar[UUID | None] = ContextVar("tenant_id", default=None)
 user_id_ctx: ContextVar[UUID | None] = ContextVar("user_id", default=None)
 actor_type_ctx: ContextVar[str] = ContextVar("actor_type", default="anonymous")
 bypass_rls_ctx: ContextVar[bool] = ContextVar("bypass_rls", default=False)
+support_readonly_ctx: ContextVar[bool] = ContextVar("support_readonly", default=False)
+support_context_ctx: ContextVar[dict | None] = ContextVar("support_context", default=None)
+support_actor_revokes_ctx: ContextVar[frozenset[str]] = ContextVar(
+    "support_actor_revokes", default=frozenset()
+)
+request_path_ctx: ContextVar[str] = ContextVar("request_path", default="")
+request_method_ctx: ContextVar[str] = ContextVar("request_method", default="")
+
+
+def with_support_revokes(revokes: Set[str]) -> frozenset[str]:
+    """只读排查的有效读取受客户和真实平台操作者双方的拒绝约束。"""
+    extra = (
+        support_actor_revokes_ctx.get()
+        if support_readonly_ctx.get() and support_context_ctx.get()
+        else frozenset()
+    )
+    return frozenset(revokes) | extra
 
 
 def get_current_tenant_id() -> UUID | None:

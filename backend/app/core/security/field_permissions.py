@@ -191,6 +191,9 @@ def field_perm_context_from(
     revokes: Set[str],
 ) -> FieldPermissionContext:
     """已经查好角色码与 scope 时直接构造（流程线矩阵的当前用户与这里同一份规则）。"""
+    from app.core.tenancy import with_support_revokes
+
+    revokes = with_support_revokes(revokes)
     is_superuser = ("*" in (role_scopes | grants)) and ("*" not in revokes)
     field_grants = frozenset(s for s in grants if s == "*" or s.startswith("field."))
     field_revokes = frozenset(s for s in revokes if s == "*" or s.startswith("field."))
