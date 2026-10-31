@@ -14,6 +14,7 @@ from fastapi import APIRouter, Query, Request, Response, status
 from slowapi.util import get_remote_address
 
 from app.core.audit import AuditService
+from app.core.exceptions import PermissionDeniedError
 
 # slowapi 限流装饰器从 app.main 中绑定的 limiter 上获取
 # 但为了避免循环依赖，这里使用全局 limiter 单例
@@ -22,6 +23,7 @@ from app.modules.auth import permissions as scopes
 from app.modules.auth.deps import (
     BypassSessionDep,
     CurrentActiveUser,
+    CurrentPerms,
     CurrentUser,
     SessionDep,
     require_permission,
@@ -168,9 +170,11 @@ async def change_password(
 async def create_user(
     payload: UserCreate,
     session: SessionDep,
-    _user: CurrentActiveUser,  # 触发鉴权
+    perms: CurrentPerms,
 ) -> UserCreateResponse:
-    """EP01-S03 管理员创建用户。"""
+    """EP01-S03 管理员创建用户；初始角色同样要求角色分配权限。"""
+    if payload.role_codes and not perms.has("auth.role", "assign"):
+        raise PermissionDeniedError("缺少角色分配权限")
     user_service = UserService(session)
     user, plain = await user_service.create(payload)
     from app.modules.auth.repository import RoleRepository
@@ -230,6 +234,16 @@ async def list_users(
         items=out,
         meta=PageMeta(page=page, page_size=page_size, total=total),
     )
+
+
+@router.get("/users/capabilities")
+async def user_management_capabilities(perms: CurrentPerms) -> dict[str, bool]:
+    """当前用户的管理能力；前端不根据角色名称猜测授权。"""
+    can_assign = perms.has("auth.role", "assign")
+    return {
+        "can_assign_roles": can_assign,
+        "can_create_users": can_assign and perms.has("auth.user", "write"),
+    }
 
 
 @router.put(
@@ -305,7 +319,7 @@ async def reset_password(
 @router.post(
     "/users/{user_id}/roles",
     response_model=UserSummary,
-    dependencies=[require_permission(scopes.SCOPE_ROLE_ASSIGN, "assign")],
+    dependencies=[require_permission("auth.role", "assign")],
 )
 async def assign_roles(
     user_id: UUID,

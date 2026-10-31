@@ -921,6 +921,7 @@ class SettlementService:
         perms = EffectivePermissions(
             user_id=str(user.id),
             scopes=merge_permissions(role_scopes, grants, revokes),
+            revokes=frozenset(revokes),
         )
         if not perms.has("finance.settlement", "pay"):
             raise FieldPermissionDenied(field="payment_proof_attachment_id", entity="settlement")

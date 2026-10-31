@@ -19,6 +19,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnsType } from "antd/es/table";
 import {
   createUser,
+  getUserManagementCapabilities,
   listUsers,
   resetPassword,
   toggleUser,
@@ -30,19 +31,8 @@ import { useAuthStore } from "@/stores/authStore";
 import { listRegisteredPermissions } from "@/features/user/permissionsApi";
 import { UserPermissionsModal } from "@/features/user/UserPermissionsModal";
 
-const ROLE_OPTIONS = [
-  "admin",
-  "platform_admin",
-  "designer",
-  "design_assistant",
-  "pattern_maker",
-  "merchandiser",
-  "pr",
-  "pr_manager",
-  "finance",
-  "operations",
-  "warehouse",
-];
+import { ROLE_OPTIONS, roleLabel } from "@/features/user/roles";
+import { UserRolesModal } from "@/features/user/UserRolesModal";
 
 export function UserListPage() {
   const qc = useQueryClient();
@@ -50,6 +40,7 @@ export function UserListPage() {
   const [open, setOpen] = useState(false);
   const [form] = Form.useForm<UserCreatePayload>();
   const [permissionUser, setPermissionUser] = useState<{ user: UserListItem; viewerId: string } | null>(null);
+  const [roleUser, setRoleUser] = useState<{ user: UserListItem; viewerId: string } | null>(null);
   const viewerId = useAuthStore((state) => state.user?.id);
   // 后端实际权限决定入口，支持个人管理授权；不从角色推断。
   const catalog = useQuery({
@@ -58,6 +49,13 @@ export function UserListPage() {
     enabled: Boolean(viewerId),
     retry: false,
   });
+  const capabilities = useQuery({
+    queryKey: ["user-management-capabilities", viewerId],
+    queryFn: getUserManagementCapabilities,
+    enabled: Boolean(viewerId),
+    retry: false,
+  });
+  const canAssignRoles = Boolean(viewerId) && capabilities.data?.can_assign_roles === true;
   const canManagePermissions = Boolean(viewerId) && catalog.isSuccess;
   const catalogForbidden = (catalog.error as { response?: { status?: number } } | null)?.response?.status === 403;
 
@@ -117,7 +115,7 @@ export function UserListPage() {
       title: "角色",
       dataIndex: "roles",
       render: (roles: string[]) =>
-        roles.length ? roles.map((r) => <Tag key={r}>{r}</Tag>) : "—",
+        roles.length ? roles.map((r) => <Tag key={r}>{roleLabel(r)}</Tag>) : "—",
     },
     {
       title: "状态",
@@ -144,6 +142,11 @@ export function UserListPage() {
       fixed: "right",
       render: (_, r) => (
         <Space wrap>
+          {canAssignRoles && (
+            <Button type="link" size="small" onClick={() => viewerId && setRoleUser({ user: r, viewerId })}>
+              修改角色
+            </Button>
+          )}
           {canManagePermissions && (
             <Button type="link" size="small" onClick={() => viewerId && setPermissionUser({ user: r, viewerId })}>
               个人权限
@@ -173,7 +176,7 @@ export function UserListPage() {
   return (
     <Card
       title={<Typography.Title level={4} style={{ margin: 0 }}>用户管理</Typography.Title>}
-      extra={
+      extra={capabilities.data?.can_create_users && (
         <Button
           type="primary"
           icon={<PlusOutlined />}
@@ -184,8 +187,11 @@ export function UserListPage() {
         >
           新建用户
         </Button>
-      }
+      )}
     >
+      {capabilities.isError && (
+        <Alert type="error" showIcon style={{ marginBottom: 16 }} message="角色管理入口加载失败" action={<Button onClick={() => void capabilities.refetch()}>重试</Button>} />
+      )}
       {catalog.isError && !catalogForbidden && (
         <Alert
           type="error"
@@ -209,6 +215,10 @@ export function UserListPage() {
           onChange: (p) => setPage(p),
         }}
       />
+
+      {roleUser && viewerId === roleUser.viewerId && canAssignRoles && (
+        <UserRolesModal key={`${viewerId}:${roleUser.user.id}`} user={roleUser.user} viewerId={viewerId} onClose={() => setRoleUser(null)} />
+      )}
 
       {permissionUser && viewerId === permissionUser.viewerId && canManagePermissions && (
         <UserPermissionsModal
@@ -255,7 +265,8 @@ export function UserListPage() {
             <Select
               mode="multiple"
               placeholder="选择角色"
-              options={ROLE_OPTIONS.map((r) => ({ label: r, value: r }))}
+              options={ROLE_OPTIONS}
+              optionFilterProp="label"
             />
           </Form.Item>
         </Form>

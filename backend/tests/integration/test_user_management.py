@@ -202,3 +202,76 @@ class TestRoleAssignment:
             assert codes == ["designer"]
         finally:
             tenant_id_ctx.reset(token)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_finance_manager_combination_keeps_overrides_and_invalidates_session(
+    session, tenant_a, finance_role, pr_manager_role, factory, stub_cache
+):
+    from uuid import uuid4
+
+    from sqlalchemy import select
+
+    from app.modules.auth.models import Permission, RolePermission, UserPermissionOverride
+    from app.modules.auth.repository import RoleRepository
+    from app.modules.auth.service import AuthService, PermissionService
+
+    token = tenant_id_ctx.set(tenant_a.id)
+    try:
+        for role, scope in [
+            (finance_role, "finance.settlement:pay"),
+            (pr_manager_role, "promotion_review:approve"),
+        ]:
+            permission = (
+                await session.execute(select(Permission).where(Permission.scope == scope))
+            ).scalar_one_or_none()
+            if permission is None:
+                permission = Permission(id=uuid4(), scope=scope, name=scope, category="function")
+                session.add(permission)
+                await session.flush()
+            link = (
+                await session.execute(
+                    select(RolePermission).where(
+                        RolePermission.role_id == role.id,
+                        RolePermission.permission_id == permission.id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if link is None:
+                session.add(RolePermission(role_id=role.id, permission_id=permission.id))
+        await session.flush()
+        user = await factory.user(tenant_a, roles=[pr_manager_role])
+        before_stamp = user.password_changed_at
+        perm = Permission(
+            id=uuid4(), scope="auth.role:assign", name="角色分配", category="function"
+        )
+        existing = (
+            await session.execute(select(Permission).where(Permission.scope == perm.scope))
+        ).scalar_one_or_none()
+        if existing is None:
+            session.add(perm)
+            await session.flush()
+        else:
+            perm = existing
+        session.add(
+            UserPermissionOverride(
+                tenant_id=tenant_a.id, user_id=user.id, permission_id=perm.id, effect="revoke"
+            )
+        )
+        await session.flush()
+        with patch("app.core.security.permissions.cache", stub_cache):
+            await UserService(session).assign_roles(user.id, ["finance", "pr_manager"])
+        assert set(await RoleRepository(session).list_codes_for_user(user.id)) == {
+            "finance",
+            "pr_manager",
+        }
+        assert user.password_changed_at != before_stamp
+        view = await PermissionService(session).get_effective(user.id)
+        assert "auth.role:assign" in view["revokes"]
+        perms = await AuthService(session).load_effective_permissions(user.id)
+        assert perms.has("finance.settlement", "pay")
+        assert perms.has("promotion_review", "approve")
+        assert not perms.has("negotiation_final", "approve")
+    finally:
+        tenant_id_ctx.reset(token)

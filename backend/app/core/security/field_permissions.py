@@ -20,6 +20,8 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
+from app.core.security.permissions import scope_matches
+
 
 @dataclass(frozen=True)
 class FieldRule:
@@ -130,12 +132,12 @@ class FieldPermissionContext:
 def can_read_field(entity: str, field: str, ctx: FieldPermissionContext) -> bool:
     """字段读权限：撤销 > 授予 > 角色默认；不在注册表 / 超管 → True。"""
     rule = FIELD_PERMISSION_REGISTRY.get(entity, {}).get(field)
+    scope = f"field.{entity}.{field}"
+    if scope_matches(ctx.revokes, scope, "read"):
+        return False
     if rule is None or ctx.is_superuser:
         return True
-    scope = f"field.{entity}.{field}:read"
-    if scope in ctx.revokes:
-        return False
-    if scope in ctx.grants:
+    if scope_matches(ctx.grants, scope, "read"):
         return True
     return bool(ctx.role_codes & rule.visible_roles)
 
@@ -143,12 +145,12 @@ def can_read_field(entity: str, field: str, ctx: FieldPermissionContext) -> bool
 def can_write_field(entity: str, field: str, ctx: FieldPermissionContext) -> bool:
     """字段写权限：撤销 > 授予 > 角色默认；不在注册表 / 超管 → True。"""
     rule = FIELD_PERMISSION_REGISTRY.get(entity, {}).get(field)
+    scope = f"field.{entity}.{field}"
+    if scope_matches(ctx.revokes, scope, "write"):
+        return False
     if rule is None or ctx.is_superuser:
         return True
-    scope = f"field.{entity}.{field}:write"
-    if scope in ctx.revokes:
-        return False
-    if scope in ctx.grants:
+    if scope_matches(ctx.grants, scope, "write"):
         return True
     return bool(ctx.role_codes & rule.writable_roles)
 
@@ -190,8 +192,8 @@ def field_perm_context_from(
 ) -> FieldPermissionContext:
     """已经查好角色码与 scope 时直接构造（流程线矩阵的当前用户与这里同一份规则）。"""
     is_superuser = ("*" in (role_scopes | grants)) and ("*" not in revokes)
-    field_grants = frozenset(s for s in grants if s.startswith("field."))
-    field_revokes = frozenset(s for s in revokes if s.startswith("field."))
+    field_grants = frozenset(s for s in grants if s == "*" or s.startswith("field."))
+    field_revokes = frozenset(s for s in revokes if s == "*" or s.startswith("field."))
     return FieldPermissionContext(
         role_codes=role_codes,
         grants=field_grants,

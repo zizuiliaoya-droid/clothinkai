@@ -37,6 +37,7 @@ export function UserPermissionsModal({ user, viewerId, catalog, onClose }: Props
       // 修改自己时重新确认管理能力，避免保留已失效的入口。
       if (user.id === viewerId) {
         await qc.invalidateQueries({ queryKey: ["permission-catalog", viewerId] });
+        await qc.invalidateQueries({ queryKey: ["user-management-capabilities", viewerId] });
       }
     },
   });

@@ -396,7 +396,7 @@ class AuthService:
     async def load_effective_permissions(self, user_id: UUID) -> EffectivePermissions:
         role_scopes, grants, revokes = await self._permissions.list_scopes_for_user(user_id)
         scopes = merge_permissions(role_scopes, grants, revokes)
-        return EffectivePermissions(user_id=str(user_id), scopes=scopes)
+        return EffectivePermissions(user_id=str(user_id), scopes=scopes, revokes=frozenset(revokes))
 
 
 # ---------------------------------------------------------------------------
@@ -555,6 +555,8 @@ class UserService:
         user = await self._users.get_by_id(user_id)
         if user is None:
             raise ResourceNotFoundError("用户不存在")
+        if user.deleted_at is not None or user.tenant_id != tenant_id_ctx.get():
+            raise ResourceNotFoundError("用户不存在")
         roles = await self._roles.list_by_codes(role_codes)
         if len(roles) != len(role_codes):
             missing = set(role_codes) - {r.code for r in roles}
@@ -699,7 +701,17 @@ class PermissionService:
     async def get_effective(self, target_user_id: UUID) -> dict[str, Any]:
         await self._ensure_user(target_user_id)
         role_scopes, grants, revokes = await self._perms.list_scopes_for_user(target_user_id)
-        effective = merge_permissions(role_scopes, grants, revokes)
+        perms = EffectivePermissions(
+            user_id=str(target_user_id),
+            scopes=merge_permissions(role_scopes, grants, revokes),
+            revokes=frozenset(revokes),
+        )
+        # 展开通配授权为已注册的具体能力，避免展示中仍以 * 掩盖个人拒绝。
+        effective = {
+            perm.scope
+            for perm in await self._perms.list_registered()
+            if "*" not in perm.scope and ":" in perm.scope and perms.has(*perm.scope.rsplit(":", 1))
+        }
         return {
             "user_id": str(target_user_id),
             "role_scopes": sorted(role_scopes),
