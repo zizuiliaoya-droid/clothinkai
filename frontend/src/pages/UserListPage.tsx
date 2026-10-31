@@ -42,6 +42,7 @@ export function UserListPage() {
   const [permissionUser, setPermissionUser] = useState<{ user: UserListItem; viewerId: string } | null>(null);
   const [roleUser, setRoleUser] = useState<{ user: UserListItem; viewerId: string } | null>(null);
   const viewerId = useAuthStore((state) => state.user?.id);
+  const viewerIsPlatform = useAuthStore((state) => state.user?.roles.includes("platform_admin") ?? false);
   // 后端实际权限决定入口，支持个人管理授权；不从角色推断。
   const catalog = useQuery({
     queryKey: ["permission-catalog", viewerId],
@@ -140,7 +141,7 @@ export function UserListPage() {
       title: "操作",
       width: 220,
       fixed: "right",
-      render: (_, r) => (
+      render: (_, r) => r.roles.includes("platform_admin") && !viewerIsPlatform ? <Typography.Text type="secondary">平台账号由平台管理员维护</Typography.Text> : (
         <Space wrap>
           {canAssignRoles && (
             <Button type="link" size="small" onClick={() => viewerId && setRoleUser({ user: r, viewerId })}>

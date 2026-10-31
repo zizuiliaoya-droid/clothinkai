@@ -13,6 +13,7 @@ export function UserRolesModal({ user, viewerId, onClose }: {
 }) {
   const [form] = Form.useForm<{ role_codes: string[] }>();
   const qc = useQueryClient();
+  const platformMember = user.roles.includes("platform_admin");
   const change = useMutation({
     mutationFn: (roles: string[]) => assignUserRoles(user.id, roles),
     onSuccess: async () => {
@@ -38,7 +39,8 @@ export function UserRolesModal({ user, viewerId, onClose }: {
     destroyOnHidden
   >
     <Alert type="info" showIcon message="可以同时分配多个角色，权限合并生效" description="保存后该用户需重新登录。个人授权与拒绝设置会保留。" style={{ marginBottom: 16 }} />
-    <Form form={form} layout="vertical" initialValues={{ role_codes: user.roles }} onFinish={(values) => change.mutate(values.role_codes)}>
+    {platformMember && <Alert type="info" message="平台管理员身份由运维维护，此处只调整业务角色" style={{ marginBottom: 16 }} />}
+    <Form form={form} layout="vertical" initialValues={{ role_codes: user.roles.filter((role) => role !== "platform_admin") }} onFinish={(values) => change.mutate(platformMember ? [...values.role_codes, "platform_admin"] : values.role_codes)}>
       <Form.Item name="role_codes" label="角色" rules={[{ required: true, type: "array", min: 1, message: "请选择至少一个角色" }]}>
         <Select mode="multiple" options={ROLE_OPTIONS} optionFilterProp="label" placeholder="选择角色" disabled={change.isPending} />
       </Form.Item>

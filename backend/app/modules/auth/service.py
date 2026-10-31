@@ -53,6 +53,7 @@ from app.modules.auth.models import (
     RefreshToken,
     User,
 )
+from app.modules.auth.platform_access import preserve_platform_membership, protect_platform_user
 from app.modules.auth.repository import (
     AuditLogRepository,
     PermissionRepository,
@@ -363,6 +364,7 @@ class AuthService:
         user = await self._users.get_by_id(user_id)
         if user is None:
             raise ResourceNotFoundError("用户不存在")
+        await protect_platform_user(self._session, user_id, user_id)
         if not verify_password(old_password, user.password_hash):
             await self._audit.log(
                 action="password_change_failed",
@@ -417,6 +419,7 @@ class UserService:
 
     async def create(self, payload: UserCreate) -> tuple[User, str]:
         """BR-INIT 创建用户：生成临时密码 + 强制改密 + 角色分配。"""
+        preserve_platform_membership([], payload.role_codes)
         existing = await self._users.get_by_username(payload.username)
         if existing is not None:
             raise UsernameAlreadyExistsError()
@@ -462,10 +465,13 @@ class UserService:
         await self._session.commit()
         return user, plain_password
 
-    async def update(self, user_id: UUID, payload: UserUpdate) -> User:
+    async def update(
+        self, user_id: UUID, payload: UserUpdate, *, actor_id: UUID | None = None
+    ) -> User:
         user = await self._users.get_by_id(user_id)
         if user is None:
             raise ResourceNotFoundError("用户不存在")
+        await protect_platform_user(self._session, user_id, actor_id)
         before: dict[str, Any] = {}
         after: dict[str, Any] = {}
         if payload.display_name is not None and payload.display_name != user.display_name:
@@ -489,10 +495,11 @@ class UserService:
         await self._session.commit()
         return user
 
-    async def toggle_active(self, user_id: UUID) -> User:
+    async def toggle_active(self, user_id: UUID, *, actor_id: UUID | None = None) -> User:
         user = await self._users.get_by_id(user_id)
         if user is None:
             raise ResourceNotFoundError("用户不存在")
+        await protect_platform_user(self._session, user_id, actor_id)
         before = {"status": user.status}
         user.status = "disabled" if user.status == "active" else "active"
         # 安全戳：状态变更触发 token 失效
@@ -510,10 +517,11 @@ class UserService:
         await self._session.commit()
         return user
 
-    async def unlock(self, user_id: UUID) -> User:
+    async def unlock(self, user_id: UUID, *, actor_id: UUID | None = None) -> User:
         user = await self._users.get_by_id(user_id)
         if user is None:
             raise ResourceNotFoundError("用户不存在")
+        await protect_platform_user(self._session, user_id, actor_id)
         if user.locked_at is None:
             raise CannotUnlockUserError()
         user.locked_at = None
@@ -530,11 +538,12 @@ class UserService:
         await self._session.commit()
         return user
 
-    async def reset_password(self, user_id: UUID) -> str:
+    async def reset_password(self, user_id: UUID, *, actor_id: UUID | None = None) -> str:
         """管理员重置密码 → 返回临时密码（一次性）+ 强制改密。"""
         user = await self._users.get_by_id(user_id)
         if user is None:
             raise ResourceNotFoundError("用户不存在")
+        await protect_platform_user(self._session, user_id, actor_id)
         plain_password = generate_random_password(16)
         user.password_hash = hash_password(plain_password)
         user.password_must_change = True
@@ -551,17 +560,21 @@ class UserService:
         await self._session.commit()
         return plain_password
 
-    async def assign_roles(self, user_id: UUID, role_codes: list[str]) -> User:
+    async def assign_roles(
+        self, user_id: UUID, role_codes: list[str], *, actor_id: UUID | None = None
+    ) -> User:
         user = await self._users.get_by_id(user_id)
         if user is None:
             raise ResourceNotFoundError("用户不存在")
         if user.deleted_at is not None or user.tenant_id != tenant_id_ctx.get():
             raise ResourceNotFoundError("用户不存在")
+        before = await self._roles.list_codes_for_user(user_id)
+        preserve_platform_membership(before, role_codes)
+        await protect_platform_user(self._session, user_id, actor_id)
         roles = await self._roles.list_by_codes(role_codes)
         if len(roles) != len(role_codes):
             missing = set(role_codes) - {r.code for r in roles}
             raise RoleNotFoundError(f"角色不存在: {sorted(missing)}")
-        before = await self._roles.list_codes_for_user(user_id)
         await self._user_roles.replace_for_user(user_id, [r.id for r in roles])
         # 安全戳：角色变更触发 token 失效
         user.password_changed_at = _utcnow()
@@ -635,6 +648,7 @@ class PermissionService:
         reason: str | None,
     ) -> None:
         await self._ensure_user(target_user_id)
+        await protect_platform_user(self._session, target_user_id, actor_id)
         permission_id = await self._resolve_permission_id(scope)
         await self._perms.upsert_override(
             target_user_id,
@@ -683,6 +697,7 @@ class PermissionService:
         reason: str | None = None,
     ) -> None:
         await self._ensure_user(target_user_id)
+        await protect_platform_user(self._session, target_user_id, actor_id)
         permission_id = await self._resolve_permission_id(scope)
         previous_effect = await self._perms.delete_override(target_user_id, permission_id)
         await self._audit.log(
@@ -698,8 +713,11 @@ class PermissionService:
         await self._session.commit()
         await invalidate_user_permissions_cache(str(target_user_id))
 
-    async def get_effective(self, target_user_id: UUID) -> dict[str, Any]:
+    async def get_effective(
+        self, target_user_id: UUID, *, actor_id: UUID | None = None
+    ) -> dict[str, Any]:
         await self._ensure_user(target_user_id)
+        await protect_platform_user(self._session, target_user_id, actor_id)
         role_scopes, grants, revokes = await self._perms.list_scopes_for_user(target_user_id)
         perms = EffectivePermissions(
             user_id=str(target_user_id),

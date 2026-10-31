@@ -258,7 +258,7 @@ async def update_user(
     _user: CurrentActiveUser,
 ) -> UserSummary:
     user_service = UserService(session)
-    updated = await user_service.update(user_id, payload)
+    updated = await user_service.update(user_id, payload, actor_id=_user.id)
     from app.modules.auth.repository import RoleRepository
 
     roles = await RoleRepository(session).list_codes_for_user(updated.id)
@@ -276,7 +276,7 @@ async def toggle_user(
     _user: CurrentActiveUser,
 ) -> UserSummary:
     user_service = UserService(session)
-    updated = await user_service.toggle_active(user_id)
+    updated = await user_service.toggle_active(user_id, actor_id=_user.id)
     from app.modules.auth.repository import RoleRepository
 
     roles = await RoleRepository(session).list_codes_for_user(updated.id)
@@ -294,7 +294,7 @@ async def unlock_user(
     _user: CurrentActiveUser,
 ) -> UserSummary:
     user_service = UserService(session)
-    updated = await user_service.unlock(user_id)
+    updated = await user_service.unlock(user_id, actor_id=_user.id)
     from app.modules.auth.repository import RoleRepository
 
     roles = await RoleRepository(session).list_codes_for_user(updated.id)
@@ -312,7 +312,7 @@ async def reset_password(
     _user: CurrentActiveUser,
 ) -> ResetPasswordResponse:
     user_service = UserService(session)
-    plain = await user_service.reset_password(user_id)
+    plain = await user_service.reset_password(user_id, actor_id=_user.id)
     return ResetPasswordResponse(initial_password=plain)
 
 
@@ -329,7 +329,7 @@ async def assign_roles(
 ) -> UserSummary:
     """EP01-S04 管理员分配预设角色。"""
     user_service = UserService(session)
-    updated = await user_service.assign_roles(user_id, payload.role_codes)
+    updated = await user_service.assign_roles(user_id, payload.role_codes, actor_id=_user.id)
     from app.modules.auth.repository import RoleRepository
 
     roles = await RoleRepository(session).list_codes_for_user(updated.id)
@@ -419,7 +419,7 @@ async def effective_permissions(
     _user: CurrentActiveUser,
 ) -> EffectivePermissionsView:
     """EP01-S05 查看用户有效权限（角色 scope + grant/revoke + 合并）。"""
-    data = await PermissionService(session).get_effective(user_id)
+    data = await PermissionService(session).get_effective(user_id, actor_id=_user.id)
     return EffectivePermissionsView(**data)
 
 

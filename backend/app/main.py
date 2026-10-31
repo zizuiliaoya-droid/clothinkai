@@ -46,6 +46,7 @@ from app.core.middleware.tenancy import TenancyContextMiddleware
 from app.core.tenancy import bypass_rls_ctx
 from app.modules.ai.api import router as ai_router
 from app.modules.auth.api import router as auth_router
+from app.modules.auth.tenant_api import router as tenant_router
 from app.modules.blogger.api import router as blogger_router
 from app.modules.collect.crawler_api import router as crawler_router
 from app.modules.collect.daily_data_api import router as daily_data_router
@@ -450,6 +451,7 @@ def create_app() -> FastAPI:
 
     # ----- 路由挂载 -----
     app.include_router(auth_router, prefix="/api")
+    app.include_router(tenant_router)
     app.include_router(product_router)  # product router 已含 /api 前缀
     app.include_router(dict_router)  # 可维护字典 /api/dict-items
     app.include_router(blogger_router)  # blogger router 已含 /api 前缀

@@ -36,6 +36,7 @@ import { LegacyStoreRedirect } from "@/pages/store/LegacyStoreRedirect";
 import { ProductionPage } from "@/pages/ProductionPage";
 import { DesignListPage } from "@/pages/DesignListPage";
 import { UserListPage } from "@/pages/UserListPage";
+import { TenantListPage } from "@/pages/TenantListPage";
 import { ImportListPage } from "@/pages/ImportListPage";
 import { SettingsPage } from "@/pages/SettingsPage";
 import { BiDashboardPage } from "@/pages/BiDashboardPage";
@@ -149,6 +150,7 @@ function AppRoutes() {
         }
       >
         <Route path="/" element={<HomePage />} />
+        <Route path="/tenants" element={<RoleRoute requireAnyRole={["platform_admin"]}><TenantListPage /></RoleRoute>} />
         {/* 款式维护并进商品 / 套装页（8a-1）；旧书签不 404 */}
         <Route path="/styles" element={<Navigate to="/goods?tab=styles" replace />} />
         {/* 商品是报表归属主体。权限靠 API 的 product.goods，跟单可写、运营与设计只读 */}
