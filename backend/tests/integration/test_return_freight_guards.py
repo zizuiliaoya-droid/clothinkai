@@ -311,11 +311,22 @@ async def test_real_personal_grants_and_field_revokes(session, freight_promotion
 async def test_admin_role_name_without_star_cannot_supplement_completed(
     session, freight_promotion, flow_users
 ):
+    from app.modules.auth.models import Permission, Role, RolePermission
     from app.modules.auth.service import AuthService
 
     p, user = freight_promotion, flow_users.admin
     p.completed_at = datetime.now(UTC)
-    await override(session, user, "*", "revoke")
+    # 只移除角色的全权授权；个人拒绝 "*" 会使普通写权限也被拒绝。
+    # session fixture 结束后回滚此种子调整。
+    star_grant = (
+        await session.execute(
+            select(RolePermission)
+            .join(Role, Role.id == RolePermission.role_id)
+            .join(Permission, Permission.id == RolePermission.permission_id)
+            .where(Role.code == "admin", Permission.scope == "*")
+        )
+    ).scalar_one()
+    await session.delete(star_grant)
     await override(session, user, "promotion:write", "grant")
     assert "*" not in (await AuthService(session).load_effective_permissions(user.id)).scopes
     response = await _call(session, user, "POST", f"/api/promotions/{p.id}/return-freight", {})
