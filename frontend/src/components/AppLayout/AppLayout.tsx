@@ -192,6 +192,7 @@ export function AppLayout() {
       label: "系统管理",
       children: [
         { key: "/users", label: <Link to="/users">用户管理</Link> },
+        ...(roles.includes("platform_admin") ? [{ key: "/tenants", label: <Link to="/tenants">租户管理</Link> }] : []),
         { key: "/imports", label: <Link to="/imports">导入记录</Link> },
         ...(canViewCredentials
           ? [

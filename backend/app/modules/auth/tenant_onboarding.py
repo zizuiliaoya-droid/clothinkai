@@ -39,9 +39,13 @@ class TenantOnboardingResult:
 
 
 async def provision_tenant(
-    session: AsyncSession, request: TenantOnboarding
+    session: AsyncSession,
+    request: TenantOnboarding,
+    *,
+    actor_id: UUID | None = None,
+    audit_tenant_id: UUID | None = None,
 ) -> TenantOnboardingResult:
-    """仅由可信运维调用；调用者负责事务提交/回滚及一次性交付临时密码。"""
+    """由运维或已验证的平台入口调用；调用者负责事务与一次性交付临时密码。"""
     if not bypass_rls_ctx.get():
         raise ValueError("开户需要运维会话")
     if (
@@ -67,10 +71,11 @@ async def provision_tenant(
     session.add(UserRole(tenant_id=tenant.id, user_id=admin.id, role_id=role.id))
     await AuditService(session).log(
         action="tenant_create",
-        actor_type="system",
+        actor_type="user" if actor_id is not None else "system",
+        user_id=actor_id,
         resource="tenant",
         resource_id=tenant.id,
-        tenant_id=tenant.id,
+        tenant_id=audit_tenant_id or tenant.id,
         after={"code": request.code, "admin_username": request.admin_username},
     )
     await session.flush()

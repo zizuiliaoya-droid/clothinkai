@@ -17,6 +17,10 @@ pytestmark = [pytest.mark.unit, pytest.mark.asyncio]
 
 @pytest.mark.parametrize("action", ["grant", "revoke", "reset"])
 async def test_changes_invalidate_target_cache_and_audit(monkeypatch, action):
+    # 本例的目标是普通业务账号；平台账号边界由 tenant_management 真库测试覆盖。
+    monkeypatch.setattr(
+        "app.modules.auth.platform_access.has_platform_role", AsyncMock(return_value=False)
+    )
     tenant, user, actor, permission = uuid4(), uuid4(), uuid4(), uuid4()
     session = AsyncMock()
     service = PermissionService(session)

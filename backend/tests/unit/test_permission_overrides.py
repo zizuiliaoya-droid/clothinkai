@@ -90,7 +90,10 @@ async def test_cache_round_trip_preserves_denies_and_ignores_old_shape(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_effective_view_excludes_revoked_concrete_permission():
+async def test_effective_view_excludes_revoked_concrete_permission(monkeypatch):
+    monkeypatch.setattr(
+        "app.modules.auth.platform_access.has_platform_role", AsyncMock(return_value=False)
+    )
     tenant, user = uuid4(), uuid4()
     svc = PermissionService(AsyncMock())
     svc._users = SimpleNamespace(

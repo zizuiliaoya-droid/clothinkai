@@ -41,6 +41,23 @@ async function openAndAddFinance() {
 }
 
 describe("已有账号角色分配", () => {
+  it("普通管理员不能操作平台账号", async () => {
+    roles = ["admin", "platform_admin"];
+    useAuthStore.setState({ user: { ...useAuthStore.getState().user!, roles: ["admin"] } });
+    mount();
+    expect(await screen.findByText("平台账号由平台管理员维护")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "修改角色" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "重置密码" })).toBeNull();
+  });
+  it("平台管理员编辑业务角色时保留平台身份且下拉不可授予", async () => {
+    roles = ["pr_manager", "platform_admin"];
+    useAuthStore.setState({ user: { ...useAuthStore.getState().user!, roles: ["admin", "platform_admin"] } });
+    mount();
+    const dialog = await openAndAddFinance();
+    expect(screen.queryByText("平台管理员", { selector: ".ant-select-item-option-content" })).toBeNull();
+    fireEvent.click(dialog.getByRole("button", { name: "保存角色" }));
+    await waitFor(() => expect(assignUserRoles).toHaveBeenCalledWith("target", ["pr_manager", "finance", "platform_admin"]));
+  });
   it("按实际权限显示入口，保存财务与PR主管并刷新中文角色", async () => {
     mount();
     const dialog = await openAndAddFinance();

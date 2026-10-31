@@ -1,6 +1,5 @@
 export const ROLE_OPTIONS = [
   { value: "admin", label: "管理员" },
-  { value: "platform_admin", label: "平台管理员" },
   { value: "designer", label: "设计师" },
   { value: "design_assistant", label: "设计助理" },
   { value: "pattern_maker", label: "版师" },
@@ -13,5 +12,6 @@ export const ROLE_OPTIONS = [
 ];
 
 export function roleLabel(code: string) {
+  if (code === "platform_admin") return "平台管理员";
   return ROLE_OPTIONS.find((role) => role.value === code)?.label ?? code;
 }
