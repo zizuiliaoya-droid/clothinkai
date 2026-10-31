@@ -31,14 +31,14 @@ pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
 
 @contextmanager
-def context(actor=None):
-    bypass = bypass_rls_ctx.set(True)
+def context(actor=None, *, bypass=True):
+    bypass_token = bypass_rls_ctx.set(bypass)
     tenant = tenant_id_ctx.set(actor.tenant_id if actor is not None else None)
     try:
         yield
     finally:
         tenant_id_ctx.reset(tenant)
-        bypass_rls_ctx.reset(bypass)
+        bypass_rls_ctx.reset(bypass_token)
 
 
 async def users(session, factory, tenant_a, admin_role):
@@ -290,7 +290,8 @@ async def test_reserved_role_cannot_be_added_removed_but_platform_can_keep_it(
 ):
     accounts = await users(session, factory, tenant_a, admin_role)
     monkeypatch.setattr("app.modules.auth.service.invalidate_user_permissions_cache", AsyncMock())
-    with context(accounts.platform):
+    # 普通角色 API 使用 SessionDep，按当前租户注入 UserRole.tenant_id。
+    with context(accounts.platform, bypass=False):
         service = UserService(session)
         with pytest.raises(PermissionDeniedError):
             await service.create(
