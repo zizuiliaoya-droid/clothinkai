@@ -20,7 +20,7 @@ def merge_permissions(
     grants: set[str],
     revokes: set[str],
 ) -> frozenset[str]:
-    """计算用户最终生效权限。
+    """合并授权候选（精确撤销先剔除）；通配拒绝由 EffectivePermissions.has 判定。
 
     BR-PERM-001：effective(U) = (role_perms ∪ grants) - revokes
     优先级：撤销 > 授予 > 角色

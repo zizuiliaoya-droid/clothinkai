@@ -34,8 +34,14 @@ class PageMeta(BaseModel):
 class LoginRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
+    tenant_code: str = Field(default="default", max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
     username: str = Field(..., min_length=3, max_length=64)
     password: str = Field(..., min_length=1, max_length=128)
+
+    @field_validator("tenant_code", mode="before")
+    @classmethod
+    def _default_tenant(cls, value: object) -> object:
+        return value.strip() or "default" if isinstance(value, str) else value
 
 
 class TokenPair(BaseModel):

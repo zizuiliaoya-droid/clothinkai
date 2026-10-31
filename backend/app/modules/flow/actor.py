@@ -22,7 +22,9 @@ async def load_flow_actor(user_id: UUID, role_repo: Any, perm_repo: Any) -> Flow
     return FlowActor(
         user_id=user_id,
         perms=EffectivePermissions(
-            user_id=str(user_id), scopes=merge_permissions(role_scopes, grants, revokes)
+            user_id=str(user_id),
+            scopes=merge_permissions(role_scopes, grants, revokes),
+            revokes=frozenset(revokes),
         ),
         field_ctx=field_perm_context_from(role_codes, role_scopes, grants, revokes),
     )

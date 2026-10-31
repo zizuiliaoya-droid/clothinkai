@@ -251,7 +251,7 @@ class ExplicitScope(Capability):
     action: str = "read"
 
     def ok(self, actor: FlowActor, doc: FlowDocBase) -> bool:
-        return f"{self.scope}:{self.action}" in actor.perms.scopes
+        return actor.perms.has_explicit(self.scope, self.action)
 
 
 @dataclass(frozen=True)

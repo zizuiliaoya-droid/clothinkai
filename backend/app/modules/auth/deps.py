@@ -20,7 +20,7 @@ from app.core.exceptions import (
 from app.core.security.auth import decode_token, is_revoked
 from app.core.security.permissions import EffectivePermissions
 from app.modules.auth.models import User
-from app.modules.auth.repository import UserRepository
+from app.modules.auth.repository import TenantRepository, UserRepository
 from app.modules.auth.service import AuthService
 
 _bearer_scheme = HTTPBearer(auto_error=False)
@@ -54,6 +54,8 @@ async def get_current_user(
     user = await UserRepository(session).get_by_id(user_id)
     if user is None or user.deleted_at is not None:
         raise TokenInvalidError("用户不存在或已删除")
+    if not await TenantRepository(session).is_active(user.tenant_id):
+        raise TokenInvalidError("租户不可用")
     if user.status == "disabled":
         raise AccountDisabledError()
     if user.locked_at is not None:

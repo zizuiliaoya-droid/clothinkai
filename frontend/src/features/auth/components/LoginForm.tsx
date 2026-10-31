@@ -1,6 +1,6 @@
 import { Button, Card, Form, Input, message } from "antd";
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { login, getMe } from "../api";
 import { useAuthStore } from "@/stores/authStore";
 import { extractErrorMessage } from "@/services/apiClient";
@@ -8,13 +8,15 @@ import type { LoginRequest } from "@/types";
 
 export function LoginForm() {
   const navigate = useNavigate();
+  const [params] = useSearchParams();
+  const tenantCode = params.get("tenant") ?? "";
   const setSession = useAuthStore((s) => s.setSession);
   const [loading, setLoading] = useState(false);
 
   async function onFinish(values: LoginRequest) {
     setLoading(true);
     try {
-      const tokens = await login(values);
+      const tokens = await login({ ...values, tenant_code: values.tenant_code?.trim() || "default" });
       // 立即拉取用户信息（包含 roles）
       // 注意：apiClient 已经持有 access_token 之前先 setTokens
       const { setTokens } = await import("@/services/apiClient");
@@ -40,13 +42,24 @@ export function LoginForm() {
   }
 
   return (
-    <Card title="服装电商运营管理系统" style={{ width: 380 }}>
+    <Card title="服装电商运营管理系统" style={{ width: 380, maxWidth: "calc(100vw - 32px)" }}>
       <Form<LoginRequest>
+        key={tenantCode}
+        initialValues={{ tenant_code: tenantCode }}
         layout="vertical"
         onFinish={onFinish}
         autoComplete="off"
         disabled={loading}
       >
+        <Form.Item
+          label="租户代码"
+          name="tenant_code"
+          extra="新客户填写开户时提供的代码；原客户可留空。"
+          rules={[{ max: 64 }, { pattern: /^[a-zA-Z0-9_-]*$/, message: "仅支持字母、数字、下划线和短横线" }]}
+          normalize={(value: string) => value.trim()}
+        >
+          <Input placeholder="原客户默认 default" autoComplete="organization" />
+        </Form.Item>
         <Form.Item
           label="用户名"
           name="username"

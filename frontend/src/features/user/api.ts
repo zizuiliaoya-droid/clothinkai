@@ -66,3 +66,12 @@ export async function resetPassword(
   );
   return resp.data;
 }
+
+export async function getUserManagementCapabilities(): Promise<{ can_assign_roles: boolean; can_create_users: boolean }> {
+  const resp = await apiClient.get<{ can_assign_roles: boolean; can_create_users: boolean }>("/api/users/capabilities");
+  return resp.data;
+}
+
+export async function assignUserRoles(userId: string, roleCodes: string[]): Promise<void> {
+  await apiClient.post(`/api/users/${userId}/roles`, { role_codes: roleCodes });
+}

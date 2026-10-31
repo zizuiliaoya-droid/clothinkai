@@ -23,6 +23,13 @@ class TestPermissionApiContract:
 
         monkeypatch.setattr(app.state.limiter, "enabled", False)
 
+    async def test_role_capabilities_require_auth(self) -> None:
+        from app.main import app
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            resp = await ac.get("/api/users/capabilities")
+        assert resp.status_code == 401
+
     async def test_catalog_requires_auth(self) -> None:
         from app.main import app
 

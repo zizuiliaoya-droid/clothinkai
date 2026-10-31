@@ -11,7 +11,7 @@ U09 阶段：在此文件追加 build_schema_for_user 动态 Schema 实现。
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Set
 from dataclasses import dataclass
 from typing import Any
 
@@ -21,7 +21,7 @@ from app.core.cache import cache
 from app.core.config import settings
 from app.core.exceptions import PermissionDeniedError, TokenInvalidError
 
-PERM_CACHE_PREFIX = "perm:user:"
+PERM_CACHE_PREFIX = "perm:user:v2:"
 
 
 # ---------------------------------------------------------------------------
@@ -29,28 +29,29 @@ PERM_CACHE_PREFIX = "perm:user:"
 # ---------------------------------------------------------------------------
 
 
+def scope_matches(scopes: Set[str], scope: str, action: str) -> bool:
+    """授权与拒绝使用同一匹配规则，保留现有一级域通配语义。"""
+    # 部分旧端点传完整 scope 常量并另传 action，统一为同一能力后再匹配。
+    scope = scope.removesuffix(f":{action}")
+    module = scope.split(":", 1)[0].split(".", 1)[0]
+    return bool({"*", f"{scope}:{action}", f"{module}.*:*", f"{module}.*:{action}"} & scopes)
+
+
 @dataclass(frozen=True)
 class EffectivePermissions:
-    """有效权限的快照。"""
+    """授权候选与个人拒绝；判定必须走 has()，拒绝优先于任何通配授权。"""
 
     user_id: str
     scopes: frozenset[str]
+    revokes: frozenset[str] = frozenset()
 
     def has(self, scope: str, action: str = "read") -> bool:
-        """检查是否拥有 ``module.sub:action`` 权限。
+        return not scope_matches(self.revokes, scope, action) and scope_matches(
+            self.scopes, scope, action
+        )
 
-        支持通配符：``*`` 表示所有 scope，``module.*:action`` 等。
-        """
-        if "*" in self.scopes:
-            return True
-        full = f"{scope}:{action}"
-        if full in self.scopes:
-            return True
-        # 通配符匹配（粗粒度）
-        module_prefix = scope.split(":", 1)[0].split(".", 1)[0]
-        if f"{module_prefix}.*:*" in self.scopes or f"{module_prefix}.*:{action}" in self.scopes:
-            return True
-        return False
+    def has_explicit(self, scope: str, action: str) -> bool:
+        return f"{scope}:{action}" in self.scopes and self.has(scope, action)
 
 
 # ---------------------------------------------------------------------------
@@ -63,9 +64,11 @@ async def _load_from_cache(user_id: str) -> EffectivePermissions | None:
     if raw is None:
         return None
     try:
-        scopes = json.loads(raw)
-        return EffectivePermissions(user_id=user_id, scopes=frozenset(scopes))
-    except (json.JSONDecodeError, TypeError):
+        data = json.loads(raw)
+        return EffectivePermissions(
+            user_id=user_id, scopes=frozenset(data["scopes"]), revokes=frozenset(data["revokes"])
+        )
+    except (json.JSONDecodeError, TypeError, KeyError):
         return None
 
 
@@ -73,7 +76,7 @@ async def _save_to_cache(perms: EffectivePermissions) -> None:
     await cache.setex(
         f"{PERM_CACHE_PREFIX}{perms.user_id}",
         settings.PERM_CACHE_TTL_SECONDS,
-        json.dumps(sorted(perms.scopes)),
+        json.dumps({"scopes": sorted(perms.scopes), "revokes": sorted(perms.revokes)}),
     )
 
 

@@ -6,9 +6,9 @@ import { UserListPage } from "@/pages/UserListPage";
 import { useAuthStore } from "@/stores/authStore";
 import { changeUserPermission, getUserPermissions, listRegisteredPermissions } from "./permissionsApi";
 import type { UserPermissions } from "./permissionsApi";
-import { listUsers } from "./api";
+import { listUsers, getUserManagementCapabilities } from "./api";
 
-vi.mock("./api", () => ({ listUsers: vi.fn(), createUser: vi.fn(), resetPassword: vi.fn(), toggleUser: vi.fn(), unlockUser: vi.fn() }));
+vi.mock("./api", () => ({ listUsers: vi.fn(), getUserManagementCapabilities: vi.fn(), assignUserRoles: vi.fn(), createUser: vi.fn(), resetPassword: vi.fn(), toggleUser: vi.fn(), unlockUser: vi.fn() }));
 vi.mock("./permissionsApi", () => ({ listRegisteredPermissions: vi.fn(), getUserPermissions: vi.fn(), changeUserPermission: vi.fn() }));
 
 const scopes = ["negotiation.review:approve", "negotiation_all:read"];
@@ -26,6 +26,7 @@ beforeAll(() => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(getUserManagementCapabilities).mockResolvedValue({ can_assign_roles: false, can_create_users: false });
   useAuthStore.setState({ user: { id: "manager", username: "管理员", display_name: null, email: null, status: "active", roles: ["designer"] }, isAuthenticated: true });
   vi.mocked(listUsers).mockResolvedValue({
     items: ["a", "b"].map((id) => ({ id, username: `用户${id}`, display_name: null, email: null, status: "active", locked_at: null, last_login_at: null, roles: ["pr"], created_at: "2026-10-27" })),

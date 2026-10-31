@@ -19,6 +19,7 @@ export interface TokenPair {
 }
 
 export interface LoginRequest {
+  tenant_code?: string;
   username: string;
   password: string;
 }

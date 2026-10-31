@@ -291,7 +291,7 @@ async def test_admin_role_without_true_star_cannot_edit_completed(
 ) -> None:
     from sqlalchemy import select
 
-    from app.modules.auth.models import Permission, UserPermissionOverride
+    from app.modules.auth.models import Permission, Role, RolePermission, UserPermissionOverride
 
     permissions = (
         (
@@ -303,15 +303,28 @@ async def test_admin_role_without_true_star_cannot_edit_completed(
         .all()
     )
     assert {p.scope for p in permissions} == {"*", "promotion.*:*"}
-    for permission in permissions:
-        session.add(
-            UserPermissionOverride(
-                tenant_id=flow_users.tenant.id,
-                user_id=flow_users.admin.id,
-                permission_id=permission.id,
-                effect="revoke" if permission.scope == "*" else "grant",
+    by_scope = {p.scope: p for p in permissions}
+    # 移除角色的全权授权；个人拒绝 "*" 会阻止所有操作，无法测到完结保护。
+    # session fixture 在测试结束回滚，角色种子不会影响其他用例。
+    star_grant = (
+        await session.execute(
+            select(RolePermission)
+            .join(Role, Role.id == RolePermission.role_id)
+            .where(
+                Role.code == "admin",
+                RolePermission.permission_id == by_scope["*"].id,
             )
         )
+    ).scalar_one()
+    await session.delete(star_grant)
+    session.add(
+        UserPermissionOverride(
+            tenant_id=flow_users.tenant.id,
+            user_id=flow_users.admin.id,
+            permission_id=by_scope["promotion.*:*"].id,
+            effect="grant",
+        )
+    )
     await session.flush()
     promo = await _pending_review(
         flow_users,
