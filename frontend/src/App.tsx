@@ -12,6 +12,9 @@ import {
 import { useAuthStore } from "@/stores/authStore";
 import { queryClient } from "@/services/queryClient";
 import { AppLayout } from "@/components/AppLayout/AppLayout";
+import { PlatformLayout } from "@/components/AppLayout/PlatformLayout";
+import { useSupportStore } from "@/stores/supportStore";
+import { isPlatformSession, isSupportPage } from "@/features/auth/sessionMode";
 import { LoginPage } from "@/pages/LoginPage";
 import { HomePage } from "@/pages/HomePage";
 import { ChangePasswordPage } from "@/pages/ChangePasswordPage";
@@ -54,6 +57,7 @@ function ProtectedRoute({ children }: { children: JSX.Element }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const mustChange = useAuthStore((s) => s.mustChangePassword);
   const user = useAuthStore((s) => s.user);
+  const support = useSupportStore((s) => s.session);
   const location = useLocation();
 
   if (!isAuthenticated) {
@@ -61,6 +65,12 @@ function ProtectedRoute({ children }: { children: JSX.Element }) {
   }
   if (mustChange && location.pathname !== "/change-password") {
     return <Navigate to="/change-password" replace />;
+  }
+  if (support && !isSupportPage(location.pathname) && location.pathname !== "/platform") {
+    return <Navigate to="/goods" replace />;
+  }
+  if (!support && isPlatformSession(user) && location.pathname !== "/platform") {
+    return <Navigate to="/platform" replace />;
   }
   // 仓库角色只能操作打单：其余路由一律重定向到 /warehouse-orders
   const roles = user?.roles ?? [];
@@ -75,6 +85,15 @@ function ProtectedRoute({ children }: { children: JSX.Element }) {
     return <Navigate to="/warehouse-orders" replace />;
   }
   return children;
+}
+
+function PlatformRoute() {
+  const user = useAuthStore((s) => s.user);
+  const support = useSupportStore((s) => s.session);
+  const end = useSupportStore((s) => s.end);
+  useEffect(() => { if (support) end(); }, [support, end]);
+  if (support) return <Spin />;
+  return isPlatformSession(user) ? <PlatformLayout /> : <Navigate to="/" replace />;
 }
 
 function RoleRoute({
@@ -94,6 +113,15 @@ function AppRoutes() {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const setUser = useAuthStore((s) => s.setUser);
   const logout = useAuthStore((s) => s.logout);
+  const support = useSupportStore((s) => s.session);
+  const endSupport = useSupportStore((s) => s.end);
+  const location = useLocation();
+
+  useEffect(() => {
+    if (!support) return;
+    const timer = window.setTimeout(() => endSupport("只读排查已到期，请重新选择客户。"), Math.max(0, support.expiresAt - Date.now()));
+    return () => window.clearTimeout(timer);
+  }, [support, endSupport]);
 
   // 启动时如果有 token 就拉一次 /me 验证
   useEffect(() => {
@@ -137,11 +165,17 @@ function AppRoutes() {
       </div>
     );
   }
+  if (support && (location.pathname === "/login" || location.pathname === "/change-password")) {
+    return <Navigate to="/goods" replace />;
+  }
 
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route path="/change-password" element={<ChangePasswordPage />} />
+      <Route element={<ProtectedRoute><PlatformRoute /></ProtectedRoute>}>
+        <Route path="/platform" element={<TenantListPage />} />
+      </Route>
       <Route
         element={
           <ProtectedRoute>
@@ -150,7 +184,7 @@ function AppRoutes() {
         }
       >
         <Route path="/" element={<HomePage />} />
-        <Route path="/tenants" element={<RoleRoute requireAnyRole={["platform_admin"]}><TenantListPage /></RoleRoute>} />
+        <Route path="/tenants" element={<Navigate to="/platform" replace />} />
         {/* 款式维护并进商品 / 套装页（8a-1）；旧书签不 404 */}
         <Route path="/styles" element={<Navigate to="/goods?tab=styles" replace />} />
         {/* 商品是报表归属主体。权限靠 API 的 product.goods，跟单可写、运营与设计只读 */}

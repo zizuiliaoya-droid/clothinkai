@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { useSupportStore } from "@/stores/supportStore";
 // 推广列表点一行开主线抽屉（流程线 8.4）：页签 单据详情 / 金额改动 / 催发记录；「金额改动记录」菜单切到金额改动页签；
 // 金额改动页签与菜单只看页级 ui.actions.amount_log（运营没有），不看报价值；详情按 ui.fields 出分组；不出商品编码。
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -69,7 +70,7 @@ beforeAll(() => {
     });
   }
 });
-afterEach(cleanup);
+afterEach(() => { cleanup(); useSupportStore.getState().end(); });
 
 const GOODS_CODE = "GOODS-CODE-SHOULD-NOT-SHOW";
 const LIST_UI: UiState = { actions: { comment: { state: "enabled" } }, edits: [] };
@@ -536,4 +537,14 @@ it("列偏好接入当前阶段和分类，未知/无权限操作列不回填，
   await waitFor(() => expect(screen.getAllByRole("columnheader")[0].textContent).toBe("当前阶段"));
   expect(screen.queryByRole("columnheader", { name: "内容分类" })).toBeNull();
   expect(api.saveFilterPreference).not.toHaveBeenCalled();
+});
+
+it("只读排查可看推广详情和筛选，隐藏新增/编辑/留言/列设置", async () => {
+  useSupportStore.getState().start({ access_token: "support", expires_in: 900, tenant: { id: "a", code: "a", name: "客户 A" } });
+  const row = promotion({ id: TARGET_A, ui: DETAIL_UI });
+  renderPage([row], row, { actions: { create: { state: "enabled" }, import: { state: "enabled" } } }, `/promotions?id=${TARGET_A}`);
+  expect(await screen.findByText("张三")).toBeTruthy();
+  for (const name of ["新建推广", "编辑收件信息", "发送留言", "列设置"]) expect(screen.queryByRole("button", { name })).toBeNull();
+  expect(screen.getByRole("checkbox", { name: "未分配 PR" })).toBeTruthy();
+  expect(screen.queryByPlaceholderText(/留言/)).toBeNull();
 });

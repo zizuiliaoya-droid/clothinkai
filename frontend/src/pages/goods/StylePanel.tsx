@@ -1,3 +1,4 @@
+import { useReadOnlySupport } from "@/stores/supportStore";
 import { useEffect, useState } from "react";
 import { Button, Input, Select, Space, Table, Tag, Tooltip, Typography, message } from "antd";
 import { CloudUploadOutlined, PlusOutlined, SearchOutlined } from "@ant-design/icons";
@@ -48,6 +49,7 @@ export interface StylePanelProps {
  * 新建、编辑、停用 / 启用。不提供删除（原页面也没有）。简称、季节、品牌在商品层维护，类目已下线。
  */
 export function StylePanel({ openStyleId, onOpenStyleClosed }: StylePanelProps) {
+  const readOnly = useReadOnlySupport();
   const qc = useQueryClient();
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("active");
   const [filters, setFilters] = useState<StyleListFilters>({
@@ -59,10 +61,10 @@ export function StylePanel({ openStyleId, onOpenStyleClosed }: StylePanelProps) 
   const [batchOpen, setBatchOpen] = useState(false);
 
   useEffect(() => {
-    if (!openStyleId) return;
+    if (!openStyleId || readOnly) return;
     setModal({ open: true, mode: "edit", styleId: openStyleId });
     setFromUrl(true);
-  }, [openStyleId]);
+  }, [openStyleId, readOnly]);
 
   const { data, isLoading } = useQuery({
     queryKey: ["styles", filters],
@@ -161,6 +163,7 @@ export function StylePanel({ openStyleId, onOpenStyleClosed }: StylePanelProps) 
     },
     {
       title: "操作",
+      key: "actions",
       width: 150,
       render: (_, record) => (
         <Space>
@@ -213,7 +216,7 @@ export function StylePanel({ openStyleId, onOpenStyleClosed }: StylePanelProps) 
             }}
           />
         </Space>
-        <Space wrap>
+        {!readOnly && <Space wrap>
           <Button icon={<CloudUploadOutlined />} onClick={() => setBatchOpen(true)}>
             批量上传主图
           </Button>
@@ -224,13 +227,13 @@ export function StylePanel({ openStyleId, onOpenStyleClosed }: StylePanelProps) 
           >
             新建款式
           </Button>
-        </Space>
+        </Space>}
       </Space>
 
       <Table
         rowKey="id"
         loading={isLoading}
-        columns={columns}
+        columns={readOnly ? columns.filter((column) => column.key !== "actions") : columns}
         dataSource={data?.items ?? []}
         scroll={{ x: 1100 }}
         pagination={{

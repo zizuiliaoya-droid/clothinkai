@@ -8,6 +8,12 @@ export interface UserSummary {
   status: string;
   password_must_change?: boolean;
   roles: string[];
+  session_mode?: "customer" | "platform" | "support";
+  support_context?: {
+    tenant: { id: string; code: string; name: string };
+    expires_at: string;
+    actor: { id: string; username: string };
+  } | null;
 }
 
 export interface TokenPair {

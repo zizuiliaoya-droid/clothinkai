@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useAuthStore } from "@/stores/authStore";
 import { getReportCapabilities, type ReportExportType } from "./api";
 import type { ReportCapabilities } from "./types";
+import { useSupportStore } from "@/stores/supportStore";
 
 /** 与后端权限缓存 TTL 相同：改了授权最多 5 分钟后菜单跟上（刷新页面立即生效）。 */
 const CAPABILITIES_STALE_MS = 5 * 60 * 1000;
@@ -16,11 +17,13 @@ const CAPABILITIES_STALE_MS = 5 * 60 * 1000;
  */
 export function useReportCapabilities() {
   const userId = useAuthStore((s) => (s.isAuthenticated ? s.user?.id ?? null : null));
+  const support = useSupportStore((s) => s.session);
   return useQuery({
-    queryKey: ["report-capabilities", userId],
+    queryKey: ["report-capabilities", userId, support?.key ?? null],
     queryFn: getReportCapabilities,
     enabled: userId != null,
     staleTime: CAPABILITIES_STALE_MS,
+    select: (data) => support ? { ...data, export: [], store_write: false, refresh: false } : data,
   });
 }
 

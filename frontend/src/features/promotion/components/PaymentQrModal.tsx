@@ -1,3 +1,4 @@
+import { useReadOnlySupport } from "@/stores/supportStore";
 // 博主收款码弹窗（流程线 8.4，从「录入信息」拆出来）。
 //
 // - 打开时拉详情（带 ui.fields 与结款块）：能不能换只看 ui.fields.payment_qr 是不是 edit（7.3 的锁 ① ② ③ ①' 在后端）
@@ -19,6 +20,7 @@ import { useRecallFreightFeedback } from "./useRecallFreightFeedback";
 
 /** 收款码的查看 / 上传 / 移除（收款码弹窗与结款重提弹窗共用）。editable = false 只看。 */
 export function PaymentQrEditor({ promotion, editable, allowRemove = true, onPendingChange }: { promotion: Promotion; editable: boolean; allowRemove?: boolean; onPendingChange?: (pending: boolean) => void }) {
+  const readOnly = useReadOnlySupport();
   const feedback = useRecallFreightFeedback(promotion.line_id);
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
@@ -68,7 +70,7 @@ export function PaymentQrEditor({ promotion, editable, allowRemove = true, onPen
       ) : (
         <Typography.Text type="secondary">尚未上传收款码</Typography.Text>
       )}
-      {editable && (
+      {!readOnly && editable && (
         <>
           <Upload
             accept="image/jpeg,image/png,image/webp"

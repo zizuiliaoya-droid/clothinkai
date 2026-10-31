@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { useSupportStore } from "@/stores/supportStore";
 // useReportFilters（7e R1，设计 2.1）：URL 覆盖记忆、URL 值不写回记忆、坏键单个丢弃、手动改后写记忆并清 URL。
 import type { ReactNode } from "react";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
@@ -42,7 +43,7 @@ beforeEach(() => {
   savePrefMock.mockReset();
   savePrefMock.mockResolvedValue(undefined);
 });
-afterEach(cleanup);
+afterEach(() => { cleanup(); useSupportStore.getState().end(); });
 
 function setup(url: string, saved: Partial<Filters> | Error) {
   if (saved instanceof Error) getPrefMock.mockRejectedValue(saved);
@@ -195,4 +196,14 @@ describe("useReportFilters 落点链接", () => {
       expect.objectContaining({ season: ["2026秋"] })
     );
   });
+});
+
+it("只读排查仍可改变筛选，但不保存客户偏好", async () => {
+  useSupportStore.getState().start({ access_token: "support", expires_in: 900, tenant: { id: "a", code: "a", name: "客户 A" } });
+  const { result } = setup("/production", {});
+  await waitFor(() => expect(result.current.r.ready).toBe(true));
+  act(() => result.current.r.setFilters({ season: ["秋冬"], preset: "last_7d" }));
+  expect(result.current.r.filters.season).toEqual(["秋冬"]);
+  await act(waitDebounce);
+  expect(savePrefMock).not.toHaveBeenCalled();
 });

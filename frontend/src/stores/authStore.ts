@@ -5,6 +5,7 @@ import { persist } from "zustand/middleware";
 import type { UserSummary } from "@/types";
 import { clearTokens, setTokens } from "@/services/apiClient";
 import { queryClient } from "@/services/queryClient";
+import { useSupportStore } from "@/stores/supportStore";
 
 function sameIdentity(left: UserSummary | null, right: UserSummary) {
   return left?.id === right.id &&
@@ -34,6 +35,7 @@ export const useAuthStore = create<AuthState>()(
       mustChangePassword: false,
 
       setSession: (user, accessToken, refreshToken, mustChangePassword) => {
+        useSupportStore.getState().end();
         if (!sameIdentity(get().user, user)) queryClient.clear();
         setTokens(accessToken, refreshToken);
         set({
@@ -49,6 +51,7 @@ export const useAuthStore = create<AuthState>()(
       },
 
       logout: () => {
+        useSupportStore.getState().end();
         queryClient.clear();
         clearTokens();
         set({

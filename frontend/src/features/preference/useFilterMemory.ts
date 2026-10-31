@@ -1,3 +1,4 @@
+import { useReadOnlySupport } from "@/stores/supportStore";
 // 页面筛选记忆 hook：首次进入回填上次的筛选，之后变更自动保存。
 
 import { useEffect, useRef, useState } from "react";
@@ -32,6 +33,7 @@ interface Result<T> {
 export function useFilterMemory<T extends object>(
   pageCode: FilterPageCode,
 ): Result<T> {
+  const readOnly = useReadOnlySupport();
   const [restored, setRestored] = useState<Partial<T> | undefined>(undefined);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -62,6 +64,7 @@ export function useFilterMemory<T extends object>(
   );
 
   function persist(filters: T) {
+    if (readOnly) return;
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(
       () => saveMutation.mutate(filters),

@@ -1,3 +1,4 @@
+import { useReadOnlySupport } from "@/stores/supportStore";
 import { formatMoney } from "@/utils/money";
 import { useState } from "react";
 import {
@@ -91,6 +92,7 @@ function isRecentGrowthValue(value: unknown): boolean {
 }
 
 export function BloggerListPage() {
+  const readOnly = useReadOnlySupport();
   const qc = useQueryClient();
   const [filters, setFilters] = useState<BloggerListFilters>({
     page: 1,
@@ -103,7 +105,7 @@ export function BloggerListPage() {
   // 本页刚上传的博主导入批次，「标签字典 → 导入缺的标签」按它定位（r1 N14 改法）
   const [lastBloggerBatchId, setLastBloggerBatchId] = useState<string>();
   const user = useAuthStore((s) => s.user);
-  const canEditQuote = Boolean(user?.roles.some((r) => QUOTE_WRITE_ROLES.includes(r)));
+  const canEditQuote = !readOnly && Boolean(user?.roles.some((r) => QUOTE_WRITE_ROLES.includes(r)));
 
   const { data, isLoading } = useQuery({
     queryKey: ["bloggers", filters],
@@ -310,6 +312,7 @@ export function BloggerListPage() {
     },
     {
       title: "操作",
+      key: "actions",
       width: 140,
       fixed: "right" as const,
       render: (_, record) => (
@@ -335,7 +338,7 @@ export function BloggerListPage() {
       title={<Typography.Title level={4} style={{ margin: 0 }}>博主管理</Typography.Title>}
       // 页头按钮多了，窄屏时标题保持原宽、按钮在右侧换行（否则标题被挤没）
       styles={{ title: { flex: "0 0 auto" }, extra: { minWidth: 0, padding: "8px 0 8px 12px" } }}
-      extra={
+      extra={!readOnly &&
         <Space wrap>
           <ImportUploadButton
             source="manual_blogger"
@@ -420,7 +423,7 @@ export function BloggerListPage() {
       <Table
         rowKey="id"
         loading={isLoading}
-        columns={columns}
+        columns={readOnly ? columns.filter((column) => column.key !== "actions") : columns}
         dataSource={data?.items ?? []}
         scroll={{ x: 3200 }}
         pagination={{

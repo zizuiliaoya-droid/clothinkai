@@ -1,3 +1,4 @@
+import { useReadOnlySupport } from "@/stores/supportStore";
 import { useState } from "react";
 import {
   Alert,
@@ -35,6 +36,7 @@ import { ROLE_OPTIONS, roleLabel } from "@/features/user/roles";
 import { UserRolesModal } from "@/features/user/UserRolesModal";
 
 export function UserListPage() {
+  const readOnly = useReadOnlySupport();
   const qc = useQueryClient();
   const [page, setPage] = useState(1);
   const [open, setOpen] = useState(false);
@@ -56,7 +58,7 @@ export function UserListPage() {
     enabled: Boolean(viewerId),
     retry: false,
   });
-  const canAssignRoles = Boolean(viewerId) && capabilities.data?.can_assign_roles === true;
+  const canAssignRoles = !readOnly && Boolean(viewerId) && capabilities.data?.can_assign_roles === true;
   const canManagePermissions = Boolean(viewerId) && catalog.isSuccess;
   const catalogForbidden = (catalog.error as { response?: { status?: number } } | null)?.response?.status === 403;
 
@@ -150,10 +152,10 @@ export function UserListPage() {
           )}
           {canManagePermissions && (
             <Button type="link" size="small" onClick={() => viewerId && setPermissionUser({ user: r, viewerId })}>
-              个人权限
+              {readOnly ? "查看权限" : "个人权限"}
             </Button>
           )}
-          <Button type="link" size="small" onClick={() => toggleMutation.mutate(r.id)}>
+          {!readOnly && <><Button type="link" size="small" onClick={() => toggleMutation.mutate(r.id)}>
             {r.status === "active" ? "禁用" : "启用"}
           </Button>
           {r.locked_at && (
@@ -168,7 +170,7 @@ export function UserListPage() {
             <Button type="link" size="small" danger>
               重置密码
             </Button>
-          </Popconfirm>
+          </Popconfirm></>}
         </Space>
       ),
     },
@@ -177,7 +179,7 @@ export function UserListPage() {
   return (
     <Card
       title={<Typography.Title level={4} style={{ margin: 0 }}>用户管理</Typography.Title>}
-      extra={capabilities.data?.can_create_users && (
+      extra={!readOnly && capabilities.data?.can_create_users && (
         <Button
           type="primary"
           icon={<PlusOutlined />}
