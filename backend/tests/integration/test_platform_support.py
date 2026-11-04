@@ -16,6 +16,7 @@ from app.core.exceptions import PermissionDeniedError, TokenInvalidError
 from app.core.security.auth import decode_token, encode_access_token
 from app.core.tenancy import bypass_rls_ctx, support_readonly_ctx
 from app.modules.auth import support_access
+from app.modules.auth.default_roles import BLOGGER_READ
 from app.modules.auth.models import AuditLog, Permission, UserPermissionOverride, UserRole
 from app.modules.auth.service import AuthService
 from tests.integration.test_tenant_management import context, users
@@ -256,7 +257,7 @@ async def test_owner_business_read_denial_is_rechecked_after_support_issuance(
     with context(accounts.platform):
         issued = await support_access.issue_support_token(session, accounts.platform, tenant_a.id)
         permission = (
-            await session.execute(select(Permission).where(Permission.scope == "blogger:read"))
+            await session.execute(select(Permission).where(Permission.scope == BLOGGER_READ))
         ).scalar_one()
         session.add(
             UserPermissionOverride(
