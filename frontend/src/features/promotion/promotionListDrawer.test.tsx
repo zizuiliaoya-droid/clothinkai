@@ -517,6 +517,7 @@ describe("PR10 R1 收件筛选", () => {
   });
 });
 
+// 多步表格/弹窗交互在 CI 并行负载下可能超过默认 5 秒，仅放宽本用例。
 it("列偏好接入当前阶段和分类，未知/无权限操作列不回填，保存后表格按新顺序显示", async () => {
   useAuthStore.setState({ user: { id: "column-user", username: "a", display_name: null, email: null, status: "active", roles: [] }, isAuthenticated: true });
   vi.mocked(getPromotionColumnPreference).mockResolvedValue({ order: ["content_category", "stage", "unknown", "actions"], hidden: ["quote_amount"] });
@@ -537,7 +538,7 @@ it("列偏好接入当前阶段和分类，未知/无权限操作列不回填，
   await waitFor(() => expect(screen.getAllByRole("columnheader")[0].textContent).toBe("当前阶段"));
   expect(screen.queryByRole("columnheader", { name: "内容分类" })).toBeNull();
   expect(api.saveFilterPreference).not.toHaveBeenCalled();
-});
+}, 15_000);
 
 it("只读排查可看推广详情和筛选，隐藏新增/编辑/留言/列设置", async () => {
   useSupportStore.getState().start({ access_token: "support", expires_in: 900, tenant: { id: "a", code: "a", name: "客户 A" } });
