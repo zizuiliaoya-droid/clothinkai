@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { useSupportStore } from "@/stores/supportStore";
 // 左侧菜单：
 // - 「仓库发货」只对仓库 / 管理员显示（PR-2 起仓库页只走 promotion_ship:fill / export，其余角色点进去是 403）；
 // - 报表各项按 GET /api/reports/capabilities 显示（7e R1 / R4）：能力没回来前都不显示；
@@ -182,4 +183,15 @@ describe("AppLayout 报表菜单按 capabilities", () => {
     renderLayout();
     expect(getReportCapabilities).not.toHaveBeenCalled();
   });
+});
+
+it("只读客户布局持续标明客户和退出入口，菜单不含管理/凭据/导入", () => {
+  useSupportStore.getState().start({ access_token: "support", expires_in: 900, tenant: { id: "a", code: "client-a", name: "客户 A" } });
+  renderAs(["platform_admin"]);
+  expect(screen.getByText(/客户 A.*client-a/)).toBeTruthy();
+  expect(screen.getByRole("button", { name: "返回平台" })).toBeTruthy();
+  expect(screen.queryByText("采集凭据")).toBeNull();
+  expect(screen.queryByText("系统设置")).toBeNull();
+  expect(screen.queryByText("仓库发货")).toBeNull();
+  expect(screen.getByText("商品 / 款式")).toBeTruthy();
 });

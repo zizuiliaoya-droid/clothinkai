@@ -1,3 +1,4 @@
+import { useReadOnlySupport } from "@/stores/supportStore";
 import { Alert, Button, Collapse, Form, Input, List, Modal, Popconfirm, Radio, Select, Space, Spin, Tag, Typography, message } from "antd";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { UserListItem } from "./api";
@@ -19,6 +20,7 @@ interface PermissionForm {
 }
 
 export function UserPermissionsModal({ user, viewerId, catalog, onClose }: Props) {
+  const readOnly = useReadOnlySupport();
   const [form] = Form.useForm<PermissionForm>();
   const qc = useQueryClient();
   const queryKey = ["user-permissions", viewerId, user.id];
@@ -69,8 +71,8 @@ export function UserPermissionsModal({ user, viewerId, catalog, onClose }: Props
       <Alert
         type="info"
         showIcon
-        message="个人设置持续生效，需手动撤销"
-        description="主管请假时，请分别授予 negotiation.review:approve 和 negotiation_all:read；交接结束后分别恢复角色默认。不会自动到期。"
+        message={readOnly ? "客户权限只读排查" : "个人设置持续生效，需手动撤销"}
+        description={readOnly ? "可查看角色默认权限和个人覆盖；不能修改客户权限。" : "主管请假时，请分别授予 negotiation.review:approve 和 negotiation_all:read；交接结束后分别恢复角色默认。不会自动到期。"}
         style={{ marginBottom: 16, overflowWrap: "anywhere" }}
       />
       {permissions.isPending && <Spin tip="正在读取个人权限"><div style={{ minHeight: 80 }} /></Spin>}
@@ -96,7 +98,7 @@ export function UserPermissionsModal({ user, viewerId, catalog, onClose }: Props
                     <Tag color={item.effect === "grant" ? "green" : "red"}>
                       {item.effect === "grant" ? "个人授予" : "个人拒绝"}
                     </Tag>
-                    <Popconfirm
+                    {!readOnly && <Popconfirm
                       title="恢复此权限的角色默认设置？"
                       description="仅删除这项个人覆盖，角色权限不变。"
                       onConfirm={() => change.mutate({ scope: item.scope, action: "reset", reason: "撤销个人覆盖，恢复角色默认" })}
@@ -109,7 +111,7 @@ export function UserPermissionsModal({ user, viewerId, catalog, onClose }: Props
                         disabled={!ready || change.isPending}
                         aria-label={`恢复角色默认 ${item.scope}`}
                       >恢复角色默认</Button>
-                    </Popconfirm>
+                    </Popconfirm>}
                   </Space>
                 </Space>
               </List.Item>
@@ -124,7 +126,7 @@ export function UserPermissionsModal({ user, viewerId, catalog, onClose }: Props
               children: <List dataSource={permissions.data.role_scopes} locale={{ emptyText: "角色未授予权限" }} renderItem={(scope) => <List.Item>{permissionLabel(scope)}</List.Item>} />,
             }]}
           />
-          <Typography.Title level={5}>新增或修改个人覆盖</Typography.Title>
+          {!readOnly && <><Typography.Title level={5}>新增或修改个人覆盖</Typography.Title>
           <Form
             form={form}
             layout="vertical"
@@ -149,7 +151,7 @@ export function UserPermissionsModal({ user, viewerId, catalog, onClose }: Props
               <Input.TextArea rows={2} maxLength={512} placeholder="例如：主管请假期间代审，交接结束后人工撤销" />
             </Form.Item>
             <Button type="primary" htmlType="submit" loading={change.isPending}>保存个人设置</Button>
-          </Form>
+          </Form></>}
         </>
       )}
       {change.isError && <Alert style={{ marginTop: 16 }} type="error" showIcon message={extractErrorMessage(change.error, "保存个人权限失败")} />}

@@ -10,6 +10,7 @@ from app.core.exceptions import PermissionDeniedError, ResourceNotFoundError
 from app.core.security.permissions import EffectivePermissions
 from app.core.tenancy import tenant_id_ctx
 from app.modules.auth.api import router
+from app.modules.auth.deps import require_permission_catalog_read
 from app.modules.auth.service import PermissionService
 
 pytestmark = [pytest.mark.unit, pytest.mark.asyncio]
@@ -89,11 +90,29 @@ async def test_other_tenant_target_is_not_found_even_if_identity_map_has_user(ac
         "/users/{user_id}/effective-permissions",
     ],
 )
-async def test_management_gate_accepts_exact_scope_and_rejects_read_only(path):
+async def test_management_gate_accepts_exact_scope_and_rejects_read_only(monkeypatch, path):
     route = next(route for route in router.routes if route.path == path)
     checker = route.dependencies[0].dependency
     allowed = EffectivePermissions(user_id="actor", scopes=frozenset({"auth.permission:grant"}))
-    assert await checker(allowed) is allowed
     denied = EffectivePermissions(user_id="actor", scopes=frozenset({"auth.user:read"}))
+
+    if path in {"/permissions", "/users/{user_id}/effective-permissions"}:
+        assert checker is require_permission_catalog_read
+        user, session = SimpleNamespace(id=uuid4()), AsyncMock()
+        load_permissions = AsyncMock(return_value=allowed)
+        monkeypatch.setattr(
+            "app.modules.auth.deps.AuthService.load_effective_permissions", load_permissions
+        )
+        assert await checker(user, session) is None
+        load_permissions.assert_awaited_once_with(user.id)
+
+        load_permissions.reset_mock()
+        load_permissions.return_value = denied
+        with pytest.raises(PermissionDeniedError):
+            await checker(user, session)
+        load_permissions.assert_awaited_once_with(user.id)
+        return
+
+    assert await checker(allowed) is allowed
     with pytest.raises(PermissionDeniedError):
         await checker(denied)

@@ -1,3 +1,4 @@
+import { useReadOnlySupport } from "@/stores/supportStore";
 import { useState } from "react";
 import { Button, Card, Tabs, Typography } from "antd";
 import { useSearchParams } from "react-router-dom";
@@ -19,10 +20,11 @@ function toTabKey(v: string | null): TabKey {
  * 标题栏的「管理字典」维护季节 / 颜色 / 尺码。
  */
 export function GoodsPage() {
+  const readOnly = useReadOnlySupport();
   const [searchParams, setSearchParams] = useSearchParams();
   const [dictOpen, setDictOpen] = useState(false);
   const activeTab = toTabKey(searchParams.get("tab"));
-  const openStyleId = searchParams.get("style_id") ?? undefined;
+  const openStyleId = readOnly ? undefined : searchParams.get("style_id") ?? undefined;
 
   function switchTab(key: string) {
     setSearchParams(
@@ -55,7 +57,7 @@ export function GoodsPage() {
           商品 / 套装
         </Typography.Title>
       }
-      extra={<Button onClick={() => setDictOpen(true)}>管理字典</Button>}
+      extra={!readOnly && <Button onClick={() => setDictOpen(true)}>管理字典</Button>}
     >
       <Tabs
         activeKey={activeTab}
@@ -71,7 +73,7 @@ export function GoodsPage() {
           },
         ]}
       />
-      <DictManagerModal open={dictOpen} onClose={() => setDictOpen(false)} />
+      {!readOnly && <DictManagerModal open={dictOpen} onClose={() => setDictOpen(false)} />}
     </Card>
   );
 }

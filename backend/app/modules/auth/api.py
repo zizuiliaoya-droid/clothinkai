@@ -8,13 +8,15 @@
 
 from __future__ import annotations
 
+from typing import Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Query, Request, Response, status
+from fastapi import APIRouter, Depends, Query, Request, Response, status
 from slowapi.util import get_remote_address
 
 from app.core.audit import AuditService
 from app.core.exceptions import PermissionDeniedError
+from app.core.tenancy import support_context_ctx
 
 # slowapi 限流装饰器从 app.main 中绑定的 limiter 上获取
 # 但为了避免循环依赖，这里使用全局 limiter 单例
@@ -27,6 +29,7 @@ from app.modules.auth.deps import (
     CurrentUser,
     SessionDep,
     require_permission,
+    require_permission_catalog_read,
 )
 from app.modules.auth.models import User
 from app.modules.auth.schemas import (
@@ -133,14 +136,26 @@ async def get_me(
     from app.modules.auth.repository import RoleRepository
 
     roles = await RoleRepository(session).list_codes_for_user(user.id)
+    from app.modules.auth.platform_access import is_platform_admin
+
+    support = support_context_ctx.get()
+    mode: Literal["customer", "platform", "support"] = (
+        "support"
+        if support
+        else "platform"
+        if await is_platform_admin(session, user.id)
+        else "customer"
+    )
     return UserSummary(
         id=user.id,
         username=user.username,
         display_name=user.display_name,
         email=user.email,
         status=user.status,
-        password_must_change=user.password_must_change,
+        password_must_change=False if support else user.password_must_change,
         roles=roles,
+        session_mode=mode,
+        support_context=support,
     )
 
 
@@ -209,7 +224,7 @@ async def list_users(
 ) -> UserListResponse:
     user_service = UserService(session)
     items, total = await user_service.list(
-        page=page, page_size=page_size, status=status_filter, search=search
+        page=page, page_size=page_size, status=status_filter, search=search, actor_id=_user.id
     )
     from app.modules.auth.repository import RoleRepository
 
@@ -344,7 +359,7 @@ async def assign_roles(
 @router.get(
     "/permissions",
     response_model=list[RegisteredPermissionView],
-    dependencies=[require_permission("auth.permission", "grant")],
+    dependencies=[Depends(require_permission_catalog_read)],
 )
 async def registered_permissions(
     session: SessionDep,
@@ -411,7 +426,7 @@ async def reset_permission(
 @router.get(
     "/users/{user_id}/effective-permissions",
     response_model=EffectivePermissionsView,
-    dependencies=[require_permission("auth.permission", "grant")],
+    dependencies=[Depends(require_permission_catalog_read)],
 )
 async def effective_permissions(
     user_id: UUID,

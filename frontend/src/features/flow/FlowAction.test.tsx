@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { useSupportStore } from "@/stores/supportStore";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { FieldBlock } from "./FieldBlock";
@@ -24,7 +25,7 @@ beforeAll(() => {
   }
 });
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); useSupportStore.getState().end(); });
 
 const UI: UiState = {
   actions: {
@@ -129,4 +130,11 @@ describe("FieldBlock", () => {
     fireEvent.click(screen.getByRole("button", { name: "编辑收件信息" }));
     expect(onEdit).toHaveBeenCalledTimes(1);
   });
+});
+
+it("支持会话隐藏动作和字段编辑，保留字段内容", () => {
+  useSupportStore.getState().start({ access_token: "support", expires_in: 900, tenant: { id: "a", code: "a", name: "客户 A" } });
+  render(<><FlowAction ui={UI} actionKey="ship_push" label="确认推送仓库" onClick={vi.fn()} /><FieldBlock ui={UI} group="receiver" title="收件信息" onEdit={vi.fn()}>上海地址</FieldBlock></>);
+  expect(screen.getByText("上海地址")).toBeTruthy();
+  expect(screen.queryByRole("button")).toBeNull();
 });

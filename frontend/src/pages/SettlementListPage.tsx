@@ -1,3 +1,4 @@
+import { useReadOnlySupport } from "@/stores/supportStore";
 import { formatMoney } from "@/utils/money";
 import { useState } from "react";
 import {
@@ -75,6 +76,7 @@ export function SettlementListPage() {
 }
 
 function ServiceFeeSettlementTab() {
+  const readOnly = useReadOnlySupport();
   const qc = useQueryClient();
   const { token } = theme.useToken();
   const [filters, setFilters] = useState<SettlementListFilters>({
@@ -97,7 +99,7 @@ function ServiceFeeSettlementTab() {
     queryFn: () => listSettlements(filters),
   });
   // 「导入结款」只看页级 ui.actions.import（流程线 PR-5）：财务、管理员有，主管没有
-  const canImport = !error && data?.ui?.actions?.import?.state === "enabled";
+  const canImport = !readOnly && !error && data?.ui?.actions?.import?.state === "enabled";
 
   const refresh = () => {
     void qc.invalidateQueries({ queryKey: ["settlements"] });
@@ -172,6 +174,7 @@ function ServiceFeeSettlementTab() {
 
   /** 行内「操作」：顺序与禁用原因由 buildMenuItems 按 row.ui 定；ui 里没有的项不出现。 */
   function rowMenuItems(record: Settlement): NonNullable<MenuProps["items"]> {
+    if (readOnly) return [];
     const built = buildMenuItems("settlement", record.ui, {
       actions: {
         legacy_approve: { label: "核查通过", onClick: () => approveMutation.mutate(record.id) },

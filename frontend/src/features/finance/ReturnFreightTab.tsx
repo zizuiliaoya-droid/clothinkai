@@ -9,8 +9,10 @@ import { LineDrawer } from "@/features/flow/LineDrawer";
 import { FREIGHT_PAYMENTS_KEY, listFreightPayments } from "@/features/promotion/freightApi";
 import type { FreightFilters, ReturnFreightPayment } from "@/features/promotion/freightTypes";
 import { FreightPaymentModal } from "./components/FreightPaymentModal";
+import { useReadOnlySupport } from "@/stores/supportStore";
 
 export function ReturnFreightTab() {
+  const readOnly = useReadOnlySupport();
   const [filters, setFilters] = useState<FreightFilters>({ page: 1, page_size: 20 });
   const [line, setLine] = useState<ReturnFreightPayment | null>(null);
   const [target, setTarget] = useState<ReturnFreightPayment | null>(null);
@@ -31,7 +33,7 @@ export function ReturnFreightTab() {
     { title: "审核人", dataIndex: "reviewed_by_name", width: 110, render: (value) => value ?? "—" },
     { title: "付款日期", dataIndex: "payment_date", width: 120, render: (value) => value ?? "—" },
     ...(rows.some((row) => row.payment_proof_attachment_id || row.payment_proof_signed_url) ? [{ title: "付款凭证", width: 100, render: (_: unknown, row: ReturnFreightPayment) => row.payment_proof_signed_url ? <StyleImageThumbnail size={48} src={row.payment_proof_signed_url} alt="寄回运费付款凭证" /> : row.payment_proof_attachment_id ? "暂无法预览" : "—" }] : []),
-    ...(rows.some((row) => row.ui.actions?.freight_pay || row.ui.actions?.freight_reject_payment) ? [{ title: "操作", width: 160, render: (_: unknown, row: ReturnFreightPayment) => <Space wrap><FlowAction ui={row.ui} actionKey="freight_pay" label="付款" onClick={() => open(row, "pay")} showReasonBelow /><FlowAction ui={row.ui} actionKey="freight_reject_payment" label="驳回" onClick={() => open(row, "reject")} showReasonBelow /></Space> }] : []),
+    ...(!readOnly && rows.some((row) => row.ui.actions?.freight_pay || row.ui.actions?.freight_reject_payment) ? [{ title: "操作", width: 160, render: (_: unknown, row: ReturnFreightPayment) => <Space wrap><FlowAction ui={row.ui} actionKey="freight_pay" label="付款" onClick={() => open(row, "pay")} showReasonBelow /><FlowAction ui={row.ui} actionKey="freight_reject_payment" label="驳回" onClick={() => open(row, "reject")} showReasonBelow /></Space> }] : []),
   ];
   return <>
     <Space wrap style={{ marginBottom: 16 }}>

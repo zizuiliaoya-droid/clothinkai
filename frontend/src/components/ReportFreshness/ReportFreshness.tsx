@@ -1,3 +1,4 @@
+import { useReadOnlySupport } from "@/stores/supportStore";
 import type { ReactNode } from "react";
 import { Button, Space, Tooltip, Typography, message } from "antd";
 import {
@@ -90,6 +91,7 @@ interface Props {
  *   这时刷新反而会把这段区间切到汇总表，以后就要等刷新才更新了
  */
 export function ReportFreshness({ preset, dateFrom, dateTo, enabled = true }: Props) {
+  const readOnly = useReadOnlySupport();
   const queryClient = useQueryClient();
   const { data } = useSummaryFreshness(preset, dateFrom, dateTo, enabled);
 
@@ -140,7 +142,7 @@ export function ReportFreshness({ preset, dateFrom, dateTo, enabled = true }: Pr
           <ClockCircleOutlined aria-hidden /> 数据更新于 {asOf ? formatAsOf(asOf) : "—"}
         </Typography.Text>
       </Tooltip>
-      {data.can_refresh ? (
+      {!readOnly && data.can_refresh ? (
         <Button
           size="small"
           icon={<ReloadOutlined aria-hidden />}

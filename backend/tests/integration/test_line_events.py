@@ -20,7 +20,7 @@ from sqlalchemy import select
 from sqlalchemy import text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.tenancy import tenant_id_ctx
+from app.core.tenancy import actor_type_ctx, tenant_id_ctx, user_id_ctx
 from app.modules.auth.models import Permission
 from app.modules.flow.exceptions import LineEventPayloadTooLargeError
 from app.modules.flow.line_events import (
@@ -82,7 +82,17 @@ async def _call(session: AsyncSession, user: Any, method: str, path: str, json: 
     from app.modules.auth.service import AuthService
 
     async def _session_override() -> AsyncIterator[AsyncSession]:
-        yield session
+        # 鉴权已被测试替换且没有 JWT，请求内显式建立模拟身份，结束后恢复。
+        tokens = (
+            tenant_id_ctx.set(user.tenant_id),
+            user_id_ctx.set(user.id),
+            actor_type_ctx.set("user"),
+        )
+        try:
+            yield session
+        finally:
+            for token in reversed(tokens):
+                token.var.reset(token)
 
     perms = await AuthService(session).load_effective_permissions(user.id)
     try:

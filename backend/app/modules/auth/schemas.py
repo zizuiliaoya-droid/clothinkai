@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
@@ -94,6 +94,8 @@ class UserSummary(BaseModel):
     status: str
     must_change_password: bool = Field(default=False, alias="password_must_change")
     roles: list[str] = []
+    session_mode: Literal["customer", "platform", "support"] = "customer"
+    support_context: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------

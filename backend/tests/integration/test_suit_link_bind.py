@@ -20,6 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_session
+from app.core.tenancy import actor_type_ctx, tenant_id_ctx, user_id_ctx
 from app.modules.auth.deps import get_current_perms, get_current_user_active
 from app.modules.auth.models import AuditLog, Role
 from app.modules.auth.service import AuthService
@@ -46,8 +47,6 @@ def _pid() -> str:
 
 @pytest.fixture
 def tenant_ctx(tenant_a: Any) -> Iterator[None]:
-    from app.core.tenancy import tenant_id_ctx
-
     token = tenant_id_ctx.set(tenant_a.id)
     try:
         yield
@@ -60,15 +59,25 @@ def as_role(session: AsyncSession, factory: Any, tenant_a: Any) -> Iterator[Call
     """``await as_role("operations")`` → 之后的请求以该角色的新用户身份发出。"""
     app = _app()
 
-    async def _session_override() -> AsyncIterator[AsyncSession]:
-        yield session
-
-    app.dependency_overrides[get_session] = _session_override
-
     async def apply(role_code: str) -> Any:
         role = (await session.execute(select(Role).where(Role.code == role_code))).scalar_one()
         user = await factory.user(tenant_a, roles=[role])
         perms = await AuthService(session).load_effective_permissions(user.id)
+
+        async def _session_override() -> AsyncIterator[AsyncSession]:
+            # 鉴权已被测试替换且没有 JWT，请求内显式建立模拟身份，结束后恢复。
+            tokens = (
+                tenant_id_ctx.set(user.tenant_id),
+                user_id_ctx.set(user.id),
+                actor_type_ctx.set("user"),
+            )
+            try:
+                yield session
+            finally:
+                for token in reversed(tokens):
+                    token.var.reset(token)
+
+        app.dependency_overrides[get_session] = _session_override
         app.dependency_overrides[get_current_user_active] = lambda: user
         app.dependency_overrides[get_current_perms] = lambda: perms
         return user

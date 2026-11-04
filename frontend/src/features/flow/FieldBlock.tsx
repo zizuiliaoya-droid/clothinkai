@@ -1,3 +1,4 @@
+import { useReadOnlySupport } from "@/stores/supportStore";
 // 按 `ui.fields[group]` 渲染一个字段分组（流程线设计 8.1、8.2）。
 //
 // - 不存在 → 不渲染（矩阵里「隐」，或字段级权限不可读）
@@ -18,6 +19,7 @@ export interface FieldBlockProps {
 }
 
 export function FieldBlock({ ui, group, title, children, onEdit }: FieldBlockProps) {
+  const readOnly = useReadOnlySupport();
   const { token } = theme.useToken();
   const field = ui?.fields?.[group];
   if (!field) return null;
@@ -26,7 +28,7 @@ export function FieldBlock({ ui, group, title, children, onEdit }: FieldBlockPro
     <section aria-label={title} data-field-group={group}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
         <Typography.Text strong>{title}</Typography.Text>
-        {field.state === "edit" && onEdit && (
+        {!readOnly && field.state === "edit" && onEdit && (
           <Button type="link" size="small" onClick={onEdit} aria-label={`编辑${title}`}>
             编辑
           </Button>

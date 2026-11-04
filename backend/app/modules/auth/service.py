@@ -53,7 +53,11 @@ from app.modules.auth.models import (
     RefreshToken,
     User,
 )
-from app.modules.auth.platform_access import preserve_platform_membership, protect_platform_user
+from app.modules.auth.platform_access import (
+    is_platform_admin,
+    preserve_platform_membership,
+    protect_platform_user,
+)
 from app.modules.auth.repository import (
     AuditLogRepository,
     PermissionRepository,
@@ -396,7 +400,10 @@ class AuthService:
     # 加载有效权限（供 deps 使用）
     # ------------------------------------------------------------------ #
     async def load_effective_permissions(self, user_id: UUID) -> EffectivePermissions:
+        from app.core.tenancy import with_support_revokes
+
         role_scopes, grants, revokes = await self._permissions.list_scopes_for_user(user_id)
+        revokes = set(with_support_revokes(revokes))
         scopes = merge_permissions(role_scopes, grants, revokes)
         return EffectivePermissions(user_id=str(user_id), scopes=scopes, revokes=frozenset(revokes))
 
@@ -598,9 +605,17 @@ class UserService:
         page_size: int = 20,
         status: str | None = None,
         search: str | None = None,
+        actor_id: UUID | None = None,
     ) -> tuple[list[User], int]:
+        include_platform_users = actor_id is not None and await is_platform_admin(
+            self._session, actor_id
+        )
         items, total = await self._users.list(
-            page=page, page_size=page_size, status=status, search=search
+            page=page,
+            page_size=page_size,
+            status=status,
+            search=search,
+            include_platform_users=include_platform_users,
         )
         return list(items), total
 

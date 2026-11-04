@@ -1,12 +1,13 @@
 """PR9 schema rules and independent content snapshots."""
 
-from datetime import timedelta
+from datetime import date, timedelta
 
 import pytest
 from pydantic import ValidationError
 
 from app.modules.promotion.schemas import PlatformPostIn, PromotionUpdate
-from app.modules.promotion.urge_calculator import get_today
+
+TEST_TODAY = date(2026, 11, 4)
 
 
 @pytest.mark.parametrize(
@@ -15,11 +16,13 @@ from app.modules.promotion.urge_calculator import get_today
         {"like_count": -1},
         {"like_count": 2147483648},
         {"publish_url": "javascript:alert(1)"},
-        {"actual_publish_date": get_today() + timedelta(days=1)},
+        {"actual_publish_date": TEST_TODAY + timedelta(days=1)},
         {"platform": " "},
     ],
 )
-def test_platform_post_rejects_invalid_input(patch):
+def test_platform_post_rejects_invalid_input(monkeypatch, patch):
+    # 收集到执行可能跨租户时区零点，未来日期与校验时钟使用同一固定基准。
+    monkeypatch.setattr("app.modules.promotion.urge_calculator.get_today", lambda: TEST_TODAY)
     with pytest.raises(ValidationError):
         PlatformPostIn.model_validate({"platform": "抖音", **patch})
 

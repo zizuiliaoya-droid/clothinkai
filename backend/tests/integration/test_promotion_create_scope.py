@@ -22,7 +22,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.tenancy import tenant_id_ctx
+from app.core.tenancy import actor_type_ctx, tenant_id_ctx, user_id_ctx
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
@@ -72,16 +72,27 @@ def as_user(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> Iterator[
     monkeypatch.setattr(tasks.run_import_batch, "delay", lambda *a, **kw: None)
     monkeypatch.setattr(tasks.run_import_batch, "apply_async", lambda *a, **kw: None)
 
-    async def _session_override() -> AsyncIterator[AsyncSession]:
-        yield session
-
-    app.dependency_overrides[get_session] = _session_override
     app.dependency_overrides[get_import_service] = lambda: ImportService(
         session, attachment_service=_FakeAttachment()
     )
 
     async def apply(user: Any) -> None:
         perms = await AuthService(session).load_effective_permissions(user.id)
+
+        async def _session_override() -> AsyncIterator[AsyncSession]:
+            # 鉴权已被测试替换且没有 JWT，请求内显式建立模拟身份，结束后恢复。
+            tokens = (
+                tenant_id_ctx.set(user.tenant_id),
+                user_id_ctx.set(user.id),
+                actor_type_ctx.set("user"),
+            )
+            try:
+                yield session
+            finally:
+                for token in reversed(tokens):
+                    token.var.reset(token)
+
+        app.dependency_overrides[get_session] = _session_override
         app.dependency_overrides[get_current_user_active] = lambda: user
         app.dependency_overrides[get_current_perms] = lambda: perms
 

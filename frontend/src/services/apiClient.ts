@@ -2,6 +2,7 @@
 
 import axios, { AxiosError, AxiosRequestConfig } from "axios";
 import type { ApiError, TokenPair } from "@/types";
+import { useSupportStore } from "@/stores/supportStore";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 
@@ -11,10 +12,11 @@ const REFRESH_KEY = "clothing_erp_refresh_token";
 // ---------- 本地存储 ----------
 
 export function getAccessToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY);
+  return useSupportStore.getState().session?.accessToken ?? localStorage.getItem(TOKEN_KEY);
 }
 
 export function getRefreshToken(): string | null {
+  if (useSupportStore.getState().session) return null;
   return localStorage.getItem(REFRESH_KEY);
 }
 
@@ -43,6 +45,17 @@ export const apiClient = axios.create({
 
 // 请求拦截器：注入 Authorization
 apiClient.interceptors.request.use((config) => {
+  const session = useSupportStore.getState().session;
+  (config as typeof config & { _supportKey?: number })._supportKey = session?.key ?? 0;
+  if (session) {
+    if (session.expiresAt <= Date.now()) {
+      useSupportStore.getState().end("只读排查已到期，请重新选择客户。");
+      throw new Error("只读排查已到期");
+    }
+    if (!["get", "head"].includes(config.method?.toLowerCase() ?? "get")) {
+      throw new Error("当前为客户只读排查，不能修改客户数据");
+    }
+  }
   const token = getAccessToken();
   if (token && config.headers) {
     config.headers["Authorization"] = `Bearer ${token}`;
@@ -60,9 +73,25 @@ function flushQueue(token: string | null): void {
 }
 
 apiClient.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    const key = (response.config as AxiosRequestConfig & { _supportKey?: number })._supportKey;
+    if (key != null && key !== (useSupportStore.getState().session?.key ?? 0)) {
+      return Promise.reject(new Error("会话已切换，已丢弃上一个视图的响应"));
+    }
+    return response;
+  },
   async (error: AxiosError<ApiError>) => {
-    const original = error.config as AxiosRequestConfig & { _retry?: boolean };
+    const original = error.config as AxiosRequestConfig & { _retry?: boolean; _supportKey?: number };
+    if (original?._supportKey != null && original._supportKey !== (useSupportStore.getState().session?.key ?? 0)) {
+      return Promise.reject(new Error("会话已切换，已丢弃上一个视图的响应"));
+    }
+    // 排查令牌永不使用平台 refresh；结束后只恢复保留的平台会话。
+    if (original?._supportKey) {
+      if (error.response?.status === 401 || error.response?.data?.code === "SUPPORT_SESSION_INVALID") {
+        useSupportStore.getState().end("只读排查已失效，请重新选择客户。");
+      }
+      return Promise.reject(error);
+    }
 
     // 401 + 未重试过 + 不是 login/refresh 自身
     if (

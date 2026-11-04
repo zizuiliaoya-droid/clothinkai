@@ -22,6 +22,7 @@ from app.modules.auth.models import (
     UserPermissionOverride,
     UserRole,
 )
+from app.modules.auth.platform_access import PLATFORM_ADMIN
 
 
 def _utcnow() -> datetime:
@@ -83,9 +84,19 @@ class UserRepository:
         page_size: int = 20,
         status: str | None = None,
         search: str | None = None,
+        include_platform_users: bool = False,
     ) -> tuple[Sequence[User], int]:
         stmt = select(User).where(User.deleted_at.is_(None))
         count_stmt = select(func.count()).select_from(User).where(User.deleted_at.is_(None))
+        if not include_platform_users:
+            platform_member = (
+                select(UserRole.id)
+                .join(Role, Role.id == UserRole.role_id)
+                .where(UserRole.user_id == User.id, Role.code == PLATFORM_ADMIN)
+                .exists()
+            )
+            stmt = stmt.where(~platform_member)
+            count_stmt = count_stmt.where(~platform_member)
         if status:
             stmt = stmt.where(User.status == status)
             count_stmt = count_stmt.where(User.status == status)

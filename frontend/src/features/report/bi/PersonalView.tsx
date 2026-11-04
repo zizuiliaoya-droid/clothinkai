@@ -1,3 +1,4 @@
+import { useReadOnlySupport } from "@/stores/supportStore";
 // BI PR 个人版（7e R6，设计 2.6 / Q16）：只有 `report.bi:read_own` 的人看到这一版。
 // 读 /bi/personal 的白名单（本人计数与进度），不含任何金额；页面上不出现「¥」。
 import { useRef } from "react";
@@ -23,6 +24,7 @@ interface Props {
 }
 
 export function PersonalView({ preset, dateFrom, dateTo, enabled }: Props) {
+  const readOnly = useReadOnlySupport();
   const { data, isLoading, isError } = useQuery({
     queryKey: ["bi-personal", preset, dateFrom, dateTo],
     enabled,
@@ -69,7 +71,7 @@ export function PersonalView({ preset, dateFrom, dateTo, enabled }: Props) {
       title="我的推广进度"
       loading={isLoading}
       styles={{ body: { background: "#f8fafc" } }}
-      extra={
+      extra={!readOnly &&
         <Button
           icon={<DownloadOutlined />}
           loading={exporting}

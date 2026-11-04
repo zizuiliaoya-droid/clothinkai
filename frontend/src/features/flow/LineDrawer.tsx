@@ -1,3 +1,4 @@
+import { useReadOnlySupport } from "@/stores/supportStore";
 // 主线抽屉（流程线设计 6.6、8.1）：头信息 + 「下一步」+ 时间线 + 可选页签 + 留言框。推广列表、谈款页、结款页共用。
 // - 打开时拉一次时间线；抽屉里做了任何动作后由调用方 invalidate lineEventsKey(lineId) 重新拉，不做推送
 // - 头信息不显示商品编码：商品简称、博主由页面行传入（读接口只回单据号与阶段）
@@ -37,6 +38,7 @@ export function LineDrawer({
   defaultTab,
   extra,
 }: LineDrawerProps) {
+  const readOnly = useReadOnlySupport();
   const { token } = theme.useToken();
   const opener = useRef<HTMLElement | null>(null);
   const open = lineId !== null;
@@ -86,7 +88,7 @@ export function LineDrawer({
         <Space direction="vertical" size={16} style={{ width: "100%" }}>
           <LineTimeline data={data} />
           {tabs && tabs.length > 0 && <Tabs items={tabs} defaultActiveKey={defaultTab} />}
-          {data.ui?.actions?.comment?.state === "enabled" && <LineCommentBox lineId={lineId} />}
+          {!readOnly && data.ui?.actions?.comment?.state === "enabled" && <LineCommentBox lineId={lineId} />}
         </Space>
       )}
     </Drawer>

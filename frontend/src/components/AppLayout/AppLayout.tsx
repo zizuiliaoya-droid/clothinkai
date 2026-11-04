@@ -1,4 +1,4 @@
-import { Avatar, Dropdown, Layout, Menu, Space, Typography } from "antd";
+import { Alert, Avatar, Button, Dropdown, Layout, Menu, Space, Typography } from "antd";
 import type { MenuProps } from "antd";
 import {
   AppstoreOutlined,
@@ -23,6 +23,8 @@ import { useAuthStore } from "@/stores/authStore";
 import { logout as apiLogout } from "@/features/auth/api";
 import { useReportCapabilities } from "@/features/report/useReportCapabilities";
 import { ModuleNavigation } from "./ModuleNavigation";
+import { useSupportStore } from "@/stores/supportStore";
+import { SUPPORT_PAGES } from "@/features/auth/sessionMode";
 
 const { Header, Sider, Content } = Layout;
 
@@ -31,6 +33,11 @@ export function AppLayout() {
   const location = useLocation();
   const user = useAuthStore((s) => s.user);
   const logout = useAuthStore((s) => s.logout);
+  const support = useSupportStore((s) => s.session);
+  function returnToPlatform() {
+    useSupportStore.getState().end();
+    navigate("/platform", { replace: true });
+  }
   const roles = user?.roles ?? [];
   const isSystemAdmin = roles.some(
     (role) => role === "admin" || role === "platform_admin"
@@ -192,7 +199,6 @@ export function AppLayout() {
       label: "系统管理",
       children: [
         { key: "/users", label: <Link to="/users">用户管理</Link> },
-        ...(roles.includes("platform_admin") ? [{ key: "/tenants", label: <Link to="/tenants">租户管理</Link> }] : []),
         { key: "/imports", label: <Link to="/imports">导入记录</Link> },
         ...(canViewCredentials
           ? [
@@ -255,7 +261,9 @@ export function AppLayout() {
   const isWarehouseOnly =
     roles.includes("warehouse") &&
     !roles.some((r) => r === "admin" || r === "platform_admin");
-  const visibleMenuItems: MenuProps["items"] = isWarehouseOnly
+  const visibleMenuItems: MenuProps["items"] = support
+    ? SUPPORT_PAGES.map((page) => ({ key: page.path, label: <Link to={page.path}>{page.label}</Link> }))
+    : isWarehouseOnly
     ? [
         {
           key: "/warehouse-orders",
@@ -281,7 +289,7 @@ export function AppLayout() {
             fontWeight: 600,
           }}
         >
-          服装电商管理
+          {support ? "客户只读排查" : "服装电商管理"}
         </div>
         <Menu
           theme="dark"
@@ -302,18 +310,24 @@ export function AppLayout() {
             borderBottom: "1px solid #f0f0f0",
           }}
         >
-          <Dropdown menu={{ items: userMenu }} placement="bottomRight">
+          {support ? <Typography.Text>平台排查会话 · 不处理客户业务</Typography.Text> : <Dropdown menu={{ items: userMenu }} placement="bottomRight">
             <Space style={{ cursor: "pointer" }}>
               <Avatar icon={<UserOutlined />} />
               <Typography.Text>
                 {user?.display_name || user?.username || "用户"}
               </Typography.Text>
             </Space>
-          </Dropdown>
+          </Dropdown>}
         </Header>
-        <ModuleNavigation productionAccess={reportCaps?.production} />
+        {support ? <Alert
+          type="warning" showIcon
+          style={{ position: "sticky", top: 0, zIndex: 100, borderRadius: 0 }}
+          message={<Space wrap><strong>{support.tenant.name}（{support.tenant.code}） · 只读排查</strong><span>有效至 {new Date(support.expiresAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}</span></Space>}
+          description="只能查看与筛选，不能新增、修改、审批、删除、上传或导出。"
+          action={<Button onClick={returnToPlatform}>返回平台</Button>}
+        /> : <ModuleNavigation productionAccess={reportCaps?.production} />}
         <Content className="app-content">
-          <Outlet key={`${user?.id ?? ""}:${[...roles].sort().join(",")}`} />
+          <Outlet key={`${user?.id ?? ""}:${support?.key ?? "customer"}:${[...roles].sort().join(",")}`} />
         </Content>
       </Layout>
     </Layout>

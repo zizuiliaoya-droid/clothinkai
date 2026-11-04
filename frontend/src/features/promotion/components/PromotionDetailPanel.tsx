@@ -18,6 +18,7 @@ import { FlowAction } from "@/features/flow/FlowAction";
 import type { FreightModalMode } from "./FreightModal";
 import { ContentCategoryEditor } from "./ContentCategoryEditor";
 import { PlatformPostsEditor } from "./PlatformPostsEditor";
+import { useReadOnlySupport } from "@/stores/supportStore";
 
 const dash = (v: ReactNode) => (v == null || v === "" ? "—" : v);
 
@@ -48,6 +49,7 @@ export function PromotionDetailPanel({
   onPaymentQr?: (row: Promotion) => void;
   onFreight?: (row: Promotion, mode: FreightModalMode) => void;
 }) {
+  const readOnly = useReadOnlySupport();
   const { data, isLoading, error } = useQuery({
     queryKey: promotionDetailKey(promotionId),
     queryFn: () => getPromotion(promotionId),
@@ -153,7 +155,7 @@ export function PromotionDetailPanel({
       </FieldBlock>
       <FieldBlock ui={ui} group="payment_qr" title="收款码">
         {data.payment_qr_signed_url ? <StyleImageThumbnail size={100} src={data.payment_qr_signed_url} alt="博主收款码" /> : <Typography.Text>{data.payment_qr_attachment_id ? "已上传收款码（暂时无法预览）" : "尚未上传收款码"}</Typography.Text>}
-        {onPaymentQr && <Button onClick={() => onPaymentQr(data)}>{ui?.fields?.payment_qr?.state === "edit" ? "管理收款码" : "查看收款码"}</Button>}
+        {onPaymentQr && <Button onClick={() => onPaymentQr(data)}>{!readOnly && ui?.fields?.payment_qr?.state === "edit" ? "管理收款码" : "查看收款码"}</Button>}
       </FieldBlock>
       <FieldBlock ui={ui} group="recall_info" title="召回">
         <Descriptions size="small" column={1}>

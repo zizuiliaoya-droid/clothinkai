@@ -11,6 +11,7 @@ from uuid import UUID
 
 from app.core.security.field_permissions import field_perm_context_from
 from app.core.security.permissions import EffectivePermissions
+from app.core.tenancy import with_support_revokes
 from app.modules.auth.domain import merge_permissions
 from app.modules.flow.matrix import FlowActor
 
@@ -19,6 +20,7 @@ async def load_flow_actor(user_id: UUID, role_repo: Any, perm_repo: Any) -> Flow
     """``role_repo`` / ``perm_repo``：``RoleRepository`` / ``PermissionRepository``（同 ``build_field_perm_context``）。"""
     role_codes = frozenset(await role_repo.list_codes_for_user(user_id))
     role_scopes, grants, revokes = await perm_repo.list_scopes_for_user(user_id)
+    revokes = set(with_support_revokes(revokes))
     return FlowActor(
         user_id=user_id,
         perms=EffectivePermissions(

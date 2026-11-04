@@ -1,3 +1,4 @@
+import { useReadOnlySupport } from "@/stores/supportStore";
 import { useRef } from "react";
 import { Alert, Button, Card, Select, Space, Switch, Tabs, Typography } from "antd";
 import { DownloadOutlined } from "@ant-design/icons";
@@ -79,6 +80,7 @@ const BI_FILTER_DEFAULTS: BiFilters = {
 };
 
 export function BiDashboardPage() {
+  const readOnly = useReadOnlySupport();
   const { filters, ready, setFilters } = useReportFilters(
     "bi_dashboard",
     BI_FILTER_SCHEMA,
@@ -180,7 +182,7 @@ export function BiDashboardPage() {
           checked={excludeBrushing}
           onChange={(v) => setFilters({ exclude_brushing: v })}
         />
-        <Button
+        {!readOnly && <Button
           icon={<DownloadOutlined />}
           loading={exporting}
           disabled={!data}
@@ -193,7 +195,7 @@ export function BiDashboardPage() {
           }
         >
           导出图片
-        </Button>
+        </Button>}
       </Space>
       <div style={{ marginBottom: 8 }}>
         <Typography.Text style={{ color: MUTED }}>

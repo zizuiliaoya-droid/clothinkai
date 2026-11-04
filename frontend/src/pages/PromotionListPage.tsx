@@ -1,3 +1,4 @@
+import { useReadOnlySupport } from "@/stores/supportStore";
 import { useEffect, useState } from "react";
 import {
   Alert,
@@ -135,6 +136,7 @@ const statusColor: Record<string, string> = {
 };
 
 export function PromotionListPage() {
+  const readOnly = useReadOnlySupport();
   const qc = useQueryClient();
   const columnSettings = usePromotionColumnPreference();
   const screens = Grid.useBreakpoint();
@@ -267,8 +269,8 @@ export function PromotionListPage() {
   // 「金额改动」页签与菜单只看页级标记（与金额改动接口同一判定），不看行上的报价值
   const canAmountLog = Boolean(data?.ui?.actions?.amount_log);
   // 「新建推广」「导入站外推广」只看页级 ui（流程线 PR-5：持 promotion_create:write 才有，PR 看不到）
-  const canCreate = data?.ui?.actions?.create?.state === "enabled";
-  const canImport = data?.ui?.actions?.import?.state === "enabled";
+  const canCreate = !readOnly && data?.ui?.actions?.create?.state === "enabled";
+  const canImport = !readOnly && data?.ui?.actions?.import?.state === "enabled";
 
   /**
    * 审核通过（R2 / R3）。成功提示按接口的 review_outcome 出，不看 settlement_status（置换单直接已结款）；
@@ -312,6 +314,10 @@ export function PromotionListPage() {
    * 顺序与禁用原因由 buildMenuItems 定；没有的项不出现。审核一个动作拆成通过 / 驳回两项（expandReviewItem）。
    */
   function flowMenuItems(record: Promotion): NonNullable<MenuProps["items"]> {
+    if (readOnly) return [
+      ...(record.payment_qr_attachment_id ? [{ key: "payment_qr_view", label: "查看收款码", onClick: () => setPaymentQrTarget(record) }] : []),
+      ...(record.line_id && canAmountLog ? [{ key: "amount-log", label: "金额改动记录", onClick: () => openLine(record, "amount") }] : []),
+    ];
     const built = buildMenuItems("promotion", record.ui, {
       actions: {
         publish: { label: "标记发布", onClick: () => { setPublishTarget(record); setPublishOpen(true); } },
@@ -680,8 +686,8 @@ export function PromotionListPage() {
     return { ...column, fixed: screens.xl && !reordered ? column.fixed : undefined };
   });
   const toolbar = <Space wrap className="promotion-toolbar">
-    <PromotionColumnSettings key={columnSettings.userId} {...columnSettings}
-      options={allowedColumns.map((column) => ({ key: column.key, label: typeof column.title === "string" ? column.title : column.key }))} />
+    {!readOnly && <PromotionColumnSettings key={columnSettings.userId} {...columnSettings}
+      options={allowedColumns.map((column) => ({ key: column.key, label: typeof column.title === "string" ? column.title : column.key }))} />}
     {canImport && <ImportUploadButton source="manual_promotion" label="导入站外推广"
       invalidateKeys={[["promotions"]]} templateColumns={PROMOTION_IMPORT_COLUMNS} />}
     {canCreate && <Button type="primary" icon={<PlusOutlined />} onClick={() => setOpen(true)}>新建推广</Button>}

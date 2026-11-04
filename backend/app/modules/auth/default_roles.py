@@ -145,7 +145,7 @@ DEFAULT_ROLES: tuple[RoleSpec, ...] = (
     RoleSpec(
         code="platform_admin",
         name="平台管理员",
-        description="跨租户的超级管理员（不属于任何 tenant）",
+        description="default 内的平台客户管理账号；客户业务仅可通过短时只读排查访问",
         permissions=(SCOPE_ALL,),
     ),
     RoleSpec(
