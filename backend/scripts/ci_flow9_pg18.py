@@ -143,7 +143,16 @@ def verify(values):
     assert len(faults) == 3 and all(f["passed"] and f["source_restored"] for f in faults)
     with closing(connect(values["DATABASE_URL_SYNC"])) as conn:
         verify_server(conn)
-        assert current(conn) == HEAD
+        # 历史068往返证据保持固定；当前源码服务测试在最新单一schema上运行。
+        from alembic.config import Config
+        from alembic.script import ScriptDirectory
+
+        cfg = Config()
+        cfg.set_main_option("script_location", "alembic")
+        scripts = ScriptDirectory.from_config(cfg)
+        heads = scripts.get_heads()
+        assert len(heads) == 1 and current(conn) == heads[0]
+        assert HEAD in {revision.revision for revision in scripts.walk_revisions(head=heads[0])}
     return {
         "passed": True,
         "revision": HEAD,

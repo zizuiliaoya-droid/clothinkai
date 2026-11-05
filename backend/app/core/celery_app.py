@@ -63,6 +63,7 @@ celery_app.autodiscover_tasks(
         "app.tasks.report_tasks",  # U14：precompute_report_cache（占位）
         "app.tasks.summary_tasks",  # PRD 模块三：refresh_report_summaries（5 张汇总表）
         "app.tasks.urge_tasks",  # PRD 改动 2：scan_urge_tasks（催发任务，独立于企微）
+        "app.tasks.follow_up_tasks",  # 1105：每日站内待跟进汇总，不投递外部消息
     ]
 )
 
@@ -102,6 +103,11 @@ celery_app.conf.beat_schedule = {
     "urge-task-scan": {
         "task": "app.tasks.urge_tasks.scan_urge_tasks",
         "schedule": crontab(hour=0, minute=30),
+        "options": {"queue": "default"},
+    },
+    "follow-up-daily-summary": {
+        "task": "app.tasks.follow_up_tasks.summarize_follow_up",
+        "schedule": crontab(hour=0, minute=35),  # 北京时间08:35
         "options": {"queue": "default"},
     },
     # 每日 09:00 企微催发扫描（U07，与备份/清理错峰）

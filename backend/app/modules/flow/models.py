@@ -23,6 +23,19 @@ from app.modules.negotiation import models as _negotiation_models  # noqa: F401
 from app.modules.promotion import models as _promotion_models  # noqa: F401
 
 
+class LineCommentRead(TenantScopedModel):
+    __tablename__ = "line_comment_read"
+
+    user_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("user.id", ondelete="CASCADE")
+    )
+    line_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True))
+    last_read_comment_seq: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    __table_args__ = (
+        Index("uq_line_comment_read", "tenant_id", "user_id", "line_id", unique=True),
+    )
+
+
 class LineEvent(TenantScopedModel):
     """主线上的一条事件。"""
 

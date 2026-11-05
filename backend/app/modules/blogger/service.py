@@ -25,6 +25,15 @@ from app.core.security.field_permissions import (
 )
 from app.modules.auth.models import User
 from app.modules.auth.repository import PermissionRepository, RoleRepository
+from app.modules.blogger.claim_access import (
+    BloggerAccessContext,
+    can_read_contact,
+    can_write_contact,
+    ensure_contact_write,
+    load_blogger_access,
+    row_contact_allowed,
+)
+from app.modules.blogger.claim_service import BloggerClaimService
 from app.modules.blogger.domain import (
     build_blogger_audit_changes,
     compute_blogger_changes,
@@ -109,6 +118,9 @@ class BloggerService:
             blogger.blogger_type = self._tags.compute_blogger_type(payload.follower_count)
         self._repo.add(blogger)
         await self._session.flush()
+        await BloggerClaimService(self._session).auto_claim_new(
+            blogger, user, payload.claim_work_wechat_id
+        )
 
         # 审计：BR-U03-32 创建仅记账号 + 昵称 + 平台（8b 判重键带平台；敏感值脱敏）
         after: dict[str, Any] = {
@@ -168,6 +180,8 @@ class BloggerService:
             await self._ensure_account_free(new_platform, new_account, exclude_id=blogger.id)
 
         # BR-U03-42: 字段写权限
+        row_access = await load_blogger_access(self._session, user, [blogger.id])
+        ensure_contact_write(row_access, blogger.id, payload.model_fields_set)
         await self._check_sensitive_write_permission(payload, user)
         await self._check_quote_note_write(payload, user)
         await self._check_quote_note_readable(payload, user)
@@ -251,6 +265,14 @@ class BloggerService:
         blogger, is_inserted = await self._repo.upsert_atomic(
             tenant_id=user.tenant_id, values=values
         )
+        if is_inserted:
+            await BloggerClaimService(self._session).auto_claim_new(
+                blogger, user, payload.claim_work_wechat_id
+            )
+        else:
+            # 原子 upsert 可能与另一创建并发；在提交前以实际命中行判权。
+            row_access = await load_blogger_access(self._session, user, [blogger.id])
+            ensure_contact_write(row_access, blogger.id, {"wechat", "phone"})
 
         # 审计区分入口
         action = "blogger.create_via_import" if is_inserted else "blogger.update_via_import"
@@ -359,21 +381,24 @@ class BloggerService:
         关键：根据 user 角色决定 include_wechat_in_keyword 参数。
         系统失败让异常自然冒泡（不 try/except DB 异常 → 5xx + Sentry）。
         """
-        ctx = await build_field_perm_context(user.id, self._roles, self._perms)
-        can_search_contact = can_read_field("blogger", "wechat", ctx)
+        access = await load_blogger_access(self._session, user, [])
+        can_search_contact = can_read_field("blogger", "wechat", access.field_ctx)
 
         items, total = await self._repo.list(
             filters=filters,
             page=page,
             page_size=page_size,
             include_wechat_in_keyword=can_search_contact,
+            claim_pr_id=user.id,
+            restrict_to_claims=access.enabled and not access.manager,
         )
 
         # 监控候选数分布
         blogger_search_results_count.observe(total)
 
+        access = await load_blogger_access(self._session, user, [b.id for b in items])
         return BloggerPage(
-            items=[await self._to_response(b, user) for b in items],
+            items=[await self._to_response(b, user, access) for b in items],
             total=total,
             page=page,
             page_size=page_size,
@@ -482,15 +507,32 @@ class BloggerService:
         if denied:
             raise FieldPermissionDenied(fields=denied, entity="blogger")
 
-    async def _to_response(self, blogger: Blogger, user: User) -> BloggerResponse:
+    async def _to_response(
+        self, blogger: Blogger, user: User, access: BloggerAccessContext | None = None
+    ) -> BloggerResponse:
         """BR-U03-41 / U09: 字段读过滤（经 core 注册表 + 字段级 override）。"""
-        ctx = await build_field_perm_context(user.id, self._roles, self._perms)
+        if access is None:
+            access = await load_blogger_access(self._session, user, [blogger.id])
+        ctx = access.field_ctx
         can_see_quote = can_read_field("blogger", "quote", ctx)
-        can_see_wechat = can_read_field("blogger", "wechat", ctx)
-        can_see_phone = can_read_field("blogger", "phone", ctx)
+        can_see_wechat = can_read_contact(access, blogger.id, "wechat")
+        can_see_phone = can_read_contact(access, blogger.id, "phone")
 
         return BloggerResponse(
             id=blogger.id,
+            claimed_by_me=blogger.id in access.claimed_ids,
+            claim_count=access.claim_counts.get(blogger.id, 0),
+            can_self_claim=access.can_self_claim,
+            can_manage_claims=access.can_manage,
+            available_for_new_cooperation=row_contact_allowed(access, blogger.id)
+            and not access.readonly,
+            contact_permissions={
+                f: {
+                    "read": can_read_contact(access, blogger.id, f),
+                    "write": can_write_contact(access, blogger.id, f),
+                }
+                for f in ("wechat", "phone")
+            },
             xiaohongshu_id=blogger.xiaohongshu_id,
             nickname=blogger.nickname,
             platform=blogger.platform,

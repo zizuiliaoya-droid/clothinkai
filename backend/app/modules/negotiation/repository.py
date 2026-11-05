@@ -152,15 +152,32 @@ class NegotiationRepository:
         cooperation_mode: str | None = None,
         keyword: str | None = None,
         overdue_only: bool = False,
+        only_unread_comments: bool = False,
+        needs_follow_up: bool = False,
+        engagement_actor: Any = None,
         page: int = 1,
         page_size: int = 20,
     ) -> tuple[builtins.list[Mapping[str, Any]], int]:
+        from app.modules.flow.engagement import (
+            COMMENT_STATE_SQL,
+            engagement_joins,
+            engagement_params,
+            follow_up_state_sql,
+            needs_follow_up_sql,
+        )
+
+        joins = _JOINS + engagement_joins("n")
         clauses = ["n.tenant_id = :tenant_id", _VISIBLE]
         params: dict[str, Any] = {
             "tenant_id": tenant_id,
             "viewer_id": viewer_id,
             "see_all": see_all,
+            **engagement_params(engagement_actor),
         }
+        if only_unread_comments:
+            clauses.append("activity.unread_comment_count > 0")
+        if needs_follow_up:
+            clauses.append(needs_follow_up_sql("n", "negotiation"))
         if overdue_only:
             clauses.append(_OVERDUE)
             params["overdue_cutoff"] = overdue_cutoff
@@ -188,21 +205,18 @@ class NegotiationRepository:
 
         total = int(
             (
-                await self._session.execute(text(f"SELECT COUNT(*) {_JOINS} WHERE {where}"), params)
+                await self._session.execute(text(f"SELECT COUNT(*) {joins} WHERE {where}"), params)
             ).scalar_one()
         )
         rows = (
             await self._session.execute(
                 text(
                     f"""
-                    SELECT {_SELECT_COLUMNS}
-                    {_JOINS}
+                    SELECT {_SELECT_COLUMNS}, {COMMENT_STATE_SQL} AS comment_state,
+                      {follow_up_state_sql('n', 'negotiation')} AS follow_up
+                    {joins}
                     WHERE {where}
-                    ORDER BY
-                      -- 主管待审的排最前：主管打开页面就该先看到要处理的
-                      CASE n.status WHEN '主管待审' THEN 0 WHEN '草稿' THEN 1
-                                    WHEN '审核驳回' THEN 2 ELSE 3 END,
-                      n.created_at DESC, n.id
+                    ORDER BY COALESCE(activity.last_comment_at,n.created_at) DESC, n.id DESC
                     OFFSET :offset LIMIT :limit
                     """
                 ),

@@ -354,11 +354,14 @@ class BloggerImportAdapter:
         xhs_id = parsed["xiaohongshu_id"]
         warnings: list[str] = []
         parsed = await self._prepare(parsed, session=session, ctx=ctx, warnings=warnings)
-        specs = self.compare_specs()
-        incoming = {spec.name: parsed[spec.name] for spec in specs if spec.name in parsed}
 
         # 8b：按（平台, 账号）判重；平台空缺省小红书（与 _insert 同口径）
         existing = await repo.get_by_account(parsed.get("platform") or _DEFAULT_PLATFORM, xhs_id)
+        from app.modules.blogger.claim_import import prepare_claim_import
+
+        parsed = await prepare_claim_import(session, ctx, parsed, existing, warnings)
+        specs = self.compare_specs()
+        incoming = {spec.name: parsed[spec.name] for spec in specs if spec.name in parsed}
         if existing is None:
             return await self._insert(parsed, session=session, ctx=ctx, warnings=warnings)
         reason = self._identity_mismatch(existing, parsed, ctx)
@@ -549,6 +552,9 @@ class BloggerImportAdapter:
         blogger = Blogger(tenant_id=ctx.tenant_id, **values)
         session.add(blogger)
         await session.flush()
+        from app.modules.blogger.claim_import import claim_import_created
+
+        await claim_import_created(session, ctx, blogger, warnings)
         # 新对象的 id 不可能已登记过：这一步只为登记，同批后面的行以本行写入的值为准
         screen_batch_seen(ctx, OBJECT_TYPE, blogger.id, self.compare_specs(), values)
         await self._write_snapshot(

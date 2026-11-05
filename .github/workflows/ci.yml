@@ -249,6 +249,13 @@ jobs:
         run: python -m scripts.ci_flow7_pg18 drill --ci --output ci-artifacts/flow7-pg18-drill.json
       - name: PR9 synthetic migration round trip (067 to 068 to 067 to 068)
         run: python -m scripts.ci_flow9_pg18 drill
+      - name: Report cache cleanup 068-069 roundtrip, empty rollback, RLS and ACL
+        run: python -m scripts.ci_report_cache_cleanup_pg18
+      - name: Upgrade current source schema and roundtrip 070-071
+        run: |
+          python -m alembic upgrade head
+          python -m alembic downgrade 069_remove_unused_shop_caches
+          python -m alembic upgrade head
       - name: PR9 snapshots, imports, primary reports, true RLS and concurrent platform writes
         run: |
           python -m pytest -q --junitxml=ci-artifacts/flow9-pg18-tests.xml \
@@ -261,8 +268,6 @@ jobs:
             tests/integration/test_promotion_patch_groups.py
           python -m scripts.ci_flow9_faults
           python -m scripts.ci_flow9_pg18 verify
-      - name: Report cache cleanup 068-069 roundtrip, empty rollback, RLS and ACL
-        run: python -m scripts.ci_report_cache_cleanup_pg18
       - name: Report daily refresh, coverage and concurrency after cache removal
         run: |
           python -m pytest -q --junitxml=ci-artifacts/report-cleanup-pg18-tests.xml \
@@ -360,6 +365,17 @@ jobs:
         run: python -m scripts.ci_flow8_faults
       - name: Verify PR8 mandatory evidence and zero skips
         run: python -m scripts.ci_flow8_verify
+      - name: 1105 comment reads, follow-up, true RLS and independent comment transactions
+        run: |
+          python -m pytest -q --junitxml=ci-artifacts/1105-engagement-pg18-tests.xml \
+            tests/integration/test_migration_070_state.py \
+            tests/integration/test_blogger_claims.py \
+            tests/integration/test_blogger_claims_rls.py \
+            tests/integration/test_migration_071_state.py \
+            tests/integration/test_line_engagement.py \
+            tests/integration/test_line_comment_reads_rls.py \
+            tests/integration/test_line_comment_concurrency.py \
+            tests/integration/test_notification_read_persistence.py
       - name: Retain synthetic validation evidence
         if: always()
         uses: actions/upload-artifact@v4

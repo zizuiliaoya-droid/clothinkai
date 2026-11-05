@@ -29,7 +29,7 @@ from app.core.attachment import BucketKind
 from app.core.attachment import attachment_service as _default_attachment_service
 from app.core.audit import AuditService
 from app.core.config import settings
-from app.core.exceptions import PermissionDeniedError
+from app.core.exceptions import PermissionDeniedError, ValidationError
 from app.core.metrics import (
     import_file_size_bytes,
     import_retry_total,
@@ -106,6 +106,7 @@ class ImportService:
         source: str,
         user: User,
         mapping_version: int | None = None,
+        claim_work_wechat_id: UUID | None = None,
     ) -> ImportBatch:
         """上传导入文件，创建 batch（status=processing）并异步触发解析。
 
@@ -123,6 +124,18 @@ class ImportService:
         # 0. source 白名单（NF：upload 时拒未注册）
         if source not in ImportAdapterRegistry.sources():
             raise ImportSourceUnknownError(source)
+        from app.modules.blogger.claim_service import BloggerClaimService
+        from app.modules.importer.adapters.blogger import BloggerImportAdapter
+
+        if isinstance(ImportAdapterRegistry.get(source), BloggerImportAdapter):
+            claims = BloggerClaimService(self._session)
+            claim_access = await claims.access(user)
+            if claim_work_wechat_id is not None or (
+                claim_access.enabled and claim_access.can_self_claim and not claim_access.manager
+            ):
+                await claims.validate_work_wechat(claim_work_wechat_id, user)
+        elif claim_work_wechat_id is not None:
+            raise ValidationError("仅博主导入可指定认领工作微信")
 
         # 1. 格式白名单（扩展名 + MIME）
         self._assert_format(filename, content_type)
@@ -153,6 +166,7 @@ class ImportService:
             file_r2_key=r2_key,
             file_bucket=settings.IMPORT_BUCKET,
             mapping_version=resolved_version,
+            claim_work_wechat_id=claim_work_wechat_id,
             status="processing",
             created_by=actor_id,
         )
@@ -475,6 +489,10 @@ class ImportService:
         field_ctx = await build_field_perm_context(
             user.id, RoleRepository(self._session), PermissionRepository(self._session)
         )
+        from app.modules.blogger.claim_access import contact_field_context, load_blogger_access
+
+        # 失败行未必解析成功，不能猜目标博主；启用后普通 PR 的联系方式保守遮罩。
+        field_ctx = contact_field_context(await load_blogger_access(self._session, user, []), None)
         adapter = ImportAdapterRegistry.get(batch.source)
         columns = await self._batch_mapping_columns(batch)
         masked = masked_source_columns(adapter, columns, field_ctx)

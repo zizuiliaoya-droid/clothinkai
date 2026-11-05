@@ -115,6 +115,8 @@ async def create_promotion(
 
 
 def promotion_list_filters(
+    only_unread_comments: bool = False,
+    needs_follow_up: bool = False,
     stage: Annotated[str | None, Query(pattern="^(" + "|".join(PROMOTION_STAGES) + ")$")] = None,
     badge: PromotionBadge | None = None,
     completed: bool | None = None,
@@ -152,6 +154,8 @@ def promotion_list_filters(
         return date.fromisoformat(s) if s else None
 
     filters = PromotionListFilters(
+        only_unread_comments=only_unread_comments,
+        needs_follow_up=needs_follow_up,
         stage=stage,
         badge=badge,
         completed=completed,

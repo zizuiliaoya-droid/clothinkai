@@ -25,6 +25,7 @@ from app.modules.auth.deps import (
     CurrentPerms,
     require_permission,
 )
+from app.modules.blogger.claim_api import router as claim_router
 from app.modules.blogger.deps import BloggerServiceDep, BloggerTagDictServiceDep
 from app.modules.blogger.repository import BloggerListFilters
 from app.modules.blogger.schemas import (
@@ -42,6 +43,8 @@ from app.modules.blogger.tag_config import SYSTEM_TAGS
 from app.modules.product.dict_models import DictItem
 
 router = APIRouter(prefix="/api", tags=["blogger"])
+
+router.include_router(claim_router)
 
 
 # ---------------------------------------------------------------------------
@@ -92,6 +95,9 @@ async def list_bloggers(
     is_active: bool = True,
     include_inactive: bool = False,
     recent_growth_only: bool = False,
+    claimed_by_me: bool = False,
+    for_new_cooperation: bool = False,
+    work_wechat_id: UUID | None = None,
 ) -> BloggerPage:
     """EP04-S03 博主搜索筛选 + 列表（合并接口）.
 
@@ -115,6 +121,9 @@ async def list_bloggers(
         is_active=is_active,
         include_inactive=include_inactive,
         recent_growth_only=recent_growth_only,
+        claimed_by_me=claimed_by_me,
+        for_new_cooperation=for_new_cooperation,
+        work_wechat_id=work_wechat_id,
     )
     return await service.list_bloggers(filters=filters, page=page, page_size=page_size, user=user)
 

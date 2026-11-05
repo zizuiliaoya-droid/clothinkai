@@ -81,6 +81,7 @@ class BloggerBase(BaseModel):
 
 class BloggerCreate(BloggerBase):
     xiaohongshu_id: str = Field(min_length=1, max_length=64, pattern=_ACCOUNT_PATTERN)
+    claim_work_wechat_id: UUID | None = None
 
     @field_validator("category_tags", "quality_tags")
     @classmethod
@@ -158,6 +159,12 @@ class BloggerResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
+    claimed_by_me: bool = False
+    claim_count: int = 0
+    can_self_claim: bool = False
+    can_manage_claims: bool = False
+    available_for_new_cooperation: bool = True
+    contact_permissions: dict[str, dict[str, bool]] = Field(default_factory=dict)
     xiaohongshu_id: str
     nickname: str
     platform: str

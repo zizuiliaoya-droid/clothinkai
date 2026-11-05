@@ -756,7 +756,8 @@ class TestLimitAndQueries:
         fifty = await count()
         assert (two[2], fifty[2]) == (2, 50)
         assert two[0] == fifty[0], (two, fifty)
-        assert two[1] == fifty[1] == 1
+        # 时间线事件一次 + 本人未读/最后留言固定聚合一次，均不随条数增长。
+        assert two[1] == fifty[1] == 2
 
 
 async def _db_now(session: AsyncSession) -> datetime:

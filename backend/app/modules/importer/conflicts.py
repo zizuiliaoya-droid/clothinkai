@@ -37,6 +37,7 @@ from app.core.security.field_permissions import (
 from app.core.security.permissions import EffectivePermissions
 from app.modules.auth.models import User
 from app.modules.auth.repository import PermissionRepository, RoleRepository
+from app.modules.blogger.claim_access import contact_field_context, load_blogger_access
 from app.modules.importer import access
 from app.modules.importer.compare import FieldDiff, display_value, normalize
 from app.modules.importer.conflict_appliers import (
@@ -547,6 +548,15 @@ class ImportConflictService:
             user.tenant_id, filters, sources=sources, page=page, page_size=page_size
         )
         field_ctx = await self._field_ctx(user)
+        claim_access = await load_blogger_access(
+            self._session, user, [c.object_id for c in rows if c.object_type == "blogger"]
+        )
+        row_contexts = {
+            c.id: contact_field_context(claim_access, c.object_id)
+            if c.object_type == "blogger"
+            else field_ctx
+            for c in rows
+        }
         filenames = await self._repo.batch_filenames(c.batch_id for c in rows if c.batch_id)
         names = await self._repo.user_names(c.resolved_by for c in rows if c.resolved_by)
         items = [
@@ -561,7 +571,7 @@ class ImportConflictService:
                 object_key=c.object_key,
                 object_label=c.object_label,
                 kind=c.kind,
-                fields=mask_fields(c.fields, field_ctx),
+                fields=mask_fields(c.fields, row_contexts[c.id]),
                 message=c.message,
                 status=c.status,
                 created_by=c.created_by,
@@ -571,7 +581,7 @@ class ImportConflictService:
                 resolved_at=c.resolved_at,
                 resolution_note=c.resolution_note,
                 superseded_by=c.superseded_by,
-                can_resolve=self._can_resolve(c, perms, field_ctx),
+                can_resolve=self._can_resolve(c, perms, row_contexts[c.id]),
                 overwritable=c.kind == "fields",
             )
             for c in rows
@@ -593,6 +603,15 @@ class ImportConflictService:
         if len(rows) > EXPORT_LIMIT:
             raise ImportConflictExportTooLargeError(EXPORT_LIMIT)
         field_ctx = await self._field_ctx(user)
+        claim_access = await load_blogger_access(
+            self._session, user, [c.object_id for c in rows if c.object_type == "blogger"]
+        )
+        row_contexts = {
+            c.id: contact_field_context(claim_access, c.object_id)
+            if c.object_type == "blogger"
+            else field_ctx
+            for c in rows
+        }
         filenames = await self._repo.batch_filenames(c.batch_id for c in rows if c.batch_id)
         names = await self._repo.user_names(c.resolved_by for c in rows if c.resolved_by)
 
@@ -638,7 +657,7 @@ class ImportConflictService:
             lines: list[list[Any]] = []
             if c.kind == "key":
                 lines.append([*base, "", "", "", "", *tail, c.message or ""])
-            for f in mask_fields(c.fields, field_ctx):
+            for f in mask_fields(c.fields, row_contexts[c.id]):
                 system = MASKED_TEXT if f.masked else f.system_display
                 file = MASKED_TEXT if f.masked else f.file_display
                 lines.append(
@@ -680,13 +699,21 @@ class ImportConflictService:
         for source in sorted({c.source for c in found.values()}):
             access.require_resolve(perms, source)
         field_ctx = await self._field_ctx(user)
+        claim_access = await load_blogger_access(
+            self._session, user, [c.object_id for c in found.values() if c.object_type == "blogger"]
+        )
         denied: list[dict[str, Any]] = []
         for c in found.values():
+            row_ctx = (
+                contact_field_context(claim_access, c.object_id)
+                if c.object_type == "blogger"
+                else field_ctx
+            )
             for f in c.fields:
                 sens = _sensitive_of(f)
                 if sens and not (
-                    can_read_field(sens[0], sens[1], field_ctx)
-                    and can_write_field(sens[0], sens[1], field_ctx)
+                    can_read_field(sens[0], sens[1], row_ctx)
+                    and can_write_field(sens[0], sens[1], row_ctx)
                 ):
                     denied.append({"id": str(c.id), "field": f.get("field")})
         if denied:
@@ -742,6 +769,20 @@ class ImportConflictService:
             return ConflictResolveResult(id=conflict_id, outcome="gone", message="冲突已不存在")
         if c.status != "pending":
             return ConflictResolveResult(id=c.id, outcome="not_pending", status=c.status)
+        if c.object_type == "blogger":
+            claim_access = await load_blogger_access(self._session, user, [c.object_id])
+            field_ctx = contact_field_context(claim_access, c.object_id)
+            denied = [
+                {"id": str(c.id), "field": f.get("field")}
+                for f in c.fields
+                if (sens := _sensitive_of(f))
+                and not (
+                    can_read_field(sens[0], sens[1], field_ctx)
+                    and can_write_field(sens[0], sens[1], field_ctx)
+                )
+            ]
+            if denied:
+                raise ImportConflictFieldPermissionError(denied)
 
         if decision == "keep":
             closing = [str(f.get("field")) for f in c.fields] if c.kind == "key" else []

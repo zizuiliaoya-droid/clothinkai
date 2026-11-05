@@ -107,6 +107,7 @@ async def upload_import_file(
     source: Annotated[str, Form(max_length=32)],
     file: Annotated[UploadFile, File()],
     mapping_version: Annotated[int | None, Form()] = None,
+    claim_work_wechat_id: Annotated[UUID | None, Form()] = None,
 ) -> ImportUploadResponse:
     """EP07-S07 上传导入文件（DB 先行 + UNIQUE 去重 + 异步解析触发）。
 
@@ -136,6 +137,7 @@ async def upload_import_file(
         source=source,
         user=user,
         mapping_version=mapping_version,
+        claim_work_wechat_id=claim_work_wechat_id,
     )
     return ImportUploadResponse(batch_id=batch.id, status=batch.status, source=batch.source)
 

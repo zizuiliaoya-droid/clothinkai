@@ -234,6 +234,16 @@ async def env(engine: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
             ),
             {"id": user_id, "tid": tenant_id, "u": f"imp8b_{suffix}"},
         )
+        # 导入行现在始终校验真实操作人的权限；夹具使用 seed 主管，且不自动认领。
+        (
+            await s.execute(
+                text(
+                    "INSERT INTO user_role(id,tenant_id,user_id,role_id) "
+                    "SELECT :id,:tid,:uid,id FROM role WHERE code='pr_manager' RETURNING id"
+                ),
+                {"id": uuid4(), "tid": tenant_id, "uid": user_id},
+            )
+        ).scalar_one()
         await s.commit()
     e = _Env(Maker=Maker, suffix=suffix, tenant_id=tenant_id, user_id=user_id)
 
