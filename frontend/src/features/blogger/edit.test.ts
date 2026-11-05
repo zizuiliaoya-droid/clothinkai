@@ -5,6 +5,15 @@ import type { BloggerCreate } from "./types";
 const base: BloggerCreate = { xiaohongshu_id: "历史昵称号", nickname: "新昵称", wechat: "wx1" };
 
 describe("toBloggerUpdate", () => {
+  it("未认领字段不回传遮罩null，工作微信参数不混入普通编辑", () => {
+    const out = toBloggerUpdate({...base, wechat: null, phone: null, claim_work_wechat_id: "w1"}, {
+      quote_note: null, wechat: null, phone: null,
+      contact_permissions: {wechat: {read: false, write: false}, phone: {read: false, write: false}},
+    });
+    expect("wechat" in out).toBe(false);
+    expect("phone" in out).toBe(false);
+    expect("claim_work_wechat_id" in out).toBe(false);
+  });
   it("报价备注被遮挡（null）且没改：不放进提交，不会清空库里的值", () => {
     for (const v of [null, ""]) {
       const out = toBloggerUpdate({ ...base, quote_note: v }, { quote_note: null });

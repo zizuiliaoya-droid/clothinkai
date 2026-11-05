@@ -15,30 +15,33 @@ import {
 
 async function fetchBloggerOptions(
   keyword: string | undefined,
-  platform: string | undefined
+  platform: string | undefined,
+  forNewCooperation: boolean
 ): Promise<PickerOption[]> {
-  const page = await listBloggers(bloggerPickerParams(keyword, platform, PICKER_PAGE_SIZE));
+  const page = await listBloggers(bloggerPickerParams(keyword, platform, PICKER_PAGE_SIZE, forNewCooperation));
   return page.items.map((b) => ({ value: b.id, label: bloggerOptionLabel(b), homepageUrl: b.homepage_url }));
 }
 
 type Props = Omit<RemoteSearchSelectProps, "fetchOptions" | "queryKeyPrefix"> & {
   /** 只搜这个平台的博主（谈款页按表单的平台过滤，8b）；不传 = 全部平台。 */
   platform?: string;
+  forNewCooperation?: boolean;
 };
 
 /** 博主下拉：按昵称 / 账号 / 网页ID 服务端搜索（7a-2、8b）。 */
 export function BloggerSelect({
   placeholder = "搜博主昵称、账号或网页ID",
   platform,
+  forNewCooperation = false,
   ...props
 }: Props) {
-  const queryKeyPrefix = useMemo(() => bloggerPickerQueryKey(platform), [platform]);
+  const queryKeyPrefix = useMemo(() => bloggerPickerQueryKey(platform, forNewCooperation), [platform, forNewCooperation]);
   const fetchOptions = useCallback(
-    (keyword?: string) => fetchBloggerOptions(keyword, platform),
-    [platform]
+    (keyword?: string) => fetchBloggerOptions(keyword, platform, forNewCooperation),
+    [platform, forNewCooperation]
   );
   return (
-    <RemoteSearchSelect
+    <><RemoteSearchSelect
       {...props}
       placeholder={placeholder}
       queryKeyPrefix={queryKeyPrefix}
@@ -53,6 +56,6 @@ export function BloggerSelect({
             onClick={(event) => event.stopPropagation()}>打开主页</a>}
         </span>;
       }}
-    />
+    />{forNewCooperation && <a href="/bloggers" target="_blank" rel="noopener noreferrer" style={{display: "block", fontSize: 12}}>找不到博主？前往博主库认领</a>}</>
   );
 }

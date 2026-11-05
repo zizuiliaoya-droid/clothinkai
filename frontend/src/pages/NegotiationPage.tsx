@@ -1,9 +1,11 @@
 import { formatMoney } from "@/utils/money";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   Badge,
   Button,
   Card,
+  Checkbox,
   Dropdown,
   Grid,
   Input,
@@ -23,6 +25,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import type { ColumnsType } from "antd/es/table";
 import {
   listNegotiations,
+  getNegotiation,
   negotiationStatusCounts,
   submitNegotiation,
 } from "@/features/negotiation/api";
@@ -48,6 +51,8 @@ import {
 } from "@/features/negotiation/negotiationList";
 import { BloggerHoverCard } from "@/components/BloggerHoverCard/BloggerHoverCard";
 import { DisplayNameCell } from "@/components/DisplayNameCell/DisplayNameCell";
+import { EngagementTags } from "@/features/flow/EngagementTags";
+import { promotionIdFromUrl } from "@/features/promotion/promotionFilters";
 import { GoodsImages } from "@/components/GoodsImages/GoodsImages";
 import { FlowAction } from "@/features/flow/FlowAction";
 import { flowErrorOutcome } from "@/features/flow/flowError";
@@ -94,6 +99,7 @@ export type NegotiationDialog = {
  * 页面不按角色码判断。可见范围（只看自己的 / 看全部）由后端定。
  */
 export function NegotiationPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const screens = Grid.useBreakpoint();
   const { token } = theme.useToken();
   const { refresh: invalidate, notifySubmitted } = useNegotiationFeedback();
@@ -110,6 +116,23 @@ export function NegotiationPage() {
   const dialogOf = (kind: NegotiationDialog["kind"]) => (dialog?.kind === kind ? dialog : null);
   // 点一行开主线抽屉（8.3）：没定稿只有谈款段，已定稿按 line_id 显示整条线
   const [lineRow, setLineRow] = useState<Negotiation | null>(null);
+  const linkedId = promotionIdFromUrl(searchParams.get("id"));
+  const linked = useQuery({ queryKey: ["negotiations", "detail", linkedId],
+    queryFn: () => getNegotiation(linkedId!), enabled: !!linkedId, retry: false });
+  const displayedLine = linkedId ? linked.data ?? null : lineRow;
+  const unreadUrl = searchParams.get("only_unread_comments") === "true";
+  const followUpUrl = searchParams.get("needs_follow_up") === "true";
+  useEffect(() => { setFilters((f) => ({ ...f, only_unread_comments: unreadUrl || undefined,
+    needs_follow_up: followUpUrl || undefined, page: 1 })); }, [unreadUrl, followUpUrl]);
+  function setEngagementFilter(key: "only_unread_comments" | "needs_follow_up", value: boolean) {
+    const next = new URLSearchParams(searchParams);
+    if (value) next.set(key, "true"); else next.delete(key);
+    setSearchParams(next, { replace: true });
+  }
+  function closeLine() {
+    setLineRow(null);
+    if (searchParams.has("id")) { const next = new URLSearchParams(searchParams); next.delete("id"); setSearchParams(next, { replace: true }); }
+  }
 
   const effectiveFilters = useMemo<NegotiationFilters>(
     () => ({
@@ -197,6 +220,7 @@ export function NegotiationPage() {
   const showOperations = [...menus.values()].some((items) => items.length > 0);
 
   const columns: ColumnsType<Negotiation> = [
+    { title: "跟进", key: "engagement", width: 150, render: (_, row) => <EngagementTags comment={row.comment_state} followUp={row.follow_up} /> },
     {
       title: "主图",
       key: "images",
@@ -395,6 +419,9 @@ export function NegotiationPage() {
       />
 
       <Space style={{ marginBottom: 16 }} wrap>
+        <Checkbox checked={!!filters.only_unread_comments} onChange={(e) => setEngagementFilter("only_unread_comments", e.target.checked)}>未读留言</Checkbox>
+        <Checkbox checked={!!filters.needs_follow_up} onChange={(e) => setEngagementFilter("needs_follow_up", e.target.checked)}>待跟进</Checkbox>
+        {linked.isError && <Typography.Text type="warning">无法打开谈款详情，可能没有权限或记录已删除</Typography.Text>}
         <Input.Search
           placeholder="博主昵称 / 款号 / 款名"
           allowClear
@@ -426,7 +453,7 @@ export function NegotiationPage() {
         columns={columns}
         dataSource={rows}
         rowClassName={(r) => (r.overdue ? `${LINE_ROW_CLASS} negotiation-row-overdue` : LINE_ROW_CLASS)}
-        onRow={(r) => lineRowProps(() => setLineRow(r))}
+        onRow={(r) => lineRowProps(() => { closeLine(); setLineRow(r); })}
         scroll={{ x: 1300 }}
         pagination={{
           current: data?.page ?? 1,
@@ -439,10 +466,10 @@ export function NegotiationPage() {
       />
 
       <LineDrawer
-        lineId={lineRow?.line_id ?? null}
-        onClose={() => setLineRow(null)}
-        goodsName={lineRow ? lineRow.display_short_name ?? lineRow.style_name : null}
-        bloggerName={lineRow?.blogger_nickname}
+        lineId={displayedLine?.line_id ?? null}
+        onClose={closeLine}
+        goodsName={displayedLine ? displayedLine.display_short_name ?? displayedLine.style_name : null}
+        bloggerName={displayedLine?.blogger_nickname}
       />
       <NegotiationFormModal target={formTarget} onClose={() => setFormTarget(null)} />
       <ManagerReviewModal target={dialogOf("manager_review")} onClose={closeDialog} />

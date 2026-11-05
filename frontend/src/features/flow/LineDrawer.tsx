@@ -4,12 +4,13 @@ import { useReadOnlySupport } from "@/stores/supportStore";
 // - 头信息不显示商品编码：商品简称、博主由页面行传入（读接口只回单据号与阶段）
 // - 留言框只在 ui.actions.comment 可点时出现
 // - 宽度 min(720px, 100vw)；Esc 关闭，关闭后焦点回到打开它的元素（8.9）
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Drawer, Space, Spin, Tabs, Tag, Typography, theme, type TabsProps } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { getLineEvents, lineEventsKey } from "./api";
 import { LineCommentBox } from "./LineCommentBox";
 import { LineTimeline } from "./LineTimeline";
+import { CommentReadTracker } from "./CommentReadTracker";
 import { negotiationStatusStyle, promotionStageStyle } from "./stageStyle";
 
 export interface LineDrawerProps {
@@ -42,6 +43,7 @@ export function LineDrawer({
   const { token } = theme.useToken();
   const opener = useRef<HTMLElement | null>(null);
   const open = lineId !== null;
+  const [displayed, setDisplayed] = useState(false);
 
   useEffect(() => {
     if (open && document.activeElement instanceof HTMLElement) opener.current = document.activeElement;
@@ -61,10 +63,11 @@ export function LineDrawer({
   return (
     <Drawer
       open={open}
-      onClose={onClose}
+      onClose={() => { setDisplayed(false); onClose(); }}
       width="min(720px, 100vw)"
       destroyOnHidden
       afterOpenChange={(visible) => {
+        setDisplayed(visible);
         if (!visible) {
           opener.current?.focus();
           opener.current = null;
@@ -87,6 +90,7 @@ export function LineDrawer({
       ) : (
         <Space direction="vertical" size={16} style={{ width: "100%" }}>
           <LineTimeline data={data} />
+          {displayed && !readOnly && data.line_id === lineId && <CommentReadTracker key={lineId} lineId={lineId} data={data} />}
           {tabs && tabs.length > 0 && <Tabs items={tabs} defaultActiveKey={defaultTab} />}
           {!readOnly && data.ui?.actions?.comment?.state === "enabled" && <LineCommentBox lineId={lineId} />}
         </Space>

@@ -121,6 +121,8 @@ export type UrgeStatus =
  * 字段可见性由后端字段级权限矩阵过滤，当前角色无权查看时返回 null。
  */
 export interface Promotion {
+  comment_state?: import("@/features/flow/engagement").CommentState | null;
+  follow_up?: import("@/features/flow/engagement").FollowUpState | null;
   content_category?: string | null;
   extra_platforms?: string[];
   platform_posts?: PlatformPost[];
@@ -437,6 +439,8 @@ export interface PromotionStageCounts {
 }
 
 export interface PromotionListFilters {
+  only_unread_comments?: boolean;
+  needs_follow_up?: boolean;
   stage?: PromotionStage;
   badge?: PromotionBadge;
   completed?: boolean;

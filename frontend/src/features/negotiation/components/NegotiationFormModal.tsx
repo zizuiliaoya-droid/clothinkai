@@ -291,6 +291,7 @@ export function NegotiationFormModal({ target, onClose }: Props) {
           rules={[{ required: true, message: "请选择博主" }]}
         >
           <BloggerSelect
+            forNewCooperation
             platform={platform}
             selected={
               editing ? { value: editing.blogger_id, label: editing.blogger_nickname || editing.blogger_id } : null

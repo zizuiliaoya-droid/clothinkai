@@ -6,18 +6,21 @@ import type { Blogger, BloggerListFilters } from "./types";
  * React Query key 前缀：按平台分开缓存（谈款页换平台不串结果），没传平台记 "*"。
  * 存的是选项数组；不要和 BloggerListPage 的 ["bloggers", 筛选条件]（分页原始数据）共用 key。
  */
-export function bloggerPickerQueryKey(platform?: string): readonly unknown[] {
-  return ["bloggers", "picker-options", platform || "*"] as const;
+export function bloggerPickerQueryKey(platform?: string, forNewCooperation = false): readonly unknown[] {
+  const key = ["bloggers", "picker-options", platform || "*"] as const;
+  return forNewCooperation ? [...key, "new-cooperation"] : key;
 }
 
 /** 搜索请求参数；没传平台时不带 platform（推广单页行为同现在）。 */
 export function bloggerPickerParams(
   keyword: string | undefined,
   platform: string | undefined,
-  pageSize: number
+  pageSize: number,
+  forNewCooperation = false
 ): BloggerListFilters {
   const params: BloggerListFilters = { page: 1, page_size: pageSize, keyword };
   if (platform) params.platform = platform;
+  if (forNewCooperation) params.for_new_cooperation = true;
   return params;
 }
 

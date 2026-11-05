@@ -14,6 +14,12 @@ export type GenderTarget = "女性" | "男性" | "中性";
  */
 export interface Blogger {
   id: string;
+  claimed_by_me?: boolean;
+  claim_count?: number;
+  can_self_claim?: boolean;
+  can_manage_claims?: boolean;
+  available_for_new_cooperation?: boolean;
+  contact_permissions?: Record<string, {read: boolean; write: boolean}>;
   xiaohongshu_id: string;
   nickname: string;
   platform: string;
@@ -55,6 +61,7 @@ export interface BloggerPlatformMetrics {
 }
 
 export interface BloggerCreate {
+  claim_work_wechat_id?: string;
   xiaohongshu_id: string;
   nickname: string;
   platform?: Platform;
@@ -115,6 +122,9 @@ export interface BloggerPage {
 }
 
 export interface BloggerListFilters {
+  claimed_by_me?: boolean;
+  for_new_cooperation?: boolean;
+  work_wechat_id?: string;
   page?: number;
   page_size?: number;
   keyword?: string;
