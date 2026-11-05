@@ -135,5 +135,10 @@ async def test_same_key_concurrent_create_and_confirm_once(
         await session.execute(
             text("DELETE FROM sku WHERE id=:id"), {"id": UUID(payload["items"][0]["sku_id"])}
         )
+        # 本用例真实定稿建单会分配编号；仅清理这个独立测试租户的序列，
+        # 否则父fixture删除tenant时仍被promotion_sequence外键引用。
+        await session.execute(
+            text("DELETE FROM promotion_sequence WHERE tenant_id=:tid"), {"tid": tid}
+        )
         await session.commit()
         tenant_id_ctx.reset(token)
