@@ -80,7 +80,7 @@ export function PaymentProofModal({ target, onClose, onChanged }: PaymentProofMo
             label="选择图片"
           />
           <div style={{ color: token.colorTextSecondary, fontSize: token.fontSizeSM, marginTop: 4 }}>
-            {file ? `已选：${file.name}（${sizeLabel(file.size)}）` : "支持 JPG、PNG、WebP，不超过 10MB"}
+            {file ? `文件大小：${sizeLabel(file.size)}` : "支持 JPG、PNG、WebP，不超过 10MB"}
           </div>
         </Form.Item>
       </Form>
