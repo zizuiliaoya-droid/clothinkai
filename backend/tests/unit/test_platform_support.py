@@ -39,6 +39,12 @@ def signed(payload=None, *, secret=None):
     "method,path",
     [
         ("POST", "/api/promotions/"),
+        ("POST", "/api/bloggers/00000000-0000-0000-0000-000000000001/works"),
+        (
+            "GET",
+            "/api/bloggers/00000000-0000-0000-0000-000000000001/works/"
+            "00000000-0000-0000-0000-000000000002/source",
+        ),
         ("POST", "/api/lines/00000000-0000-0000-0000-000000000001/comments/read"),
         ("PUT", "/api/auth/password"),
         ("POST", "/api/auth/logout"),
@@ -70,6 +76,28 @@ async def test_support_rejects_before_any_endpoint_side_effect(method, path):
     assert response.status_code == 403
     assert response.json()["code"] == "SUPPORT_READ_ONLY"
     invoked.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "query",
+    ["", "?snapshot_id=00000000-0000-0000-0000-000000000002"],
+)
+async def test_support_reads_work_list_and_history_through_middleware(query):
+    app = FastAPI()
+    app.add_middleware(TenancyContextMiddleware)
+
+    @app.get("/api/bloggers/{blogger_id}/works")
+    async def endpoint(blogger_id: str, snapshot_id: str | None = None):
+        return {"snapshot_id": snapshot_id, "readonly": support_readonly_ctx.get()}
+
+    path = "/api/bloggers/00000000-0000-0000-0000-000000000001/works"
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(path + query, headers={"Authorization": "Bearer " + signed()})
+    assert response.status_code == 200
+    assert response.json() == {
+        "snapshot_id": "00000000-0000-0000-0000-000000000002" if query else None,
+        "readonly": True,
+    }
 
 
 @pytest.mark.parametrize("mode", ["expired", "forged"])

@@ -18,6 +18,7 @@ import type { BloggerCooperationItem } from "@/features/negotiation/types";
 import { bloggerRetrospectives } from "@/features/promotion/api";
 import { DisplayNameCell } from "@/components/DisplayNameCell/DisplayNameCell";
 import { NegotiationRejections } from "./NegotiationRejections";
+import { BloggerWorks } from "./BloggerWorks";
 
 const modeColor: Record<string, string> = {
   寄拍: "blue",
@@ -158,6 +159,8 @@ export function BloggerHoverCard({
 
   const content = (
     <div style={{ width: "min(560px, calc(100vw - 48px))" }}>
+      <BloggerWorks bloggerId={bloggerId} enabled={open} />
+      <Divider style={{ margin: "12px 0" }} />
       <Typography.Text strong>历史合作款式</Typography.Text>
       {data && (
         <Typography.Text type="secondary" style={{ marginLeft: 8 }}>
