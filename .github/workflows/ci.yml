@@ -256,6 +256,17 @@ jobs:
           python -m alembic upgrade head
           python -m alembic downgrade 069_remove_unused_shop_caches
           python -m alembic upgrade head
+      - name: 1105 comment reads, follow-up, true RLS and independent comment transactions
+        run: |
+          python -m pytest -q --junitxml=ci-artifacts/1105-engagement-pg18-tests.xml \
+            tests/integration/test_migration_070_state.py \
+            tests/integration/test_blogger_claims.py \
+            tests/integration/test_blogger_claims_rls.py \
+            tests/integration/test_migration_071_state.py \
+            tests/integration/test_line_engagement.py \
+            tests/integration/test_line_comment_reads_rls.py \
+            tests/integration/test_line_comment_concurrency.py \
+            tests/integration/test_notification_read_persistence.py
       - name: PR9 snapshots, imports, primary reports, true RLS and concurrent platform writes
         run: |
           python -m pytest -q --junitxml=ci-artifacts/flow9-pg18-tests.xml \
@@ -365,17 +376,6 @@ jobs:
         run: python -m scripts.ci_flow8_faults
       - name: Verify PR8 mandatory evidence and zero skips
         run: python -m scripts.ci_flow8_verify
-      - name: 1105 comment reads, follow-up, true RLS and independent comment transactions
-        run: |
-          python -m pytest -q --junitxml=ci-artifacts/1105-engagement-pg18-tests.xml \
-            tests/integration/test_migration_070_state.py \
-            tests/integration/test_blogger_claims.py \
-            tests/integration/test_blogger_claims_rls.py \
-            tests/integration/test_migration_071_state.py \
-            tests/integration/test_line_engagement.py \
-            tests/integration/test_line_comment_reads_rls.py \
-            tests/integration/test_line_comment_concurrency.py \
-            tests/integration/test_notification_read_persistence.py
       - name: Retain synthetic validation evidence
         if: always()
         uses: actions/upload-artifact@v4

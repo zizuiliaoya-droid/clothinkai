@@ -261,17 +261,18 @@ class TestVisibility:
         assert counts["老板退回"] == 1
         assert set(counts) == {*_STATES, _OVERDUE_KEY}
 
-    async def test_status_filter_and_pending_first(
+    async def test_status_filter_and_created_order_without_comments(
         self, session: AsyncSession, flow_users: Any, world: _World
     ) -> None:
-        draft = await world.make(flow_users.pr, "草稿")
-        pending = await world.make(flow_users.pr, "主管待审")
-        finalized = await world.make(flow_users.pr, "已定稿")
+        draft = await world.make(flow_users.pr, "草稿", created_at=_T0)
+        pending = await world.make(flow_users.pr, "主管待审", created_at=_T0 + timedelta(hours=1))
+        finalized = await world.make(flow_users.pr, "已定稿", created_at=_T0 + timedelta(hours=2))
         svc = NegotiationService(session)
 
         page = await svc.list_negotiations(user=flow_users.pr, filters=NegotiationListFilters())
         assert page.total == 3
-        assert page.items[0].id == pending.id
+        # 没有可见留言时按创建时间倒序，不再将主管待审置顶。
+        assert [n.id for n in page.items] == [finalized.id, pending.id, draft.id]
         assert {n.id for n in page.items} == {draft.id, pending.id, finalized.id}
         assert await _ids(svc, flow_users.pr, status="已定稿") == {finalized.id}
 
