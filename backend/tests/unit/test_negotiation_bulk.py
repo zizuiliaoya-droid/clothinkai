@@ -1,7 +1,7 @@
 """请求摘要、逐项隔离和动作重复项；不连接数据库。"""
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
@@ -17,6 +17,30 @@ from app.modules.negotiation.bulk_schemas import (
 from app.modules.negotiation.bulk_service import BulkNegotiationService, creation_request_hash
 from app.modules.negotiation.exceptions import NegotiationStateConflictError
 from app.modules.negotiation.schemas import NegotiationCreate
+
+
+@pytest.mark.asyncio
+async def test_actual_factory_creation_metadata_contract_without_database():
+    from tests.conftest import negotiation_factory
+    from tests.integration.test_factory_kwargs import test_negotiation_known_kwargs_match_columns
+
+    # 创建真实工厂类但不请求数据库fixture，直接执行原有精确列覆盖断言。
+    session = SimpleNamespace(add=Mock(), flush=AsyncMock())
+    tenant, style, blogger, pr = (SimpleNamespace(id=uuid4()) for _ in range(4))
+    factory = await negotiation_factory.__wrapped__(session, tenant)
+    await test_negotiation_known_kwargs_match_columns({"negotiation_factory": factory})
+    metadata = {
+        "client_create_key": uuid4(),
+        "creation_group_id": uuid4(),
+        "creation_pr_id": pr.id,
+        "creation_request_hash": "a" * 64,
+    }
+    populated = await factory.negotiation(style=style, blogger=blogger, pr=pr, **metadata)
+    assert {name: getattr(populated, name) for name in metadata} == metadata
+    defaulted = await factory.negotiation(style=style, blogger=blogger, pr=pr)
+    assert all(getattr(defaulted, name) is None for name in metadata)
+    with pytest.raises(TypeError, match="creation_request_hahs"):
+        await factory.negotiation(style=style, blogger=blogger, pr=pr, creation_request_hahs="typo")
 
 
 def test_hash_is_canonical_without_live_prices():
