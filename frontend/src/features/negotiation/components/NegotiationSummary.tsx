@@ -11,7 +11,7 @@ export function NegotiationSummary({ row }: Props) {
     <Descriptions size="small" column={1} bordered style={{ marginTop: 16 }}>
       <Descriptions.Item label="博主">{row.blogger_nickname ?? "—"}</Descriptions.Item>
       <Descriptions.Item label="商品">
-        <span title={row.goods_title ?? undefined}>{row.display_short_name ?? row.style_name ?? "—"}</span>
+        <span title={row.goods_title ?? undefined}>{row.style_id ? (row.display_short_name ?? row.style_name ?? "—") : "待补款"}</span>
         {row.goods_is_suit && (
           <Tag color="purple" style={{ marginInlineStart: 8 }}>
             套装

@@ -65,7 +65,7 @@ export interface Negotiation {
   copied_from_id: string | null;
   blogger_id: string;
   blogger_nickname: string | null;
-  style_id: string;
+  style_id: string | null;
   style_code: string | null;
   style_name: string | null;
   goods_main_id: string | null;
@@ -149,7 +149,7 @@ export interface NegotiationFilters {
 
 export interface NegotiationCreate {
   blogger_id: string;
-  style_id: string;
+  style_id?: string | null;
   /** 不传由后端按款式推定主商品并写回。 */
   goods_main_id?: string | null;
   cooperation_mode: CooperationMode;
@@ -164,7 +164,7 @@ export interface NegotiationCreate {
 
 export interface NegotiationUpdate {
   blogger_id?: string;
-  style_id?: string;
+  style_id?: string | null;
   goods_main_id?: string | null;
   cooperation_mode?: CooperationMode;
   platform?: string;

@@ -31,7 +31,8 @@ class NegotiationCreate(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
     blogger_id: UUID
-    style_id: UUID
+    style_id: UUID | None = None
+    """草稿可不选款；未选款时商品为空、明细为空，提交前必须补齐。"""
     goods_main_id: UUID | None = None
     """谈的是哪个商品。不传由服务端按现有规则推定主商品（非套装优先）并写回谈款（N1）；
     款式不属于任何商品时留空、按单品建 1 行明细。款式同时属于单品与套装时由前端要求显式选。"""
@@ -40,7 +41,7 @@ class NegotiationCreate(BaseModel):
     platform: str = Field(default="小红书", min_length=1, max_length=16)
     scheduled_publish_date: date | None = None
     quote_amount: _QuoteField | None = None
-    """博主服务费。不传则取 ``blogger.quote``。
+    """博主服务费。不传则取 ``blogger.quote``；两者都没有时草稿保留未知，提交前补齐。
 
     置换模式服务端强制 0（PRD：置换无博主服务费），前端传什么都会被覆盖。
     """
@@ -198,7 +199,7 @@ class NegotiationResponse(BaseModel):
     """「复制为新谈款」的来源。"""
     blogger_id: UUID
     blogger_nickname: str | None = None
-    style_id: UUID
+    style_id: UUID | None
     style_code: str | None = None
     style_name: str | None = None
     goods_main_id: UUID | None = None

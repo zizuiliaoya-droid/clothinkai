@@ -224,7 +224,7 @@ def _submit_snapshot(
     quote = negotiation.quote_amount
     return {
         "blogger_id": str(negotiation.blogger_id),
-        "style_id": str(negotiation.style_id),
+        "style_id": str(negotiation.style_id) if negotiation.style_id else None,
         "goods_main_id": str(negotiation.goods_main_id) if negotiation.goods_main_id else None,
         "goods_items": [
             [str(v.style_id), str(v.sku_id) if v.sku_id is not None else None] for v in views
@@ -298,13 +298,17 @@ class NegotiationService:
     # ------------------------------------------------------------------ #
 
     async def _validate_refs(
-        self, *, blogger_id: UUID, style_id: UUID, goods_main_id: UUID | None
+        self, *, blogger_id: UUID, style_id: UUID | None, goods_main_id: UUID | None
     ) -> None:
         blogger = await self._blogger_repo.get_by_id(blogger_id)
         if blogger is None:
             raise InvalidNegotiationBloggerError(
                 "博主不存在或已删除", details={"blogger_id": str(blogger_id)}
             )
+        if style_id is None:
+            if goods_main_id is not None:
+                raise InvalidNegotiationGoodsError("未选款时不能关联商品")
+            return
         if not await self._repo.style_exists(style_id):
             raise InvalidNegotiationStyleError(
                 "款式不存在或已删除", details={"style_id": str(style_id)}
@@ -319,7 +323,7 @@ class NegotiationService:
 
     async def _resolve_quote(
         self, *, mode: CooperationMode, quote_amount: Decimal | None, blogger_id: UUID
-    ) -> Decimal:
+    ) -> Decimal | None:
         """博主服务费：置换强制 0，其余不传则取 blogger.quote。
 
         PRD 原文「选择置换，表单控件 disabled，值固定 0，接口也要做校验防止绕过前端传值」，
@@ -332,7 +336,7 @@ class NegotiationService:
         blogger = await self._blogger_repo.get_by_id(blogger_id)
         if blogger is not None and blogger.quote is not None:
             return blogger.quote
-        return Decimal("0")
+        return None
 
     # ------------------------------------------------------------------ #
     # 出参
@@ -412,9 +416,13 @@ class NegotiationService:
     # ------------------------------------------------------------------ #
 
     async def _resolve_goods(
-        self, *, style_id: UUID, goods_main_id: UUID | None, explicit: bool
+        self, *, style_id: UUID | None, goods_main_id: UUID | None, explicit: bool
     ) -> UUID | None:
         """``goods_main_id``：显式传了（含传 null）用传的；没传按现有规则推定主商品（非套装优先），之后以写回的值为准。"""
+        if style_id is None:
+            if goods_main_id is not None:
+                raise InvalidNegotiationGoodsError("未选款时不能关联商品")
+            return None
         if explicit:
             return goods_main_id
         return await self._promotion_repo.resolve_owner_goods_id(style_id)
@@ -423,7 +431,7 @@ class NegotiationService:
         self,
         *,
         goods_main_id: UUID | None,
-        style_id: UUID,
+        style_id: UUID | None,
         items: builtins.list[GoodsItemIn] | None,
     ) -> builtins.list[tuple[UUID, UUID | None]]:
         """明细应有的行（7.2）：不传 = 按商品成员建空行；传了款式集合要与成员完全相同，``sku_id`` 可空。
@@ -431,6 +439,10 @@ class NegotiationService:
         顺序：同一款式两次 → 款式集合 ≠ 成员（多出 / 缺少都列出）→ 422 ``VALIDATION_ERROR``；
         给了的 sku 不存在、已删或不属于该行款式 → 422 ``INVALID_SKU_REFERENCE``（与推广单入口同一口径）。
         """
+        if style_id is None:
+            if goods_main_id is not None or items:
+                raise InvalidNegotiationGoodsError("未选款时不能关联商品或颜色尺码")
+            return []
         members = await self._items_repo.members_of(goods_main_id=goods_main_id, style_id=style_id)
         if items is None:
             return [(member, None) for member in members]
@@ -523,8 +535,12 @@ class NegotiationService:
         ):
             raise NegotiationNotFoundError("谈款单不存在")
         views = (await self._repo.list_items([negotiation.id])).get(negotiation.id, [])
-        members = await self._items_repo.members_of(
-            goods_main_id=negotiation.goods_main_id, style_id=negotiation.style_id
+        members = (
+            await self._items_repo.members_of(
+                goods_main_id=negotiation.goods_main_id, style_id=negotiation.style_id
+            )
+            if negotiation.style_id is not None
+            else []
         )
         return actor, negotiation, views, members
 
@@ -540,10 +556,6 @@ class NegotiationService:
         from app.modules.blogger.claim_access import ensure_new_cooperation_allowed
 
         await ensure_new_cooperation_allowed(self._session, user, payload.blogger_id)
-        if not await self._repo.style_exists(payload.style_id):
-            raise InvalidNegotiationStyleError(
-                "款式不存在或已删除", details={"style_id": str(payload.style_id)}
-            )
         goods_main_id = await self._resolve_goods(
             style_id=payload.style_id,
             goods_main_id=payload.goods_main_id,
@@ -596,7 +608,7 @@ class NegotiationService:
                 "status": negotiation.status,
                 "cooperation_mode": negotiation.cooperation_mode,
                 "blogger_id": str(negotiation.blogger_id),
-                "style_id": str(negotiation.style_id),
+                "style_id": str(negotiation.style_id) if negotiation.style_id else None,
             },
             user_id=user.id,
         )
@@ -629,11 +641,9 @@ class NegotiationService:
             from app.modules.blogger.claim_access import ensure_new_cooperation_allowed
 
             await ensure_new_cooperation_allowed(self._session, user, blogger_id)
-        style_id = payload.style_id if payload.style_id is not None else negotiation.style_id
-        if not await self._repo.style_exists(style_id):
-            raise InvalidNegotiationStyleError(
-                "款式不存在或已删除", details={"style_id": str(style_id)}
-            )
+        style_id = payload.style_id if "style_id" in fields else negotiation.style_id
+        if style_id is None and negotiation.status != NegotiationStatus.DRAFT.value:
+            raise InvalidNegotiationStyleError("只有草稿可以暂不选款")
         if "goods_main_id" in fields or style_id != negotiation.style_id:
             goods_main_id = await self._resolve_goods(
                 style_id=style_id,
@@ -660,14 +670,23 @@ class NegotiationService:
             if payload.cooperation_mode is not None
             else CooperationMode(negotiation.cooperation_mode)
         )
-        # 没传服务费时也重算一次：模式可能刚被改成置换，服务费要跟着归零
-        quote = await self._resolve_quote(
-            mode=mode,
-            quote_amount=(
-                payload.quote_amount if "quote_amount" in fields else negotiation.quote_amount
-            ),
-            blogger_id=blogger_id,
-        )
+        # 未传金额保持原值（包括未知）；改模式或博主时仍沿用原报价解析规则。
+        if (
+            "quote_amount" not in fields
+            and mode.value == negotiation.cooperation_mode
+            and blogger_id == negotiation.blogger_id
+        ):
+            quote = negotiation.quote_amount
+        else:
+            quote = await self._resolve_quote(
+                mode=mode,
+                quote_amount=(
+                    payload.quote_amount if "quote_amount" in fields else negotiation.quote_amount
+                ),
+                blogger_id=blogger_id,
+            )
+        if quote is None and negotiation.status != NegotiationStatus.DRAFT.value:
+            raise ValidationError("只有草稿可以暂不填写服务费")
         values: dict[str, Any] = {
             "blogger_id": blogger_id,
             "style_id": style_id,
@@ -1017,6 +1036,8 @@ class NegotiationService:
             )
         doc = build_negotiation_doc(negotiation, items_complete=_items_complete(views, members))
         require(actor, doc, "receiver_confirm", gates=False)
+        if negotiation.style_id is None or negotiation.quote_amount is None:
+            raise ValidationError("请先补齐款式和服务费后提交审核")
         self._require_receiver_write(actor, RECEIVER_FIELDS)
         name = _clean_receiver("receiver_name", payload.receiver_name, strict=False)
         phone = _clean_receiver("receiver_phone", payload.receiver_phone, strict=False)
@@ -1302,8 +1323,12 @@ class NegotiationService:
         if row is None:
             raise NegotiationNotFoundError("谈款单不存在")
         views = (await self._repo.list_items([negotiation_id])).get(negotiation_id, [])
-        members = await self._items_repo.members_of(
-            goods_main_id=row["goods_main_id"], style_id=row["style_id"]
+        members = (
+            await self._items_repo.members_of(
+                goods_main_id=row["goods_main_id"], style_id=row["style_id"]
+            )
+            if row["style_id"] is not None
+            else []
         )
         response = self._to_response(
             row, actor=actor, views=views, members=members, now=_utcnow(), view="detail"
@@ -1363,7 +1388,7 @@ class NegotiationService:
                     if r["goods_main_id"] is not None
                     else None
                 )
-                or [r["style_id"]],
+                or ([r["style_id"]] if r["style_id"] is not None else []),
                 now=now,
                 view="list",
             )

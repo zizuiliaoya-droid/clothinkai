@@ -140,7 +140,9 @@ export function NegotiationFormModal({ target, onClose }: Props) {
   useEffect(() => {
     if (!open) return;
     let found: GoodsMember[] | null = null;
-    if (membersData && membersEnabled) found = membersData.members;
+    // 初始化 effect 已写入表单时，useWatch 可能尚未刷新，不能误清原有颜色尺码。
+    if (!form.getFieldValue("style_id")) found = [];
+    else if (membersData && membersEnabled) found = membersData.members;
     else if (goodsChoiceNeeded && !formGoods) found = [];
     if (!found) return;
     const next = found;
@@ -155,7 +157,7 @@ export function NegotiationFormModal({ target, onClose }: Props) {
       setMembersBoth(next);
     }
     if (result.rebuilt) setRebuilt(true);
-  }, [open, membersData, membersEnabled, goodsChoiceNeeded, formGoods, form]);
+  }, [open, styleId, membersData, membersEnabled, goodsChoiceNeeded, formGoods, form]);
 
   // 同一博主有别的 PR 在谈：只提示，不拦保存和提交（7c-16）
   const { data: others } = useQuery({
@@ -284,6 +286,10 @@ export function NegotiationFormModal({ target, onClose }: Props) {
           description={rest ?? "补齐标红的项再提交；只保存草稿不用填全。"}
         />
       )}
+      {!returned && !styleId && (
+        <Alert type="info" showIcon style={{ marginTop: 12 }} message="草稿·待补款"
+          description="可先保存合作意向，补齐款式、颜色尺码、约定发布时间和服务费后再提交审核。" />
+      )}
       <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
         <Form.Item
           name="blogger_id"
@@ -298,10 +304,11 @@ export function NegotiationFormModal({ target, onClose }: Props) {
             }
           />
         </Form.Item>
-        <Form.Item name="style_id" label="款式" rules={[{ required: true, message: "请选择款式" }]}>
+        <Form.Item name="style_id" label="款式" rules={[{ required: returned, message: "请选择款式" }]}>
           <StyleSelect
+            allowClear={!returned}
             selected={
-              editing
+              editing?.style_id
                 ? {
                     value: editing.style_id,
                     // 与下拉选项同一写法（货号 + 款名，8.8 货号保留）
@@ -309,7 +316,11 @@ export function NegotiationFormModal({ target, onClose }: Props) {
                   }
                 : null
             }
-            onChange={() => form.setFieldValue("goods_main_id", undefined)}
+            onChange={() => {
+              form.setFieldValue("goods_main_id", undefined);
+              form.setFieldValue("items", {});
+              setMembersBoth([]);
+            }}
           />
         </Form.Item>
         {goodsChoiceNeeded && (
@@ -361,7 +372,7 @@ export function NegotiationFormModal({ target, onClose }: Props) {
           <Form.Item
             name="quote_amount"
             label="博主服务费"
-            tooltip="不填则取博主档案里的报价。置换模式填了也会被置 0。"
+            tooltip="不填则取博主档案报价；档案也没有报价时保持待补，提交前需填写。明确为0请填0，置换模式保存后为0。"
             extra={mode === "置换" ? "置换没有博主服务费，保存后置 0" : undefined}
             style={{ width: 180 }}
           >

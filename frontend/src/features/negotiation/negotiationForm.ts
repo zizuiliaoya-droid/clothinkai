@@ -103,7 +103,7 @@ export function negotiationPayload(
 ): NegotiationCreate {
   const payload: NegotiationCreate = {
     blogger_id: values.blogger_id ?? "",
-    style_id: values.style_id ?? "",
+    style_id: values.style_id || null,
     cooperation_mode: values.cooperation_mode as CooperationMode,
     platform: values.platform || undefined,
     scheduled_publish_date: values.scheduled_publish_date
@@ -112,8 +112,13 @@ export function negotiationPayload(
     quote_amount: values.quote_amount != null ? String(values.quote_amount) : null,
     remark: values.remark?.trim() || null,
   };
-  if (values.goods_main_id) payload.goods_main_id = values.goods_main_id;
-  if (members.length) payload.items = negotiationItemsPayload(members, values.items);
+  if (!payload.style_id) {
+    payload.goods_main_id = null;
+    payload.items = [];
+  } else {
+    if (values.goods_main_id) payload.goods_main_id = values.goods_main_id;
+    if (members.length) payload.items = negotiationItemsPayload(members, values.items);
+  }
   return payload;
 }
 
