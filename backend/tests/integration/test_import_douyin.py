@@ -286,6 +286,16 @@ async def env(engine: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
             ),
             {"id": user_id, "tid": tenant_id, "u": f"impdy_{suffix}"},
         )
+        # 与手工博主导入夹具一致：真实主管具备来源写权限，且不会自动认领。
+        (
+            await s.execute(
+                text(
+                    "INSERT INTO user_role(id,tenant_id,user_id,role_id) "
+                    "SELECT :id,:tid,:uid,id FROM role WHERE code='pr_manager' RETURNING id"
+                ),
+                {"id": uuid4(), "tid": tenant_id, "uid": user_id},
+            )
+        ).scalar_one()
         await s.commit()
     e = _Env(Maker=Maker, suffix=suffix, tenant_id=tenant_id, user_id=user_id)
 

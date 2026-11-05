@@ -1,4 +1,7 @@
 from dataclasses import replace
+from decimal import Decimal
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -14,6 +17,9 @@ from app.modules.blogger.claim_access import (
     ensure_contact_write,
     row_contact_allowed,
 )
+from app.modules.blogger.models import Blogger
+from app.modules.blogger.schemas import BloggerUpdate
+from app.modules.blogger.service import BloggerService
 
 
 def context(*, claimed=False, enabled=True, manager=False, revokes=frozenset()):
@@ -70,3 +76,52 @@ def test_unresolved_failure_export_does_not_fall_back_to_role_contact_access():
     assert can_read_field("blogger", "wechat", contact_field_context(ctx, bid))
     assert not can_read_field("blogger", "wechat", contact_field_context(ctx, None))
     assert not can_read_field("blogger", "wechat", contact_field_context(ctx, uuid4()))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "role,enabled,claimed,deny_wechat,wechat",
+    [
+        ("finance", False, False, False, "changed"),
+        ("pr", True, False, False, None),
+        ("pr", True, True, True, "changed"),
+        ("pr", False, False, True, None),
+    ],
+    ids=["role-deny", "unclaimed-clear", "claimed-personal-deny", "preparation-personal-deny"],
+)
+async def test_update_aggregates_quote_and_contact_denials(
+    monkeypatch, role, enabled, claimed, deny_wechat, wechat
+):
+    """公开更新入口保留固定错误汇总，并在认领/准备状态下拒绝越权写入或清空。"""
+    bid, access = context(enabled=enabled, claimed=claimed)
+    revokes = {"field.blogger.quote:write"} if role == "pr" else set()
+    if deny_wechat:
+        revokes.add("field.blogger.wechat:write")
+    access = replace(
+        access,
+        field_ctx=FieldPermissionContext(frozenset({role}), frozenset(), frozenset(revokes)),
+    )
+    blogger = Blogger(
+        id=bid,
+        tenant_id=access.tenant_id,
+        xiaohongshu_id="original-id",
+        nickname="原博主",
+        platform="小红书",
+        wechat="original-wechat",
+        quote=Decimal("50"),
+    )
+    session = AsyncMock()
+    service = BloggerService(session)
+    monkeypatch.setattr(service._repo, "get_by_id", AsyncMock(return_value=blogger))
+    monkeypatch.setattr(
+        "app.modules.blogger.service.load_blogger_access", AsyncMock(return_value=access)
+    )
+    user = SimpleNamespace(id=access.user_id, tenant_id=access.tenant_id)
+    with pytest.raises(FieldPermissionDenied) as exc_info:
+        await service.update_blogger(bid, BloggerUpdate(quote=Decimal("100"), wechat=wechat), user)
+    assert exc_info.value.details["fields"] == ["quote", "wechat"]
+    assert exc_info.value.details["field"] == "quote"
+    assert blogger.wechat == "original-wechat"
+    assert blogger.quote == Decimal("50")
+    session.flush.assert_not_awaited()
+    session.commit.assert_not_awaited()

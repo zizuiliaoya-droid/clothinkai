@@ -26,6 +26,7 @@ from app.core.security.field_permissions import (
 from app.modules.auth.models import User
 from app.modules.auth.repository import PermissionRepository, RoleRepository
 from app.modules.blogger.claim_access import (
+    CONTACT_FIELDS,
     BloggerAccessContext,
     can_read_contact,
     can_write_contact,
@@ -180,9 +181,7 @@ class BloggerService:
             await self._ensure_account_free(new_platform, new_account, exclude_id=blogger.id)
 
         # BR-U03-42: 字段写权限
-        row_access = await load_blogger_access(self._session, user, [blogger.id])
-        ensure_contact_write(row_access, blogger.id, payload.model_fields_set)
-        await self._check_sensitive_write_permission(payload, user)
+        await self._check_sensitive_write_permission(payload, user, blogger_id=blogger.id)
         await self._check_quote_note_write(payload, user)
         await self._check_quote_note_readable(payload, user)
         # 8b-3：系统标签只读、类目标签按字典
@@ -486,7 +485,11 @@ class BloggerService:
     # ============================================================
 
     async def _check_sensitive_write_permission(
-        self, payload: BloggerCreate | BloggerUpdate, user: User
+        self,
+        payload: BloggerCreate | BloggerUpdate,
+        user: User,
+        *,
+        blogger_id: UUID | None = None,
     ) -> None:
         """BR-U03-42 / U09: 字段写权限（经 core 注册表 + 字段级 override）。"""
         fields_set = payload.model_fields_set
@@ -494,16 +497,30 @@ class BloggerService:
         if not sensitive_set:
             return
 
-        ctx = await build_field_perm_context(user.id, self._roles, self._perms)
+        access = (
+            await load_blogger_access(self._session, user, [blogger_id])
+            if blogger_id is not None
+            else None
+        )
+        ctx = (
+            access.field_ctx
+            if access is not None
+            else await build_field_perm_context(user.id, self._roles, self._perms)
+        )
 
         # 收齐全部越权字段再抛（流程线 7.1：details.fields），顺序固定
-        denied = [
-            field_name
-            for field_name in ("quote", "wechat", "phone")
-            if field_name in sensitive_set
-            and getattr(payload, field_name) is not None
-            and not can_write_field("blogger", field_name, ctx)
-        ]
+        denied = []
+        for field_name in ("quote", "wechat", "phone"):
+            if field_name not in sensitive_set:
+                continue
+            if access is not None and blogger_id is not None and field_name in CONTACT_FIELDS:
+                # 行权限也并入同一汇总；显式清空联系方式同样必须有写权限。
+                if not can_write_contact(access, blogger_id, field_name):
+                    denied.append(field_name)
+            elif getattr(payload, field_name) is not None and not can_write_field(
+                "blogger", field_name, ctx
+            ):
+                denied.append(field_name)
         if denied:
             raise FieldPermissionDenied(fields=denied, entity="blogger")
 
