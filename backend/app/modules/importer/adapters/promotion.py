@@ -109,6 +109,10 @@ class PromotionImportAdapter:
         # tenant_id → tenant.code 实例级缓存（tenant.code 不可变，worker 跨 batch 复用）
         self._tenant_code_cache: dict[UUID, str] = {}
 
+    def builtin_columns(self) -> list[dict[str, Any]]:
+        """解析和空模板共用的规范表头，不展开历史别名。"""
+        return _DEFAULT_COLUMNS
+
     # ----------------------- parse_row（纯函数）----------------------- #
 
     def parse_row(self, row: dict[str, Any], mapping: FieldMapping | None) -> dict[str, Any]:

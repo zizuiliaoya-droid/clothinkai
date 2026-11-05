@@ -53,6 +53,17 @@ class FieldMappingService:
         self._repo = FieldMappingRepository(session)
         self._audit = AuditService(session)
 
+    async def download_template(
+        self, source: str, user: User, perms: EffectivePermissions
+    ) -> bytes:
+        """下载与当前租户上传行为一致的空模板，权限与该来源上传相同。"""
+        from app.modules.importer.templates import build_import_template, require_template_source
+
+        access.require_write(perms, source)
+        require_template_source(source)
+        active = await self._repo.get_active(user.tenant_id, source)
+        return build_import_template(source, active)
+
     async def create_version(
         self, payload: FieldMappingCreate, user: User, perms: EffectivePermissions
     ) -> FieldMapping:

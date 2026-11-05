@@ -36,7 +36,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, File, Form, Path, Query, UploadFile, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 from app.core.config import settings
 from app.modules.auth.deps import CurrentActiveUser, CurrentPerms
@@ -72,6 +72,22 @@ from app.modules.importer.schemas import (
 from app.modules.importer.service import ImportService
 
 router = APIRouter(prefix="/api/imports", tags=["importer"])
+
+
+@router.get("/sources/{source}/template")
+async def download_import_template(
+    source: str,
+    user: CurrentActiveUser,
+    perms: CurrentPerms,
+    service: FieldMappingServiceDep,
+) -> Response:
+    """人工导入空模板；生效映射按当前租户读取，权限与该来源上传一致。"""
+    data = await service.download_template(source, user, perms)
+    return Response(
+        data,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{source}-template-1105-v1.xlsx"'},
+    )
 
 
 # ---------------------------------------------------------------------------
