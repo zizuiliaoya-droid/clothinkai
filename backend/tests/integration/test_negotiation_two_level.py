@@ -1216,6 +1216,23 @@ class TestSubmit:
             ("negotiation.final_returned", "待老板审核", "老板退回", "老板：价格再压"),
             ("negotiation.submitted", "老板退回", "主管待审", None),
         ]
+        account_snapshot = {
+            "version": 1,
+            "primary_account_id": str(world.blogger.id),
+            "group_id": None,
+            "accounts": [
+                {
+                    "account_id": str(world.blogger.id),
+                    "platform": "小红书",
+                    "account": world.blogger.xiaohongshu_id,
+                    "nickname": world.blogger.nickname,
+                }
+            ],
+            "quote_id": None,
+            "reference_amount": "500.00",
+            "price_source": "blogger_quote",
+        }
+        amended_account_snapshot = {**account_snapshot, "price_source": "manual"}
         snapshot = {
             "blogger_id": str(world.blogger.id),
             "style_id": str(world.style.id),
@@ -1225,11 +1242,19 @@ class TestSubmit:
             "platform": "小红书",
             "scheduled_publish_date": "2026-11-01",
             "quote_amount": "500.00",
+            "account_snapshot": account_snapshot,
         }
         assert events[1][3] == {"snapshot": snapshot}
         assert events[4][3] == {
-            "snapshot": {**snapshot, "quote_amount": "300.00"},
-            "diff": {"quote_amount": {"before": "500.00", "after": "300.00"}},
+            "snapshot": {
+                **snapshot,
+                "quote_amount": "300.00",
+                "account_snapshot": amended_account_snapshot,
+            },
+            "diff": {
+                "quote_amount": {"before": "500.00", "after": "300.00"},
+                "account_snapshot": {"before": account_snapshot, "after": amended_account_snapshot},
+            },
         }
         assert [e[4] for e in events] == [
             flow_users.pr.id,
@@ -2450,7 +2475,7 @@ class TestCopy:
     ) -> None:
         """复制博主、商品、明细、模式、平台、服务费、备注、约定发布时间；不复制审核与收货。
         新单新 ``line_id``、``copied_from_id`` 指回原单、本人是新单 PR；两条主线各写一条事件互相引用。"""
-        blogger = await blogger_factory.blogger()
+        blogger = await blogger_factory.blogger(platform="抖音")
         src = await negotiation_factory.negotiation(
             style=suit.top,
             blogger=blogger,
@@ -2474,6 +2499,8 @@ class TestCopy:
         new = await svc.copy(src_id, flow_users.pr)
         assert new.id != src_id and new.line_id != src_line
         assert (new.status, new.copied_from_id, new.pr_id) == ("草稿", src_id, flow_users.pr.id)
+        assert new.account_snapshot.primary_account_id == blogger.id
+        assert new.account_snapshot.accounts[0].platform == "抖音"
         assert (
             new.blogger_id,
             new.style_id,
