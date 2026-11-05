@@ -236,9 +236,16 @@ def test_pr3_payload_shapes_are_registered() -> None:
         platform="小红书",
         scheduled_publish_date=date(2026, 10, 1),
         quote_amount=Decimal("100"),
+        account_snapshot=None,
     )
     view = SimpleNamespace(style_id=uuid4(), sku_id=uuid4())
     snapshot = _submit_snapshot(negotiation, [view])  # type: ignore[arg-type]
+    assert snapshot["account_snapshot"] is None
+    assert_payload_registered(snapshot)
+    # 真实旧单无账号约定；读取只省略这个空容器，其余PR3原始形状完整保留。
+    legacy_snapshot = {key: value for key, value in snapshot.items() if key != "account_snapshot"}
+    assert filter_payload(snapshot, _ctx("pr")) == legacy_snapshot
+    snapshot = legacy_snapshot
     previous = {**snapshot, "platform": "抖音", "quote_amount": "90.00"}
     samples: list[dict[str, Any]] = [
         {"snapshot": snapshot, "diff": _snapshot_diff(previous, snapshot)},

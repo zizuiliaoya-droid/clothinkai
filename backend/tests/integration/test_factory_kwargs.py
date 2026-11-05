@@ -240,6 +240,22 @@ async def test_negotiation_kwargs_applied(ctx: dict[str, Any], session: Any) -> 
         "promotion_id": None,
         "line_id": uuid4(),
         "copied_from_id": source.id,
+        "account_snapshot": {
+            "version": 1,
+            "primary_account_id": str(ctx["blogger"].id),
+            "group_id": None,
+            "accounts": [
+                {
+                    "account_id": str(ctx["blogger"].id),
+                    "platform": ctx["blogger"].platform,
+                    "account": ctx["blogger"].xiaohongshu_id,
+                    "nickname": ctx["blogger"].nickname,
+                }
+            ],
+            "quote_id": None,
+            "reference_amount": "500.00",
+            "price_source": "manual",
+        },
         "cooperation_mode": "送拍",
         "platform": "抖音",
         "scheduled_publish_date": date(2026, 6, 20),
@@ -285,6 +301,7 @@ async def test_negotiation_defaults_and_finalized(ctx: dict[str, Any]) -> None:
     draft = await _negotiation(ctx, {})
     assert (draft.status, draft.cooperation_mode, draft.pr_id) == ("草稿", "寄拍", ctx["pr"].id)
     assert draft.line_id is not None
+    assert draft.account_snapshot is None
 
     p = await _promotion(ctx, {})
     assert p.line_id is not None  # 不传 line_id 由库发号
