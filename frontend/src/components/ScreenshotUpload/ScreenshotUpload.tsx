@@ -74,7 +74,7 @@ export function ScreenshotUpload({ value, onChange, validate = screenshotImageEr
       onDragOver={(event) => {
         if (!unavailable && Array.from(event.dataTransfer.types).includes("Files")) event.preventDefault();
       }}
-      onDrop={drop}
+      onDropCapture={drop}
       onClick={(event) => {
         if (!unavailable && !(event.target as Element).closest("button,input,a")) event.currentTarget.focus();
       }}

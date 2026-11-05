@@ -59,6 +59,15 @@ describe("截图选择、粘贴与拖拽", () => {
     expect(onChange).toHaveBeenCalledWith(file);
   });
 
+  it("直接拖到选择按钮也只接收一次，不再触发内部 Upload 的 drop", async () => {
+    const onChange = vi.fn();
+    render(<ScreenshotUpload value={null} onChange={onChange} />);
+    const file = png();
+    fireEvent.drop(screen.getByRole("button", { name: /选择截图/ }), { dataTransfer: clipboard([file]) });
+    await waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
+    expect(onChange).toHaveBeenCalledWith(file);
+  });
+
   it.each([
     ["类型", () => new File(["not-image"], "notes.pdf", { type: "application/pdf" })],
     ["大小", () => new File([new Uint8Array(10 * 1024 * 1024 + 1)], "large.png", { type: "image/png" })],

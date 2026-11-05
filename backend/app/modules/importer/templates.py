@@ -64,7 +64,9 @@ def require_template_source(source: str) -> None:
 def build_import_template(source: str, mapping: FieldMapping | None = None) -> bytes:
     """使用上传时同一份生效映射，不更改映射或创建任何业务记录。"""
     require_template_source(source)
-    adapter = BloggerImportAdapter() if source == "manual_blogger" else PromotionImportAdapter()
+    adapter: BloggerImportAdapter | PromotionImportAdapter = (
+        BloggerImportAdapter() if source == "manual_blogger" else PromotionImportAdapter()
+    )
     columns: list[dict[str, Any]] = (
         mapping.mapping_config.get("columns", adapter.builtin_columns())
         if mapping is not None
