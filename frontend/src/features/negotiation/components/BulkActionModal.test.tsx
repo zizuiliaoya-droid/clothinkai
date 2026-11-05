@@ -79,7 +79,13 @@ it("提交后行级INTERNAL_ERROR先GET核对，审核已变阶段不算本次�
   expect(screen.getByLabelText("a审核意见")).toBeDisabled();
   expect(screen.getByText(/成功 0，未执行 0，失败 0，待核对 1/)).toBeInTheDocument();
   api.getNegotiation.mockResolvedValue(row("a", {status: "待老板审核"}));
-  fireEvent.click(screen.getByRole("button", {name: "核对并重试待处理项"}));
+  const retry = await waitFor(() => {
+    const button = screen.getByRole("button", {name: "核对并重试待处理项"});
+    expect(button).not.toHaveClass("ant-btn-loading");
+    expect(button).toBeEnabled();
+    return button;
+  });
+  fireEvent.click(retry);
   expect(await screen.findByText("未执行：状态已变化，不计为本次成功")).toBeInTheDocument();
   expect(api.getNegotiation).toHaveBeenCalledTimes(2);
   expect(api.getNegotiation).toHaveBeenLastCalledWith("a");
