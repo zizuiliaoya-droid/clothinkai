@@ -118,6 +118,9 @@ def test_invalid_mapping_does_not_download_an_unusable_template() -> None:
     ("source", "scopes", "revokes", "allowed"),
     [
         ("manual_blogger", {"importer.batch:write"}, set(), True),
+        ("manual_blogger_audience", {"blogger:write"}, set(), True),
+        ("manual_blogger_audience", {"importer.batch:write"}, set(), False),
+        ("manual_blogger_audience", {"*"}, {"blogger:write"}, False),
         ("manual_promotion", {"importer.batch:write"}, set(), False),
         ("manual_promotion", {"promotion_create:write"}, set(), True),
         ("manual_blogger", {"importer.batch:read"}, set(), False),

@@ -203,6 +203,12 @@ export function BloggerListPage() {
       render: (v: number | null) => (v == null ? "—" : v.toLocaleString()),
     },
     {
+      title: "画像更新",
+      dataIndex: "audience_updated_on",
+      width: 110,
+      render: (v: string | null | undefined) => v || "—",
+    },
+    {
       title: "博主类型",
       dataIndex: "blogger_type",
       width: 90,

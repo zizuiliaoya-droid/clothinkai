@@ -94,7 +94,10 @@ class HuitunImportAdapter:
         xhs_id = parsed["xiaohongshu_id"]
         blogger = (
             await session.execute(
-                select(Blogger).where(
+                select(Blogger)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+                .where(
                     # 灰豚画像是小红书的数据，只认小红书博主（8b 设计 §3.9）
                     Blogger.platform == Platform.XIAOHONGSHU.value,
                     Blogger.xiaohongshu_id == xhs_id,
@@ -111,7 +114,11 @@ class HuitunImportAdapter:
                 entity_ref=xhs_id,
             )
             return uuid4(), False
-        blogger.audience_profile = self._build_profile(parsed)
+        profile = self._build_profile(parsed)
+        profile.pop("structured_v1", None)
+        if blogger.audience_profile and "structured_v1" in blogger.audience_profile:
+            profile["structured_v1"] = blogger.audience_profile["structured_v1"]
+        blogger.audience_profile = profile
         await session.flush()
         return blogger.id, False
 

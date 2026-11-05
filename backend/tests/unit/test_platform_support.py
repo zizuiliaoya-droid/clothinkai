@@ -40,6 +40,11 @@ def signed(payload=None, *, secret=None):
     [
         ("POST", "/api/promotions/"),
         ("POST", "/api/bloggers/00000000-0000-0000-0000-000000000001/works"),
+        ("POST", "/api/bloggers/00000000-0000-0000-0000-000000000001/audience"),
+        (
+            "GET",
+            "/api/bloggers/00000000-0000-0000-0000-000000000001/audience/00000000-0000-0000-0000-000000000002/source",
+        ),
         (
             "GET",
             "/api/bloggers/00000000-0000-0000-0000-000000000001/works/"
@@ -98,6 +103,24 @@ async def test_support_reads_work_list_and_history_through_middleware(query):
         "snapshot_id": "00000000-0000-0000-0000-000000000002" if query else None,
         "readonly": True,
     }
+
+
+@pytest.mark.parametrize("history", [False, True])
+async def test_support_reads_audience_current_and_history(history):
+    app = FastAPI()
+    app.add_middleware(TenancyContextMiddleware)
+
+    @app.get("/api/bloggers/{blogger_id}/audience")
+    async def endpoint(blogger_id: str, history: bool = False):
+        return {"history": history, "readonly": support_readonly_ctx.get()}
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            "/api/bloggers/00000000-0000-0000-0000-000000000001/audience",
+            params={"history": history},
+            headers={"Authorization": "Bearer " + signed()},
+        )
+    assert response.status_code == 200 and response.json() == {"history": history, "readonly": True}
 
 
 @pytest.mark.parametrize("mode", ["expired", "forged"])

@@ -46,6 +46,9 @@ SWITCHABLE_POLICIES: frozenset[DuplicatePolicy] = frozenset(
 
 
 DUPLICATE_RULES: dict[str, DuplicateRule] = {
+    "manual_blogger_audience": DuplicateRule(
+        DuplicatePolicy.SNAPSHOT, key="平台账号 + 维度 + 采集日期", fill_empty=False
+    ),
     "manual_blogger_work": DuplicateRule(
         DuplicatePolicy.SNAPSHOT, key="平台账号 + 作品标识 + 采集时间", fill_empty=False
     ),
