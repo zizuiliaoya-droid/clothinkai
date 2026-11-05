@@ -1293,6 +1293,7 @@ class TestFlowUi:
                 pr_id=flow_users.pr2.id,
                 promotion_id=negotiated.id,
                 cooperation_mode="送拍",
+                quote_amount=Decimal("0.00"),  # 既有定稿夹具明确为零金额，不表示未知。
                 status="已定稿",
             )
         )

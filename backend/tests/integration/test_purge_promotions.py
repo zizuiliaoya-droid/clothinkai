@@ -116,8 +116,8 @@ async def _with_children(
         ),
         (
             "INSERT INTO negotiation (id, tenant_id, blogger_id, style_id, pr_id, "
-            "cooperation_mode, status, promotion_id, line_id) "
-            "VALUES (:n, :t, :b, :st, :pr, '寄拍', '已定稿', :p, :line)",
+            "cooperation_mode, quote_amount, status, promotion_id, line_id) "
+            "VALUES (:n, :t, :b, :st, :pr, '寄拍', 0, '已定稿', :p, :line)",
             {},
         ),
         (
