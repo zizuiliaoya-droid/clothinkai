@@ -859,6 +859,7 @@ async def negotiation_factory(session: AsyncSession, tenant_a: Any) -> Any:
                     "promotion_id",
                     "line_id",
                     "copied_from_id",
+                    "account_snapshot",
                     "cooperation_mode",
                     "platform",
                     "scheduled_publish_date",
