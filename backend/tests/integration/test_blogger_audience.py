@@ -115,14 +115,23 @@ async def test_runner_group_atomicity_row_errors_and_retry(
         async with factory() as fresh:
             yield fresh
 
+    @asynccontextmanager
+    async def bypass_sessions():
+        async with factory() as fresh:
+            yield fresh
+            # 测试共用同一连接：释放外层锁会话的保存点，避免 close() 回滚
+            # 其内已经提交的组事务。fixture 最外层事务仍在测试结束统一回滚。
+            await fresh.commit()
+
     monkeypatch.setattr(tasks, "AsyncSessionApp", sessions)
-    monkeypatch.setattr(tasks, "AsyncSessionBypass", sessions)
+    monkeypatch.setattr(tasks, "AsyncSessionBypass", bypass_sessions)
     monkeypatch.setattr(attachment_service, "get_object_bytes", lambda *args: content)
     monkeypatch.setitem(
         ImportAdapterRegistry._adapters, "manual_blogger_audience", BloggerAudienceImportAdapter()
     )
     result = await tasks._run_import_batch(batch.id)
     assert result == {"status": "partial", "imported": 1, "failed": 2}
+    assert tenant_id_ctx.get() == tenant_a.id
     jobs = (
         await session.scalars(
             select(ImportJob).where(ImportJob.batch_id == batch.id).order_by(ImportJob.row_number)
@@ -134,6 +143,9 @@ async def test_runner_group_atomicity_row_errors_and_retry(
         await session.scalars(select(Capture).where(Capture.blogger_id == blogger.id))
     ).one().dimension == "gender"
     jobs[1].raw_data = {**jobs[1].raw_data, "占比": "40"}
+    # 汇总由另一 Session 更新；先刷新，不能让本地旧 processing 值掩盖状态变更。
+    await session.refresh(batch)
+    assert batch.status == "partial"
     batch.status = "processing"
     await session.flush()
     retried = await tasks._run_import_batch(batch.id, only_failed=True)
