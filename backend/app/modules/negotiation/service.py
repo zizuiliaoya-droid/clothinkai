@@ -57,6 +57,7 @@ from app.modules.flow.matrix import (
     ui_for,
 )
 from app.modules.metric_config.service import PlatformMetricSettingService
+from app.modules.negotiation.bulk_schemas import CreationIdentity
 from app.modules.negotiation.enums import (
     NegotiationFinalReviewAction,
     NegotiationReviewAction,
@@ -555,7 +556,13 @@ class NegotiationService:
     # N1 新建 / N2 编辑
     # ------------------------------------------------------------------ #
 
-    async def create(self, payload: NegotiationCreate, user: User) -> NegotiationResponse:
+    async def create(
+        self,
+        payload: NegotiationCreate,
+        user: User,
+        *,
+        creation_identity: CreationIdentity | None = None,
+    ) -> NegotiationResponse:
         """N1：落草稿。持 ``*`` → 403 ``star_create``；发 ``line_id``；不传商品就推定并写回；按商品建明细。"""
         actor = await self._flow_actor(user)
         if actor.is_star:
@@ -605,6 +612,10 @@ class NegotiationService:
             account_snapshot=snapshot,
             remark=payload.remark,
             status=NegotiationStatus.DRAFT.value,
+            client_create_key=creation_identity.client_create_key if creation_identity else None,
+            creation_group_id=creation_identity.creation_group_id if creation_identity else None,
+            creation_pr_id=user.id if creation_identity else None,
+            creation_request_hash=creation_identity.request_hash if creation_identity else None,
         )
         self._repo.add(negotiation)
         await self._session.flush()

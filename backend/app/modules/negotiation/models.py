@@ -16,6 +16,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Numeric,
     SmallInteger,
@@ -40,6 +41,11 @@ class Negotiation(TenantScopedModel):
 
     __tablename__ = "negotiation"
     account_snapshot: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    client_create_key: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True)
+    creation_group_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True)
+    creation_pr_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True)
+    """原创建 PR，转交 pr_id 不改变创建重试身份。仅批量创建设置。"""
+    creation_request_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     # --- 关联 ---
     blogger_id: Mapped[UUID] = mapped_column(
@@ -146,6 +152,30 @@ class Negotiation(TenantScopedModel):
     """实际确认收货信息（= 定稿）的人：本人，或 PR 不在时的主管 / 管理员。"""
 
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "creation_pr_id"],
+            ["user.tenant_id", "user.id"],
+            name="fk_negotiation_creation_pr",
+            ondelete="RESTRICT",
+        ),
+        Index(
+            "uq_negotiation_create_key",
+            "tenant_id",
+            "creation_pr_id",
+            "client_create_key",
+            unique=True,
+            postgresql_where=text("client_create_key IS NOT NULL"),
+        ),
+        Index(
+            "idx_negotiation_creation_group",
+            "tenant_id",
+            "creation_group_id",
+            postgresql_where=text("creation_group_id IS NOT NULL"),
+        ),
+        CheckConstraint(
+            "(client_create_key IS NULL AND creation_group_id IS NULL AND creation_pr_id IS NULL AND creation_request_hash IS NULL) OR (client_create_key IS NOT NULL AND creation_group_id IS NOT NULL AND creation_pr_id IS NOT NULL AND creation_request_hash IS NOT NULL)",
+            name="ck_negotiation_creation_identity",
+        ),
         Index("idx_negotiation_tenant_status", "tenant_id", "status"),
         Index("idx_negotiation_pr", "tenant_id", "pr_id", "status"),
         Index("idx_negotiation_blogger", "tenant_id", "blogger_id"),

@@ -13,14 +13,14 @@ export function AccountSelection({form, enabled, snapshot, legacy, preserveSnaps
   preserveSnapshot?: boolean;
   onSelectionChange: () => void;
   onReference: (amount: string | null) => void;
-  onPermissions: (write: boolean) => void;
+  onPermissions: (write: boolean, ready: boolean) => void;
 }) {
   const bloggerId = Form.useWatch("blogger_id", form) as string | undefined;
   const selected = Form.useWatch("account_ids", form) as string[] | undefined;
   const group = useQuery({queryKey: ["blogger-account-group", bloggerId], queryFn: () => getAccountGroup(bloggerId!), enabled: enabled && !!bloggerId});
   const ids = selected?.length ? selected : bloggerId ? [bloggerId] : [];
   const quote = useQuery({queryKey: ["account-quote", bloggerId, [...ids].sort()], queryFn: () => resolveAccountQuote(bloggerId!, ids), enabled: enabled && !!bloggerId && !legacy && !preserveSnapshot && !!group.data});
-  useEffect(() => { onPermissions(!!group.data?.can_write_amount); }, [enabled, bloggerId, group.data?.can_write_amount, onPermissions]);
+  useEffect(() => { onPermissions(!!group.data?.can_write_amount, group.isSuccess); }, [enabled, bloggerId, group.data?.can_write_amount, group.isSuccess, onPermissions]);
   useEffect(() => {
     if (quote.data) onReference(quote.data.reference_amount);
   }, [quote.data, onReference]);

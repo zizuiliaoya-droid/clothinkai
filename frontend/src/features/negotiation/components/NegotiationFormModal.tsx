@@ -30,7 +30,7 @@ import {
   rebuildOnGoodsChange,
   type NegotiationFormValues,
 } from "../negotiationForm";
-import type { Negotiation } from "../types";
+import type { Negotiation, NegotiationCreate } from "../types";
 import { AccountSelection } from "./AccountSelection";
 import { useReadOnlySupport } from "@/stores/supportStore";
 import { useNegotiationFeedback } from "./useNegotiationFeedback";
@@ -40,12 +40,15 @@ export interface NegotiationFormTarget {
   editing: Negotiation | null;
   /** 打开时就要标红的缺项（菜单「提交审核」带 missing、或提交 422 时）。 */
   missing?: GateMissingItem[] | null;
+  /** 批量创建前的本地行，复用单笔输入但不写入服务器。 */
+  prepared?: { values: NegotiationFormValues; members: GoodsMember[]; styleLabel: string; bloggerLabel: string };
 }
 
 type Props = {
   /** null = 弹窗关着。 */
   target: NegotiationFormTarget | null;
   onClose: () => void;
+  onPrepare?: (payload: NegotiationCreate, values: NegotiationFormValues, members: GoodsMember[]) => void;
 };
 
 type Mode = "draft" | "submit";
@@ -66,7 +69,7 @@ class StageError extends Error {
  * 「保存草稿」不卡缺项；「保存并提交」先在前端查 ★¹，缺的标红不发请求；后端 422 的 missing 同样标回字段。
  * 老板退回的单顶部只读显示退回意见；同一博主别的 PR 在谈时顶部黄色提示（不拦）。不显示商品编码与 SKU 编码（规-1）。
  */
-export function NegotiationFormModal({ target, onClose }: Props) {
+export function NegotiationFormModal({ target, onClose, onPrepare }: Props) {
   const [form] = Form.useForm<NegotiationFormValues>();
   const { refresh, handleError, notifySubmitted } = useNegotiationFeedback();
   const open = !!target;
@@ -74,6 +77,8 @@ export function NegotiationFormModal({ target, onClose }: Props) {
   const legacy = !!editing && !editing.account_snapshot;
   const readOnly = useReadOnlySupport();
   const [canWriteAmount, setCanWriteAmount] = useState(false);
+  const [permissionReady, setPermissionReady] = useState(false);
+  const receivePermissions = useCallback((write: boolean, ready: boolean) => {setCanWriteAmount(write); setPermissionReady(ready);}, []);
   const [selectionEdited, setSelectionEdited] = useState(false);
   const amountManual = useRef(false);
   const applyReference = useRef(false);
@@ -118,18 +123,18 @@ export function NegotiationFormModal({ target, onClose }: Props) {
   // 每次打开从单据（或空表单）开始
   useEffect(() => {
     if (!target) return;
-    const initialMembers = target.editing ? membersFromItems(target.editing) : [];
+    const initialMembers = target.editing ? membersFromItems(target.editing) : target.prepared?.members ?? [];
     setMembersBoth(initialMembers);
     setRebuilt(false);
     setSavedId(target.editing?.id ?? null);
-    amountManual.current = false;
+    amountManual.current = target.prepared?.values.quote_amount != null;
     applyReference.current = !target.editing;
     setSelectionEdited(false);
     setMissing([]);
     setRest(null);
     form.resetFields();
     form.setFieldsValue(
-      target.editing ? negotiationFormInitial(target.editing) : { platform: "小红书", items: {} }
+      target.editing ? negotiationFormInitial(target.editing) : target.prepared?.values ?? { platform: "小红书", items: {} }
     );
     if (target.missing?.length) markMissing(target.missing, initialMembers);
     // markMissing 只读 form 与 setter，按打开的单初始化一次
@@ -228,6 +233,7 @@ export function NegotiationFormModal({ target, onClose }: Props) {
   });
 
   async function save(mode: Mode) {
+    if (onPrepare && !permissionReady) return;
     let values: NegotiationFormValues;
     try {
       values = await form.validateFields();
@@ -245,6 +251,13 @@ export function NegotiationFormModal({ target, onClose }: Props) {
     }
     setMissing([]);
     setRest(null);
+    if (onPrepare) {
+      const payload = negotiationPayload(values, membersRef.current);
+      if (!canWriteAmount || !amountManual.current) delete payload.quote_amount;
+      onPrepare(payload, values, membersRef.current);
+      onClose();
+      return;
+    }
     mutation.mutate({ mode, values });
   }
 
@@ -253,7 +266,7 @@ export function NegotiationFormModal({ target, onClose }: Props) {
 
   return (
     <Modal
-      title={editing ? "编辑谈款" : "新建谈款"}
+      title={onPrepare ? "编辑待建行" : editing ? "编辑谈款" : "新建谈款"}
       open={open}
       onCancel={onClose}
       destroyOnHidden
@@ -263,19 +276,19 @@ export function NegotiationFormModal({ target, onClose }: Props) {
           <Button onClick={onClose}>取消</Button>
           <Button
             loading={pendingMode === "draft"}
-            disabled={mutation.isPending && pendingMode !== "draft"}
+            disabled={(mutation.isPending && pendingMode !== "draft") || (!!onPrepare && !permissionReady)}
             onClick={() => void save("draft")}
           >
-            {returned ? "保存" : "保存草稿"}
+            {onPrepare ? "更新此行" : returned ? "保存" : "保存草稿"}
           </Button>
-          <Button
+          {!onPrepare && <Button
             type="primary"
             loading={pendingMode === "submit"}
             disabled={mutation.isPending && pendingMode !== "submit"}
             onClick={() => void save("submit")}
           >
             保存并提交
-          </Button>
+          </Button>}
         </Space>
       }
     >
@@ -325,12 +338,12 @@ export function NegotiationFormModal({ target, onClose }: Props) {
             }}
             platform={platform}
             selected={
-              editing ? { value: editing.blogger_id, label: editing.blogger_nickname || editing.blogger_id } : null
+              editing ? { value: editing.blogger_id, label: editing.blogger_nickname || editing.blogger_id } : target?.prepared?.values.blogger_id ? {value: target.prepared.values.blogger_id, label: target.prepared.bloggerLabel} : null
             }
           />
         </Form.Item>
         <AccountSelection form={form} enabled={open} snapshot={editing?.account_snapshot} legacy={legacy} preserveSnapshot={!selectionEdited && !!editing?.account_snapshot}
-          onSelectionChange={selectionChanged} onReference={receiveReference} onPermissions={setCanWriteAmount} />
+          onSelectionChange={selectionChanged} onReference={receiveReference} onPermissions={receivePermissions} />
         <Form.Item name="style_id" label="款式" rules={[{ required: returned, message: "请选择款式" }]}>
           <StyleSelect
             allowClear={!returned}
@@ -341,7 +354,7 @@ export function NegotiationFormModal({ target, onClose }: Props) {
                     // 与下拉选项同一写法（货号 + 款名，8.8 货号保留）
                     label: `${editing.style_code ?? ""} ${editing.style_name ?? ""}`.trim() || editing.style_id,
                   }
-                : null
+                : target?.prepared?.values.style_id ? {value: target.prepared.values.style_id, label: target.prepared.styleLabel} : null
             }
             onChange={() => {
               form.setFieldValue("goods_main_id", undefined);

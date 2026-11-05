@@ -61,6 +61,10 @@ import { LineDrawer } from "@/features/flow/LineDrawer";
 import { LINE_ROW_CLASS, LINE_ROW_IGNORE_CLASS, lineRowProps } from "@/features/flow/lineRow";
 import type { UiAction } from "@/features/flow/keys";
 import { negotiationStatusStyle } from "@/features/flow/stageStyle";
+import { BulkCreateModal } from "@/features/negotiation/components/BulkCreateModal";
+import { BulkActionModal, type BulkActionTarget } from "@/features/negotiation/components/BulkActionModal";
+import { BULK_ACTION_LABEL, BULK_ACTION_UI, BULK_LIMIT, type BulkAction } from "@/features/negotiation/bulkApi";
+import { useReadOnlySupport } from "@/stores/supportStore";
 import "./NegotiationPage.css";
 
 const MODES: CooperationMode[] = ["寄拍", "送拍", "置换"];
@@ -112,6 +116,10 @@ export function NegotiationPage() {
   });
   const [formTarget, setFormTarget] = useState<NegotiationFormTarget | null>(null);
   const [dialog, setDialog] = useState<NegotiationDialog | null>(null);
+  const [bulkCreateOpen, setBulkCreateOpen] = useState(false);
+  const [bulkTarget, setBulkTarget] = useState<BulkActionTarget | null>(null);
+  const [selectedRows, setSelectedRows] = useState<Negotiation[]>([]);
+  const readOnly = useReadOnlySupport();
   const closeDialog = () => setDialog(null);
   const dialogOf = (kind: NegotiationDialog["kind"]) => (dialog?.kind === kind ? dialog : null);
   // 点一行开主线抽屉（8.3）：没定稿只有谈款段，已定稿按 line_id 显示整条线
@@ -358,6 +366,8 @@ export function NegotiationPage() {
         </Typography.Title>
       }
       extra={
+        <Space wrap>
+        <FlowAction ui={data?.ui} actionKey="create" label="批量建草稿" onClick={() => setBulkCreateOpen(true)} />
         <FlowAction
           ui={data?.ui}
           actionKey="create"
@@ -366,6 +376,7 @@ export function NegotiationPage() {
           showReasonBelow
           buttonProps={{ type: "primary", icon: <PlusOutlined /> }}
         />
+        </Space>
       }
     >
       <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>
@@ -446,12 +457,24 @@ export function NegotiationPage() {
         )}
       </Space>
 
+      {!readOnly && selectedRows.length > 0 && <Space wrap style={{marginBottom: 12}}>
+        <Typography.Text>已选 {selectedRows.length} / 50 项</Typography.Text>
+        {(Object.keys(BULK_ACTION_LABEL) as BulkAction[]).filter(action => selectedRows.some(row => row.ui?.actions?.[BULK_ACTION_UI[action]])).map(action => <Button key={action} onClick={() => setBulkTarget({action, rows: selectedRows})}>批量{BULK_ACTION_LABEL[action]}</Button>)}
+        <Button onClick={() => setSelectedRows([])}>清空选择</Button>
+      </Space>}
       <Table
         rowKey="id"
         size="small"
         loading={isLoading}
         columns={columns}
         dataSource={rows}
+        rowSelection={showOperations && !readOnly ? {
+          selectedRowKeys: selectedRows.map(row => row.id),
+          preserveSelectedRowKeys: true,
+          onCell: () => ({className: LINE_ROW_IGNORE_CLASS}),
+          getCheckboxProps: row => ({disabled: selectedRows.length >= BULK_LIMIT && !selectedRows.some(item => item.id === row.id)}),
+          onChange: (_, selected) => {if (selected.length > BULK_LIMIT) message.warning("一次最多选择50项"); setSelectedRows(selected.slice(0, BULK_LIMIT));},
+        } : undefined}
         rowClassName={(r) => (r.overdue ? `${LINE_ROW_CLASS} negotiation-row-overdue` : LINE_ROW_CLASS)}
         onRow={(r) => lineRowProps(() => { closeLine(); setLineRow(r); })}
         scroll={{ x: 1300 }}
@@ -472,6 +495,8 @@ export function NegotiationPage() {
         bloggerName={displayedLine?.blogger_nickname}
       />
       <NegotiationFormModal target={formTarget} onClose={() => setFormTarget(null)} />
+      <BulkCreateModal open={bulkCreateOpen} onClose={() => setBulkCreateOpen(false)} onEdit={row => {setBulkCreateOpen(false); openEdit(row);}} />
+      <BulkActionModal target={bulkTarget} onClose={() => setBulkTarget(null)} />
       <ManagerReviewModal target={dialogOf("manager_review")} onClose={closeDialog} />
       <FinalReviewModal target={dialogOf("final_review")} onClose={closeDialog} />
       <NegotiationReceiverModal target={dialogOf("receiver")} onClose={closeDialog} />

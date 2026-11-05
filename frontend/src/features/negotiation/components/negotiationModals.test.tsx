@@ -13,6 +13,7 @@ import { FinalReviewModal } from "./FinalReviewModal";
 import { ManagerReviewModal } from "./ManagerReviewModal";
 import { NegotiationFormModal } from "./NegotiationFormModal";
 import { NegotiationReceiverModal } from "./NegotiationReceiverModal";
+import { negotiationFormInitial } from "../negotiationForm";
 
 const api = vi.hoisted(() => ({
   createNegotiation: vi.fn(),
@@ -178,6 +179,18 @@ function gateError(missing: { key: string; label: string }[]) {
 }
 
 describe("NegotiationFormModal", () => {
+  it("批量待建行复用单笔表单只更新本地，0金额与套装成员保留，不创建或提交", async () => {
+    const onPrepare = vi.fn();
+    render(wrap(<NegotiationFormModal target={{editing: null, prepared: {values: negotiationFormInitial(row({quote_amount: "0"})), members: SUIT_MEMBERS, styleLabel: "飞狐套装", bloggerLabel: "小美"}}} onClose={() => {}} onPrepare={onPrepare} />));
+    await screen.findByText("白色 / S");
+    expect(screen.queryByRole("button", {name: "保存并提交"})).toBeNull();
+    await waitFor(() => expect(button("更新此行").hasAttribute("disabled")).toBe(false));
+    fireEvent.click(button("更新此行"));
+    await waitFor(() => expect(onPrepare).toHaveBeenCalledWith(expect.objectContaining({quote_amount: "0", goods_main_id: "g-1", items: [{style_id: "s-1", sku_id: "k-1"}, {style_id: "s-2", sku_id: "k-2"}]}), expect.anything(), SUIT_MEMBERS));
+    expect(api.createNegotiation).not.toHaveBeenCalled();
+    expect(api.updateNegotiation).not.toHaveBeenCalled();
+    expect(api.submitNegotiation).not.toHaveBeenCalled();
+  });
   it("已有账号约定普通编辑保留成交金额，不用当前标价覆盖", async () => {
     const draft = row({account_snapshot: {version: 1, primary_account_id: "b-1", group_id: "g", accounts: [{account_id: "b-1", nickname: "小美", platform: "小红书", account: "xhs-1"}], quote_id: "q", reference_amount: "250.00", price_source: "manual"}});
     api.updateNegotiation.mockResolvedValue(draft);
