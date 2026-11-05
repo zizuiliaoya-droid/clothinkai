@@ -187,9 +187,14 @@ async def test_cross_tenant_blogger_pr_and_work_rejected(
     session, tenant_a, tenant_b, flow_users, factory, pr_role, blogger_factory
 ):
     own = await blogger_factory.blogger()
-    other = await blogger_factory.blogger(tenant=tenant_b)
-    other_pr = await factory.user(tenant_b, roles=[pr_role])
-    own_work, other_work = await work(session, tenant_a), await work(session, tenant_b)
+    own_work = await work(session, tenant_a)
+    other_tenant_token = tenant_id_ctx.set(tenant_b.id)
+    try:
+        other = await blogger_factory.blogger(tenant=tenant_b)
+        other_pr = await factory.user(tenant_b, roles=[pr_role])
+        other_work = await work(session, tenant_b)
+    finally:
+        tenant_id_ctx.reset(other_tenant_token)
     svc = BloggerClaimService(session)
     with pytest.raises(ResourceNotFoundError):
         await svc.assign(other.id, flow_users.pr.id, own_work.id, flow_users.pr_manager)
