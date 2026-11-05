@@ -192,10 +192,11 @@ def _req(
 @pytest.mark.integration
 @pytest.mark.asyncio
 class TestResolveSingle:
-    async def test_keep(self, world: _World) -> None:
+    @pytest.mark.parametrize("source", [BLOGGER, "huitun_douyin"])
+    async def test_keep(self, world: _World, source: str) -> None:
         user, perms = await world.user("pr")
         b = await world.blogger()
-        c = await world.conflict(b.id, [_f("follower_count", 1000, 2000)])
+        c = await world.conflict(b.id, [_f("follower_count", 1000, 2000)], source=source)
         resp = await world.svc.resolve(_req("keep", (c.id, None), note=" 以系统为准 "), user, perms)
         assert [(r.outcome, r.status) for r in resp.results] == [("resolved", "kept")]
         assert resp.summary.resolved == 1
@@ -210,10 +211,11 @@ class TestResolveSingle:
         assert audit.after["via"] == "single"
         assert audit.after["object_id"] == str(b.id)
 
-    async def test_overwrite(self, world: _World) -> None:
+    @pytest.mark.parametrize("source", [BLOGGER, "huitun_douyin"])
+    async def test_overwrite(self, world: _World, source: str) -> None:
         user, perms = await world.user("pr")
         b = await world.blogger(blogger_type="腰部")
-        c = await world.conflict(b.id, [_f("follower_count", 1000, 2000)])
+        c = await world.conflict(b.id, [_f("follower_count", 1000, 2000)], source=source)
         resp = await world.svc.resolve(
             _req("overwrite", (c.id, {"follower_count": 1000})), user, perms
         )
@@ -411,10 +413,11 @@ class TestResolveRequestSchema:
 @pytest.mark.integration
 @pytest.mark.asyncio
 class TestResolvePermissions:
-    async def test_operations_cannot_resolve_blogger(self, world: _World) -> None:
+    @pytest.mark.parametrize("source", [BLOGGER, "huitun_douyin"])
+    async def test_operations_cannot_resolve_blogger(self, world: _World, source: str) -> None:
         user, perms = await world.user("operations")
         b = await world.blogger()
-        c = await world.conflict(b.id, [_f("follower_count", 1000, 2000)])
+        c = await world.conflict(b.id, [_f("follower_count", 1000, 2000)], source=source)
         with pytest.raises(PermissionDeniedError):
             await world.svc.resolve(_req("keep", (c.id, None)), user, perms)
         assert (await world.reload(ImportConflict, c.id)).status == "pending"

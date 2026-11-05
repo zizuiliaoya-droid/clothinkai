@@ -39,6 +39,7 @@ import type {
 } from "@/features/blogger/types";
 import { extractErrorMessage } from "@/services/apiClient";
 import { ImportUploadButton } from "@/components/ImportUploadButton";
+import { BloggerLegacyMetrics } from "@/features/blogger/BloggerLegacyMetrics";
 import { BloggerHoverCard } from "@/components/BloggerHoverCard/BloggerHoverCard";
 import { PLATFORMS } from "@/features/common/platforms";
 import { BloggerClaimsModal } from "@/features/blogger/BloggerClaimsModal";
@@ -53,10 +54,6 @@ const MANUAL_BLOGGER_COLUMNS = [
   "账号", "昵称", "平台", "微信", "手机号", "粉丝数", "博主类型", "性别投放",
   "类目标签", "报价", "合作历史", "备注", "主页链接", "网页ID",
 ];
-// 8b §6.3：灰豚抖音版式固定，只列读的列；r1 N8：列说明要 templateColumns 非空才显示
-const DOUYIN_IMPORT_COLUMNS = ["博主ID", "抖音博主", "网页ID", "微信号", "报价", "粉丝总量", "统计列（灰豚指数 … 曝光点赞比）"];
-const DOUYIN_IMPORT_NOTE =
-  "直接传灰豚导出的 .xlsx 原文件，读『抖音博主库』sheet，7天视频详情暂不导入。按博主ID 判重，读这些列：";
 // 报价（及报价备注）的默认可写角色，同后端 FIELD_PERMISSION_REGISTRY["blogger"]["quote"]；最终以后端校验为准
 const QUOTE_WRITE_ROLES = ["admin", "platform_admin", "pr", "pr_manager"];
 const CATEGORY_TAG_MAX = 20;
@@ -155,7 +152,7 @@ export function BloggerListPage() {
       dataIndex: "nickname",
       width: 140,
       render: (v: string, record: Blogger) => (
-        <BloggerHoverCard bloggerId={record.id} bloggerName={v}>
+        <BloggerHoverCard bloggerId={record.id} bloggerName={v} blogger={record}>
           {v}
         </BloggerHoverCard>
       ),
@@ -238,7 +235,7 @@ export function BloggerListPage() {
       title: "是否假号",
       dataIndex: "is_suspected_fake",
       width: 90,
-      render: (v: boolean) => (v ? <Tag color="red">疑似</Tag> : "—"),
+      render: (v: boolean) => (v ? <Tag color="red" title="历史记录，原判定依据待核实">疑似（历史）</Tag> : "未标记"),
     },
     {
       title: "状态",
@@ -286,20 +283,6 @@ export function BloggerListPage() {
             invalidateKeys={[["bloggers"], ["blogger-tags"]]}
             templateColumns={MANUAL_BLOGGER_COLUMNS}
             onUploaded={setLastBloggerBatchId}
-          />
-          <ImportUploadButton
-            source="huitun"
-            label="导入灰豚画像"
-            invalidateKeys={[["bloggers"]]}
-          />
-          <ImportUploadButton
-            source="huitun_douyin"
-            claimWorkWechatId={importWorkId}
-            requireWorkWechat={autoClaimImport && claimsEnabled}
-            label="导入灰豚抖音博主"
-            invalidateKeys={[["bloggers"]]}
-            templateColumns={DOUYIN_IMPORT_COLUMNS}
-            columnsNote={DOUYIN_IMPORT_NOTE}
           />
           <Button icon={<TagsOutlined />} onClick={() => setTagDictOpen(true)}>
             标签字典
@@ -405,6 +388,7 @@ export function BloggerListPage() {
         destroyOnHidden
         width={560}
       >
+        {editing && <BloggerLegacyMetrics blogger={editing} />}
         <Form
           form={form}
           layout="vertical"
@@ -416,7 +400,7 @@ export function BloggerListPage() {
           <Form.Item
             name="xiaohongshu_id"
             label="账号"
-            extra="抖音填灰豚的博主ID；同一平台下账号不能重复"
+            extra="同一平台下账号不能重复；已有账号继续沿用"
             rules={[{ required: true, message: "请输入账号" }]}
           >
             <Input placeholder="平台账号" maxLength={64} disabled={!!editing} />

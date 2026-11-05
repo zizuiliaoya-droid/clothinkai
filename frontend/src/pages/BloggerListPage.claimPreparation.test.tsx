@@ -59,7 +59,6 @@ it.each([false, true])("空工作微信字典，新建在enabled=%s时遵守准�
 
 it.each([
   [false, "manual_blogger", "导入博主库"], [true, "manual_blogger", "导入博主库"],
-  [false, "huitun_douyin", "导入灰豚抖音博主"], [true, "huitun_douyin", "导入灰豚抖音博主"],
 ] as const)("空工作微信字典，enabled=%s的%s上传行为", async (enabled, source, label) => {
   await show(enabled);
   const file = new File(["账号,昵称\na,b"], "bloggers.csv", {type: "text/csv"});
@@ -71,4 +70,11 @@ it.each([
   } else {
     await waitFor(() => expect(importer.uploadImportFile).toHaveBeenCalledWith(source, expect.any(File)));
   }
+});
+
+
+it("旧来源停止新上传，人工模板继续可用", async () => {
+  await show(false);
+  expect(screen.queryByRole("button", {name: /导入灰豚/})).not.toBeInTheDocument();
+  expect(screen.getByRole("button", {name: /导入博主库/})).toBeInTheDocument();
 });

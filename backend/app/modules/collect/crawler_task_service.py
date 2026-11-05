@@ -36,6 +36,8 @@ from app.modules.collect.schemas import (
 )
 from app.modules.credential.models import Credential
 from app.modules.credential.service import CredentialService
+from app.modules.importer.access import RETIRED_SOURCES
+from app.modules.importer.exceptions import ImportSourceRetiredError
 from app.modules.importer.service import ImportService
 
 log = logging.getLogger(__name__)
@@ -70,6 +72,8 @@ class CrawlerTaskService:
         )
         created = 0
         for c in creds:
+            if PLATFORM_SOURCE.get(c.platform, c.platform) in RETIRED_SOURCES:
+                continue
             inserted_id = (
                 await self._session.execute(
                     text(
@@ -246,6 +250,20 @@ class CrawlerTaskService:
             if not content or not filename:
                 raise CrawlerTaskResultInvalid()
             source = PLATFORM_SOURCE.get(task.platform, task.platform)
+            if source in RETIRED_SOURCES:
+                # 来源退出不是凭据失败。结束当前任务，422使现有worker停止重试；不创建批次。
+                stopped = ImportSourceRetiredError(source)
+                task.status = CrawlerStatus.FAILED.value
+                task.error_reason = stopped.message
+                await self._audit.log(
+                    action="crawler.result",
+                    resource="crawler_task",
+                    resource_id=task.id,
+                    after={"status": task.status, "error_code": stopped.code},
+                )
+                await self._session.commit()
+                crawler_task_total.labels(task.platform, "failed").inc()
+                raise stopped
             batch, should_enqueue = await ImportService(self._session).upload_for_crawler(
                 content=content,
                 source=source,

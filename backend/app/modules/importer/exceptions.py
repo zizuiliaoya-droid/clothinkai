@@ -31,6 +31,15 @@ class ImportFormatUnsupportedError(AppException):
     message = "不支持的文件格式（仅 CSV / XLSX）"
 
 
+class ImportSourceRetiredError(AppException):
+    code = "IMPORT_SOURCE_RETIRED"
+    status_code = 422
+    message = "该来源已转为历史来源，停止新上传；请使用统一人工博主模板"
+
+    def __init__(self, source: str) -> None:
+        super().__init__(self.message, details={"source": source, "retryable": False})
+
+
 class ImportFileTooLargeError(AppException):
     code = "IMPORT_FILE_TOO_LARGE"
     status_code = 422
@@ -227,6 +236,7 @@ __all__ = [
     "ImportMappingVersionNotFoundError",
     "ImportRetryExhaustedError",
     "ImportSourceUnknownError",
+    "ImportSourceRetiredError",
     "ImportStorageError",
     "ImportTooManyRowsError",
     "RowValidationError",

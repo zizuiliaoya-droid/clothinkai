@@ -369,9 +369,9 @@ class TestDescribeAccess:
         assert access.access_for("huitun_douyin") == access.access_for(BLOGGER)
         pr = {i["source"]: i for i in access.describe_access(_role_perms("pr"))}
         ops = {i["source"]: i for i in access.describe_access(_role_perms("operations"))}
-        assert pr["huitun_douyin"]["label"] == "灰豚抖音博主库"
+        assert pr["huitun_douyin"]["label"] == "灰豚抖音博主库（历史来源）"
         assert (pr["huitun_douyin"]["can_upload"], pr["huitun_douyin"]["can_resolve"]) == (
-            True,
+            False,
             True,
         )
         assert (ops["huitun_douyin"]["can_upload"], ops["huitun_douyin"]["can_resolve"]) == (

@@ -29,11 +29,19 @@ from typing import Any
 from app.core.exceptions import PermissionDeniedError
 from app.core.security.permissions import EffectivePermissions
 from app.modules.importer.duplicate_rules import is_configurable
+from app.modules.importer.exceptions import ImportSourceRetiredError
 from app.modules.importer.registry import ImportAdapterRegistry
 
 SCOPE_PRODUCT_IMPORT = "product.import"
 SCOPE_PROMOTION_CREATE = "promotion_create"
 SCOPE_SETTLEMENT_PAY: tuple[str, str] = ("finance.settlement", "pay")
+RETIRED_SOURCES = frozenset({"huitun", "huitun_douyin"})
+
+
+def require_new_input(source: str) -> None:
+    """仅限制新输入；历史批次读取、重试和裁决仍使用原来源权限。"""
+    if source in RETIRED_SOURCES:
+        raise ImportSourceRetiredError(source)
 
 
 @dataclass(frozen=True)
@@ -94,8 +102,8 @@ SOURCE_LABELS: dict[str, str] = {
     "wanxiangtai": "万相台日报",
     "manual_tao_order": "拍单",
     "manual_brush_order": "刷单",
-    "huitun": "灰豚博主画像",
-    "huitun_douyin": "灰豚抖音博主库",
+    "huitun": "灰豚博主画像（历史来源）",
+    "huitun_douyin": "灰豚抖音博主库（历史来源）",
 }
 
 _BATCH_READ: tuple[str, str] = ("importer.batch", "read")
@@ -173,7 +181,7 @@ def describe_access(perms: EffectivePermissions) -> list[dict[str, Any]]:
                 # 重复规则可切换的来源（商品资料、博主），导入记录页据此显示新计数列（8a-6）
                 "configurable": is_configurable(source),
                 "can_view": can_view(perms, source),
-                "can_upload": perms.has(*access.write),
+                "can_upload": source not in RETIRED_SOURCES and perms.has(*access.write),
                 "can_map": perms.has(*access.mapping),
                 "can_resolve": perms.has(*access.resolve),
             }
@@ -182,6 +190,7 @@ def describe_access(perms: EffectivePermissions) -> list[dict[str, Any]]:
 
 
 __all__ = [
+    "RETIRED_SOURCES",
     "SCOPE_PRODUCT_IMPORT",
     "SCOPE_PROMOTION_CREATE",
     "SCOPE_SETTLEMENT_PAY",
@@ -193,6 +202,7 @@ __all__ = [
     "can_write",
     "describe_access",
     "require_mapping",
+    "require_new_input",
     "require_resolve",
     "require_view",
     "require_write",

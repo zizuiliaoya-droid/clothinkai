@@ -281,6 +281,14 @@ jobs:
           python -m pytest -q --junitxml=ci-artifacts/1105-drafts-pg18-tests.xml \
             tests/integration/test_negotiation_optional_style.py \
             tests/integration/test_migration_073_state.py
+      - name: 1105 retired sources, preserved history and missing metrics
+        run: |
+          python -m pytest -q --junitxml=ci-artifacts/1105-retire-pg18-tests.xml \
+            tests/integration/test_crawler_flow.py \
+            tests/integration/test_blogger_recompute.py \
+            tests/integration/test_import_conflict_resolve.py \
+            tests/integration/test_import_douyin.py \
+            tests/integration/test_huitun_platform.py
       - name: PR9 snapshots, imports, primary reports, true RLS and concurrent platform writes
         run: |
           python -m pytest -q --junitxml=ci-artifacts/flow9-pg18-tests.xml \

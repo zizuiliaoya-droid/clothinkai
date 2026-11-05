@@ -3,7 +3,7 @@
 按 P-U11-01 / P-U11-02：
 - compute_blogger_type：实时 O(1) 粉丝量分级（KOL/KOC/素人）。
 - compute_read_like_ratio：读时衍生点赞/阅读比（不存 DB），分母 0/None→None。
-- is_fake_account：ratio≤阈值→True；None（无数据）→False（保守）。
+- is_fake_account：ratio≤阈值→True；None（无数据）→None，不覆盖历史标记。
 - recompute_for_tenant：批量重算单租户全部活跃博主，单 blogger 失败不中止；
   博主类型只对 ``TYPE_GRADED_PLATFORMS`` 里的平台重算（8b）。
 - recompute_quality_for_tenant：只重算质量标签，平台指标改了之后用（7e R7）。
@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 import logging
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from uuid import UUID
 
 from sqlalchemy.exc import DBAPIError
@@ -65,19 +65,24 @@ class BloggerTagService:
         if not audience_profile:
             return None
         stats = audience_profile.get("note_stats")
-        if not stats:
+        if not isinstance(stats, dict):
             return None
-        avg_reads = stats.get("avg_reads", 0)
-        if not avg_reads:
+        if stats.get("avg_likes") is None or stats.get("avg_reads") is None:
             return None
-        avg_likes = stats.get("avg_likes", 0)
-        return Decimal(str(avg_likes)) / Decimal(str(avg_reads))
+        try:
+            likes = Decimal(str(stats["avg_likes"]))
+            reads = Decimal(str(stats["avg_reads"]))
+        except (InvalidOperation, ValueError):
+            return None
+        if not likes.is_finite() or not reads.is_finite() or likes < 0 or reads <= 0:
+            return None
+        return likes / reads
 
     @staticmethod
-    def is_fake_account(ratio: Decimal | None) -> bool:
-        """假号嫌疑判定。无数据（ratio None）→ False（保守不标记）。"""
+    def is_fake_account(ratio: Decimal | None) -> bool | None:
+        """无数据不能得出正常或异常结论，调用方保留历史标记。"""
         if ratio is None:
-            return False
+            return None
         return ratio <= FAKE_RATIO_THRESHOLD
 
     # ------------------------------------------------------------------ #
@@ -100,7 +105,9 @@ class BloggerTagService:
                 if b.platform in TYPE_GRADED_PLATFORMS:
                     b.blogger_type = self.compute_blogger_type(b.follower_count)
                 ratio = self.compute_read_like_ratio(b.audience_profile)
-                b.is_suspected_fake = self.is_fake_account(ratio)
+                suspected = self.is_fake_account(ratio)
+                if suspected is not None:
+                    b.is_suspected_fake = suspected
                 b.quality_tags = await compute_quality_tags(
                     b.id, self._session, tenant_id, settings=settings
                 )
