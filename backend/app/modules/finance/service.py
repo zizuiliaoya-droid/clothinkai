@@ -149,6 +149,9 @@ class SettlementService:
         from_status = settlement.settlement_status
 
         if payload.action == ReviewAction.APPROVE:
+            from app.modules.promotion.fulfillment import require_fulfilled
+
+            await require_fulfilled(self._session, settlement.promotion_id, user.tenant_id)
             to_status = SettlementStatus.PENDING_PAYMENT.value
             action_name = "approve"
             audit_action = "settlement.review.approve"
@@ -164,6 +167,12 @@ class SettlementService:
             to_state=to_status,
             action=action_name,
         )
+
+        if payload.action == ReviewAction.REJECT:
+            from app.modules.promotion.fulfillment import lock_promotion
+
+            # 与付款统一 Promotion → Settlement；缺少发布事实仍可合法驳回。
+            await lock_promotion(self._session, settlement.promotion_id, user.tenant_id)
 
         now = _utcnow()
         updated = await self._repo.update_state(
@@ -362,6 +371,7 @@ class SettlementService:
             action="mark_paid",
         )
         problem = check_image_payload(
+            # 业务履约在上传文件前检查，最终付款时同事务重查。
             data=data,
             mime_type=mime_type,
             filename=filename,
@@ -375,6 +385,9 @@ class SettlementService:
 
         attachment_id: UUID | None = None
         attachment_key: str | None = None
+        from app.modules.promotion.fulfillment import require_fulfilled
+
+        await require_fulfilled(self._session, settlement.promotion_id, user.tenant_id)
         try:
             attachment, _ = await self._attachment_service.create_upload_record(
                 session=self._session,
@@ -442,6 +455,9 @@ class SettlementService:
             raise SettlementNotFoundError(f"结算单 {settlement_id} 不存在")
 
         # F4（Q11、D5）：付款日期 = 北京时间的当天；请求里的 payment_date 忽略。
+        from app.modules.promotion.fulfillment import require_fulfilled
+
+        await require_fulfilled(self._session, settlement.promotion_id, user.tenant_id)
         # 不能用 date.today()：容器是 UTC，北京 0 ~ 8 点之间会记成前一天
         payment_date = get_today()
 
@@ -562,6 +578,9 @@ class SettlementService:
             to_state=SettlementStatus.PENDING_PAYMENT.value,
             action="resubmit",
         )
+        from app.modules.promotion.fulfillment import require_fulfilled
+
+        await require_fulfilled(self._session, settlement.promotion_id, tenant_id)
 
         updated = await self._repo.update_state(
             settlement_id=settlement_id,

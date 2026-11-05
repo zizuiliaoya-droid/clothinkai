@@ -861,6 +861,10 @@ class PromotionServiceBase:
         if actor is None:
             actor = await self._flow_actor(user)
         ctx = actor.field_ctx
+        from app.modules.blogger.account_schemas import AccountSnapshot
+        from app.modules.blogger.account_service import visible_snapshot
+        from app.modules.promotion.fulfillment import fulfillment_summary
+
         can_see_quote = can_read_field("promotion", "quote_amount", ctx)
         can_see_cost = can_read_field("promotion", "cost_snapshot", ctx)
         if freights is None:
@@ -1131,6 +1135,12 @@ class PromotionServiceBase:
             content_category=promotion.content_category,
             extra_platforms=[p.platform for p in platform_posts],
             platform_posts=platform_posts if view != "list" else [],
+            account_snapshot=AccountSnapshot.model_validate(
+                visible_snapshot(promotion.account_snapshot, ctx)
+            )
+            if promotion.account_snapshot is not None
+            else None,
+            fulfillment=fulfillment_summary(promotion.account_snapshot, platform_posts or []),
             cooperation_date=promotion.cooperation_date,
             scheduled_publish_date=promotion.scheduled_publish_date,
             actual_publish_date=promotion.actual_publish_date,

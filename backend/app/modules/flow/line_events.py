@@ -211,6 +211,7 @@ PAYLOAD_FIELD_RULES: dict[str, tuple[str, str] | PayloadContainer | None] = {
     "diff": CONTAINER,
     # 金额与收件
     "quote_amount": _Q,
+    "account_snapshot": None,  # 内层价格由 filter_payload 的专用分支裁剪，包括 diff。
     "payable": _Q,
     "receiver_name": ("promotion", "receiver_name"),
     "receiver_phone": ("promotion", "receiver_phone"),
@@ -317,6 +318,17 @@ def filter_payload(payload: Mapping[str, Any], ctx: FieldPermissionContext) -> d
     """
     out: dict[str, Any] = {}
     for key, value in payload.items():
+        if key == "account_snapshot":
+            from app.modules.blogger.account_service import visible_snapshot
+
+            if isinstance(value, Mapping):
+                if "before" in value or "after" in value:
+                    out[key] = {
+                        side: visible_snapshot(value.get(side), ctx) for side in ("before", "after")
+                    }
+                else:
+                    out[key] = visible_snapshot(dict(value), ctx)
+            continue
         if key not in PAYLOAD_FIELD_RULES:
             continue
         rule = PAYLOAD_FIELD_RULES[key]

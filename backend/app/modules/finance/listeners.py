@@ -62,6 +62,9 @@ async def on_settlement_requested(event: SettlementRequested, session: AsyncSess
         return
 
     # 2. 序列号原子分配（FB2，复用 U04 模式）
+    from app.modules.promotion.fulfillment import require_fulfilled
+
+    await require_fulfilled(session, event.promotion_id, event.tenant_id)
     seq = await repo.next_settlement_sequence(
         tenant_id=event.tenant_id,
         date_key=event.requested_at.date(),

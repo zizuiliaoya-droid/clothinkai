@@ -1,4 +1,5 @@
 // 审核弹窗顶部的谈款摘要：博主、商品（简称 + 每个成员的颜色尺码）、模式、平台、约定发布、服务费、对接 PR。不显示编码（规-1）。
+import { accountLabel } from "@/features/blogger/accounts";
 import { Descriptions, Tag } from "antd";
 import { negotiationItemLines } from "../negotiationList";
 import type { Negotiation } from "../types";
@@ -21,6 +22,7 @@ export function NegotiationSummary({ row }: Props) {
           <div key={i}>{line}</div>
         ))}
       </Descriptions.Item>
+      {row.account_snapshot && <Descriptions.Item label="约定账号">{row.account_snapshot.accounts.map(a => <div key={a.account_id}>{accountLabel(a)}{a.account_id === row.account_snapshot?.primary_account_id ? "（主账号）" : ""}</div>)}</Descriptions.Item>}
       <Descriptions.Item label="合作模式">{row.cooperation_mode}</Descriptions.Item>
       <Descriptions.Item label="平台">{row.platform}</Descriptions.Item>
       <Descriptions.Item label="约定发布">{row.scheduled_publish_date ?? "—"}</Descriptions.Item>

@@ -10,6 +10,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic_core import PydanticCustomError
 
+from app.modules.blogger.account_schemas import AccountIds, AccountSnapshot
 from app.modules.flow.schemas import CommentState, FollowUpState
 from app.modules.negotiation.enums import (
     NegotiationFinalReviewAction,
@@ -31,6 +32,7 @@ class NegotiationCreate(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
     blogger_id: UUID
+    account_ids: AccountIds | None = None
     style_id: UUID | None = None
     """草稿可不选款；未选款时商品为空、明细为空，提交前必须补齐。"""
     goods_main_id: UUID | None = None
@@ -58,6 +60,7 @@ class NegotiationUpdate(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
     blogger_id: UUID | None = None
+    account_ids: AccountIds | None = None
     style_id: UUID | None = None
     goods_main_id: UUID | None = None
     cooperation_mode: CooperationMode | None = None
@@ -188,6 +191,7 @@ class ReceiverSuggestion(BaseModel):
 
 
 class NegotiationResponse(BaseModel):
+    account_snapshot: AccountSnapshot | None = None
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID

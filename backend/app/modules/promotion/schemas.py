@@ -31,6 +31,7 @@ from pydantic import (
     model_validator,
 )
 
+from app.modules.blogger.account_schemas import AccountSnapshot, FulfillmentSummary
 from app.modules.flow.schemas import CommentState, FollowUpState
 from app.modules.promotion.enums import (
     CooperationMode,
@@ -524,6 +525,7 @@ class PlatformPostIn(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
     platform: str = Field(min_length=1, max_length=16)
+    account_id: UUID | None = None
     publish_url: str | None = Field(default=None, max_length=512)
     actual_publish_date: date | None = None
     like_count: int | None = Field(default=None, ge=0, le=2147483647)
@@ -547,6 +549,10 @@ class PlatformPostResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
+    account_id: UUID | None = None
+    account: str | None = None
+    nickname: str | None = None
+    is_primary: bool = False
     platform: str
     publish_url: str | None = None
     actual_publish_date: date | None = None
@@ -554,6 +560,8 @@ class PlatformPostResponse(BaseModel):
 
 
 class PromotionResponse(BaseModel):
+    account_snapshot: AccountSnapshot | None = None
+    fulfillment: FulfillmentSummary | None = None
     stage: str | None = None
 
     """推广响应。

@@ -130,3 +130,5 @@ class Blogger(TenantScopedModel):
 
 
 __all__ = ["Blogger"]
+
+from app.modules.blogger import account_models as _account_models  # noqa: E402,F401

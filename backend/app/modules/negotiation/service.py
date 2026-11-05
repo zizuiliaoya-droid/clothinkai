@@ -38,6 +38,11 @@ from app.core.security.field_permissions import (
 )
 from app.modules.auth.models import User
 from app.modules.auth.repository import PermissionRepository, RoleRepository
+from app.modules.blogger.account_service import (
+    AccountGroupService,
+    apply_deal_amount,
+    visible_snapshot,
+)
 from app.modules.blogger.repository import BloggerRepository
 from app.modules.flow.actor import load_flow_actor
 from app.modules.flow.exceptions import FlowActionForbiddenError
@@ -237,6 +242,7 @@ def _submit_snapshot(
             else None
         ),
         "quote_amount": str(quote.quantize(Decimal("0.01"))) if quote is not None else None,
+        "account_snapshot": negotiation.account_snapshot,
     }
 
 
@@ -363,6 +369,7 @@ class NegotiationService:
         state = ui_for(actor, doc)
         ctx = actor.field_ctx
         data = dict(row)
+        data["account_snapshot"] = visible_snapshot(row.get("account_snapshot"), ctx)
         if not can_read_field("promotion", "quote_amount", ctx):
             data["quote_amount"] = None
         for field in RECEIVER_FIELDS:
@@ -567,10 +574,17 @@ class NegotiationService:
         rows = await self._item_rows(
             goods_main_id=goods_main_id, style_id=payload.style_id, items=payload.items
         )
-        quote = await self._resolve_quote(
-            mode=payload.cooperation_mode,
-            quote_amount=payload.quote_amount,
-            blogger_id=payload.blogger_id,
+        if "quote_amount" in payload.model_fields_set and not can_write_field(
+            "promotion", "quote_amount", actor.field_ctx
+        ):
+            raise FieldPermissionDenied(field="quote_amount", entity="promotion")
+        snapshot = await AccountGroupService(self._session).resolve_snapshot(
+            payload.blogger_id, payload.account_ids, user
+        )
+        snapshot, quote = apply_deal_amount(
+            snapshot,
+            payload.quote_amount,
+            barter=payload.cooperation_mode is CooperationMode.BARTER,
         )
         # line_id 显式发号：同一事务马上要写事件，不等库默认值回读（6.2）
         negotiation = Negotiation(
@@ -581,9 +595,14 @@ class NegotiationService:
             goods_main_id=goods_main_id,
             pr_id=user.id,
             cooperation_mode=payload.cooperation_mode.value,
-            platform=payload.platform,
+            platform=next(
+                a["platform"]
+                for a in snapshot["accounts"]
+                if a["account_id"] == str(payload.blogger_id)
+            ),
             scheduled_publish_date=payload.scheduled_publish_date,
             quote_amount=quote,
+            account_snapshot=snapshot,
             remark=payload.remark,
             status=NegotiationStatus.DRAFT.value,
         )
@@ -634,6 +653,10 @@ class NegotiationService:
         )
 
         fields = payload.model_fields_set
+        if "quote_amount" in fields and not can_write_field(
+            "promotion", "quote_amount", actor.field_ctx
+        ):
+            raise FieldPermissionDenied(field="quote_amount", entity="promotion")
         blogger_id = (
             payload.blogger_id if payload.blogger_id is not None else negotiation.blogger_id
         )
@@ -670,8 +693,35 @@ class NegotiationService:
             if payload.cooperation_mode is not None
             else CooperationMode(negotiation.cooperation_mode)
         )
-        # 未传金额保持原值（包括未知）；改模式或博主时仍沿用原报价解析规则。
-        if (
+        snapshot = negotiation.account_snapshot
+        old_ids = (
+            {UUID(a["account_id"]) for a in snapshot["accounts"]}
+            if snapshot
+            else {negotiation.blogger_id}
+        )
+        selected_ids = (
+            payload.account_ids
+            if payload.account_ids is not None
+            else ([blogger_id] if blogger_id != negotiation.blogger_id else list(old_ids))
+        )
+        accounts_changed = blogger_id != negotiation.blogger_id or set(selected_ids) != old_ids
+        if accounts_changed or ("account_ids" in fields and snapshot is None):
+            snapshot = await AccountGroupService(self._session).resolve_snapshot(
+                blogger_id, selected_ids, user
+            )
+            snapshot, quote = apply_deal_amount(
+                snapshot, payload.quote_amount, barter=mode is CooperationMode.BARTER
+            )
+        elif snapshot is not None:
+            if "quote_amount" in fields or mode.value != negotiation.cooperation_mode:
+                snapshot, quote = apply_deal_amount(
+                    snapshot,
+                    payload.quote_amount if "quote_amount" in fields else negotiation.quote_amount,
+                    barter=mode is CooperationMode.BARTER,
+                )
+            else:
+                quote = negotiation.quote_amount
+        elif (
             "quote_amount" not in fields
             and mode.value == negotiation.cooperation_mode
             and blogger_id == negotiation.blogger_id
@@ -693,9 +743,14 @@ class NegotiationService:
             "goods_main_id": goods_main_id,
             "cooperation_mode": mode.value,
             "quote_amount": quote,
+            "account_snapshot": snapshot,
         }
         if "platform" in fields and payload.platform is not None:
             values["platform"] = payload.platform
+        if snapshot is not None:
+            values["platform"] = next(
+                a["platform"] for a in snapshot["accounts"] if a["account_id"] == str(blogger_id)
+            )
         if "scheduled_publish_date" in fields:
             values["scheduled_publish_date"] = payload.scheduled_publish_date
         if "remark" in fields:
@@ -1083,6 +1138,7 @@ class NegotiationService:
                 actor_id=user.id,
                 # 字段写权限只看确认人（上面的 _require_receiver_write）；不再按谈款 PR 查（评审 L2）
                 reviewed_negotiation_copy=True,
+                approved_account_snapshot=negotiation.account_snapshot,
             )
         except IntegrityError as exc:
             # 事务已失效：先回滚再抛；要用的 id 都是调用前取出的
@@ -1172,6 +1228,19 @@ class NegotiationService:
         from app.modules.blogger.claim_access import ensure_new_cooperation_allowed
 
         await ensure_new_cooperation_allowed(self._session, user, source.blogger_id)
+        source_ids = (
+            [UUID(a["account_id"]) for a in source.account_snapshot["accounts"]]
+            if source.account_snapshot
+            else None
+        )
+        snapshot = await AccountGroupService(self._session).resolve_snapshot(
+            source.blogger_id, source_ids, user
+        )
+        snapshot, _ = apply_deal_amount(
+            snapshot,
+            source.quote_amount,
+            barter=source.cooperation_mode == CooperationMode.BARTER.value,
+        )
         tenant_id, source_line = source.tenant_id, source.line_id
         negotiation = Negotiation(
             tenant_id=tenant_id,
@@ -1182,9 +1251,14 @@ class NegotiationService:
             goods_main_id=source.goods_main_id,
             pr_id=user.id,
             cooperation_mode=source.cooperation_mode,
-            platform=source.platform,
+            platform=next(
+                a["platform"]
+                for a in snapshot["accounts"]
+                if a["account_id"] == str(source.blogger_id)
+            ),
             scheduled_publish_date=source.scheduled_publish_date,
             quote_amount=source.quote_amount,
+            account_snapshot=snapshot,
             remark=source.remark,
             status=NegotiationStatus.DRAFT.value,
         )

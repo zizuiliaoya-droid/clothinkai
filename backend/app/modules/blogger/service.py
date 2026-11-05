@@ -14,6 +14,7 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import AuditService
@@ -25,6 +26,7 @@ from app.core.security.field_permissions import (
 )
 from app.modules.auth.models import User
 from app.modules.auth.repository import PermissionRepository, RoleRepository
+from app.modules.blogger.account_models import BloggerAccountMember
 from app.modules.blogger.audience_schemas import audience_updated_on
 from app.modules.blogger.claim_access import (
     CONTACT_FIELDS,
@@ -303,6 +305,10 @@ class BloggerService:
             raise BloggerNotFoundError(f"博主 {blogger_id} 不存在")
 
         refs = await self.check_references(blogger_id)
+        if refs.get("account_group_count", 0):
+            raise BloggerHasReferenceError(
+                "请先从同人账号组移除该账号，再删除；也可以仅停用", details=refs
+            )
         if sum(refs.values()) > 0:
             raise BloggerHasReferenceError(
                 f"该博主已被引用（{refs}），仅可停用",
@@ -409,8 +415,19 @@ class BloggerService:
     # ============================================================
 
     async def check_references(self, blogger_id: UUID) -> dict[str, int]:
-        """检查博主的全部历史推广引用；租户隔离由 RLS 保证。"""
-        return {"promotion_count": await self._promotion_repo.count_by_blogger(blogger_id)}
+        """检查历史推广和有效账号组引用；租户隔离由 RLS 保证。"""
+        group_count = await self._session.scalar(
+            select(func.count())
+            .select_from(BloggerAccountMember)
+            .where(
+                BloggerAccountMember.blogger_id == blogger_id,
+                BloggerAccountMember.is_active.is_(True),
+            )
+        )
+        return {
+            "promotion_count": await self._promotion_repo.count_by_blogger(blogger_id),
+            "account_group_count": group_count or 0,
+        }
 
     # ============================================================
     # U11 标签计算

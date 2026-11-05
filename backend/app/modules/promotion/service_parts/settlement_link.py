@@ -59,6 +59,9 @@ class PromotionSettlementLinkMixin(PromotionServiceBase):
 
         actor = await self._flow_actor(user)
         require(actor, await self._promotion_doc(promotion), "settlement_resubmit")
+        from app.modules.promotion.fulfillment import require_fulfilled
+
+        await require_fulfilled(self._session, promotion_id, user.tenant_id)
         SettlementStatusMachine.assert_can_transition(
             from_state=promotion.settlement_status,
             to_state=SettlementStatus.PENDING_PAYMENT.value,

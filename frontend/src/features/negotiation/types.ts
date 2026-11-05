@@ -1,5 +1,6 @@
 // 谈款审核类型（PRD V1.4 模块一；流程线 PR-3 起 7 态两级审核，设计 3.2、7.2）。
 
+import type { AccountSnapshot } from "@/features/blogger/accounts";
 import type { UiState } from "@/features/flow/keys";
 import type { GoodsItemIn, GoodsMember } from "@/features/promotion/types";
 
@@ -56,6 +57,7 @@ export interface ReceiverSuggestion {
 }
 
 export interface Negotiation {
+  account_snapshot?: AccountSnapshot | null;
   comment_state?: import("@/features/flow/engagement").CommentState | null;
   follow_up?: import("@/features/flow/engagement").FollowUpState | null;
   id: string;
@@ -148,6 +150,7 @@ export interface NegotiationFilters {
 }
 
 export interface NegotiationCreate {
+  account_ids?: string[];
   blogger_id: string;
   style_id?: string | null;
   /** 不传由后端按款式推定主商品并写回。 */
@@ -163,6 +166,7 @@ export interface NegotiationCreate {
 }
 
 export interface NegotiationUpdate {
+  account_ids?: string[];
   blogger_id?: string;
   style_id?: string | null;
   goods_main_id?: string | null;

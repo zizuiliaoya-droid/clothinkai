@@ -24,6 +24,7 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
+from app.core.exceptions import ValidationError
 from app.core.metrics import (
     promotion_search_results_count,
 )
@@ -47,6 +48,7 @@ from app.modules.promotion.domain import (
     merge_source_extra,
 )
 from app.modules.promotion.enums import (
+    CooperationMode,
     PublishStatus,
     RecallStatus,
     SettlementStatus,
@@ -133,6 +135,7 @@ class PromotionService(
         negotiation_id: UUID | None = None,
         actor_id: UUID | None = None,
         reviewed_negotiation_copy: bool = False,
+        approved_account_snapshot: dict | None = None,
     ) -> PromotionResponse:
         """EP05-S02 创建推广 + 自动 internal_code + 重复检测.
 
@@ -245,11 +248,28 @@ class PromotionService(
         )
 
         # 5. 快照字段计算
+        from app.modules.blogger.account_service import AccountGroupService, apply_deal_amount
+        from app.modules.promotion.fulfillment import initialize_account_posts
+
+        account_snapshot = (
+            approved_account_snapshot
+            if reviewed_negotiation_copy
+            else await AccountGroupService(self._session).resolve_snapshot(
+                payload.blogger_id, None, user
+            )
+        )
         quote_amount = (
             payload.quote_amount
             if payload.quote_amount is not None
             else (blogger.quote if blogger.quote is not None else None)
         )
+        if not reviewed_negotiation_copy:
+            assert account_snapshot is not None
+            account_snapshot, quote_amount = apply_deal_amount(
+                account_snapshot,
+                payload.quote_amount,
+                barter=payload.cooperation_mode is CooperationMode.BARTER,
+            )
         if quote_amount is None:
             # 业务规则 BR-U04-10：blogger.quote 为 NULL 时 PR 必须显式传值
             raise PublishUrlRequiredError(  # 复用 422 类异常通用消息
@@ -277,10 +297,17 @@ class PromotionService(
             style_code_snapshot=style.style_code,
             style_short_name_snapshot=style_short_name,
             quote_amount=quote_amount,
+            account_snapshot=account_snapshot,
             cost_snapshot=cost_snapshot,
             cooperation_mode=payload.cooperation_mode.value,
             return_shipping_fee=payload.return_shipping_fee,
-            platform=payload.platform,
+            platform=next(
+                a["platform"]
+                for a in account_snapshot["accounts"]
+                if a["account_id"] == str(payload.blogger_id)
+            )
+            if account_snapshot
+            else payload.platform,
             content_category=payload.content_category
             if "content_category" in payload.model_fields_set
             else blogger.content_category,
@@ -303,6 +330,7 @@ class PromotionService(
             promotion.line_id = line_id
         self._repo.add(promotion)
         await self._session.flush()
+        await initialize_account_posts(self._session, promotion, actor_id or user.id)
         if item_rows is not None:
             await self._items_repo.replace(
                 tenant_id=user.tenant_id, promotion_id=promotion.id, rows=item_rows
@@ -439,6 +467,8 @@ class PromotionService(
         await self._check_amount_write_permission(payload, user)
         payload = await self._normalize_receiver(payload, user, check_write=True)
         if payload.platform is not None and payload.platform != promotion.platform:
+            if promotion.account_snapshot is not None:
+                raise ValidationError("已约定账号的主平台不可修改")
             from app.modules.promotion.platform_posts import posts_by_promotion, validate_platforms
 
             existing = (
@@ -618,20 +648,28 @@ class PromotionService(
             is not Level.EDIT
         ):
             raise FieldPermissionDenied(fields=["platform_posts"], entity="promotion")
-        validate_platforms(rows, promotion.platform)
+        if promotion.account_snapshot is None:
+            if any(row.account_id is not None for row in rows):
+                raise ValidationError("历史平台记录不能追加约定账号")
+            validate_platforms(rows, promotion.platform)
         old = (
             await posts_by_promotion(self._session, [promotion_id], tenant_id=user.tenant_id)
         ).get(promotion_id, [])
-        before = [p.model_dump(mode="json", exclude={"id"}) for p in old]
+        before = [p.model_dump(mode="json", include=set(PlatformPostIn.model_fields)) for p in old]
         after = [p.model_dump(mode="json") for p in rows]
         if before != after:
-            await replace_posts(
-                self._session,
-                promotion_id=promotion_id,
-                tenant_id=user.tenant_id,
-                actor_id=user.id,
-                rows=rows,
-            )
+            if promotion.account_snapshot is not None:
+                from app.modules.promotion.fulfillment import update_account_posts
+
+                await update_account_posts(self._session, promotion, rows)
+            else:
+                await replace_posts(
+                    self._session,
+                    promotion_id=promotion_id,
+                    tenant_id=user.tenant_id,
+                    actor_id=user.id,
+                    rows=rows,
+                )
             await self._append_patch_events(
                 promotion,
                 user,

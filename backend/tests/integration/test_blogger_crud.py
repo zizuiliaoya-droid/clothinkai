@@ -266,7 +266,7 @@ class TestSoftDeleteBlogger:
             svc = BloggerService(session)
 
             refs = await svc.check_references(blogger.id)
-            assert refs == {"promotion_count": 1}
+            assert refs == {"promotion_count": 1, "account_group_count": 0}
             with pytest.raises(BloggerHasReferenceError):
                 await svc.soft_delete_blogger(blogger.id, user)
             assert blogger.is_deleted is False
