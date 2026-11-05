@@ -318,13 +318,13 @@ class TestRecomputeQualityOnly:
             )
             await session.flush()
 
-            # 场景有效性：全量重算会改掉 b1 / b2 的类型与假号标记（两人都是分级平台小红书）
+            # 全量重算会改两人的类型及 b1 的假号标记；b2 缺依据，应保留历史标记。
             svc = BloggerTagService(session)
             assert {b1.platform, b2.platform} <= TYPE_GRADED_PLATFORMS
             assert svc.compute_blogger_type(200_000) != "素人"
             assert svc.compute_blogger_type(100) != "KOL"
             assert svc.is_fake_account(svc.compute_read_like_ratio(b1.audience_profile)) is True
-            assert svc.is_fake_account(svc.compute_read_like_ratio(None)) is False
+            assert svc.is_fake_account(svc.compute_read_like_ratio(None)) is None
 
             before = await _blogger_rows(session, tenant_a.id)
             result = await svc.recompute_quality_for_tenant(tenant_a.id)
