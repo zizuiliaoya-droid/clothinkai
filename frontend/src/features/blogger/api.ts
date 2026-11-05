@@ -18,6 +18,7 @@ export async function listBloggers(
 ): Promise<BloggerPage> {
   const resp = await apiClient.get<BloggerPage>("/api/bloggers/", {
     params: filters,
+    paramsSerializer: { indexes: null },
   });
   return resp.data;
 }

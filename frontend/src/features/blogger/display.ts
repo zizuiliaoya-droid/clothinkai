@@ -6,7 +6,27 @@ const SAFE_HOMEPAGE = /^https?:\/\//i;
 /** 主页链接能渲染成 <a> 时返回去空白后的链接，否则 null（只显示 —）。 */
 export function safeHomepageUrl(url: string | null | undefined): string | null {
   const s = url?.trim();
-  return s && SAFE_HOMEPAGE.test(s) ? s : null;
+  if (!s || !SAFE_HOMEPAGE.test(s) || /\s/.test(s)) return null;
+  try {
+    return new URL(s).hostname ? s : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 从分享文案提取首个有效网址，不解析短链或改写查询参数。 */
+export function extractHomepageUrl(text: string): string | null {
+  for (const match of text.matchAll(/https?:\/\/[^\s<>"'“”‘’]+/gi)) {
+    let candidate = match[0].replace(/[，。！？；、]+$/u, "");
+    for (const [left, right] of [["(", ")"], ["（", "）"], ["[", "]"], ["【", "】"]]) {
+      while (candidate.endsWith(right) && candidate.split(right).length > candidate.split(left).length) {
+        candidate = candidate.slice(0, -1);
+      }
+    }
+    const url = safeHomepageUrl(candidate);
+    if (url) return url;
+  }
+  return null;
 }
 
 /**

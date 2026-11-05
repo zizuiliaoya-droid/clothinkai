@@ -248,6 +248,27 @@ class TestFieldVisibilityInResponse:
 @pytest.mark.integration
 @pytest.mark.asyncio
 class TestRangeAndTagFilters:
+    async def test_multi_tags_match_any_within_group(
+        self, session, tenant_a, factory, admin_role, blogger_factory
+    ):
+        token = tenant_id_ctx.set(tenant_a.id)
+        try:
+            a = await blogger_factory.blogger(category_tags=["穿搭"], quality_tags=["活跃"])
+            b = await blogger_factory.blogger(category_tags=["美妆"], quality_tags=["活跃"])
+            await blogger_factory.blogger(category_tags=["美食"], quality_tags=["活跃"])
+            await blogger_factory.blogger(category_tags=["穿搭"], quality_tags=["历史"])
+            user = await factory.user(tenant_a, roles=[admin_role])
+            result = await BloggerService(session).list_bloggers(
+                filters=BloggerListFilters(category_tags=["穿搭", "美妆"], quality_tags=["活跃"]),
+                page=1,
+                page_size=20,
+                user=user,
+            )
+            assert result.total == 2
+            assert {row.id for row in result.items} == {a.id, b.id}
+        finally:
+            tenant_id_ctx.reset(token)
+
     async def test_follower_count_range(
         self,
         session: AsyncSession,

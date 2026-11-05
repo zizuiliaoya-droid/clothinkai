@@ -1,4 +1,4 @@
-import { useState, type AriaAttributes, type CSSProperties } from "react";
+import { useState, type AriaAttributes, type CSSProperties, type ReactNode } from "react";
 import { Select } from "antd";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { mergeOptions, type PickerOption } from "./mergeSelectedOption";
@@ -27,6 +27,7 @@ export interface RemoteSearchSelectProps extends AriaAttributes {
   allowClear?: boolean;
   disabled?: boolean;
   style?: CSSProperties;
+  renderOption?: (option: PickerOption) => ReactNode;
 }
 
 /**
@@ -46,6 +47,7 @@ export function RemoteSearchSelect({
   allowClear,
   disabled,
   style,
+  renderOption,
   ...rest
 }: RemoteSearchSelectProps) {
   const [open, setOpen] = useState(false);
@@ -74,6 +76,7 @@ export function RemoteSearchSelect({
       filterOption={false}
       value={value ?? undefined}
       options={options}
+      optionRender={renderOption ? (option) => renderOption(option.data as PickerOption) : undefined}
       placeholder={placeholder}
       allowClear={allowClear}
       disabled={disabled}

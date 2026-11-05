@@ -1,5 +1,6 @@
 import { useCallback, useMemo } from "react";
 import { listBloggers } from "@/features/blogger/api";
+import { safeHomepageUrl } from "@/features/blogger/display";
 import {
   bloggerOptionLabel,
   bloggerPickerParams,
@@ -17,7 +18,7 @@ async function fetchBloggerOptions(
   platform: string | undefined
 ): Promise<PickerOption[]> {
   const page = await listBloggers(bloggerPickerParams(keyword, platform, PICKER_PAGE_SIZE));
-  return page.items.map((b) => ({ value: b.id, label: bloggerOptionLabel(b) }));
+  return page.items.map((b) => ({ value: b.id, label: bloggerOptionLabel(b), homepageUrl: b.homepage_url }));
 }
 
 type Props = Omit<RemoteSearchSelectProps, "fetchOptions" | "queryKeyPrefix"> & {
@@ -42,6 +43,16 @@ export function BloggerSelect({
       placeholder={placeholder}
       queryKeyPrefix={queryKeyPrefix}
       fetchOptions={fetchOptions}
+      renderOption={(option) => {
+        const href = safeHomepageUrl(option.homepageUrl);
+        return <span style={{ display: "flex", gap: 12, justifyContent: "space-between" }}>
+          <span>{option.label}</span>
+          {href && <a href={href} target="_blank" rel="noopener noreferrer"
+            aria-label={`打开 ${option.label} 的主页（新窗口）`}
+            onMouseDown={(event) => { event.preventDefault(); event.stopPropagation(); }}
+            onClick={(event) => event.stopPropagation()}>打开主页</a>}
+        </span>;
+      }}
     />
   );
 }

@@ -23,6 +23,7 @@ router = APIRouter(prefix="/api/preferences", tags=["preference"])
 _PageCode = Annotated[str, Path(max_length=64, description="页面编码，如 product_roi")]
 
 _COLUMN_KEY = "columns:promotion_list"
+DEFAULT_PROMOTION_COLUMNS = {"order": [], "hidden": ["like_count", "return_waybill"]}
 _ColumnId = Annotated[str, Field(min_length=1, max_length=64)]
 
 
@@ -40,7 +41,7 @@ async def get_promotion_columns(
     service: UserPreferenceServiceDep,
 ) -> PromotionColumnPreference:
     return PromotionColumnPreference.model_validate(
-        await service.get_or_default(user.id, _COLUMN_KEY, {})
+        await service.get_or_default(user.id, _COLUMN_KEY, DEFAULT_PROMOTION_COLUMNS)
     )
 
 

@@ -10,7 +10,6 @@ import {
   Modal,
   Select,
   Space,
-  Switch,
   Table,
   Tag,
   Typography,
@@ -19,12 +18,7 @@ import {
 import { PlusOutlined, SearchOutlined, TagsOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnsType } from "antd/es/table";
-import {
-  DOUYIN_METRIC_FIELDS,
-  douyinMetricText,
-  usesDouyinMetrics,
-} from "@/features/blogger/douyinMetrics";
-import { safeHomepageUrl } from "@/features/blogger/display";
+import { extractHomepageUrl, safeHomepageUrl } from "@/features/blogger/display";
 import { BloggerTagDictModal } from "@/components/BloggerTagDict/BloggerTagDictModal";
 import { useAuthStore } from "@/stores/authStore";
 import {
@@ -49,22 +43,6 @@ import { PLATFORMS } from "@/features/common/platforms";
 const TYPES = ["素人", "KOC", "KOL", "明星"];
 const GENDER_TARGETS = ["女性", "男性", "中性"];
 const LEVELS = ["A", "B", "C", "D"];
-const CONTENT_CATEGORIES = ["单篇", "合集"];
-
-// 灰豚爬虫/指标列（对齐 final.xlsx 博主库），从 crawler_metrics 按列名读取
-// §5.4：3篇/7篇/14篇 的 阅读/点赞/收藏/评论 这组统一后移到「爆文率」之后
-const CRAWLER_FIELDS = [
-  "阅读点赞比", "收藏赞比", "近期数据涨的博主",
-  "活跃粉丝数", "阅读粉丝数", "粉丝画像", "粉丝占比", "主要年龄",
-  "粉丝赞藏比", "笔记数", "爆文率",
-  "3篇阅读量", "3篇点赞数", "3篇收藏数", "3篇评论数",
-  "7篇阅读量", "7篇点赞数", "7篇收藏数", "7篇评论数",
-  "14篇阅读量", "14篇点赞数", "14篇收藏数", "14篇评论数",
-  "3天平均阅读", "7天平均阅读", "14天平均阅读",
-  "3天平均点赞", "7天平均点赞", "14天平均点赞",
-  "3天阅读涨跌", "7天阅读涨跌", "3天点赞涨跌", "7天点赞涨跌",
-];
-
 // 8b §6.2：博主模版表头（别名：账号 = 小红书ID / 小红书号，昵称 = 小红书昵称，微信 = 微信号，粉丝数 = 粉丝量，类目标签 = 标签）
 const MANUAL_BLOGGER_COLUMNS = [
   "账号", "昵称", "平台", "微信", "手机号", "粉丝数", "博主类型", "性别投放",
@@ -77,19 +55,6 @@ const DOUYIN_IMPORT_NOTE =
 // 报价（及报价备注）的默认可写角色，同后端 FIELD_PERMISSION_REGISTRY["blogger"]["quote"]；最终以后端校验为准
 const QUOTE_WRITE_ROLES = ["admin", "platform_admin", "pr", "pr_manager"];
 const CATEGORY_TAG_MAX = 20;
-
-function isRecentGrowthValue(value: unknown): boolean {
-  if (typeof value === "boolean") return value;
-  if (typeof value === "number") return Number.isFinite(value) && value > 0;
-  if (typeof value !== "string") return false;
-
-  const normalized = value.trim().toLowerCase();
-  if (["是", "上涨", "true", "1"].includes(normalized)) return true;
-  return (
-    /^\+?(?:\d+(?:\.\d*)?|\.\d+)$/.test(normalized) &&
-    Number(normalized) > 0
-  );
-}
 
 export function BloggerListPage() {
   const readOnly = useReadOnlySupport();
@@ -112,11 +77,10 @@ export function BloggerListPage() {
     queryFn: () => listBloggers(filters),
   });
 
-  // 类目标签只能从字典里选；弹窗开着才查
+  // 列表筛选与编辑共用标签字典。
   const tagDictQuery = useQuery({
     queryKey: ["blogger-tags"],
     queryFn: listBloggerTags,
-    enabled: open,
   });
   const categoryTagOptions = (tagDictQuery.data?.items ?? []).map((t) => ({
     label: t.value,
@@ -167,12 +131,6 @@ export function BloggerListPage() {
       render: (v: string | null) => (v ? <Tag color="blue">{v}</Tag> : "—"),
     },
     {
-      title: "分类",
-      dataIndex: "content_category",
-      width: 80,
-      render: (v) => v || "—",
-    },
-    {
       // 悬浮看最近合作过的款式：挑博主时不用再切页去翻推广单（PRD V1.4 改动 3）
       title: "昵称",
       dataIndex: "nickname",
@@ -186,7 +144,6 @@ export function BloggerListPage() {
     // 8b-1：列名历史原因叫 xiaohongshu_id，语义是平台账号（抖音 = 灰豚博主ID）
     { title: "账号", dataIndex: "xiaohongshu_id", width: 130 },
     { title: "平台", dataIndex: "platform", width: 80 },
-    { title: "网页ID", dataIndex: "web_id", width: 130, render: (v) => v || "—" },
     {
       title: "主页",
       dataIndex: "homepage_url",
@@ -229,25 +186,6 @@ export function BloggerListPage() {
       render: (v: number | null) => (v == null ? "—" : v.toLocaleString()),
     },
     {
-      title: "博主对接人(主)",
-      dataIndex: "contact_primary",
-      width: 130,
-      render: (v) => v || "—",
-    },
-    {
-      title: "博主对接人(备)",
-      dataIndex: "contact_backup",
-      width: 130,
-      render: (v) => v || "—",
-    },
-    {
-      title: "是否添加成功",
-      dataIndex: "is_added_success",
-      width: 110,
-      render: (v: boolean) =>
-        v ? <Tag color="green">是</Tag> : "—",
-    },
-    {
       title: "博主类型",
       dataIndex: "blogger_type",
       width: 90,
@@ -282,26 +220,6 @@ export function BloggerListPage() {
       width: 90,
       render: (v: boolean) => (v ? <Tag color="red">疑似</Tag> : "—"),
     },
-    // 8b §7.4：平台筛「抖音」时换成灰豚抖音的统计列（读 platform_metrics.raw 原文），否则照旧
-    ...(usesDouyinMetrics(filters.platform)
-      ? DOUYIN_METRIC_FIELDS.map((f) => ({
-          title: f,
-          key: `pm_${f}`,
-          width: 120,
-          render: (_: unknown, r: Blogger) => douyinMetricText(r.platform_metrics, f),
-        }))
-      : CRAWLER_FIELDS.map((f) => ({
-          title: f,
-          key: `cm_${f}`,
-          width: 110,
-          render: (_: unknown, r: Blogger) => {
-            const v = (r.crawler_metrics ?? {})[f];
-            if (f === "近期数据涨的博主") {
-              return isRecentGrowthValue(v) ? <Tag color="green">上涨</Tag> : "—";
-            }
-            return v == null || v === "" ? "—" : String(v);
-          },
-        }))),
     {
       title: "状态",
       dataIndex: "is_active",
@@ -402,13 +320,21 @@ export function BloggerListPage() {
           options={LEVELS.map((l) => ({ label: l, value: l }))}
           onChange={(v) => setFilters((f) => ({ ...f, level: v, page: 1 }))}
         />
+        <Select mode="multiple" allowClear aria-label="类目标签筛选" placeholder="类目标签（匹配任一）"
+          value={filters.category_tags} options={categoryTagOptions} maxCount={CATEGORY_TAG_MAX}
+          style={{ minWidth: 200, maxWidth: 380 }} loading={tagDictQuery.isLoading}
+          onChange={(tags: string[]) => setFilters((f) => ({ ...f, category_tags: tags.length ? tags : undefined, page: 1 }))} />
+        <Select mode="multiple" allowClear aria-label="系统标签筛选" placeholder="系统标签（匹配任一）"
+          value={filters.quality_tags} options={(tagDictQuery.data?.system_tags ?? []).map((value) => ({ label: value, value }))}
+          style={{ minWidth: 200, maxWidth: 380 }} maxCount={CATEGORY_TAG_MAX}
+          onChange={(tags: string[]) => setFilters((f) => ({ ...f, quality_tags: tags.length ? tags : undefined, page: 1 }))} />
         <Select
           aria-label="近期数据筛选"
           value={filters.recent_growth_only ? "up" : "all"}
           style={{ width: 120 }}
           options={[
             { label: "全部", value: "all" },
-            { label: "上涨", value: "up" },
+            { label: "历史数据上涨", value: "up" },
           ]}
           onChange={(value) =>
             setFilters((f) => ({
@@ -425,7 +351,7 @@ export function BloggerListPage() {
         loading={isLoading}
         columns={readOnly ? columns.filter((column) => column.key !== "actions") : columns}
         dataSource={data?.items ?? []}
-        scroll={{ x: 3200 }}
+        scroll={{ x: 1450 }}
         pagination={{
           current: data?.page ?? 1,
           pageSize: data?.page_size ?? 10,
@@ -476,30 +402,6 @@ export function BloggerListPage() {
                 options={LEVELS.map((l) => ({ label: l, value: l }))}
               />
             </Form.Item>
-            <Form.Item name="content_category" label="分类">
-              <Select
-                allowClear
-                placeholder="单篇/合集"
-                style={{ width: 140 }}
-                options={CONTENT_CATEGORIES.map((c) => ({ label: c, value: c }))}
-              />
-            </Form.Item>
-          </Space>
-          <Space size="large" align="end">
-            <Form.Item name="contact_primary" label="博主对接人(主)">
-              <Input placeholder="如 张三-1号机" style={{ width: 180 }} />
-            </Form.Item>
-            <Form.Item name="contact_primary_added" label="主-已添加" valuePropName="checked">
-              <Switch />
-            </Form.Item>
-          </Space>
-          <Space size="large" align="end">
-            <Form.Item name="contact_backup" label="博主对接人(备)">
-              <Input placeholder="如 李四-2号机" style={{ width: 180 }} />
-            </Form.Item>
-            <Form.Item name="contact_backup_added" label="备-已添加" valuePropName="checked">
-              <Switch />
-            </Form.Item>
           </Space>
           <Space size="large">
             <Form.Item name="platform" label="平台">
@@ -533,20 +435,25 @@ export function BloggerListPage() {
               <Input placeholder="微信号（可选）" style={{ width: 180 }} />
             </Form.Item>
           </Space>
-          <Form.Item name="web_id" label="网页ID">
-            <Input placeholder="抖音网页ID（可选）" maxLength={64} />
-          </Form.Item>
           <Form.Item
             name="homepage_url"
             label="主页链接"
+            extra="从博主主页的“分享 → 复制链接”获取，可直接粘贴分享文案"
             rules={[
               {
-                pattern: /^\s*https?:\/\//i,
-                message: "主页链接需以 http:// 或 https:// 开头",
+                validator: (_, value: string | undefined) => !value?.trim() || safeHomepageUrl(value)
+                  ? Promise.resolve() : Promise.reject(new Error("请填写 http/https 主页网址，不是账号或昵称")),
               },
             ]}
           >
-            <Input placeholder="https://…（可选）" maxLength={1024} />
+            <Input placeholder="https://…（可粘贴分享文案）" maxLength={1024} onPaste={(event) => {
+              const url = extractHomepageUrl(event.clipboardData.getData("text"));
+              if (url) {
+                event.preventDefault();
+                form.setFieldValue("homepage_url", url);
+                message.success("已识别链接");
+              }
+            }} />
           </Form.Item>
           <Form.Item
             name="category_tags"
