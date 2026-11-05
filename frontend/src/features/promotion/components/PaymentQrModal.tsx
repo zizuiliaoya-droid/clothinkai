@@ -1,3 +1,4 @@
+import { ScreenshotUpload } from "@/components/ScreenshotUpload/ScreenshotUpload";
 import { useReadOnlySupport } from "@/stores/supportStore";
 // 博主收款码弹窗（流程线 8.4，从「录入信息」拆出来）。
 //
@@ -5,7 +6,7 @@ import { useReadOnlySupport } from "@/stores/supportStore";
 // - 只读时按单据情况写一句说明（paymentQrView）；灰显时显示接口的 hint（「发布后上传」）
 // - 上传走后端代传；成功后 invalidate ["promotions"]（详情 key 在它下面，一起重拉）与时间线
 import { useEffect, useState } from "react";
-import { Alert, Button, Image, Modal, Space, Spin, Typography, Upload, message } from "antd";
+import { Alert, Button, Image, Modal, Space, Spin, Typography, message } from "antd";
 import { DeleteOutlined, EyeOutlined, UploadOutlined } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -72,20 +73,7 @@ export function PaymentQrEditor({ promotion, editable, allowRemove = true, onPen
       )}
       {!readOnly && editable && (
         <>
-          <Upload
-            accept="image/jpeg,image/png,image/webp"
-            maxCount={1}
-            beforeUpload={(f) => {
-              setFile(f);
-              return false;
-            }}
-            onRemove={() => setFile(null)}
-            fileList={file ? [{ uid: "payment-qr", name: file.name }] : []}
-          >
-            <Button icon={<UploadOutlined />} disabled={busy}>
-              选择图片
-            </Button>
-          </Upload>
+          <ScreenshotUpload value={file} onChange={setFile} validate={(next) => settlementImageError("收款码", next)} disabled={busy || !editable} label="选择图片" />
           <Space wrap>
             <Button
               type="primary"

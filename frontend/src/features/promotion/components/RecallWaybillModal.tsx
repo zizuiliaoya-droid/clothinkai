@@ -1,7 +1,7 @@
+import { ScreenshotUpload } from "@/components/ScreenshotUpload/ScreenshotUpload";
 import { StyleImageThumbnail } from "@/components/StyleImageThumbnail/StyleImageThumbnail";
 import { useEffect, useState } from "react";
-import { Alert, Button, Modal, Space, Spin, Typography, Upload, message } from "antd";
-import { UploadOutlined } from "@ant-design/icons";
+import { Alert, Button, Modal, Space, Spin, Typography, message } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { getPromotion, promotionDetailKey, uploadRecallWaybillFile } from "../api";
 import type { Promotion } from "../types";
@@ -26,9 +26,7 @@ export function RecallWaybillEditor({ promotion, onPendingChange }: { promotion:
     {promotion.recall_waybill_signed_url ? <StyleImageThumbnail size={120} src={promotion.recall_waybill_signed_url} alt="召回寄回截图" /> : promotion.recall_waybill_attachment_id ? <Typography.Text>已上传寄回截图（暂时无法预览）</Typography.Text> : <Typography.Text type="secondary">尚未上传寄回截图</Typography.Text>}
     {editable ? <>
       <Alert type="info" message="只截单号与运费部分" />
-      <Upload accept="image/jpeg,image/png,image/webp" disabled={busy} maxCount={1} fileList={file ? [{ uid: "recall-waybill", name: file.name }] : []} onRemove={() => setFile(null)} beforeUpload={(next) => { const problem = settlementImageError("寄回截图", next); if (problem) { message.error(problem); return Upload.LIST_IGNORE; } setFile(next); return false; }}>
-        <Button icon={<UploadOutlined />} disabled={busy}>选择寄回截图</Button>
-      </Upload>
+      <ScreenshotUpload value={file} onChange={setFile} validate={(next) => settlementImageError("寄回截图", next)} disabled={busy || !editable} label="选择寄回截图" />
       <Button type="primary" onClick={() => void upload()} disabled={!file} loading={busy}>上传寄回截图</Button>
       <Typography.Text type="secondary">JPG、PNG、WebP，单张不超过 10MB</Typography.Text>
     </> : <Typography.Text type="secondary">{action?.reason ?? action?.hint ?? "当前寄回截图只读"}</Typography.Text>}

@@ -1,7 +1,7 @@
+import { ScreenshotUpload } from "@/components/ScreenshotUpload/ScreenshotUpload";
 import { LINE_EVENTS_ALL } from "@/features/flow/api";
 import { useEffect, useState } from "react";
-import { Button, Form, InputNumber, Modal, Space, Typography, Upload, message } from "antd";
-import { UploadOutlined } from "@ant-design/icons";
+import { Form, InputNumber, Modal, Space, Typography, message } from "antd";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { recordMetrics } from "@/features/promotion/api";
 import type { Promotion } from "@/features/promotion/types";
@@ -110,17 +110,7 @@ export function MetricsModal({ target, onClose }: Props) {
           </Form.Item>
         </Space>
         <Form.Item label="数据截图" required>
-          <Upload
-            accept="image/png,image/jpeg,image/webp"
-            maxCount={1}
-            beforeUpload={(file) => {
-              setMetricsFile(file as unknown as File);
-              return false;
-            }}
-            onRemove={() => setMetricsFile(null)}
-          >
-            <Button icon={<UploadOutlined />}>选择截图</Button>
-          </Upload>
+          <ScreenshotUpload value={metricsFile} onChange={setMetricsFile} disabled={!target || metricsMutation.isPending} />
         </Form.Item>
       </Form>
     </Modal>

@@ -1,6 +1,6 @@
-import { useState } from "react";
-import { Alert, Button, Form, Input, Modal, Space, Spin, Typography, Upload, message } from "antd";
-import { UploadOutlined } from "@ant-design/icons";
+import { ScreenshotUpload } from "@/components/ScreenshotUpload/ScreenshotUpload";
+import { useEffect, useState } from "react";
+import { Alert, Form, Input, Modal, Space, Spin, Typography, message } from "antd";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { freightDetailKey, getFreightPayment, payFreightPayment, rejectFreightPayment } from "@/features/promotion/freightApi";
 import type { ReturnFreightPayment } from "@/features/promotion/freightTypes";
@@ -11,6 +11,7 @@ import { useRecallFreightFeedback } from "@/features/promotion/components/useRec
 export function FreightPaymentModal({ target, mode, onClose }: { target: ReturnFreightPayment | null; mode: "pay" | "reject"; onClose: () => void }) {
   const id = target?.id ?? "";
   const [file, setFile] = useState<File | null>(null);
+  useEffect(() => { setFile(null); }, [id, mode]);
   const [form] = Form.useForm<{ reason: string }>();
   const { data, isLoading, error } = useQuery({ queryKey: freightDetailKey(id), queryFn: () => getFreightPayment(id), enabled: !!id });
   const feedback = useRecallFreightFeedback(target?.line_id);
@@ -37,9 +38,7 @@ export function FreightPaymentModal({ target, mode, onClose }: { target: ReturnF
       {mode === "pay" ? <Form layout="vertical">
         <Typography.Paragraph>付款日期：今天（{today}），系统自动记录（北京时间）</Typography.Paragraph>
         <Form.Item label="付款凭证" required>
-          <Upload accept="image/jpeg,image/png,image/webp" maxCount={1} disabled={!canSubmit || mutation.isPending} fileList={file ? [{ uid: "freight-proof", name: file.name }] : []} onRemove={() => setFile(null)} beforeUpload={(next) => { const problem = settlementImageError("付款凭证", next); if (problem) { message.error(problem); return Upload.LIST_IGNORE; } setFile(next); return false; }}>
-            <Button icon={<UploadOutlined />} disabled={!canSubmit || mutation.isPending}>选择付款凭证</Button>
-          </Upload>
+          <ScreenshotUpload value={file} onChange={setFile} validate={(next) => settlementImageError("付款凭证", next)} disabled={!target || !canSubmit || mutation.isPending} label="选择付款凭证" />
           <Typography.Text type="secondary">JPG、PNG、WebP，单张不超过 10MB</Typography.Text>
         </Form.Item>
       </Form> : <Form form={form} layout="vertical" onFinish={(value) => mutation.mutate(value.reason)}>

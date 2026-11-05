@@ -1,7 +1,7 @@
+import { ScreenshotUpload } from "@/components/ScreenshotUpload/ScreenshotUpload";
 import { LINE_EVENTS_ALL } from "@/features/flow/api";
 import { useEffect, useState } from "react";
-import { Alert, Button, DatePicker, Form, Input, Modal, Upload, message } from "antd";
-import { UploadOutlined } from "@ant-design/icons";
+import { Alert, DatePicker, Form, Input, Modal, message } from "antd";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import dayjs from "dayjs";
 import type { Dayjs } from "dayjs";
@@ -154,17 +154,7 @@ export function ResubmitModal({ target, onClose }: Props) {
           label="品牌词评论截图（可选）"
           extra="驳回跟截图有关时重新选一张，会覆盖旧图；不选就沿用旧图"
         >
-          <Upload
-            accept="image/png,image/jpeg,image/webp"
-            maxCount={1}
-            beforeUpload={(file) => {
-              setBrandFile(file as unknown as File);
-              return false;
-            }}
-            onRemove={() => setBrandFile(null)}
-          >
-            <Button icon={<UploadOutlined />}>重新上传</Button>
-          </Upload>
+          <ScreenshotUpload value={brandFile} onChange={setBrandFile} disabled={!target || resubmitMutation.isPending} label="重新上传" />
         </Form.Item>
       </Form>
     </Modal>

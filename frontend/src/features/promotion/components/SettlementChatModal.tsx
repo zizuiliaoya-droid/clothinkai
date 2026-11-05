@@ -1,10 +1,10 @@
+import { ScreenshotUpload } from "@/components/ScreenshotUpload/ScreenshotUpload";
 // 上传结款聊天截图（流程线 R9、8.4）：财务付款后，PR 通知博主并上传聊天截图，提交即记为已结款。
 //
 // - 上方只读显示实付金额与调整说明（详情结款块，PR 可读不可写，11-17）
 // - 截图必传，格式 / 大小先在前端挡一次（后端还会核对文件头）
 import { useEffect, useState } from "react";
-import { Alert, Button, Descriptions, Modal, Space, Spin, Typography, Upload, message } from "antd";
-import { UploadOutlined } from "@ant-design/icons";
+import { Alert, Descriptions, Modal, Space, Spin, Typography, message } from "antd";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { getPromotion, promotionDetailKey, uploadSettlementChat } from "@/features/promotion/api";
 import { settlementImageError } from "@/features/promotion/settlementFlow";
@@ -86,22 +86,7 @@ export function SettlementChatModal({ target, onClose }: Props) {
           <Typography.Text type="secondary">
             把财务已付款告诉博主后，上传和博主的结款聊天截图；提交即记为已结款，之后满 7 天可录 7 天数据。
           </Typography.Text>
-          <Upload
-            accept="image/jpeg,image/png,image/webp"
-            maxCount={1}
-            beforeUpload={(f) => {
-              setFile(f);
-              setFileError(settlementImageError("结款聊天截图", f));
-              return false;
-            }}
-            onRemove={() => {
-              setFile(null);
-              setFileError(null);
-            }}
-            fileList={file ? [{ uid: "settlement-chat", name: file.name }] : []}
-          >
-            <Button icon={<UploadOutlined />}>选择截图</Button>
-          </Upload>
+          <ScreenshotUpload value={file} onChange={(next) => { setFile(next); setFileError(null); }} validate={(next) => settlementImageError("结款聊天截图", next)} disabled={!target || mutation.isPending} />
           {fileError && <Alert type="error" showIcon message={fileError} />}
         </Space>
       )}

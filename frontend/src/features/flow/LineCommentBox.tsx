@@ -1,13 +1,13 @@
+import { pastedImages, ScreenshotUpload } from "@/components/ScreenshotUpload/ScreenshotUpload";
+import { useReadOnlySupport } from "@/stores/supportStore";
 // 抽屉底部的留言框（流程线设计 6.6、N11）：文字 + 一张图，至少一项；提交后重新拉时间线。
 // 输入框下固定提示「收货信息请填在收货栏」（11-21：留言里写地址只提示、不识别）。
 import { useId, useState } from "react";
-import { Button, Input, Space, Upload, message, theme } from "antd";
-import { PictureOutlined } from "@ant-design/icons";
+import { Button, Input, Space, message, theme } from "antd";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { lineEventsKey, postLineComment } from "./api";
 import { flowErrorOutcome } from "./flowError";
 import {
-  COMMENT_IMAGE_TYPES,
   COMMENT_MAX_LENGTH,
   COMMENT_RECEIVER_HINT,
   commentError,
@@ -15,6 +15,7 @@ import {
 } from "./timeline";
 
 export function LineCommentBox({ lineId }: { lineId: string }) {
+  const readOnly = useReadOnlySupport();
   const { token } = theme.useToken();
   const qc = useQueryClient();
   const inputId = useId();
@@ -56,6 +57,19 @@ export function LineCommentBox({ lineId }: { lineId: string }) {
       <Input.TextArea
         id={inputId}
         value={text}
+        disabled={mutation.isPending || readOnly}
+        onPaste={(event) => {
+          if (mutation.isPending || readOnly) return;
+          const files = pastedImages(event.clipboardData);
+          if (!files.length) return;
+          event.preventDefault();
+          event.stopPropagation();
+          if (files.length > 1) message.info("此处只支持一张图片，已取第一张");
+          const problem = commentImageError(files[0]);
+          if (problem) { message.error(problem); return; }
+          setImage(files[0]);
+          setError(null);
+        }}
         onChange={(e) => {
           setText(e.target.value);
           if (error) setError(null);
@@ -76,25 +90,8 @@ export function LineCommentBox({ lineId }: { lineId: string }) {
         {COMMENT_RECEIVER_HINT}
       </div>
       <Space style={{ marginTop: 8, width: "100%", justifyContent: "space-between" }} wrap>
-        <Upload
-          accept={COMMENT_IMAGE_TYPES.join(",")}
-          maxCount={1}
-          fileList={image ? [{ uid: "comment-image", name: image.name, size: image.size, status: "done" }] : []}
-          beforeUpload={(file) => {
-            const problem = commentImageError(file);
-            if (problem) {
-              message.error(problem);
-              return Upload.LIST_IGNORE;
-            }
-            setImage(file as unknown as File);
-            if (error) setError(null);
-            return false;
-          }}
-          onRemove={() => setImage(null)}
-        >
-          <Button icon={<PictureOutlined />}>贴图</Button>
-        </Upload>
-        <Button type="primary" onClick={submit} loading={mutation.isPending}>
+        <ScreenshotUpload value={image} onChange={(next) => { setImage(next); setError(null); }} validate={commentImageError} disabled={mutation.isPending} label="贴图" />
+        <Button type="primary" onClick={submit} loading={mutation.isPending} disabled={readOnly}>
           发送
         </Button>
       </Space>
