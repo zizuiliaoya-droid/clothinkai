@@ -53,7 +53,13 @@ async def _call(
     from app.modules.auth.service import AuthService
 
     async def _session_override() -> AsyncIterator[AsyncSession]:
-        yield session
+        # 认证依赖被本夹具替换，未发送 JWT；中间件会清空外层 tenant_ctx。
+        # 在请求依赖内恢复测试身份的租户，保留真实 ORM 租户校验。
+        tenant_token = tenant_id_ctx.set(user.tenant_id)
+        try:
+            yield session
+        finally:
+            tenant_id_ctx.reset(tenant_token)
 
     perms = await AuthService(session).load_effective_permissions(user.id)
     try:
