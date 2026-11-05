@@ -1,6 +1,9 @@
 """手工与逐行导入共用作品写入规则；事务由调用方提交。"""
 
+from collections.abc import Sequence
 from datetime import date
+from decimal import Decimal
+from statistics import median
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -12,7 +15,7 @@ from app.core.exceptions import ResourceNotFoundError, ValidationError
 from app.modules.auth.models import User
 from app.modules.blogger.models import Blogger
 from app.modules.blogger.work_models import BloggerWorkSnapshot as Snapshot
-from app.modules.blogger.work_schemas import WorkInput, WorkItem, WorkPage
+from app.modules.blogger.work_schemas import WorkHitSummary, WorkInput, WorkItem, WorkPage
 from app.modules.importer.models import ImportBatch
 
 
@@ -98,6 +101,32 @@ def work_item(row: Snapshot, actor_name: str | None = None) -> WorkItem:
     return result
 
 
+def summarize_work_hits(rows: Sequence[Snapshot]) -> tuple[WorkHitSummary, frozenset[UUID]]:
+    """仅接收当前窗口去重后最近 30 篇，不将缺失点赞补成零。"""
+    likes = [Decimal(row.like_count) for row in rows if row.like_count is not None]
+    published = [row.published_on for row in rows]
+    summary = WorkHitSummary(
+        sample_count=len(rows),
+        valid_like_count=len(likes),
+        published_from=min(published) if published else None,
+        published_to=max(published) if published else None,
+        status="insufficient_samples",
+    )
+    if len(likes) < 10:
+        return summary, frozenset()
+    middle = median(likes)
+    threshold = middle * 3
+    summary.median_likes = float(middle)
+    summary.threshold = float(threshold)
+    if middle == 0:
+        summary.status = "zero_median"
+        return summary, frozenset()
+    summary.status = "ready"
+    return summary, frozenset(
+        row.id for row in rows if row.like_count is not None and row.like_count >= threshold
+    )
+
+
 async def list_works(
     session: AsyncSession,
     tenant_id: UUID,
@@ -149,6 +178,12 @@ async def list_works(
         if snapshot_id
         else [current.published_on.desc(), current.id]
     )
+    hit_summary = None
+    hit_ids: frozenset[UUID] = frozenset()
+    if snapshot_id is None:
+        # 与列表共用去重、筛选和排序；取样在分页之前，翻页不会改变基准。
+        sample = (await session.scalars(select(current).order_by(*order).limit(30))).all()
+        hit_summary, hit_ids = summarize_work_hits(sample)
     rows = (
         await session.execute(
             select(current, func.coalesce(User.display_name, User.username))
@@ -161,9 +196,15 @@ async def list_works(
             .limit(page_size)
         )
     ).all()
+    items = []
+    for row, name in rows:
+        item = work_item(row, name)
+        item.is_hit = row.id in hit_ids
+        items.append(item)
     return WorkPage(
-        items=[work_item(row, name) for row, name in rows],
+        items=items,
         total=total,
         page=page,
         page_size=page_size,
+        hit_summary=hit_summary,
     )

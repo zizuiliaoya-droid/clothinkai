@@ -1,11 +1,11 @@
 import { useState } from "react";
-import { Alert, Button, Collapse, Form, Input, Modal, Space, Table, Typography, message } from "antd";
+import { Alert, Button, Collapse, Form, Input, Modal, Space, Table, Tag, Typography, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ImportUploadButton } from "@/components/ImportUploadButton";
 import { getBlogger } from "@/features/blogger/api";
 import { getWorkSource, listWorks, saveWork } from "@/features/blogger/worksApi";
-import type { WorkInput, WorkItem } from "@/features/blogger/worksApi";
+import type { WorkHitSummary, WorkInput, WorkItem } from "@/features/blogger/worksApi";
 import { extractErrorMessage } from "@/services/apiClient";
 import { useReadOnlySupport } from "@/stores/supportStore";
 
@@ -24,6 +24,18 @@ const metricColumns: ColumnsType<WorkItem> = [
   { title: "分享/点赞", dataIndex: "share_like_ratio", width: 100, render: ratioText },
   { title: "评论/点赞", dataIndex: "comment_like_ratio", width: 100, render: ratioText },
 ];
+
+function HitSummary({ summary }: { summary: WorkHitSummary }) {
+  return <Typography.Paragraph type="secondary">
+    当前日期范围内按发布时间最近的 {summary.sample_count} 篇作品（最多 30 篇），有效点赞 {summary.valid_like_count} 篇。
+    {summary.published_from && <>样本发布时间：{summary.published_from} 至 {summary.published_to}。</>}
+    {summary.status === "insufficient_samples"
+      ? "有效点赞不足 10 篇，仅展示数据，不判定爆款。"
+      : <>点赞中位数 {numberText(summary.median_likes)}，爆款阈值 {numberText(summary.threshold)}（中位数 ×3）。
+        {summary.status === "zero_median" ? "中位数为 0，暂不判定爆款。" : "仅对上述样本中点赞达到阈值的作品标记爆款。"}</>}
+    点赞 0 计入有效样本，缺失不计入；采集历史不重复计数，翻页不改变样本。
+  </Typography.Paragraph>;
+}
 
 function WorkHistory({ bloggerId, snapshotId }: { bloggerId: string; snapshotId: string }) {
   const [page, setPage] = useState(1);
@@ -81,6 +93,7 @@ export function BloggerWorks({ bloggerId, enabled }: { bloggerId: string; enable
     { title: "作品", width: 200, render: (_, row) => <Space direction="vertical" size={0}>
       {row.work_url ? <a href={row.work_url} target="_blank" rel="noopener noreferrer">{row.title || row.work_id || "打开作品"}</a> : <span>{row.title || row.work_id}</span>}
       {row.work_id && <Typography.Text type="secondary">ID：{row.work_id}</Typography.Text>}
+      {row.is_hit && <Tag color="orange">爆款</Tag>}
     </Space> },
     ...metricColumns,
     { title: "采集时间（北京时间）", dataIndex: "collected_at", width: 180, render: timeText },
@@ -98,6 +111,7 @@ export function BloggerWorks({ bloggerId, enabled }: { bloggerId: string; enable
         <label>发布止日<Input aria-label="发布止日" type="date" value={dateTo} onChange={(e) => { setDateTo(e.target.value); setPage(1); }} /></label>
       </Space>
       <Typography.Paragraph type="secondary">按发布时间倒序，每件作品显示最新采集值。展开作品查看历史记录。仅统计已采集作品，不代表账号全部作品。</Typography.Paragraph>
+      {query.data?.hit_summary && <HitSummary summary={query.data.hit_summary} />}
       {!readOnly && query.data?.can_write && <Space wrap style={{ marginBottom: 8 }}>
         <Button size="small" onClick={() => setEditing(true)}>补录作品</Button>
         <ImportUploadButton source="manual_blogger_work" label="导入作品" size="small" invalidateKeys={[["blogger-works"]]} successHint="请在导入记录查看完成结果，再刷新作品。" />

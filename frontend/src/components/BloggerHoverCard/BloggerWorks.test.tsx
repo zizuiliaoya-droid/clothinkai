@@ -5,6 +5,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BloggerWorks } from "./BloggerWorks";
 import { listWorks, saveWork } from "@/features/blogger/worksApi";
+import type { WorkHitSummary, WorkPage } from "@/features/blogger/worksApi";
 
 const state = vi.hoisted(() => ({ readOnly: false }));
 vi.mock("@/stores/supportStore", () => ({ useReadOnlySupport: () => state.readOnly }));
@@ -18,8 +19,13 @@ const work = {
   comment_count: null, share_count: null, collect_count: null, play_count: null,
   interaction_total: null, collect_like_ratio: null, share_like_ratio: null, comment_like_ratio: null,
   platform: "抖音", created_by_name: "小李", import_batch_id: null, row_number: null,
+  is_hit: false,
 };
-const data = { items: [work], total: 1, page: 1, page_size: 10, can_write: true, can_read_source: false };
+const summary: WorkHitSummary = {
+  sample_count: 1, valid_like_count: 1, published_from: "2026-11-01", published_to: "2026-11-01",
+  median_likes: null, threshold: null, status: "insufficient_samples",
+};
+const data: WorkPage = { items: [work], total: 1, page: 1, page_size: 10, can_write: true, can_read_source: false, hit_summary: summary };
 
 beforeAll(() => {
   const getStyle = window.getComputedStyle.bind(window);
@@ -43,6 +49,7 @@ describe("作品卡片", () => {
     expect(await screen.findByText("作品一")).toBeInTheDocument();
     expect(screen.getAllByText("—").length).toBeGreaterThan(4);
     expect(screen.queryByText("爆款")).toBeNull();
+    expect(screen.getByText(/有效点赞不足 10 篇，仅展示数据/)).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("发布起日"), { target: { value: "2026-11-01" } });
     await waitFor(() => expect(listWorks).toHaveBeenLastCalledWith("blogger-1", { page: 1, date_from: "2026-11-01", date_to: undefined }));
     fireEvent.click(await screen.findByRole("button", { name: /expand row|展开行/i }));
@@ -69,5 +76,31 @@ describe("作品卡片", () => {
     await screen.findByText("作品一");
     expect(screen.queryByText("补录作品")).toBeNull();
     expect(screen.queryByText("manual_blogger_work")).toBeNull();
+  });
+
+  it("使用后端的跨页样本和阈值，只标记样本内爆款", async () => {
+    const ready: WorkHitSummary = { ...summary, sample_count: 30, valid_like_count: 29,
+      published_from: "2026-10-03", median_likes: 10, threshold: 30, status: "ready" };
+    vi.mocked(listWorks).mockImplementation(async (_, filters) => ({
+      ...data, total: 32, page: filters?.page ?? 1, hit_summary: ready,
+      items: [{ ...work, like_count: 1000, is_hit: filters?.page !== 4 }],
+    }));
+    mount(); fireEvent.click(screen.getByText("作品与采集记录"));
+    expect(await screen.findByText("爆款")).toBeInTheDocument();
+    expect(screen.getByText(/最近的 30 篇作品.*有效点赞 29 篇/)).toHaveTextContent("2026-10-03 至 2026-11-01");
+    expect(screen.getByText(/点赞中位数 10，爆款阈值 30/)).toHaveTextContent("仅对上述样本");
+    fireEvent.click(screen.getByTitle("4"));
+    await waitFor(() => expect(listWorks).toHaveBeenLastCalledWith("blogger-1", { page: 4, date_from: undefined, date_to: undefined }));
+    await waitFor(() => expect(screen.queryByText("爆款")).toBeNull());
+    expect(screen.getByText(/点赞中位数 10，爆款阈值 30/)).toBeInTheDocument();
+  });
+
+  it("中位数为零显示实际阈值与暂不判定提示", async () => {
+    vi.mocked(listWorks).mockResolvedValue({ ...data, hit_summary: {
+      ...summary, sample_count: 10, valid_like_count: 10, median_likes: 0, threshold: 0, status: "zero_median",
+    } });
+    mount(); fireEvent.click(screen.getByText("作品与采集记录"));
+    expect(await screen.findByText(/点赞中位数 0，爆款阈值 0/)).toHaveTextContent("中位数为 0，暂不判定爆款");
+    expect(screen.queryByText("爆款")).toBeNull();
   });
 });

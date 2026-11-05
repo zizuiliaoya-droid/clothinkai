@@ -1,7 +1,7 @@
 """实际 PostgreSQL：作品快照、逐行导入与租户边界。"""
 
 from contextlib import asynccontextmanager
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 from sqlalchemy import select
@@ -69,8 +69,11 @@ async def test_snapshots_latest_idempotent_conflict_and_tenant(
     )
     current = await list_works(session, tenant_a.id, blogger.id)
     assert current.total == 1 and current.items[0].id == newer.id
+    assert current.hit_summary.sample_count == 1
+    assert current.hit_summary.status == "insufficient_samples"
     history = await list_works(session, tenant_a.id, blogger.id, snapshot_id=original.id)
     assert history.total == 3 and history.items[0].like_count == 456
+    assert history.hit_summary is None and not any(row.is_hit for row in history.items)
     assert (
         await list_works(session, tenant_a.id, blogger.id, date_from=date(2026, 11, 2))
     ).total == 0
@@ -130,3 +133,60 @@ async def test_real_runner_partial_duplicate_and_manual_equivalence(
     )
     assert not inserted and repeated.id == row.id
     assert row.import_batch_id == batch.id and row.row_number == 1
+
+
+@pytest.mark.usefixtures("tenant_ctx")
+async def test_hit_sample_uses_latest_thirty_before_paging_and_after_date_filter(
+    session, tenant_a, blogger_factory, flow_users
+):
+    blogger = await blogger_factory.blogger()
+    for index in range(32):
+        await save_work(
+            session,
+            tenant_a.id,
+            blogger.id,
+            payload(
+                work_id=f"work-{index}",
+                published_on=date(2026, 10, 1) + timedelta(days=index),
+                like_count=1000 if index in {0, 30} else (30 if index == 20 else 10),
+            ),
+            flow_users.pr.id,
+        )
+    for index, likes in ((30, None), (31, 30)):
+        await save_work(
+            session,
+            tenant_a.id,
+            blogger.id,
+            payload(
+                work_id=f"work-{index}",
+                published_on=date(2026, 10, 1) + timedelta(days=index),
+                collected_at="2026-11-06 14:30:00",
+                like_count=likes,
+            ),
+            flow_users.pr.id,
+        )
+    first = await list_works(session, tenant_a.id, blogger.id)
+    second = await list_works(session, tenant_a.id, blogger.id, page=2)
+    outside = await list_works(session, tenant_a.id, blogger.id, page=4)
+    summary = first.hit_summary
+    assert summary == second.hit_summary == outside.hit_summary
+    assert first.total == 32  # 两条重复采集不会成为额外作品。
+    assert summary.sample_count == 30 and summary.valid_like_count == 29
+    assert summary.published_from == date(2026, 10, 3)
+    assert summary.published_to == date(2026, 11, 1)
+    assert summary.median_likes == 10 and summary.threshold == 30
+    assert [row.work_id for row in first.items if row.is_hit] == ["work-31"]
+    assert [row.work_id for row in second.items if row.is_hit] == ["work-20"]
+    assert not any(row.is_hit for row in outside.items)  # 旧作品即便高点赞也不套用本样本。
+    assert next(row for row in first.items if row.work_id == "work-30").like_count is None
+
+    small = await list_works(session, tenant_a.id, blogger.id, date_from=date(2026, 10, 23))
+    assert small.total == 10
+    assert small.hit_summary.sample_count == 10 and small.hit_summary.valid_like_count == 9
+    assert small.hit_summary.status == "insufficient_samples"
+    assert not any(row.is_hit for row in small.items)
+
+    earlier = await list_works(session, tenant_a.id, blogger.id, date_to=date(2026, 10, 30), page=3)
+    assert earlier.total == 30 and earlier.hit_summary.valid_like_count == 30
+    assert earlier.hit_summary.published_to == date(2026, 10, 30)
+    assert next(row for row in earlier.items if row.work_id == "work-0").is_hit
