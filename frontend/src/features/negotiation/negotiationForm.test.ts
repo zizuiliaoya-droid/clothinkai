@@ -92,6 +92,12 @@ describe("membersFromItems / negotiationFormInitial", () => {
 });
 
 describe("negotiationItemsPayload / negotiationPayload", () => {
+  it("无款草稿传真实null和空明细，不带之前选择的商品及SKU", () => {
+    const payload = negotiationPayload({ ...full, style_id: null, quote_amount: null }, [top, pants]);
+    expect(payload).toMatchObject({ style_id: null, goods_main_id: null, items: [], quote_amount: null });
+    expect(negotiationPayload({ ...full, style_id: undefined, quote_amount: 0 }, []).quote_amount).toBe("0");
+  });
+
   it("每个成员一行、按成员顺序，没选的 sku = null", () => {
     expect(negotiationItemsPayload([top, pants], { pants: "k2" })).toEqual([
       { style_id: "top", sku_id: null },

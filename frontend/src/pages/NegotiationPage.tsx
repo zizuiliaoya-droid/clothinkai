@@ -256,7 +256,7 @@ export function NegotiationPage() {
       render: (v: string | null, row) => (
         <div style={{ minWidth: 0 }}>
           <Space size={4} wrap>
-            <DisplayNameCell name={v ?? row.style_name} fullTitle={row.goods_title} />
+            <DisplayNameCell name={row.style_id ? (v ?? row.style_name) : "待补款"} fullTitle={row.goods_title} />
             {row.goods_is_suit && <Tag color="purple">套装</Tag>}
           </Space>
           {negotiationItemLines(row).map((line, i) => (
@@ -303,7 +303,7 @@ export function NegotiationPage() {
       render: (v: NegotiationStatus, row) => (
         <Space size={4} direction="vertical" align="start">
           <Space size={4} wrap>
-            <Tag color={negotiationStatusStyle(v).color}>{negotiationStatusStyle(v).label}</Tag>
+            <Tag color={negotiationStatusStyle(v).color}>{v === "草稿" && !row.style_id ? "草稿·待补款" : negotiationStatusStyle(v).label}</Tag>
             {row.overdue && (
               <Tag
                 color="red"

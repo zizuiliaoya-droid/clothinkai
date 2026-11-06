@@ -45,10 +45,10 @@ class Negotiation(TenantScopedModel):
         ForeignKey("blogger.id", ondelete="RESTRICT"),
         nullable=False,
     )
-    style_id: Mapped[UUID] = mapped_column(
+    style_id: Mapped[UUID | None] = mapped_column(
         PGUUID(as_uuid=True),
         ForeignKey("style.id", ondelete="RESTRICT"),
-        nullable=False,
+        nullable=True,
     )
     goods_main_id: Mapped[UUID | None] = mapped_column(
         PGUUID(as_uuid=True),
@@ -99,9 +99,7 @@ class Negotiation(TenantScopedModel):
     scheduled_publish_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     """约定发布时间。"""
 
-    quote_amount: Mapped[Decimal] = mapped_column(
-        Numeric(10, 2), nullable=False, server_default=text("0")
-    )
+    quote_amount: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
     """博主服务费。置换模式强制 0（PRD：置换无博主服务费，接口也要校验防绕过前端）。"""
 
     remark: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -166,6 +164,14 @@ class Negotiation(TenantScopedModel):
             name="ck_negotiation_cooperation_mode",
         ),
         CheckConstraint("quote_amount >= 0", name="ck_negotiation_quote_amount_nonneg"),
+        CheckConstraint(
+            "status = '草稿' OR (style_id IS NOT NULL AND quote_amount IS NOT NULL)",
+            name="ck_negotiation_submitted_complete",
+        ),
+        CheckConstraint(
+            "style_id IS NOT NULL OR goods_main_id IS NULL",
+            name="ck_negotiation_goods_requires_style",
+        ),
         # 已定稿必须有推广单，没定稿不该有 —— 两者必须同步，否则是数据异常
         CheckConstraint(
             "(status = '已定稿' AND promotion_id IS NOT NULL)"

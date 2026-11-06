@@ -54,7 +54,7 @@ async def create_negotiation(
     session: SessionDep,
     user: CurrentActiveUser,
 ) -> NegotiationResponse:
-    """新建谈款单（N1，落草稿）。持 ``*`` → 403 ``star_create``；不传商品按现有规则推定并写回；
+    """新建谈款单（N1，落草稿）。可先不选款；持 ``*`` → 403 ``star_create``；已选款时不传商品按现有规则推定并写回；
     按商品成员建颜色尺码明细。置换模式的博主服务费会被强制为 0。响应带 ``others_in_progress``（只提示不拦）。
     """
     return await _svc(session).create(payload, user)

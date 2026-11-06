@@ -171,6 +171,42 @@ function gateError(missing: { key: string; label: string }[]) {
 }
 
 describe("NegotiationFormModal", () => {
+  it("无款草稿刷新后能保存，提交定位缺款，且不请求商品成员", async () => {
+    const draft = row({ style_id: null, goods_main_id: null, items: [], quote_amount: null });
+    api.updateNegotiation.mockResolvedValue(draft);
+    render(wrap(<NegotiationFormModal target={{ editing: draft }} onClose={() => {}} />));
+    expect(await screen.findByText("草稿·待补款")).toBeTruthy();
+    fireEvent.click(button("保存并提交"));
+    expect(await screen.findByText("还缺：商品、颜色尺码")).toBeTruthy();
+    expect(api.submitNegotiation).not.toHaveBeenCalled();
+    fireEvent.click(button("保存草稿"));
+    await waitFor(() => expect(api.updateNegotiation).toHaveBeenCalledWith("n-1",
+      expect.objectContaining({ style_id: null, goods_main_id: null, items: [], quote_amount: null })));
+    expect(api.negotiationGoodsMembers).not.toHaveBeenCalled();
+  });
+
+  it("草稿清款同时清空商品和明细", async () => {
+    api.updateNegotiation.mockResolvedValue(row({ style_id: null, goods_main_id: null, items: [] }));
+    render(wrap(<NegotiationFormModal target={{ editing: row() }} onClose={() => {}} />));
+    expect(await screen.findByText("白色 / S")).toBeTruthy();
+    const styleSelect = screen.getByLabelText("款式").closest(".ant-select")!;
+    fireEvent.mouseDown(styleSelect.querySelector(".ant-select-clear")!);
+    expect(await screen.findByText("草稿·待补款")).toBeTruthy();
+    fireEvent.click(button("保存草稿"));
+    await waitFor(() => expect(api.updateNegotiation).toHaveBeenCalledWith("n-1",
+      expect.objectContaining({ style_id: null, goods_main_id: null, items: [] })));
+  });
+
+  it("未知服务费提交后缺项显示在表单，不把空值变成0", async () => {
+    api.updateNegotiation.mockResolvedValue(row({ quote_amount: null }));
+    api.submitNegotiation.mockRejectedValue(gateError([{ key: "quote_amount", label: "服务费" }]));
+    render(wrap(<NegotiationFormModal target={{ editing: row({ quote_amount: null }) }} onClose={() => {}} />));
+    expect(await screen.findByText("白色 / S")).toBeTruthy();
+    fireEvent.click(button("保存并提交"));
+    expect(await screen.findByText("还缺：服务费")).toBeTruthy();
+    expect(api.updateNegotiation).toHaveBeenCalledWith("n-1", expect.objectContaining({ quote_amount: null }));
+  });
+
   it("套装：每个成员一行颜色尺码（选项是「颜色 / 尺码」）；别的 PR 在谈出黄色提示；不出商品编码与 SKU 编码", async () => {
     api.othersInProgress.mockResolvedValue([
       { pr_name: "李四", status: "主管待审", updated_at: "2026-10-06T10:00:00+08:00" },
