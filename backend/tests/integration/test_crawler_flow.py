@@ -332,3 +332,66 @@ class TestReportResult:
             assert conflict.value.status_code == 409
         finally:
             tenant_id_ctx.reset(token)
+
+
+async def test_retired_result_failure_survives_request_rollback(
+    session: AsyncSession,
+    tenant_a: Any,
+    factory: Any,
+    admin_role: Any,
+) -> None:
+    from app.modules.importer.exceptions import ImportSourceRetiredError
+    from app.modules.importer.models import ImportBatch
+
+    token = tenant_id_ctx.set(tenant_a.id)
+    try:
+        user = await factory.user(tenant_a, roles=[admin_role])
+        wt, _ = await WorkerTokenService(session).issue("vm-retired", ["1.1.1.1"], user)
+        cred = await _make_credential(session, tenant_a, platform="灰豚")
+        task = CrawlerTask(
+            tenant_id=tenant_a.id,
+            platform="灰豚",
+            credential_id=cred.id,
+            target_date=datetime.now(UTC).date(),
+            status="exchanged",
+            worker_token_id=wt.id,
+            cred_token="retired-lease",
+        )
+        session.add(task)
+        await session.flush()
+        task_id, cred_id = task.id, cred.id
+        before = await session.scalar(select(func.count()).select_from(ImportBatch))
+        svc = CrawlerTaskService(session)
+        with pytest.raises(ImportSourceRetiredError) as exc:
+            await svc.report_result(
+                task_id,
+                "success",
+                wt,
+                lease_token="retired-lease",
+                content=b"old-data",
+                filename="history.csv",
+                content_type="text/csv",
+            )
+        assert exc.value.status_code == 422
+        assert exc.value.details["retryable"] is False
+        # Match the request dependency's exception rollback. Terminal state was committed first.
+        await session.rollback()
+        await session.refresh(task)
+        await session.refresh(cred)
+        await session.refresh(wt)
+        assert task.id == task_id and task.status == "failed"
+        assert "停止新上传" in task.error_reason
+        assert task.import_batch_id is None
+        assert cred.id == cred_id and cred.consecutive_failures == 0
+        assert await session.scalar(select(func.count()).select_from(ImportBatch)) == before
+        with pytest.raises(CrawlerTaskResultConflict):
+            await svc.report_result(
+                task_id,
+                "success",
+                wt,
+                lease_token="retired-lease",
+                content=b"old-data",
+                filename="history.csv",
+            )
+    finally:
+        tenant_id_ctx.reset(token)

@@ -18,6 +18,8 @@ import type { BloggerCooperationItem } from "@/features/negotiation/types";
 import { bloggerRetrospectives } from "@/features/promotion/api";
 import { DisplayNameCell } from "@/components/DisplayNameCell/DisplayNameCell";
 import { NegotiationRejections } from "./NegotiationRejections";
+import type { Blogger } from "@/features/blogger/types";
+import { BloggerLegacyMetrics } from "@/features/blogger/BloggerLegacyMetrics";
 import { BloggerWorks } from "./BloggerWorks";
 
 const modeColor: Record<string, string> = {
@@ -51,11 +53,13 @@ const publishColor: Record<string, string> = {
 export function BloggerHoverCard({
   bloggerId,
   bloggerName,
+  blogger,
   children,
   limit = 5,
 }: {
   bloggerId: string;
   bloggerName?: string | null;
+  blogger?: Blogger;
   children: ReactNode;
   limit?: number;
 }) {
@@ -159,6 +163,7 @@ export function BloggerHoverCard({
 
   const content = (
     <div style={{ width: "min(560px, calc(100vw - 48px))" }}>
+      {blogger && <BloggerLegacyMetrics blogger={blogger} />}
       <BloggerWorks bloggerId={bloggerId} enabled={open} />
       <Divider style={{ margin: "12px 0" }} />
       <Typography.Text strong>历史合作款式</Typography.Text>

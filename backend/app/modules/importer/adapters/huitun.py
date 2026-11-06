@@ -69,8 +69,8 @@ class HuitunImportAdapter:
     def _build_profile(self, parsed: dict[str, Any]) -> dict:
         profile: dict[str, Any] = {
             "note_stats": {
-                "avg_likes": parsed.get("avg_likes") or 0,
-                "avg_reads": parsed.get("avg_reads") or 0,
+                "avg_likes": parsed.get("avg_likes"),
+                "avg_reads": parsed.get("avg_reads"),
             }
         }
         raw = parsed.get("audience_profile_raw")

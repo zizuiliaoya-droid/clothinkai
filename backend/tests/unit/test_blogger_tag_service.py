@@ -56,8 +56,8 @@ class TestComputeReadLikeRatio:
 
 
 class TestIsFakeAccount:
-    def test_none_ratio_conservative_false(self) -> None:
-        assert BloggerTagService.is_fake_account(None) is False
+    def test_none_ratio_unknown(self) -> None:
+        assert BloggerTagService.is_fake_account(None) is None
 
     def test_below_threshold_is_fake(self) -> None:
         assert BloggerTagService.is_fake_account(Decimal("0.005")) is True
@@ -81,3 +81,25 @@ class TestIsFakeAccount:
 )
 def test_blogger_type_table(follower: int | None, expected: str | None) -> None:
     assert BloggerTagService.compute_blogger_type(follower) == expected
+
+
+@pytest.mark.parametrize(
+    "stats",
+    [
+        None,
+        {},
+        {"avg_reads": 100},
+        {"avg_likes": 1},
+        {"avg_likes": None, "avg_reads": 100},
+        {"avg_likes": "NaN", "avg_reads": 100},
+        {"avg_likes": -1, "avg_reads": 100},
+    ],
+)
+def test_missing_or_invalid_values_are_unknown(stats):
+    assert BloggerTagService.compute_read_like_ratio({"note_stats": stats}) is None
+
+
+def test_explicit_zero_likes_is_evidence():
+    assert BloggerTagService.compute_read_like_ratio(
+        {"note_stats": {"avg_likes": 0, "avg_reads": 100}}
+    ) == Decimal(0)

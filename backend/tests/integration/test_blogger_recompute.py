@@ -318,13 +318,13 @@ class TestRecomputeQualityOnly:
             )
             await session.flush()
 
-            # 场景有效性：全量重算会改掉 b1 / b2 的类型与假号标记（两人都是分级平台小红书）
+            # 全量重算会改两人的类型及 b1 的假号标记；b2 缺依据，应保留历史标记。
             svc = BloggerTagService(session)
             assert {b1.platform, b2.platform} <= TYPE_GRADED_PLATFORMS
             assert svc.compute_blogger_type(200_000) != "素人"
             assert svc.compute_blogger_type(100) != "KOL"
             assert svc.is_fake_account(svc.compute_read_like_ratio(b1.audience_profile)) is True
-            assert svc.is_fake_account(svc.compute_read_like_ratio(None)) is False
+            assert svc.is_fake_account(svc.compute_read_like_ratio(None)) is None
 
             before = await _blogger_rows(session, tenant_a.id)
             result = await svc.recompute_quality_for_tenant(tenant_a.id)
@@ -437,3 +437,45 @@ class TestRecomputeOnCreateUpdate:
             assert resp.blogger_type == "KOL"
         finally:
             tenant_id_ctx.reset(token)
+
+
+@pytest.mark.parametrize("entry", ["batch", "single", "mark"])
+@pytest.mark.parametrize("profile", [None, {"note_stats": {"avg_reads": 100}}])
+async def test_missing_source_preserves_suspected_and_quality_still_computes(
+    session: AsyncSession,
+    tenant_a: Any,
+    blogger_factory: Any,
+    product_factory: Any,
+    promotion_factory: Any,
+    entry: str,
+    profile: dict | None,
+) -> None:
+    token = tenant_id_ctx.set(tenant_a.id)
+    try:
+        blogger = await blogger_factory.blogger(is_suspected_fake=True, audience_profile=profile)
+        style = await product_factory.style()
+        promotion = await promotion_factory.promotion(
+            style=style,
+            blogger=blogger,
+            quote_amount=Decimal("400"),
+            cost_snapshot=Decimal("80"),
+            return_shipping_fee=Decimal("20"),
+            like_count=1000,
+            platform="小红书",
+        )
+        promotion.metrics_recorded_at = datetime.now(UTC)
+        await session.flush()
+        svc = BloggerService(session)
+        if entry == "batch":
+            result = await svc.recompute_tags_for_current_tenant(tenant_a.id)
+            assert result["failed"] == 0
+        elif entry == "single":
+            await svc.recompute_quality_tags(blogger.id)
+        else:
+            await svc.mark_suspected_fake(blogger.id, "历史记录复核")
+        await session.refresh(blogger)
+        assert blogger.is_suspected_fake is True
+        if entry != "mark":
+            assert TAG_HIGH_VALUE in blogger.quality_tags
+    finally:
+        tenant_id_ctx.reset(token)

@@ -439,7 +439,9 @@ class BloggerService:
             blogger.id, self._session, blogger.tenant_id, settings=settings
         )
         ratio = self._tags.compute_read_like_ratio(blogger.audience_profile)
-        blogger.is_suspected_fake = self._tags.is_fake_account(ratio)
+        suspected = self._tags.is_fake_account(ratio)
+        if suspected is not None:
+            blogger.is_suspected_fake = suspected
         await self._session.flush()
         await self._session.commit()
         return blogger
@@ -450,13 +452,19 @@ class BloggerService:
         if blogger is None:
             raise BloggerNotFoundError(f"博主 {blogger_id} 不存在")
         ratio = self._tags.compute_read_like_ratio(blogger.audience_profile)
-        blogger.is_suspected_fake = self._tags.is_fake_account(ratio)
+        suspected = self._tags.is_fake_account(ratio)
+        if suspected is not None:
+            blogger.is_suspected_fake = suspected
         await self._session.flush()
         await self._audit.log(
             action="blogger.mark_suspected_fake",
             resource="blogger",
             resource_id=blogger.id,
-            after={"is_suspected_fake": blogger.is_suspected_fake, "reason": reason},
+            after={
+                "is_suspected_fake": blogger.is_suspected_fake,
+                "reason": reason,
+                "basis": "historical_ratio" if ratio is not None else "unavailable_preserved",
+            },
         )
         await self._session.commit()
         return blogger

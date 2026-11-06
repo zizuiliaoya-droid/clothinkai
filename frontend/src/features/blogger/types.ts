@@ -43,6 +43,8 @@ export interface Blogger {
   is_suspected_fake: boolean;
   is_active: boolean;
   is_deleted: boolean;
+  audience_profile?: {note_stats?: {avg_likes?: number | null; avg_reads?: number | null}} | null;
+  read_like_ratio?: string | number | null;
   crawler_metrics?: Record<string, unknown>;
   // 8b：抖音网页ID、主页链接、灰豚抖音统计快照、报价备注（与报价同一条字段权限，看不到收到 null）
   web_id?: string | null;

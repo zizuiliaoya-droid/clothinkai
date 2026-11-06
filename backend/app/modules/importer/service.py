@@ -121,6 +121,7 @@ class ImportService:
             ImportFileTooLargeError(422) / ImportMappingVersionNotFoundError(422) /
             ImportDuplicateFileError(409) / ImportStorageError(500)
         """
+        access.require_new_input(source)
         # 0. source 白名单（NF：upload 时拒未注册）
         if source not in ImportAdapterRegistry.sources():
             raise ImportSourceUnknownError(source)
@@ -232,6 +233,7 @@ class ImportService:
         tenant_id 由调用方（CrawlerTaskService，system_context）显式传入。
         source 已由 platform 映射，不再校验白名单失败时静默（缺 adapter → batch.failed）。
         """
+        access.require_new_input(source)
         if source not in ImportAdapterRegistry.sources():
             raise ImportSourceUnknownError(source)
         self._assert_format(filename, content_type)
