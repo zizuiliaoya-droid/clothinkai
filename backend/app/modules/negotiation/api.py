@@ -12,6 +12,7 @@ from uuid import UUID
 from fastapi import APIRouter, Query, status
 
 from app.modules.auth.deps import CurrentActiveUser, SessionDep, require_permission
+from app.modules.negotiation.bulk_api import router as bulk_router
 from app.modules.negotiation.enums import NegotiationStatus
 from app.modules.negotiation.schemas import (
     BloggerCooperationHistory,
@@ -32,6 +33,7 @@ from app.modules.negotiation.service import NegotiationService
 from app.modules.promotion.enums import CooperationMode
 
 router = APIRouter(prefix="/api/negotiations", tags=["negotiation"])
+router.include_router(bulk_router)
 
 SCOPE = "negotiation"
 SCOPE_REVIEW = "negotiation.review"

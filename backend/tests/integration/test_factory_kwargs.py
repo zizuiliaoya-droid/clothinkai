@@ -240,6 +240,10 @@ async def test_negotiation_kwargs_applied(ctx: dict[str, Any], session: Any) -> 
         "promotion_id": None,
         "line_id": uuid4(),
         "copied_from_id": source.id,
+        "client_create_key": uuid4(),
+        "creation_group_id": uuid4(),
+        "creation_pr_id": ctx["pr"].id,
+        "creation_request_hash": "a" * 64,
         "account_snapshot": {
             "version": 1,
             "primary_account_id": str(ctx["blogger"].id),
@@ -302,6 +306,12 @@ async def test_negotiation_defaults_and_finalized(ctx: dict[str, Any]) -> None:
     assert (draft.status, draft.cooperation_mode, draft.pr_id) == ("草稿", "寄拍", ctx["pr"].id)
     assert draft.line_id is not None
     assert draft.account_snapshot is None
+    assert (
+        draft.client_create_key,
+        draft.creation_group_id,
+        draft.creation_pr_id,
+        draft.creation_request_hash,
+    ) == (None, None, None, None)
 
     p = await _promotion(ctx, {})
     assert p.line_id is not None  # 不传 line_id 由库发号

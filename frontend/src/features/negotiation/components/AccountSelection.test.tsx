@@ -36,6 +36,6 @@ it("有效权限禁止写金额时同步只读，不显示被隐藏的参考价"
   api.getAccountGroup.mockResolvedValue({...data, can_write_amount: false});
   api.resolveAccountQuote.mockResolvedValue({matched: true, reference_amount: null, can_read_quote: false}); show();
   expect(await screen.findByText("当前权限不可查看参考标价")).toBeInTheDocument();
-  expect(permissions).toHaveBeenLastCalledWith(false);
+  expect(permissions).toHaveBeenLastCalledWith(false, true);
   expect(screen.queryByText(/本次参考标价 ¥/)).not.toBeInTheDocument();
 });
