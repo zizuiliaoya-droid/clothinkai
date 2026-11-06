@@ -33,6 +33,8 @@ class BloggerListFilters:
     follower_count_max: int | None = None
     category_tag: str | None = None
     quality_tag: str | None = None
+    category_tags: builtins.list[str] | None = None
+    quality_tags: builtins.list[str] | None = None
     platform: str | None = None
     is_suspected_fake: bool | None = None
     is_active: bool | None = True
@@ -155,6 +157,13 @@ class BloggerRepository:
             )
         if filters.quality_tag:
             stmt = stmt.where(Blogger.quality_tags.contains(sa.cast([filters.quality_tag], JSONB)))
+        # 同组多选命中任一标签；不同筛选组与其他条件取交集。
+        for field, tags in (
+            (Blogger.category_tags, filters.category_tags),
+            (Blogger.quality_tags, filters.quality_tags),
+        ):
+            if tags:
+                stmt = stmt.where(or_(*(field.contains(sa.cast([tag], JSONB)) for tag in tags)))
 
         # 普通筛选
         if filters.blogger_type is not None:

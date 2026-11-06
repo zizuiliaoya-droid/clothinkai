@@ -26,6 +26,15 @@ export async function getImportAccess(): Promise<ImportSourceAccess[]> {
   return resp.data;
 }
 
+/** 当前租户实际字段映射生成的空模板，首个工作表无示例业务行。 */
+export async function downloadImportTemplate(source: string): Promise<Blob> {
+  const resp = await apiClient.get(
+    `/api/imports/sources/${encodeURIComponent(source)}/template`,
+    { responseType: "blob" }
+  );
+  return resp.data as Blob;
+}
+
 /**
  * 上传导入文件（multipart）。
  * 后端 DB 先行 + UNIQUE 去重，重复文件返回 409（IMPORT_DUPLICATE_FILE）。

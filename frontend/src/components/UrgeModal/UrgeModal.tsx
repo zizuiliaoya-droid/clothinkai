@@ -1,9 +1,8 @@
+import { ScreenshotUpload } from "@/components/ScreenshotUpload/ScreenshotUpload";
 import { useState } from "react";
-import { Button, Form, Input, Modal, Typography, Upload, message } from "antd";
-import { UploadOutlined } from "@ant-design/icons";
+import { Form, Input, Modal, Typography, message } from "antd";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  URGE_SCREENSHOT_MIME_TYPES,
   screenshotProblem,
   urgePromotion,
   urgePromotionWithScreenshot,
@@ -86,22 +85,7 @@ export function UrgeModal({ open, promotionId, title, onClose, onUrged }: Props)
           />
         </Form.Item>
         <Form.Item label="聊天截图" extra="可选。支持 JPG、PNG、WebP，不超过 10MB">
-          <Upload
-            accept={URGE_SCREENSHOT_MIME_TYPES.join(",")}
-            maxCount={1}
-            beforeUpload={(file) => {
-              const problem = screenshotProblem(file);
-              if (problem) {
-                message.error(problem);
-                return Upload.LIST_IGNORE;
-              }
-              setScreenshot(file);
-              return false;
-            }}
-            onRemove={() => setScreenshot(null)}
-          >
-            <Button icon={<UploadOutlined />}>选择截图</Button>
-          </Upload>
+          <ScreenshotUpload value={screenshot} onChange={setScreenshot} validate={screenshotProblem} disabled={!open || mutation.isPending} />
         </Form.Item>
       </Form>
     </Modal>

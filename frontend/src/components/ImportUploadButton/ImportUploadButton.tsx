@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { Button, Modal, Space, Upload, message } from "antd";
-import { UploadOutlined } from "@ant-design/icons";
+import { DownloadOutlined, UploadOutlined } from "@ant-design/icons";
 import type { UploadProps } from "antd";
 import { useQueryClient } from "@tanstack/react-query";
-import { uploadImportFile } from "@/features/import/api";
+import { downloadImportTemplate, uploadImportFile } from "@/features/import/api";
 import { importUploadErrorMessage } from "@/features/import/uploadError";
+import { extractErrorMessage } from "@/services/apiClient";
 
 interface Props {
   /** 后端 importer adapter source（如 manual_style_sku / qianniu / wanxiangtai）。 */
@@ -46,6 +47,24 @@ export function ImportUploadButton({
 }: Props) {
   const qc = useQueryClient();
   const [uploading, setUploading] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+
+  const downloadTemplate = async () => {
+    setDownloading(true);
+    try {
+      const blob = await downloadImportTemplate(source);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${source}-template.xlsx`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      message.error(extractErrorMessage(err, "模板下载失败，请稍后重试"));
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   const refresh = () => {
     for (const key of invalidateKeys) {
@@ -94,6 +113,11 @@ export function ImportUploadButton({
           {label}
         </Button>
       </Upload>
+      {["manual_blogger", "manual_promotion"].includes(source) && (
+        <Button icon={<DownloadOutlined />} size={size} loading={downloading} onClick={() => void downloadTemplate()}>
+          下载空模板
+        </Button>
+      )}
       {templateColumns?.length ? (
         <Button type="link" size={size} onClick={showTemplate}>
           列说明

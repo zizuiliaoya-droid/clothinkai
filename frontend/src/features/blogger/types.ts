@@ -124,6 +124,8 @@ export interface BloggerListFilters {
   follower_count_max?: number;
   category_tag?: string;
   quality_tag?: string;
+  category_tags?: string[];
+  quality_tags?: string[];
   platform?: string;
   is_suspected_fake?: boolean;
   is_active?: boolean;

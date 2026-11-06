@@ -2,7 +2,7 @@ import { apiClient } from "@/services/apiClient";
 
 export interface ColumnPreference { order: string[]; hidden: string[] }
 export interface ColumnOption { key: string; label: string }
-export const DEFAULT_COLUMN_PREFERENCE: ColumnPreference = { order: [], hidden: [] };
+export const DEFAULT_COLUMN_PREFERENCE: ColumnPreference = { order: [], hidden: ["like_count", "return_waybill"] };
 
 export async function getPromotionColumnPreference(): Promise<ColumnPreference> {
   return (await apiClient.get<ColumnPreference>("/api/preferences/columns/promotion_list")).data;

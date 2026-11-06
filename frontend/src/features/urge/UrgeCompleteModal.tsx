@@ -1,9 +1,8 @@
+import { ScreenshotUpload } from "@/components/ScreenshotUpload/ScreenshotUpload";
 import { useState } from "react";
-import { Button, Form, Input, Modal, Typography, Upload, message } from "antd";
-import { UploadOutlined } from "@ant-design/icons";
+import { Form, Input, Modal, Typography, message } from "antd";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  URGE_SCREENSHOT_MIME_TYPES,
   completeUrgeTask,
   screenshotProblem,
 } from "@/features/urge/api";
@@ -85,22 +84,7 @@ export function UrgeCompleteModal({ task, onClose, onCompleted }: Props) {
           required
           extra="必传：博主已发布或已确认的截图。支持 JPG、PNG、WebP，不超过 10MB"
         >
-          <Upload
-            accept={URGE_SCREENSHOT_MIME_TYPES.join(",")}
-            maxCount={1}
-            beforeUpload={(file) => {
-              const problem = screenshotProblem(file);
-              if (problem) {
-                message.error(problem);
-                return Upload.LIST_IGNORE;
-              }
-              setScreenshot(file);
-              return false;
-            }}
-            onRemove={() => setScreenshot(null)}
-          >
-            <Button icon={<UploadOutlined />}>选择截图</Button>
-          </Upload>
+          <ScreenshotUpload value={screenshot} onChange={setScreenshot} validate={screenshotProblem} disabled={!task || mutation.isPending} />
         </Form.Item>
         <Form.Item name="note" label="备注">
           <Input.TextArea

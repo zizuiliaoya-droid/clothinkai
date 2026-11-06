@@ -1,7 +1,7 @@
+import { ScreenshotUpload } from "@/components/ScreenshotUpload/ScreenshotUpload";
 import { LINE_EVENTS_ALL } from "@/features/flow/api";
 import { useEffect, useState } from "react";
-import { Button, DatePicker, Form, Input, Modal, Upload, message } from "antd";
-import { UploadOutlined } from "@ant-design/icons";
+import { DatePicker, Form, Input, Modal, message } from "antd";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import dayjs from "dayjs";
 import { publishPromotion, uploadBrandComment } from "@/features/promotion/api";
@@ -118,21 +118,7 @@ export function PublishModal({ open, target, onCancel, onDone }: Props) {
               : "提交发布审核必传。截图里要能看到品牌词相关评论。"
           }
         >
-          <Upload
-            accept="image/png,image/jpeg,image/webp"
-            maxCount={1}
-            beforeUpload={(file) => {
-              setBrandCommentFile(file as unknown as File);
-              return false;
-            }}
-            onRemove={() => setBrandCommentFile(null)}
-          >
-            <Button icon={<UploadOutlined />}>
-              {target?.brand_comment_attachment_id
-                ? "重新上传"
-                : "选择截图"}
-            </Button>
-          </Upload>
+          <ScreenshotUpload value={brandCommentFile} onChange={setBrandCommentFile} disabled={!open || publishMutation.isPending} label={target?.brand_comment_attachment_id ? "重新上传" : "选择截图"} />
         </Form.Item>
       </Form>
     </Modal>

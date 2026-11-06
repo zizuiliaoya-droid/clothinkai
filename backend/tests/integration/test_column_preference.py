@@ -4,6 +4,7 @@ import pytest
 
 from app.core.tenancy import tenant_id_ctx
 from app.modules.report.preference_api import (
+    DEFAULT_PROMOTION_COLUMNS,
     PromotionColumnPreference,
     get_promotion_columns,
     save_promotion_columns,
@@ -20,7 +21,9 @@ async def test_columns_roundtrip_reset_does_not_overwrite_filters(session, tenan
         service = UserPreferenceService(session)
         filters = {"goods_id": "g", "season": ["春季"], "content_category": "单篇"}
         await service.save_filter(user, "promotion_list", filters)
-        assert await get_promotion_columns(user, service) == PromotionColumnPreference()
+        assert await get_promotion_columns(user, service) == PromotionColumnPreference(
+            **DEFAULT_PROMOTION_COLUMNS
+        )
         preference = PromotionColumnPreference(
             order=["stage", "content_category"], hidden=["quote_amount"]
         )
@@ -43,15 +46,21 @@ async def test_columns_are_separate_for_users_and_tenants(session, tenant_a, ten
         second = await factory.user(tenant_a)
         pref_a = PromotionColumnPreference(hidden=["quote_amount"])
         await save_promotion_columns(first, service, pref_a)
-        assert await get_promotion_columns(second, service) == PromotionColumnPreference()
+        assert await get_promotion_columns(second, service) == PromotionColumnPreference(
+            **DEFAULT_PROMOTION_COLUMNS
+        )
         tenant_id_ctx.set(tenant_b.id)
         third = await factory.user(tenant_b)
-        assert await get_promotion_columns(third, service) == PromotionColumnPreference()
+        assert await get_promotion_columns(third, service) == PromotionColumnPreference(
+            **DEFAULT_PROMOTION_COLUMNS
+        )
         pref_b = PromotionColumnPreference(hidden=["main_image"])
         await save_promotion_columns(third, service, pref_b)
         assert await get_promotion_columns(third, service) == pref_b
         tenant_id_ctx.set(tenant_a.id)
         assert await get_promotion_columns(first, service) == pref_a
-        assert await get_promotion_columns(second, service) == PromotionColumnPreference()
+        assert await get_promotion_columns(second, service) == PromotionColumnPreference(
+            **DEFAULT_PROMOTION_COLUMNS
+        )
     finally:
         tenant_id_ctx.reset(token)

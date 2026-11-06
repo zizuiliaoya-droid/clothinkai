@@ -42,6 +42,15 @@ async function open() { await screen.findByText("ready"); fireEvent.click(screen
 async function save() { fireEvent.click(screen.getByRole("button", { name: "保存" })); await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull()); }
 
 describe("推广列偏好", () => {
+  it("已有偏好保留点赞和寄回单号，恢复默认才隐藏两列", async () => {
+    const available = [...options, { key: "like_count", label: "点赞量" }, { key: "return_waybill", label: "寄回单号" }];
+    mount(available); await screen.findByText("ready");
+    expect(screen.getByLabelText("当前列").textContent).toContain("like_count,return_waybill");
+    await open(); fireEvent.click(screen.getByRole("button", { name: "恢复默认" })); await save();
+    expect(screen.getByLabelText("当前列").textContent).not.toContain("like_count");
+    expect(screen.getByLabelText("当前列").textContent).not.toContain("return_waybill");
+    expect(savePromotionColumnPreference).toHaveBeenCalledWith({ order: available.map((item) => item.key), hidden: ["like_count", "return_waybill"] });
+  });
   it("勾选、拖排、上下移动保存后刷新恢复，恢复默认再保存", async () => {
     let stored: ColumnPreference = { order: [], hidden: [] };
     vi.mocked(getPromotionColumnPreference).mockImplementation(async () => stored);

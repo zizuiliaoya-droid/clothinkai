@@ -1,9 +1,9 @@
+import { ScreenshotUpload } from "@/components/ScreenshotUpload/ScreenshotUpload";
 // 结款单「上传付款凭证」弹窗（流程线 8.6、F4）。
 // 没有付款日期选择：付款日期一律记上传当天（服务端取北京时间），弹窗里写一行说明。
 // 选文件时就挡掉格式、大小不对的（与后端 check_image_payload 同一套限制），并显示文件名与大小（8.9）。
 import { useEffect, useState } from "react";
-import { Button, Form, Modal, Upload, message, theme } from "antd";
-import { UploadOutlined } from "@ant-design/icons";
+import { Form, Modal, message, theme } from "antd";
 import dayjs from "dayjs";
 import { flowErrorOutcome } from "@/features/flow/flowError";
 import { PAYMENT_PROOF_MAX_BYTES, PAYMENT_PROOF_MIME_TYPES, uploadPaymentProof } from "../api";
@@ -70,28 +70,17 @@ export function PaymentProofModal({ target, onClose, onChanged }: PaymentProofMo
           <span>付款日期：今天（{dayjs().format("YYYY-MM-DD")}），系统自动记录</span>
         </Form.Item>
         <Form.Item label="付款截图" required>
-          <Upload
-            beforeUpload={(f) => {
-              // 先在本地挡掉格式和大小不对的文件，省得传完 10MB 才被后端拒
-              if (!(PAYMENT_PROOF_MIME_TYPES as readonly string[]).includes(f.type)) {
-                message.error("付款截图仅支持 JPG、PNG、WebP 图片");
-                return Upload.LIST_IGNORE;
-              }
-              if (f.size > PAYMENT_PROOF_MAX_BYTES) {
-                message.error("付款截图不能超过 10MB");
-                return Upload.LIST_IGNORE;
-              }
-              setFile(f as File);
-              return false;
-            }}
-            maxCount={1}
-            showUploadList={false}
-            accept={PAYMENT_PROOF_MIME_TYPES.join(",")}
-          >
-            <Button icon={<UploadOutlined />}>选择图片</Button>
-          </Upload>
+          <ScreenshotUpload
+            value={file}
+            onChange={setFile}
+            validate={(next) => !(PAYMENT_PROOF_MIME_TYPES as readonly string[]).includes(next.type)
+              ? "付款截图仅支持 JPG、PNG、WebP 图片"
+              : next.size > PAYMENT_PROOF_MAX_BYTES ? "付款截图不能超过 10MB" : null}
+            disabled={!target || uploading}
+            label="选择图片"
+          />
           <div style={{ color: token.colorTextSecondary, fontSize: token.fontSizeSM, marginTop: 4 }}>
-            {file ? `已选：${file.name}（${sizeLabel(file.size)}）` : "支持 JPG、PNG、WebP，不超过 10MB"}
+            {file ? `文件大小：${sizeLabel(file.size)}` : "支持 JPG、PNG、WebP，不超过 10MB"}
           </div>
         </Form.Item>
       </Form>

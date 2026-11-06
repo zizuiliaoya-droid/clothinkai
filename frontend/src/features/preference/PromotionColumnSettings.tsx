@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Alert, Button, Checkbox, Modal, Space, Typography } from "antd";
 import { ArrowDownOutlined, ArrowUpOutlined, HolderOutlined, SettingOutlined } from "@ant-design/icons";
 import { extractErrorMessage } from "@/services/apiClient";
-import { orderedColumnKeys, type ColumnOption, type ColumnPreference } from "./columnPreference";
+import { DEFAULT_COLUMN_PREFERENCE, orderedColumnKeys, type ColumnOption, type ColumnPreference } from "./columnPreference";
 
 interface Props {
   options: ColumnOption[];
@@ -70,7 +70,7 @@ export function PromotionColumnSettings({ options, preference, loading, loadErro
         })}
       </ul>
       {!visibleCount && <Typography.Paragraph type="danger">至少保留一列</Typography.Paragraph>}
-      <Button disabled={saving} onClick={() => setDraft({ order: [], hidden: [] })}>恢复默认</Button>
+      <Button disabled={saving} onClick={() => setDraft(DEFAULT_COLUMN_PREFERENCE)}>恢复默认</Button>
     </Modal>
   </>;
 }

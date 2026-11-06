@@ -18,6 +18,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Query, status
 from fastapi.responses import Response
+from pydantic import Field
 
 from app.modules.auth.deps import (
     CurrentActiveUser,
@@ -80,6 +81,12 @@ async def list_bloggers(
     follower_count_max: Annotated[int | None, Query(ge=0)] = None,
     category_tag: Annotated[str | None, Query(max_length=32)] = None,
     quality_tag: Annotated[str | None, Query(max_length=32)] = None,
+    category_tags: Annotated[
+        list[Annotated[str, Field(min_length=1, max_length=32)]] | None, Query(max_length=20)
+    ] = None,
+    quality_tags: Annotated[
+        list[Annotated[str, Field(min_length=1, max_length=32)]] | None, Query(max_length=20)
+    ] = None,
     platform: Annotated[str | None, Query(max_length=16)] = None,
     is_suspected_fake: bool | None = None,
     is_active: bool = True,
@@ -101,6 +108,8 @@ async def list_bloggers(
         follower_count_max=follower_count_max,
         category_tag=category_tag,
         quality_tag=quality_tag,
+        category_tags=category_tags,
+        quality_tags=quality_tags,
         platform=platform,
         is_suspected_fake=is_suspected_fake,
         is_active=is_active,
