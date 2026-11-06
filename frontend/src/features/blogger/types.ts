@@ -43,6 +43,7 @@ export interface Blogger {
   is_suspected_fake: boolean;
   is_active: boolean;
   is_deleted: boolean;
+  audience_updated_on?: string | null;
   audience_profile?: {note_stats?: {avg_likes?: number | null; avg_reads?: number | null}} | null;
   read_like_ratio?: string | number | null;
   crawler_metrics?: Record<string, unknown>;

@@ -68,6 +68,10 @@ async def test_create_read_and_explicit_write_deny(as_user, blogger_factory, flo
         page = (await client.get(endpoint)).json()
         assert page["total"] == 1 and page["items"][0]["like_count"] == 143000
         assert page["items"][0]["interaction_total"] is None
+        assert page["items"][0]["is_hit"] is False
+        assert page["hit_summary"]["sample_count"] == 1
+        assert page["hit_summary"]["valid_like_count"] == 1
+        assert page["hit_summary"]["status"] == "insufficient_samples"
         assert page["can_write"] is False
         assert (
             await client.get(endpoint, params={"date_from": "2026-11-03", "date_to": "2026-11-01"})

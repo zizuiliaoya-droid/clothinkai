@@ -24,6 +24,17 @@ export interface WorkItem extends WorkInput {
   collect_like_ratio: number | null;
   share_like_ratio: number | null;
   comment_like_ratio: number | null;
+  is_hit: boolean;
+}
+
+export interface WorkHitSummary {
+  sample_count: number;
+  valid_like_count: number;
+  published_from: string | null;
+  published_to: string | null;
+  median_likes: number | null;
+  threshold: number | null;
+  status: "ready" | "insufficient_samples" | "zero_median";
 }
 
 export interface WorkPage {
@@ -33,6 +44,7 @@ export interface WorkPage {
   page_size: number;
   can_write: boolean;
   can_read_source: boolean;
+  hit_summary: WorkHitSummary | null;
 }
 
 export async function listWorks(bloggerId: string, filters: { page?: number; date_from?: string; date_to?: string; snapshot_id?: string } = {}) {

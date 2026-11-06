@@ -14,14 +14,29 @@ from openpyxl.worksheet.datavalidation import DataValidation
 from app.core.exceptions import ResourceNotFoundError
 from app.modules.blogger.enums import Platform
 from app.modules.importer.adapters.blogger import BloggerImportAdapter
+from app.modules.importer.adapters.blogger_audience import BloggerAudienceImportAdapter
 from app.modules.importer.adapters.blogger_work import BloggerWorkImportAdapter
 from app.modules.importer.adapters.promotion import PromotionImportAdapter
 from app.modules.importer.exceptions import ImportMappingInvalidError
 from app.modules.importer.models import FieldMapping
 
 TEMPLATE_VERSION = "1105-v1"
-TEMPLATE_SOURCES = frozenset({"manual_blogger", "manual_promotion", "manual_blogger_work"})
+TEMPLATE_SOURCES = frozenset(
+    {"manual_blogger", "manual_promotion", "manual_blogger_work", "manual_blogger_audience"}
+)
 _REQUIRED = {
+    "manual_blogger_audience": frozenset(
+        {
+            "platform",
+            "xiaohongshu_id",
+            "dimension",
+            "label",
+            "collected_on",
+            "source",
+            "completeness",
+            "estimated",
+        }
+    ),
     "manual_blogger_work": frozenset(
         {"platform", "xiaohongshu_id", "published_on", "collected_at", "source"}
     ),
@@ -31,6 +46,14 @@ _REQUIRED = {
     ),
 }
 _EXAMPLES = {
+    "dimension": "年龄",
+    "label": "41–50",
+    "percentage": "23.5%",
+    "tgi": "120",
+    "collected_on": "2026-11-05",
+    "completeness": "部分",
+    "estimated": "否",
+    "tgi_source": "来源页面的TGI及基准人群说明",
     "work_id": "demo_work_001",
     "work_url": "https://www.example.com/video/demo_work_001",
     "published_on": "2026-11-01",
@@ -56,6 +79,14 @@ _EXAMPLES = {
     "scheduled_publish_date": "2026-11-20",
 }
 _NOTES = {
+    "dimension": "地域省份 / 城市级别 / 年龄 / 性别；省份和城市层级分开填写。",
+    "label": "保留来源原始标签；年龄不合并41–50、50+等不同分箱。城市级别填一线/新一线/二线/三线/四线/五线/六线及以下/特区/其他。",
+    "percentage": "23.5和23.5%均表示23.5%；0.235表示0.235%。仅Excel原生百分比格式按显示值读取。不填分数比例来猜测换算；缺失留空。",
+    "completeness": "完整 / 部分。完整各分类均有占比且合计99%～101%（含边界）；Top5或缺分类选部分，不补齐。",
+    "estimated": "是 / 否，按实际来源填写。",
+    "collected_on": "YYYY-MM-DD。同账号同维度同日期合并一组；同组采集来源/完整性/估计/TGI来源须一致。",
+    "tgi": "只填写实际提供的TGI，不能从占比推导；填写时TGI来源必填。",
+    "tgi_source": "填写TGI的来源和基准口径。",
     "work_id": "作品ID与稳定链接至少填一项；同一作品后续采集保持相同标识方式。ID优先，不自动合并仅链接的旧记录。",
     "work_url": "作品稳定 http/https 链接；不要填临时分享短链。保留有意义的查询参数。",
     "collected_at": "YYYY-MM-DD HH:mm:ss，未带时区按北京时间。同标识同时间不同内容会报错。",
@@ -79,8 +110,15 @@ def require_template_source(source: str) -> None:
 def build_import_template(source: str, mapping: FieldMapping | None = None) -> bytes:
     """使用上传时同一份生效映射，不更改映射或创建任何业务记录。"""
     require_template_source(source)
-    adapter: BloggerImportAdapter | PromotionImportAdapter | BloggerWorkImportAdapter
-    if source == "manual_blogger_work":
+    adapter: (
+        BloggerImportAdapter
+        | PromotionImportAdapter
+        | BloggerWorkImportAdapter
+        | BloggerAudienceImportAdapter
+    )
+    if source == "manual_blogger_audience":
+        adapter = BloggerAudienceImportAdapter()
+    elif source == "manual_blogger_work":
         adapter = BloggerWorkImportAdapter()
     elif source == "manual_blogger":
         adapter = BloggerImportAdapter()
@@ -110,6 +148,7 @@ def build_import_template(source: str, mapping: FieldMapping | None = None) -> b
         "manual_blogger": "博主",
         "manual_promotion": "站外推广",
         "manual_blogger_work": "博主作品",
+        "manual_blogger_audience": "博主画像",
     }[source]
     notes.append([f"{title}空模板", TEMPLATE_VERSION])
     notes.append(["映射版本", str(mapping.version) if mapping is not None else "内置默认"])
@@ -141,6 +180,17 @@ def build_import_template(source: str, mapping: FieldMapping | None = None) -> b
             else "博主按平台和账号判重；推广单每个有效数据行创建一张新单。",
         ]
     )
+    if source == "manual_blogger_audience":
+        notes.cell(
+            4,
+            2,
+            "一行一个分类；同账号+维度+日期整组验证提交，有错误整组失败，保留数据行定位。相同内容跳过，不同内容报错；较旧采集只归档。",
+        )
+        notes.cell(
+            7,
+            2,
+            "平台和账号须匹配本租户已有博主；每次仅更新对应维度，不清空其它维度。缺失不填0，部分数据不补齐到100%。",
+        )
     notes.append([])
     notes.append(["表头", "是否必填", "类型", "填写示例（勿作为业务数据）", "说明"])
 

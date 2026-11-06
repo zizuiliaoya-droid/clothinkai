@@ -25,6 +25,7 @@ from app.core.security.field_permissions import (
 )
 from app.modules.auth.models import User
 from app.modules.auth.repository import PermissionRepository, RoleRepository
+from app.modules.blogger.audience_schemas import audience_updated_on
 from app.modules.blogger.claim_access import (
     CONTACT_FIELDS,
     BloggerAccessContext,
@@ -582,6 +583,7 @@ class BloggerService:
             is_active=blogger.is_active,
             is_deleted=blogger.is_deleted,
             audience_profile=blogger.audience_profile,
+            audience_updated_on=audience_updated_on(blogger.audience_profile),
             read_like_ratio=self._tags.compute_read_like_ratio(blogger.audience_profile),
             crawler_metrics=dict(blogger.crawler_metrics or {}),
             web_id=blogger.web_id,

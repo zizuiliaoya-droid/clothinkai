@@ -169,7 +169,12 @@ async def _run_import_batch_claimed(batch_id: UUID, only_failed: bool = False) -
             from app.core.attachment import attachment_service
 
             raw = attachment_service.get_object_bytes(cast("BucketKind", file_bucket), file_r2_key)
-            rows = _parse_rows(raw, original_filename, getattr(adapter, "file_layout", None))
+            rows = _parse_rows(
+                raw,
+                original_filename,
+                getattr(adapter, "file_layout", None),
+                percent_formats=source == "manual_blogger_audience",
+            )
     except Exception as exc:
         await _mark_batch_failed(batch_id, _parse_failure_reason(exc))
         if not isinstance(exc, LayoutNotFoundError):  # 传错文件是用户操作，不报 Sentry
@@ -191,21 +196,37 @@ async def _run_import_batch_claimed(batch_id: UUID, only_failed: bool = False) -
     # 每次执行（首跑、整文件重跑、只重跑失败行）一个，同批以第一个已提交的给值行为准（§4.2.1）
     batch_seen = BatchSeen()
     try:
-        for row_number, row in rows:
-            outcome = await _process_one_row(
-                adapter,
-                row,
-                row_number,
+        if source == "manual_blogger_audience":
+            from app.modules.importer.audience_runner import process_audience_groups
+
+            outcomes = await process_audience_groups(
+                rows,
                 mapping,
                 batch_id=batch_id,
                 tenant_id=tenant_id,
                 actor_id=created_by,
-                source=source,
-                batch_seen=batch_seen,
-                affected=affected,
+                app_session=AsyncSessionApp,
+                bypass_session=AsyncSessionBypass,
             )
-            result = counts.add(outcome)
-            import_rows_total.labels(source=source, result=result).inc()
+            for outcome in outcomes:
+                result = counts.add(outcome)
+                import_rows_total.labels(source=source, result=result).inc()
+        else:
+            for row_number, row in rows:
+                outcome = await _process_one_row(
+                    adapter,
+                    row,
+                    row_number,
+                    mapping,
+                    batch_id=batch_id,
+                    tenant_id=tenant_id,
+                    actor_id=created_by,
+                    source=source,
+                    batch_seen=batch_seen,
+                    affected=affected,
+                )
+                result = counts.add(outcome)
+                import_rows_total.labels(source=source, result=result).inc()
         # 行之后的一段（商品资料导入读内嵌图补主图）：汇总之前做完，前端轮询到终态时结果已在
         if isinstance(adapter, PostRowsImportAdapter):
             first_raw = raw
@@ -575,7 +596,7 @@ def _parse_failure_reason(exc: Exception) -> str:
 
 
 def _parse_rows(
-    raw: bytes, filename: str, layout: XlsxLayout | None = None
+    raw: bytes, filename: str, layout: XlsxLayout | None = None, *, percent_formats: bool = False
 ) -> list[tuple[int, dict[str, Any]]]:
     """解析 CSV / XLSX 为 [(row_number, {col: value}), ...]（row_number 从 1 起，不含表头）。
 
@@ -587,7 +608,7 @@ def _parse_rows(
     if name.endswith(".csv"):
         return _parse_csv(raw)
     if name.endswith(".xlsx"):
-        return _parse_xlsx(raw, layout)
+        return _parse_xlsx(raw, layout, percent_formats=percent_formats)
     raise ValueError(f"unsupported file extension: {filename}")
 
 
@@ -617,7 +638,9 @@ def _xlsx_cells(excel_row: tuple[Any, ...]) -> list[str]:
     return [str(c).strip() if c is not None else "" for c in excel_row]
 
 
-def _parse_xlsx(raw: bytes, layout: XlsxLayout | None = None) -> list[tuple[int, dict[str, Any]]]:
+def _parse_xlsx(
+    raw: bytes, layout: XlsxLayout | None = None, *, percent_formats: bool = False
+) -> list[tuple[int, dict[str, Any]]]:
     from itertools import chain
 
     from openpyxl import load_workbook
@@ -631,7 +654,15 @@ def _parse_xlsx(raw: bytes, layout: XlsxLayout | None = None) -> list[tuple[int,
             raise LayoutNotFoundError(layout.not_found_message())
         else:
             ws = wb.active
-        excel_rows = ws.iter_rows(values_only=True)
+        if percent_formats:
+            from app.modules.importer.adapters.blogger_audience import excel_percent_value
+
+            excel_rows = (
+                tuple(excel_percent_value(cell.value, cell.number_format) for cell in row)
+                for row in ws.iter_rows(values_only=False)
+            )
+        else:
+            excel_rows = ws.iter_rows(values_only=True)
         # 表头及之前的行先缓存：平台导出常带前置空行/标题行（如生意参谋千牛表头在第 5 行）。
         # 没有表头标记 → 跳过完全空白的前置行，第一行非空行作为表头；
         # 有标记 → 前 HEADER_SCAN_ROWS 个非空行里第一个含它的行，找不到回落到第一行非空行

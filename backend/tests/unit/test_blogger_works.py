@@ -1,7 +1,7 @@
 """作品数值、标识与实际模板解析契约。"""
 
 import io
-from datetime import timedelta
+from datetime import date, timedelta
 from uuid import uuid4
 
 import pytest
@@ -11,7 +11,7 @@ from pydantic import ValidationError
 from app.core.security.permissions import EffectivePermissions
 from app.modules.blogger.work_models import BloggerWorkSnapshot
 from app.modules.blogger.work_schemas import WorkInput
-from app.modules.blogger.work_service import work_item
+from app.modules.blogger.work_service import summarize_work_hits, work_item
 from app.modules.importer import access
 from app.modules.importer.adapters.blogger_work import BloggerWorkImportAdapter
 from app.modules.importer.domain import validate_mapping_config
@@ -116,3 +116,47 @@ def test_source_permissions_preserve_deny_and_source_read_gate():
     assert not access.can_view(perms, "manual_blogger_work")
     denied = EffectivePermissions(str(uuid4()), frozenset({"*"}), frozenset({"blogger:write"}))
     assert not access.can_write(denied, "manual_blogger_work")
+
+
+def hit_rows(likes):
+    return [
+        BloggerWorkSnapshot(
+            id=uuid4(), published_on=date(2026, 10, 1) + timedelta(days=index), like_count=count
+        )
+        for index, count in enumerate(likes)
+    ]
+
+
+@pytest.mark.parametrize("likes", [[], [99] * 9, [99] * 9 + [None] * 21])
+def test_hit_requires_ten_valid_likes_without_filling_missing(likes):
+    summary, hits = summarize_work_hits(hit_rows(likes))
+    assert summary.sample_count == len(likes)
+    assert summary.valid_like_count == sum(value is not None for value in likes)
+    assert summary.status == "insufficient_samples"
+    assert summary.median_likes is None and summary.threshold is None
+    assert not hits
+
+
+def test_hit_counts_zero_and_even_median_with_exact_threshold():
+    rows = hit_rows([0, 0, 1, 1, 2, 3, 3, 4, 5, 8, None])
+    summary, hits = summarize_work_hits(rows)
+    assert summary.sample_count == 11 and summary.valid_like_count == 10
+    assert summary.published_from == date(2026, 10, 1)
+    assert summary.published_to == date(2026, 10, 11)
+    assert summary.status == "ready"
+    assert summary.median_likes == 2.5 and summary.threshold == 7.5
+    assert hits == {rows[9].id}
+
+    rows = hit_rows([10] * 8 + [29, 30])
+    summary, hits = summarize_work_hits(rows)
+    assert summary.threshold == 30
+    assert hits == {rows[-1].id}  # 等于阈值计入，差 1 不计入。
+
+
+@pytest.mark.parametrize("likes", [[0] * 10, [0] * 9 + [1000]])
+def test_zero_median_shows_actual_zero_but_does_not_label_hits(likes):
+    summary, hits = summarize_work_hits(hit_rows(likes))
+    assert summary.valid_like_count == 10
+    assert summary.median_likes == 0 and summary.threshold == 0
+    assert summary.status == "zero_median"
+    assert not hits

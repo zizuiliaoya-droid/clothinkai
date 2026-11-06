@@ -2,7 +2,7 @@
 
 import hashlib
 from datetime import date, datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID
 
@@ -100,6 +100,17 @@ class WorkItem(WorkInput):
     collect_like_ratio: float | None = None
     share_like_ratio: float | None = None
     comment_like_ratio: float | None = None
+    is_hit: bool = False
+
+
+class WorkHitSummary(BaseModel):
+    sample_count: int
+    valid_like_count: int
+    published_from: date | None
+    published_to: date | None
+    median_likes: float | None = None
+    threshold: float | None = None
+    status: Literal["ready", "insufficient_samples", "zero_median"]
 
 
 class WorkPage(BaseModel):
@@ -109,6 +120,7 @@ class WorkPage(BaseModel):
     page_size: int
     can_write: bool = False
     can_read_source: bool = False
+    hit_summary: WorkHitSummary | None = None
 
 
 class WorkSaveResult(BaseModel):

@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Annotated
 from uuid import UUID
@@ -191,6 +191,7 @@ class BloggerResponse(BaseModel):
     is_deleted: bool
     # U11：受众画像（U13 写入）+ 读时衍生点赞/阅读比
     audience_profile: dict | None = None
+    audience_updated_on: date | None = None
     read_like_ratio: Decimal | None = None
     # 灰豚爬虫指标（对齐 final.xlsx 博主库 41 列）
     crawler_metrics: dict = Field(default_factory=dict)

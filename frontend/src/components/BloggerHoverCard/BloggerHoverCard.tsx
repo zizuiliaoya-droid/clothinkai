@@ -20,6 +20,7 @@ import { DisplayNameCell } from "@/components/DisplayNameCell/DisplayNameCell";
 import { NegotiationRejections } from "./NegotiationRejections";
 import type { Blogger } from "@/features/blogger/types";
 import { BloggerLegacyMetrics } from "@/features/blogger/BloggerLegacyMetrics";
+import { BloggerAudience } from "./BloggerAudience";
 import { BloggerWorks } from "./BloggerWorks";
 
 const modeColor: Record<string, string> = {
@@ -165,6 +166,7 @@ export function BloggerHoverCard({
     <div style={{ width: "min(560px, calc(100vw - 48px))" }}>
       {blogger && <BloggerLegacyMetrics blogger={blogger} />}
       <BloggerWorks bloggerId={bloggerId} enabled={open} />
+      <BloggerAudience bloggerId={bloggerId} enabled={open} />
       <Divider style={{ margin: "12px 0" }} />
       <Typography.Text strong>历史合作款式</Typography.Text>
       {data && (

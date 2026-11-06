@@ -23,7 +23,7 @@ describe("空白导入模板", () => {
   beforeEach(() => { vi.clearAllMocks(); });
   afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
-  it.each(["manual_blogger", "manual_promotion", "manual_blogger_work"])("%s 可下载对应来源的文件", async (source) => {
+  it.each(["manual_blogger", "manual_promotion", "manual_blogger_work", "manual_blogger_audience"])("%s 可下载对应来源的文件", async (source) => {
     vi.mocked(downloadImportTemplate).mockResolvedValue(new Blob(["xlsx"]));
     const create = vi.fn().mockReturnValue("blob:template");
     const revoke = vi.fn();
