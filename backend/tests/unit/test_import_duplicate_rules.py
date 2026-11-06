@@ -35,6 +35,7 @@ _FIXED_EXPECTED: dict[str, DuplicatePolicy] = {
     "huitun": DuplicatePolicy.OVERWRITE,
 }
 _CONFIGURABLE = ("manual_style_sku", "manual_blogger", "huitun_douyin")  # 8b §6.7 加灰豚抖音
+_FIXED_EXPECTED["manual_blogger_work"] = DuplicatePolicy.SNAPSHOT
 
 
 @pytest.fixture

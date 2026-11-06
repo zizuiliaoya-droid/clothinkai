@@ -40,11 +40,13 @@ from app.modules.blogger.schemas import (
     BloggerUpdate,
 )
 from app.modules.blogger.tag_config import SYSTEM_TAGS
+from app.modules.blogger.work_api import router as work_router
 from app.modules.product.dict_models import DictItem
 
 router = APIRouter(prefix="/api", tags=["blogger"])
 
 router.include_router(claim_router)
+router.include_router(work_router)
 
 
 # ---------------------------------------------------------------------------

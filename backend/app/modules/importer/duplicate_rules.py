@@ -26,6 +26,7 @@ class DuplicatePolicy(StrEnum):
     KEEP = "keep"  # 已存在不动、不比较，计「重复已跳过」
     REJECT = "reject"  # 已存在 → 该行失败
     APPEND = "append"  # 没有判重键，每行新建
+    SNAPSHOT = "snapshot"  # 同标识同采集时间：内容相同跳过，不同拒绝；不覆盖历史
 
 
 @dataclass(frozen=True)
@@ -45,6 +46,9 @@ SWITCHABLE_POLICIES: frozenset[DuplicatePolicy] = frozenset(
 
 
 DUPLICATE_RULES: dict[str, DuplicateRule] = {
+    "manual_blogger_work": DuplicateRule(
+        DuplicatePolicy.SNAPSHOT, key="平台账号 + 作品标识 + 采集时间", fill_empty=False
+    ),
     # 商品资料：款号；SKU 编码；商品见 §5.3。「商品名称」只在新建时写入、不比较
     "manual_style_sku": DuplicateRule(
         DuplicatePolicy.COMPARE, key="款号；SKU 编码；单品商品", configurable=True

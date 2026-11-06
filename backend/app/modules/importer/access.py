@@ -56,6 +56,9 @@ _DEFAULT = SourceAccess(
 )
 
 SOURCE_ACCESS: dict[str, SourceAccess] = {
+    "manual_blogger_work": replace(
+        _DEFAULT, write=("blogger", "write"), resolve=("blogger", "write")
+    ),
     "manual_style_sku": SourceAccess(
         write=(SCOPE_PRODUCT_IMPORT, "write"),
         mapping=(SCOPE_PRODUCT_IMPORT, "write"),
@@ -82,6 +85,7 @@ SOURCE_ACCESS: dict[str, SourceAccess] = {
 
 # 来源的中文名（导入记录页、权限说明用）；没列的来源显示来源编码本身
 SOURCE_LABELS: dict[str, str] = {
+    "manual_blogger_work": "博主作品",
     "manual_style_sku": "商品资料",
     "manual_blogger": "博主",
     "manual_promotion": "推广单",

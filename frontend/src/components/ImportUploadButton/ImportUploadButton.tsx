@@ -123,7 +123,7 @@ export function ImportUploadButton({
           {label}
         </Button>
       </Upload>
-      {["manual_blogger", "manual_promotion"].includes(source) && (
+      {["manual_blogger", "manual_promotion", "manual_blogger_work"].includes(source) && (
         <Button icon={<DownloadOutlined />} size={size} loading={downloading} onClick={() => void downloadTemplate()}>
           下载空模板
         </Button>
