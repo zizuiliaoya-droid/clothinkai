@@ -20,6 +20,10 @@ describe("bloggerPickerQueryKey", () => {
 });
 
 describe("bloggerPickerParams", () => {
+  it("新合作筛选交给后端且隔离缓存", () => {
+    expect(bloggerPickerParams("abc", "抖音", 20, true).for_new_cooperation).toBe(true);
+    expect(bloggerPickerQueryKey("抖音", true)).not.toEqual(bloggerPickerQueryKey("抖音"));
+  });
   it("带上平台与关键词", () => {
     expect(bloggerPickerParams("abc", "抖音", 20)).toEqual({
       page: 1,

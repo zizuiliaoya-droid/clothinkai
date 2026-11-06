@@ -56,6 +56,8 @@ export interface ReceiverSuggestion {
 }
 
 export interface Negotiation {
+  comment_state?: import("@/features/flow/engagement").CommentState | null;
+  follow_up?: import("@/features/flow/engagement").FollowUpState | null;
   id: string;
   /** 主线号（开抽屉、读时间线用）。 */
   line_id: string;
@@ -131,6 +133,8 @@ export interface NegotiationPage {
 }
 
 export interface NegotiationFilters {
+  only_unread_comments?: boolean;
+  needs_follow_up?: boolean;
   status?: NegotiationStatus;
   blogger_id?: string;
   style_id?: string;

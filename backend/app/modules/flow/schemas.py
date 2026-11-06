@@ -9,6 +9,22 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 
+class CommentState(BaseModel):
+    last_comment_at: datetime | None = None
+    last_read_comment_seq: int = 0
+    unread_comment_count: int = 0
+
+
+class FollowUpState(BaseModel):
+    last_human_follow_up_at: datetime
+    due_at: datetime
+    is_due: bool
+
+
+class CommentReadRequest(BaseModel):
+    seen_comment_seq: int = Field(gt=0)
+
+
 class TimelineActor(BaseModel):
     id: UUID
     display_name: str
@@ -67,6 +83,7 @@ class LegacyPoint(BaseModel):
 
 class LineTimelineResponse(BaseModel):
     line_id: UUID
+    comment_state: CommentState | None = None
     negotiation: TimelineNegotiation | None
     """看不到谈款段时为 null。"""
     promotion: TimelinePromotion | None

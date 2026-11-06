@@ -26,6 +26,7 @@ from datetime import date, datetime, time
 from uuid import UUID
 
 from fastapi.concurrency import run_in_threadpool
+from sqlalchemy import text as sql_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.attachment import Attachment, attachment_service, check_image_payload
@@ -34,6 +35,7 @@ from app.core.security.field_permissions import FieldPermissionContext, can_read
 from app.modules.auth.models import User
 from app.modules.auth.repository import PermissionRepository, RoleRepository
 from app.modules.flow.actor import load_flow_actor
+from app.modules.flow.engagement import LineEngagementService
 from app.modules.flow.exceptions import (
     LineCommentEmptyError,
     LineCommentImageInvalidError,
@@ -292,6 +294,11 @@ class LineEventService:
             if image is not None:
                 attachment = await self._store_image(image, user)
                 stored = (attachment.id, attachment.r2_key)
+            # 只串行同线留言的序号分配，保证阅读高水位不吞掉晚提交的低序号留言。
+            await self._session.execute(
+                sql_text("SELECT pg_advisory_xact_lock(hashtextextended(:comment_line, 0))"),
+                {"comment_line": f"comment:{user.tenant_id}:{line_id}"},
+            )
             event = await self._events.append(
                 tenant_id=user.tenant_id,
                 line_id=line_id,
@@ -303,6 +310,7 @@ class LineEventService:
                 negotiation_id=negotiation_id,
             )
             seq, created_at = event.seq, event.created_at
+            await LineEngagementService(self._session).notify_comment(event, user)
             await self._session.commit()
         except Exception:
             await self._session.rollback()
@@ -451,6 +459,7 @@ class LineEventService:
         )
         return LineTimelineResponse(
             line_id=line_id,
+            comment_state=await LineEngagementService(self._session).state(line_id, user, actor),
             negotiation=(
                 TimelineNegotiation(id=negotiation.id, status=negotiation.status)
                 if negotiation is not None and sees_negotiation

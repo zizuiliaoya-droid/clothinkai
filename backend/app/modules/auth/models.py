@@ -52,6 +52,9 @@ class Tenant(Base, TimestampMixin, SoftDeleteMixin):
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
     max_users: Mapped[int | None] = mapped_column(Integer, nullable=True)
     max_storage_mb: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    blogger_claims_enabled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -135,6 +138,7 @@ class User(TenantScopedModel, SoftDeleteMixin):
 
     __table_args__ = (
         UniqueConstraint("tenant_id", "username", name="uq_user_tenant_username"),
+        Index("uq_user_tenant_id", "tenant_id", "id", unique=True),
         Index("ix_user_locked", "tenant_id", "locked_at", postgresql_where=(locked_at.isnot(None))),
     )
 

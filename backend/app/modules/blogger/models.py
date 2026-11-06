@@ -33,6 +33,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import TenantScopedModel
+from app.modules.blogger.claim_models import BloggerClaim as BloggerClaim
 
 
 class Blogger(TenantScopedModel):
@@ -93,6 +94,7 @@ class Blogger(TenantScopedModel):
     is_deleted: Mapped[bool] = mapped_column(nullable=False, server_default=text("false"))
 
     __table_args__ = (
+        Index("uq_blogger_tenant_id", "tenant_id", "id", unique=True),
         # 部分唯一索引：（平台, 账号）唯一，软删后释放（迁移 059；按原样比较，不规范化大小写）
         Index(
             "uq_blogger_platform_account",

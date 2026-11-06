@@ -405,6 +405,16 @@ async def env(engine: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
             ),
             {"id": user_id, "tid": tenant_id, "u": f"imp_{suffix}"},
         )
+        # 导入行现在始终校验真实操作人的权限；夹具使用 seed 主管，且不自动认领。
+        (
+            await s.execute(
+                text(
+                    "INSERT INTO user_role(id,tenant_id,user_id,role_id) "
+                    "SELECT :id,:tid,:uid,id FROM role WHERE code='pr_manager' RETURNING id"
+                ),
+                {"id": uuid4(), "tid": tenant_id, "uid": user_id},
+            )
+        ).scalar_one()
         await s.commit()
     # 8b D2：_line 默认类目标签「美妆」，建进字典，否则用例会多出字典外标签的提示
     await _add_tags(Maker, tenant_id, "美妆")

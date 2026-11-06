@@ -42,11 +42,13 @@ export async function downloadImportTemplate(source: string): Promise<Blob> {
 export async function uploadImportFile(
   source: string,
   file: File,
-  mappingVersion?: number
+  mappingVersion?: number,
+  claimWorkWechatId?: string
 ): Promise<ImportUploadResponse> {
   const form = new FormData();
   form.append("source", source);
   form.append("file", file);
+  if (claimWorkWechatId) form.append("claim_work_wechat_id", claimWorkWechatId);
   if (mappingVersion != null) {
     form.append("mapping_version", String(mappingVersion));
   }

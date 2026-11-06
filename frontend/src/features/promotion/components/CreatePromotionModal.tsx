@@ -115,7 +115,7 @@ export function CreatePromotionModal({ open, onClose }: Props) {
           label="博主"
           rules={[{ required: true, message: "请选择博主" }]}
         >
-          <BloggerSelect />
+          <BloggerSelect forNewCooperation />
         </Form.Item>
         <Form.Item
           name="cooperation_mode"

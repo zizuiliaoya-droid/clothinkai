@@ -10,6 +10,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic_core import PydanticCustomError
 
+from app.modules.flow.schemas import CommentState, FollowUpState
 from app.modules.negotiation.enums import (
     NegotiationFinalReviewAction,
     NegotiationReviewAction,
@@ -190,6 +191,8 @@ class NegotiationResponse(BaseModel):
 
     id: UUID
     line_id: UUID
+    comment_state: CommentState | None = None
+    follow_up: FollowUpState | None = None
     """主线号（开抽屉、读时间线用）。"""
     copied_from_id: UUID | None = None
     """「复制为新谈款」的来源。"""
@@ -263,6 +266,8 @@ class NegotiationListResponse(BaseModel):
 
 
 class NegotiationListFilters(BaseModel):
+    only_unread_comments: bool = False
+    needs_follow_up: bool = False
     """列表筛选。"""
 
     model_config = ConfigDict(str_strip_whitespace=True)

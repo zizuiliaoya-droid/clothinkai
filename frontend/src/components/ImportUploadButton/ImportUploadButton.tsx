@@ -10,6 +10,8 @@ import { extractErrorMessage } from "@/services/apiClient";
 interface Props {
   /** 后端 importer adapter source（如 manual_style_sku / qianniu / wanxiangtai）。 */
   source: string;
+  claimWorkWechatId?: string;
+  requireWorkWechat?: boolean;
   /** 按钮文案，默认「导入 Excel」。 */
   label?: string;
   /** 上传成功后需要刷新的 react-query key（该模块列表）。 */
@@ -36,6 +38,8 @@ const DEFAULT_COLUMNS_NOTE = "上传文件首行需包含以下任一列名（�
  */
 export function ImportUploadButton({
   source,
+  claimWorkWechatId,
+  requireWorkWechat = false,
   label = "导入 Excel",
   invalidateKeys = [],
   templateColumns,
@@ -75,9 +79,15 @@ export function ImportUploadButton({
 
   const uploadProps: UploadProps = {
     beforeUpload: async (file) => {
+      if (requireWorkWechat && !claimWorkWechatId) {
+        message.warning("请先选择本批认领使用的工作微信");
+        return false;
+      }
       setUploading(true);
       try {
-        const resp = await uploadImportFile(source, file as File);
+        const resp = claimWorkWechatId
+          ? await uploadImportFile(source, file as File, undefined, claimWorkWechatId)
+          : await uploadImportFile(source, file as File);
         message.success(`上传成功，已创建导入批次，解析中…${successHint ?? ""}`);
         refresh();
         onUploaded?.(resp.batch_id);

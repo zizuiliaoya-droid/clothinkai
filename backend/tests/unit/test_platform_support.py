@@ -39,6 +39,7 @@ def signed(payload=None, *, secret=None):
     "method,path",
     [
         ("POST", "/api/promotions/"),
+        ("POST", "/api/lines/00000000-0000-0000-0000-000000000001/comments/read"),
         ("PUT", "/api/auth/password"),
         ("POST", "/api/auth/logout"),
         ("POST", "/api/auth/refresh"),

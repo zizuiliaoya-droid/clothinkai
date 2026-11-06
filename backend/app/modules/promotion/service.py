@@ -211,6 +211,10 @@ class PromotionService(
         blogger = await self._blogger_repo.get_by_id(payload.blogger_id)
         if blogger is None:
             raise InvalidBloggerReferenceError(f"博主 {payload.blogger_id} 不存在或已删除")
+        if not reviewed_negotiation_copy:
+            from app.modules.blogger.claim_access import ensure_new_cooperation_allowed
+
+            await ensure_new_cooperation_allowed(self._session, user, payload.blogger_id)
 
         # 2. 字段写权限（quote_amount 可写）；收件三项过写权限并规范化电话
         #    谈款定稿复制的是审过的条款，不按谈款 PR 查写权限（评审 L2）
@@ -721,12 +725,12 @@ class PromotionService(
     async def stage_counts(
         self, filters: ApiPromotionListFilters, user: User
     ) -> PromotionStageCounts:
-        await self._list_actor(filters, user)
+        actor = await self._list_actor(filters, user)
         thresholds = await UrgeService(self._session).get_urge_thresholds(user.tenant_id)
         settings = await PlatformMetricSettingService(self._session).get_settings(user.tenant_id)
         result = await self._repo.stage_counts(
             tenant_id=user.tenant_id,
-            filters=RepoPromotionListFilters(**filters.model_dump()),
+            filters=RepoPromotionListFilters(**filters.model_dump(), engagement_actor=actor),
             today=get_today(),
             urge_threshold_days=thresholds.urge_days,
             important_threshold_days=thresholds.important_days,
@@ -749,7 +753,7 @@ class PromotionService(
         today = get_today()
 
         actor = await self._list_actor(filters, user)
-        repo_filters = RepoPromotionListFilters(**filters.model_dump())
+        repo_filters = RepoPromotionListFilters(**filters.model_dump(), engagement_actor=actor)
 
         # 阈值读租户配置（后台可改），整页共用一次查询
         thresholds = await UrgeService(self._session).get_urge_thresholds(user.tenant_id)
@@ -829,6 +833,15 @@ class PromotionService(
             )
             for row in rows
         ]
+        from app.modules.flow.schemas import CommentState, FollowUpState
+
+        for response, row in zip(items, rows, strict=True):
+            response.comment_state = (
+                CommentState.model_validate(row.comment_state) if row.comment_state else None
+            )
+            response.follow_up = (
+                FollowUpState.model_validate(row.follow_up) if row.follow_up else None
+            )
         # 页级标记（收尾 L3）：「金额改动」页签与菜单只看它，与行上的报价值无关
         page_actions: dict[str, Any] = {}
         if await self.amount_log_readable(user):

@@ -4,6 +4,7 @@ import {
   Alert,
   Button,
   Card,
+  Checkbox,
   Dropdown,
   Grid,
   Input,
@@ -88,6 +89,7 @@ import { useFlowFeedback } from "@/features/promotion/components/useFlowFeedback
 import { ImportUploadButton } from "@/components/ImportUploadButton";
 import { GoodsImages } from "@/components/GoodsImages/GoodsImages";
 import { DisplayNameCell } from "@/components/DisplayNameCell/DisplayNameCell";
+import { EngagementTags } from "@/features/flow/EngagementTags";
 import { UrgeModal } from "@/components/UrgeModal/UrgeModal";
 import { PLATFORMS } from "@/features/common/platforms";
 import { isApiError } from "@/services/apiClient";
@@ -145,11 +147,22 @@ export function PromotionListPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const initialKeyword = searchParams.get("keyword")?.trim() || undefined;
   const [filters, setFilters] = useState<PromotionListFilters>({
+    needs_follow_up: searchParams.get("needs_follow_up") === "true" || undefined,
+    only_unread_comments: searchParams.get("only_unread_comments") === "true" || undefined,
     page: 1,
     page_size: 10,
     keyword: initialKeyword,
   });
   const dimensions = useReportFilters("promotion_list", PROMOTION_FILTER_SCHEMA, PROMOTION_FILTER_DEFAULTS);
+  const unreadUrl = searchParams.get("only_unread_comments") === "true";
+  const followUpUrl = searchParams.get("needs_follow_up") === "true";
+  useEffect(() => { setFilters((f) => ({ ...f, only_unread_comments: unreadUrl || undefined,
+    needs_follow_up: followUpUrl || undefined, page: 1 })); }, [unreadUrl, followUpUrl]);
+  function setEngagementFilter(key: "only_unread_comments" | "needs_follow_up", value: boolean) {
+    const next = new URLSearchParams(searchParams);
+    if (value) next.set(key, "true"); else next.delete(key);
+    setSearchParams(next, { replace: true });
+  }
   const queryFilters = { ...filters, ...promotionDimensionParams(dimensions.filters) };
   const changeDimensions = (patch: Partial<PromotionDimensions>) => {
     dimensions.setFilters(patch);
@@ -411,6 +424,7 @@ export function PromotionListPage() {
   // 列显隐与行菜单使用同一结果，也保留页级金额记录、只读收款码等查看入口。
   const hasOperations = data?.items.some((row) => flowMenuItems(row).length > 0);
   const columns: ColumnsType<Promotion> = [
+    { title: "跟进", key: "engagement", width: 150, render: (_, row) => <EngagementTags comment={row.comment_state} followUp={row.follow_up} /> },
     { title: "内部编码", dataIndex: "internal_code", width: 150, fixed: screens.md ? "left" : undefined },
     { title: "当前阶段", key: "stage", width: 230, fixed: screens.md ? "left" : undefined, render: (_, row) => <PromotionStageCell row={row} /> },
     {
@@ -702,6 +716,8 @@ export function PromotionListPage() {
       <PromotionQuickFilters filters={queryFilters} counts={countsQuery.data} error={countsQuery.isError} onChange={(patch) => setFilters((current) => ({ ...current, ...patch }))} />
       <PromotionDimensionFilters value={dimensions.filters} onChange={changeDimensions} />
       <Space className="promotion-filters" style={{ marginBottom: 16, width: "100%" }} wrap>
+        <Checkbox checked={!!filters.only_unread_comments} onChange={(e) => setEngagementFilter("only_unread_comments", e.target.checked)}>未读留言</Checkbox>
+        <Checkbox checked={!!filters.needs_follow_up} onChange={(e) => setEngagementFilter("needs_follow_up", e.target.checked)}>待跟进</Checkbox>
         <Select<PromotionStage> aria-label="当前阶段" placeholder="当前阶段" allowClear style={{ width: 190 }} value={filters.stage}
           options={PROMOTION_STAGES.map((stage) => ({ label: stage, value: stage }))} onChange={(stage) => setFilters((f) => ({ ...f, stage, page: 1 }))} />
         <Select<PromotionBadge> aria-label="角标" placeholder="角标" allowClear style={{ width: 190 }} value={filters.badge}

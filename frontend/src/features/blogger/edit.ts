@@ -10,9 +10,14 @@ import type { Blogger, BloggerCreate, BloggerUpdate } from "./types";
  */
 export function toBloggerUpdate(
   values: BloggerCreate,
-  record: Pick<Blogger, "quote_note">
+  record: Pick<Blogger, "quote_note"> & Partial<Pick<Blogger, "wechat" | "phone" | "contact_permissions">>
 ): BloggerUpdate {
   const { quote_note: quoteNote, ...rest } = values;
+  delete rest.claim_work_wechat_id;
+  for (const field of ["wechat", "phone"] as const) {
+    if (record.contact_permissions?.[field]?.write === false ||
+      (field in record && (rest[field] ?? "").trim() === (record[field] ?? "").trim())) delete rest[field];
+  }
   if (quoteNote === undefined) return rest;
   // 后端会去首尾空白、空串当 null，比较时同样处理
   const same = (quoteNote ?? "").trim() === (record.quote_note ?? "").trim();

@@ -40,6 +40,9 @@ class BloggerListFilters:
     is_active: bool | None = True
     include_inactive: bool = False
     recent_growth_only: bool = False
+    claimed_by_me: bool = False
+    for_new_cooperation: bool = False
+    work_wechat_id: UUID | None = None
 
 
 class BloggerRepository:
@@ -119,6 +122,8 @@ class BloggerRepository:
         page: int = 1,
         page_size: int = 20,
         include_wechat_in_keyword: bool = False,
+        claim_pr_id: UUID | None = None,
+        restrict_to_claims: bool = False,
     ) -> tuple[Sequence[Blogger], int]:
         """列表查询，含防侧信道：
 
@@ -128,6 +133,28 @@ class BloggerRepository:
         由 service 层根据 ``has_contact_visibility(role_codes)`` 决定该参数。
         """
         stmt = select(Blogger).where(Blogger.is_deleted.is_(False))
+        from app.modules.blogger.claim_models import BloggerClaim
+
+        claimed = (
+            select(BloggerClaim.id)
+            .where(
+                BloggerClaim.tenant_id == Blogger.tenant_id,
+                BloggerClaim.blogger_id == Blogger.id,
+                BloggerClaim.pr_id == claim_pr_id,
+            )
+            .exists()
+        )
+        if filters.claimed_by_me or (filters.for_new_cooperation and restrict_to_claims):
+            stmt = stmt.where(claimed)
+        if filters.work_wechat_id:
+            work_claim = select(BloggerClaim.id).where(
+                BloggerClaim.tenant_id == Blogger.tenant_id,
+                BloggerClaim.blogger_id == Blogger.id,
+                BloggerClaim.work_wechat_id == filters.work_wechat_id,
+            )
+            if filters.claimed_by_me:
+                work_claim = work_claim.where(BloggerClaim.pr_id == claim_pr_id)
+            stmt = stmt.where(work_claim.exists())
 
         if not filters.include_inactive:
             stmt = stmt.where(Blogger.is_active.is_(True))
@@ -135,13 +162,16 @@ class BloggerRepository:
         # BR-U03-50: 关键字搜索（命中 GIN trgm + 防侧信道）
         if filters.keyword:
             pattern = f"%{filters.keyword}%"
-            clauses = [
+            clauses: builtins.list[sa.ColumnElement[bool]] = [
                 Blogger.nickname.ilike(pattern),
                 Blogger.xiaohongshu_id.ilike(pattern),
                 Blogger.web_id.ilike(pattern),
             ]
             if include_wechat_in_keyword:
-                clauses.append(Blogger.wechat.ilike(pattern))
+                contact_match = Blogger.wechat.ilike(pattern)
+                clauses.append(
+                    sa.and_(contact_match, claimed) if restrict_to_claims else contact_match
+                )
             stmt = stmt.where(or_(*clauses))
 
         # BR-U03-51: 范围筛选

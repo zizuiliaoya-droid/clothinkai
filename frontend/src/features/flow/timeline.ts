@@ -6,6 +6,7 @@ import { formatMoney } from "@/utils/money";
 // payload 已由后端按 PAYLOAD_FIELD_RULES 裁剪（看不到的键不会来）；这里再做一道显示白名单：
 // 不认识的键、存 id 的键都不显示原值（规-1：页面不出现商品编码 / SKU 编码，id 也没有可读意义）。
 import type { UiState } from "./keys";
+import type { CommentState } from "./engagement";
 
 export interface TimelineActor {
   id: string;
@@ -48,6 +49,7 @@ export interface LegacyPoint {
 
 export interface LineTimelineData {
   line_id: string;
+  comment_state?: CommentState | null;
   negotiation: { id: string; status: string } | null;
   promotion: { id: string; internal_code: string; stage: string } | null;
   next_step: { text: string; who: string } | null;

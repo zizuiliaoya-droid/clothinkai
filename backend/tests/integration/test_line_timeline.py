@@ -322,6 +322,7 @@ class TestLayerOne:
         assert body["line_id"] == str(line.line_id)
         assert set(body) == {
             "line_id",
+            "comment_state",
             "negotiation",
             "promotion",
             "next_step",
@@ -330,6 +331,14 @@ class TestLayerOne:
             "legacy",
             "truncated",
             "ui",
+        }
+        # 夹具的两条留言均由当前 PR 发出；首次 GET 不推进阅读位置，也不计本人未读。
+        assert body["comment_state"] == {
+            "last_comment_at": max(
+                e["created_at"] for e in body["events"] if e["event_type"] == "line.comment"
+            ),
+            "last_read_comment_seq": 0,
+            "unread_comment_count": 0,
         }
 
     async def test_finance_enters_through_settlement(
@@ -756,7 +765,8 @@ class TestLimitAndQueries:
         fifty = await count()
         assert (two[2], fifty[2]) == (2, 50)
         assert two[0] == fifty[0], (two, fifty)
-        assert two[1] == fifty[1] == 1
+        # 时间线事件一次 + 本人未读/最后留言固定聚合一次，均不随条数增长。
+        assert two[1] == fifty[1] == 2
 
 
 async def _db_now(session: AsyncSession) -> datetime:

@@ -11,10 +11,23 @@ from uuid import UUID
 from fastapi import APIRouter, File, Form, UploadFile, status
 
 from app.modules.auth.deps import CurrentActiveUser, SessionDep
-from app.modules.flow.schemas import LineTimelineResponse, TimelineEvent
+from app.modules.flow.engagement import LineEngagementService
+from app.modules.flow.schemas import (
+    CommentReadRequest,
+    CommentState,
+    LineTimelineResponse,
+    TimelineEvent,
+)
 from app.modules.flow.timeline import COMMENT_IMAGE_MAX_BYTES, LineEventService
 
 router = APIRouter(prefix="/api/lines", tags=["flow"])
+
+
+@router.post("/{line_id}/comments/read", response_model=CommentState)
+async def mark_comments_read(
+    line_id: UUID, payload: CommentReadRequest, session: SessionDep, user: CurrentActiveUser
+) -> CommentState:
+    return await LineEngagementService(session).mark_read(line_id, user, payload.seen_comment_seq)
 
 
 @router.get("/{line_id}/events", response_model=LineTimelineResponse)

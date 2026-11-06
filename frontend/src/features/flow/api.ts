@@ -1,6 +1,11 @@
 // 主线时间线与留言接口（流程线设计 7.6）。
 import { apiClient } from "@/services/apiClient";
 import type { LineTimelineData, TimelineEvent } from "./timeline";
+import type { CommentState } from "./engagement";
+
+export async function markLineCommentsRead(lineId: string, seenCommentSeq: number): Promise<CommentState> {
+  return (await apiClient.post<CommentState>(`/api/lines/${lineId}/comments/read`, { seen_comment_seq: seenCommentSeq })).data;
+}
 
 /** react-query 键：抽屉里做了任何动作后 invalidate 它重新拉（6.6）。 */
 export function lineEventsKey(lineId: string | null | undefined) {

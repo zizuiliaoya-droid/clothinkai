@@ -77,6 +77,8 @@ async def list_negotiations(
         str | None, Query(max_length=64, description="博主昵称 / 款号 / 款名")
     ] = None,
     overdue_only: Annotated[bool, Query(description="只看主管待审超 36 小时的")] = False,
+    only_unread_comments: bool = False,
+    needs_follow_up: bool = False,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
 ) -> NegotiationListResponse:
@@ -91,6 +93,8 @@ async def list_negotiations(
             cooperation_mode=cooperation_mode,
             keyword=keyword,
             overdue_only=overdue_only,
+            only_unread_comments=only_unread_comments,
+            needs_follow_up=needs_follow_up,
         ),
         page=page,
         page_size=page_size,

@@ -7,7 +7,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Path, Query, status
 
-from app.modules.auth.deps import CurrentActiveUser, require_permission
+from app.modules.auth.deps import CurrentActiveUser, SessionDep, require_permission
 from app.modules.wecom.deps import NotificationServiceDep
 from app.modules.wecom.schemas import NotificationResponse, UnreadCountResponse
 
@@ -50,11 +50,13 @@ async def unread_count(
 async def mark_read(
     user: CurrentActiveUser,
     service: NotificationServiceDep,
+    session: SessionDep,
     notification_id: Annotated[UUID, Path()],
 ) -> dict[str, bool]:
     ok = await service.mark_read(notification_id=notification_id, user_id=user.id)
     if not ok:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "通知不存在")
+    await session.commit()
     return {"ok": True}
 
 

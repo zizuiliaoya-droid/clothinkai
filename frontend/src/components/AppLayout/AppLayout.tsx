@@ -25,6 +25,7 @@ import { useReportCapabilities } from "@/features/report/useReportCapabilities";
 import { ModuleNavigation } from "./ModuleNavigation";
 import { useSupportStore } from "@/stores/supportStore";
 import { SUPPORT_PAGES } from "@/features/auth/sessionMode";
+import { NotificationBell } from "./NotificationBell";
 
 const { Header, Sider, Content } = Layout;
 
@@ -310,6 +311,8 @@ export function AppLayout() {
             borderBottom: "1px solid #f0f0f0",
           }}
         >
+          <Space size={20}>
+          {!support && <NotificationBell />}
           {support ? <Typography.Text>平台排查会话 · 不处理客户业务</Typography.Text> : <Dropdown menu={{ items: userMenu }} placement="bottomRight">
             <Space style={{ cursor: "pointer" }}>
               <Avatar icon={<UserOutlined />} />
@@ -318,6 +321,7 @@ export function AppLayout() {
               </Typography.Text>
             </Space>
           </Dropdown>}
+          </Space>
         </Header>
         {support ? <Alert
           type="warning" showIcon

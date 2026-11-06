@@ -27,6 +27,7 @@ class DictItem(TenantScopedModel):
     is_active: Mapped[bool] = mapped_column(nullable=False, server_default=text("true"))
 
     __table_args__ = (
+        Index("uq_dict_item_tenant_id", "tenant_id", "id", unique=True),
         Index(
             "uq_dict_item",
             "tenant_id",
@@ -40,7 +41,7 @@ class DictItem(TenantScopedModel):
 
 # 8b-3：存在 dict_item 里、但由别的模块自己的接口和权限维护的类型。商品字典接口
 # （product/dict_api.py，挂 product:read/write）看不到、加不了、删不掉它们
-RESERVED_DICT_TYPES: frozenset[str] = frozenset({"blogger_tag"})
+RESERVED_DICT_TYPES: frozenset[str] = frozenset({"blogger_tag", "blogger_work_wechat"})
 
 
 __all__ = ["RESERVED_DICT_TYPES", "DictItem"]

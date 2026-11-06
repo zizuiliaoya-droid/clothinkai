@@ -537,6 +537,9 @@ class NegotiationService:
         actor = await self._flow_actor(user)
         if actor.is_star:
             raise FlowActionForbiddenError(rule="star_create", reason=STAR_CREATE_REASON)
+        from app.modules.blogger.claim_access import ensure_new_cooperation_allowed
+
+        await ensure_new_cooperation_allowed(self._session, user, payload.blogger_id)
         if not await self._repo.style_exists(payload.style_id):
             raise InvalidNegotiationStyleError(
                 "款式不存在或已删除", details={"style_id": str(payload.style_id)}
@@ -622,6 +625,10 @@ class NegotiationService:
         blogger_id = (
             payload.blogger_id if payload.blogger_id is not None else negotiation.blogger_id
         )
+        if blogger_id != negotiation.blogger_id:
+            from app.modules.blogger.claim_access import ensure_new_cooperation_allowed
+
+            await ensure_new_cooperation_allowed(self._session, user, blogger_id)
         style_id = payload.style_id if payload.style_id is not None else negotiation.style_id
         if not await self._repo.style_exists(style_id):
             raise InvalidNegotiationStyleError(
@@ -1141,6 +1148,9 @@ class NegotiationService:
         """
         actor, source, views, _members = await self._load_for_action(negotiation_id, user)
         require(actor, build_negotiation_doc(source, items_complete=False), "copy", gates=False)
+        from app.modules.blogger.claim_access import ensure_new_cooperation_allowed
+
+        await ensure_new_cooperation_allowed(self._session, user, source.blogger_id)
         tenant_id, source_line = source.tenant_id, source.line_id
         negotiation = Negotiation(
             tenant_id=tenant_id,
@@ -1333,6 +1343,9 @@ class NegotiationService:
             cooperation_mode=(filters.cooperation_mode.value if filters.cooperation_mode else None),
             keyword=filters.keyword,
             overdue_only=filters.overdue_only,
+            only_unread_comments=filters.only_unread_comments,
+            needs_follow_up=filters.needs_follow_up,
+            engagement_actor=actor,
             page=page,
             page_size=page_size,
         )
@@ -1356,6 +1369,17 @@ class NegotiationService:
             )
             for r in rows
         ]
+        from app.modules.flow.schemas import CommentState, FollowUpState
+
+        for response, row in zip(responses, rows, strict=True):
+            response.comment_state = (
+                CommentState.model_validate(row["comment_state"])
+                if row.get("comment_state")
+                else None
+            )
+            response.follow_up = (
+                FollowUpState.model_validate(row["follow_up"]) if row.get("follow_up") else None
+            )
         return NegotiationListResponse(
             items=responses,
             total=total,

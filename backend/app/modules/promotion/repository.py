@@ -28,6 +28,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.metrics import promotion_sequence_lock_duration_seconds
 from app.modules.auth.models import User
+from app.modules.flow.engagement import (
+    COMMENT_STATE_SQL,
+    engagement_joins,
+    engagement_params,
+    follow_up_state_sql,
+)
+from app.modules.flow.matrix import FlowActor
 from app.modules.metric_config.settings import PlatformMetricSettings, hit_condition_sql
 from app.modules.negotiation.models import Negotiation
 from app.modules.product.goods_models import GoodsMain, GoodsStyleItem
@@ -74,6 +81,9 @@ class PromotionListFilters:
     """列表查询筛选条件（service 层从 PromotionListFilters Pydantic 转换而来）。"""
 
     stage: str | None = None
+    only_unread_comments: bool = False
+    needs_follow_up: bool = False
+    engagement_actor: FlowActor | None = None
     badge: str | None = None
     completed: bool | None = None
     receiver_name: str | None = None
@@ -118,6 +128,8 @@ class PromotionListRow:
     goods_short_name: str | None = None
     # 流程线 3.8 当前阶段（stage_calculator.stage_sql_expr）；PR-10 之前不进响应
     stage: str | None = None
+    comment_state: dict[str, Any] | None = None
+    follow_up: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -968,6 +980,10 @@ class PromotionRepository:
         base_sql = f"""
         WITH base AS (
             SELECT p.*,
+                   {COMMENT_STATE_SQL} AS comment_state,
+                   activity.last_comment_at AS last_comment_at,
+                   activity.unread_comment_count AS unread_comment_count,
+                   {follow_up_state_sql('p', 'promotion')} AS follow_up,
                    (SELECT f.status FROM return_freight_payment f
                     WHERE f.promotion_id=p.id AND f.tenant_id=p.tenant_id) AS freight_status,
                    {goods_columns}
@@ -988,6 +1004,7 @@ class PromotionRepository:
                          AND p2.id <> p.id
                    ) AS dual_platform_calc
             FROM promotion p
+            {engagement_joins('p')}
             LEFT JOIN style s
               ON s.id = p.style_id AND s.tenant_id = p.tenant_id
             LEFT JOIN goods_main g
@@ -1007,11 +1024,17 @@ class PromotionRepository:
             "today": today,
             "urge_days": urge_threshold_days,
             "important_days": important_threshold_days,
+            **engagement_params(filters.engagement_actor),
         }
 
         # ------ 动态 WHERE ------
         clauses: list[str] = []
-        if filters.is_active is not None:
+        if filters.only_unread_comments:
+            clauses.append("unread_comment_count > 0")
+        if filters.needs_follow_up:
+            clauses.append("CAST(follow_up->>'is_due' AS boolean)")
+        # 待跟进包含停用但仍有真实结款/运费/召回义务的单，不能被默认启用筛选吞掉。
+        if filters.is_active is not None and not (filters.needs_follow_up and filters.is_active):
             clauses.append("is_active = :is_active")
             params["is_active"] = filters.is_active
         if filters.publish_status:
@@ -1148,7 +1171,7 @@ class PromotionRepository:
         # ------ 2. data ------
         data_sql = (
             filtered_sql
-            + " ORDER BY cooperation_date DESC, created_at DESC, id DESC "
+            + " ORDER BY COALESCE(last_comment_at, created_at) DESC, id DESC "
             + " LIMIT :limit OFFSET :offset"
         )
         params["limit"] = page_size
@@ -1176,6 +1199,8 @@ class PromotionRepository:
                     goods_title=row["goods_title"],
                     goods_short_name=row["goods_short_name"],
                     stage=row["stage"],
+                    comment_state=row["comment_state"],
+                    follow_up=row["follow_up"],
                 )
             )
         return rows, total

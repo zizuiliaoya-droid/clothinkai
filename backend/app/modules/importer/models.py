@@ -59,6 +59,9 @@ class ImportBatch(TenantScopedModel):
     )
 
     mapping_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    claim_work_wechat_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("dict_item.id", ondelete="RESTRICT"), nullable=True
+    )
 
     status: Mapped[str] = mapped_column(
         String(16), nullable=False, server_default=text("'processing'")

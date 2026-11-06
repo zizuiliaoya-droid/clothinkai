@@ -207,6 +207,24 @@ class PromotionImportAdapter:
             if not candidates:
                 raise RowValidationError(f"博主 {account} 不存在")
             blogger = candidates[0]
+        from sqlalchemy import select
+
+        from app.modules.auth.models import Tenant
+        from app.modules.blogger.claim_access import (
+            ensure_new_cooperation_allowed,
+            load_blogger_access,
+            load_claim_actor,
+        )
+        from app.modules.importer import access as import_access
+
+        # 历史批次可能没有操作者；准备期保留历史导入，启用后由真实操作人判权。
+        if await session.scalar(
+            select(Tenant.blogger_claims_enabled_at).where(Tenant.id == tenant_id)
+        ):
+            actor = await load_claim_actor(session, tenant_id, actor_id)
+            await ensure_new_cooperation_allowed(session, actor, blogger.id)
+            actor_access = await load_blogger_access(session, actor, [blogger.id])
+            import_access.require_write(actor_access.permissions, self.source)
         sku_id: UUID | None = None
         if parsed.get("sku_code"):
             sku = await SkuRepository(session).get_by_code(parsed["sku_code"])

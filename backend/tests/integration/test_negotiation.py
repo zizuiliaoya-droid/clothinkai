@@ -242,24 +242,32 @@ class TestSubmitAndReview:
 
 @pytest.mark.usefixtures("tenant_ctx")
 class TestListAndHistory:
-    async def test_list_puts_pending_first(
+    async def test_list_without_comments_puts_new_documents_first(
         self, session: AsyncSession, flow_users: Any, product_factory: Any, blogger_factory: Any
     ) -> None:
-        """主管待审排最前 —— 主管打开页面就该先看到要处理的。"""
+        """1105最新沟通排序：无留言时按创建时间，状态不再隐式置顶。"""
         pr, _, style, sku, blogger = await _setup(
             flow_users, product_factory, blogger_factory, code="NG_SORT"
         )
         other_style = await product_factory.style(style_code="NG_SORT2")
         other_sku = await product_factory.sku(other_style)
         svc = NegotiationService(session)
-        await _create(svc, pr, style, sku, blogger)
+        draft = await _create(svc, pr, style, sku, blogger)
         to_submit = await _create(svc, pr, other_style, other_sku, blogger)
         await svc.submit(to_submit.id, pr)
+        await session.execute(
+            sa_text("UPDATE negotiation SET created_at=:at WHERE id=:id"),
+            {"id": draft.id, "at": datetime(2026, 11, 5, tzinfo=UTC)},
+        )
+        await session.execute(
+            sa_text("UPDATE negotiation SET created_at=:at WHERE id=:id"),
+            {"id": to_submit.id, "at": datetime(2026, 11, 4, tzinfo=UTC)},
+        )
 
         page = await svc.list_negotiations(user=pr, filters=NegotiationListFilters())
         assert page.total == 2
-        assert page.items[0].status == "主管待审"
-        assert page.items[1].status == "草稿"
+        assert page.items[0].status == "草稿"
+        assert page.items[1].status == "主管待审"
 
         counts = await svc.status_counts(pr)
         assert counts["草稿"] == 1

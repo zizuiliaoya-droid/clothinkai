@@ -3,11 +3,13 @@ import { formatMoney } from "@/utils/money";
 import { useState } from "react";
 import {
   Button,
+  Alert,
   Card,
   Form,
   Input,
   InputNumber,
   Modal,
+  Popconfirm,
   Select,
   Space,
   Table,
@@ -39,6 +41,9 @@ import { extractErrorMessage } from "@/services/apiClient";
 import { ImportUploadButton } from "@/components/ImportUploadButton";
 import { BloggerHoverCard } from "@/components/BloggerHoverCard/BloggerHoverCard";
 import { PLATFORMS } from "@/features/common/platforms";
+import { BloggerClaimsModal } from "@/features/blogger/BloggerClaimsModal";
+import { WorkWechatModal } from "@/features/blogger/WorkWechatModal";
+import { enableClaims, getClaimSettings, listWorkWechats } from "@/features/blogger/claims";
 
 const TYPES = ["素人", "KOC", "KOL", "明星"];
 const GENDER_TARGETS = ["女性", "男性", "中性"];
@@ -67,10 +72,24 @@ export function BloggerListPage() {
   const [editing, setEditing] = useState<Blogger | null>(null);
   const [form] = Form.useForm<BloggerCreate>();
   const [tagDictOpen, setTagDictOpen] = useState(false);
+  const [workOpen, setWorkOpen] = useState(false);
+  const [claimTargets, setClaimTargets] = useState<Blogger[]>([]);
+  const [selected, setSelected] = useState<Blogger[]>([]);
+  const [importWorkId, setImportWorkId] = useState<string>();
   // 本页刚上传的博主导入批次，「标签字典 → 导入缺的标签」按它定位（r1 N14 改法）
   const [lastBloggerBatchId, setLastBloggerBatchId] = useState<string>();
   const user = useAuthStore((s) => s.user);
   const canEditQuote = !readOnly && Boolean(user?.roles.some((r) => QUOTE_WRITE_ROLES.includes(r)));
+  const autoClaimCreate = !readOnly && Boolean(user?.roles.includes("pr"));
+  const autoClaimImport = autoClaimCreate && !user?.roles.some(r => ["admin", "pr_manager"].includes(r));
+  const claimSettings = useQuery({queryKey: ["blogger-claim-settings"], queryFn: getClaimSettings});
+  const claimsEnabled = Boolean(claimSettings.data?.enabled_at);
+  const workWechats = useQuery({queryKey: ["blogger-work-wechats"], queryFn: listWorkWechats});
+  const workOptions = (workWechats.data?.items ?? []).filter(w => w.is_active).map(w => ({value: w.id, label: w.value}));
+  const enable = useMutation({mutationFn: enableClaims, onSuccess: () => {
+    for (const key of ["blogger-claim-settings", "bloggers"]) void qc.invalidateQueries({queryKey: [key]});
+    message.success("认领规则已启用");
+  }, onError: e => message.error(extractErrorMessage(e))});
 
   const { data, isLoading } = useQuery({
     queryKey: ["bloggers", filters],
@@ -144,6 +163,7 @@ export function BloggerListPage() {
     // 8b-1：列名历史原因叫 xiaohongshu_id，语义是平台账号（抖音 = 灰豚博主ID）
     { title: "账号", dataIndex: "xiaohongshu_id", width: 130 },
     { title: "平台", dataIndex: "platform", width: 80 },
+    { title: "认领", key: "claims", width: 135, render: (_, row) => <Button type="link" size="small" onClick={() => setClaimTargets([row])}>{row.claimed_by_me ? "我已认领" : "查看 / 认领"}（{row.claim_count ?? 0}）</Button> },
     {
       title: "主页",
       dataIndex: "homepage_url",
@@ -260,6 +280,8 @@ export function BloggerListPage() {
         <Space wrap>
           <ImportUploadButton
             source="manual_blogger"
+            claimWorkWechatId={importWorkId}
+            requireWorkWechat={autoClaimImport && claimsEnabled}
             label="导入博主库"
             invalidateKeys={[["bloggers"], ["blogger-tags"]]}
             templateColumns={MANUAL_BLOGGER_COLUMNS}
@@ -272,6 +294,8 @@ export function BloggerListPage() {
           />
           <ImportUploadButton
             source="huitun_douyin"
+            claimWorkWechatId={importWorkId}
+            requireWorkWechat={autoClaimImport && claimsEnabled}
             label="导入灰豚抖音博主"
             invalidateKeys={[["bloggers"]]}
             templateColumns={DOUYIN_IMPORT_COLUMNS}
@@ -280,13 +304,22 @@ export function BloggerListPage() {
           <Button icon={<TagsOutlined />} onClick={() => setTagDictOpen(true)}>
             标签字典
           </Button>
+          <Button onClick={() => setWorkOpen(true)}>工作微信</Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
             新建博主
           </Button>
         </Space>
       }
     >
+      {claimSettings.data && <Alert style={{marginBottom: 12}} showIcon type={claimSettings.data.enabled_at ? "success" : "info"}
+        message={claimSettings.data.enabled_at ? "认领规则已启用：联系方式与新合作范围按认领生效" : "准备分配中：当前仍沿用原权限，分配后由主管启用认领规则"}
+        description={`未分配博主 ${claimSettings.data.unclaimed_count} 位；工作微信待补 ${claimSettings.data.pending_work_wechat_count} 条。既有业务单继续由原负责人处理。`}
+        action={!readOnly && claimSettings.data.can_enable && !claimSettings.data.enabled_at ? <Popconfirm title="确认已完成必要分配？启用后未认领 PR 不能查看/修改联系方式或发起新合作。" onConfirm={() => enable.mutate()}><Button loading={enable.isPending}>启用认领规则</Button></Popconfirm> : undefined} />}
+      {autoClaimImport && <Space style={{marginBottom: 12}} wrap><Typography.Text>本批导入认领使用：</Typography.Text><Select aria-label="导入工作微信" placeholder={claimsEnabled ? "先选工作微信，再导入" : "可选，准备期允许留空待补"} value={importWorkId} onChange={setImportWorkId} options={workOptions} style={{width: 260}} /><Typography.Text type="secondary">{claimsEnabled ? "资料与认领结果在导入记录中分别提示" : "准备期可先导入；自动认领的工作微信留待补充"}</Typography.Text></Space>}
       <Space style={{ marginBottom: 16 }} wrap>
+        <Select aria-label="认领筛选" value={filters.claimed_by_me ? "mine" : "all"} style={{width: 130}} options={[{label: "全部博主", value: "all"}, {label: "我认领的", value: "mine"}]} onChange={v => setFilters(f => ({...f, claimed_by_me: v === "mine" || undefined, page: 1}))} />
+        <Select aria-label="工作微信筛选" placeholder="认领工作微信" allowClear style={{width: 180}} value={filters.work_wechat_id} options={(workWechats.data?.items ?? []).map(w => ({value: w.id, label: w.value + (w.is_active ? "" : "（已停用）")}))} onChange={v => setFilters(f => ({...f, work_wechat_id: v, page: 1}))} />
+        {!readOnly && <Button disabled={!selected.length} onClick={() => setClaimTargets(selected)}>批量认领 / 分配（{selected.length}）</Button>}
         <Input.Search
           placeholder="搜索昵称 / 账号 / 网页ID"
           aria-label="搜索博主"
@@ -348,6 +381,7 @@ export function BloggerListPage() {
 
       <Table
         rowKey="id"
+        rowSelection={readOnly ? undefined : {selectedRowKeys: selected.map(r => r.id), onChange: (_, rows) => setSelected(rows)}}
         loading={isLoading}
         columns={readOnly ? columns.filter((column) => column.key !== "actions") : columns}
         dataSource={data?.items ?? []}
@@ -378,6 +412,7 @@ export function BloggerListPage() {
           style={{ marginTop: 16 }}
           initialValues={{ platform: "小红书" }}
         >
+          {!editing && autoClaimCreate && <Form.Item name="claim_work_wechat_id" label="认领主工作微信" rules={[{required: claimsEnabled, message: "请选择认领使用的工作微信"}]} extra={claimsEnabled ? "创建成功后自动认领；没有可选账号请主管先维护工作微信。" : "准备期可留空创建，自动认领后显示工作微信待补。"}><Select options={workOptions} placeholder={claimsEnabled ? "选择工作微信" : "可选，准备期允许留空待补"} /></Form.Item>}
           <Form.Item
             name="xiaohongshu_id"
             label="账号"
@@ -432,7 +467,7 @@ export function BloggerListPage() {
               <InputNumber min={0} style={{ width: 180 }} placeholder="粉丝数" />
             </Form.Item>
             <Form.Item name="wechat" label="微信">
-              <Input placeholder="微信号（可选）" style={{ width: 180 }} />
+              <Input placeholder={editing?.contact_permissions?.wechat?.write === false ? "需认领及字段权限" : "微信号（可选）"} disabled={editing?.contact_permissions?.wechat?.write === false} style={{ width: 180 }} />
             </Form.Item>
           </Space>
           <Form.Item
@@ -492,6 +527,8 @@ export function BloggerListPage() {
         onClose={() => setTagDictOpen(false)}
         batchId={lastBloggerBatchId}
       />
+      <WorkWechatModal open={workOpen} onClose={() => setWorkOpen(false)} />
+      {claimTargets.length > 0 && <BloggerClaimsModal targets={claimTargets} onClose={() => setClaimTargets([])} />}
     </Card>
   );
 }

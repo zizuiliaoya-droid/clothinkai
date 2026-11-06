@@ -12,11 +12,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from uuid import UUID
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
+    Date,
     DateTime,
     ForeignKey,
     Index,
@@ -141,8 +143,28 @@ class Notification(TenantScopedModel):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     link: Mapped[str | None] = mapped_column(String(255), nullable=True)
     is_read: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    line_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True)
+    event_seq: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    summary_date: Mapped[date | None] = mapped_column(Date, nullable=True)
 
     __table_args__ = (
+        Index(
+            "uq_notification_daily_summary",
+            "tenant_id",
+            "user_id",
+            "type",
+            "summary_date",
+            unique=True,
+            postgresql_where=text("summary_date IS NOT NULL"),
+        ),
+        Index(
+            "idx_notification_line_comment",
+            "tenant_id",
+            "user_id",
+            "line_id",
+            "event_seq",
+            postgresql_where=text("line_id IS NOT NULL"),
+        ),
         Index(
             "idx_notification_user",
             "tenant_id",

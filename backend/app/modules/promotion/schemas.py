@@ -31,6 +31,7 @@ from pydantic import (
     model_validator,
 )
 
+from app.modules.flow.schemas import CommentState, FollowUpState
 from app.modules.promotion.enums import (
     CooperationMode,
     PublishStatus,
@@ -573,6 +574,8 @@ class PromotionResponse(BaseModel):
     blogger_id: UUID
     pr_id: UUID | None = None
     line_id: UUID | None = None
+    comment_state: CommentState | None = None
+    follow_up: FollowUpState | None = None
     """主线号（流程线 6.2）：只由系统写，任何更新接口都不接受；前端靠它开时间线抽屉（PR-4）。"""
 
     # 快照字段
@@ -771,6 +774,8 @@ PromotionBadge = Literal[
 
 
 class PromotionListFilters(BaseModel):
+    only_unread_comments: bool = False
+    needs_follow_up: bool = False
     """列表过滤入参（query string 解析后构造）。"""
 
     model_config = ConfigDict(str_strip_whitespace=True)

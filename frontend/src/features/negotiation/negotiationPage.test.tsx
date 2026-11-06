@@ -10,8 +10,10 @@ import type { Negotiation, NegotiationItem, NegotiationPage as NegotiationPageDa
 const listMock = vi.fn();
 const countsMock = vi.fn();
 const submitMock = vi.fn();
+const detailMock = vi.fn();
 vi.mock("@/features/negotiation/api", () => ({
   listNegotiations: (...args: unknown[]) => listMock(...args),
+  getNegotiation: (...args: unknown[]) => detailMock(...args),
   negotiationStatusCounts: (...args: unknown[]) => countsMock(...args),
   submitNegotiation: (...args: unknown[]) => submitMock(...args),
   createNegotiation: vi.fn(),
@@ -54,6 +56,7 @@ beforeEach(() => {
   listMock.mockReset();
   countsMock.mockReset();
   submitMock.mockReset();
+  detailMock.mockReset();
   lineEventsMock.mockReset();
   countsMock.mockResolvedValue({});
   lineEventsMock.mockResolvedValue({
@@ -148,10 +151,10 @@ function pageOf(rows: Negotiation[], ui: UiState = { actions: { create: { state:
   return { items: rows, total: rows.length, page: 1, page_size: 20, ui };
 }
 
-function renderPage() {
+function renderPage(url = "/negotiations") {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[url]}>
       <QueryClientProvider client={client}>
         <NegotiationPage />
       </QueryClientProvider>
@@ -167,6 +170,25 @@ async function openMenu(index = 0): Promise<string[]> {
 }
 
 describe("NegotiationPage", () => {
+  it("通知深链不依赖列表所在页，并把待跟进筛选传给接口", async () => {
+    const id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    listMock.mockResolvedValue(pageOf([]));
+    countsMock.mockResolvedValue({});
+    detailMock.mockResolvedValue(row({ id }));
+    renderPage(`/negotiations?id=${id}&needs_follow_up=true`);
+    await waitFor(() => expect(detailMock).toHaveBeenCalledWith(id));
+    await waitFor(() => expect(document.querySelector(".ant-drawer-open")).toBeTruthy());
+    expect(listMock).toHaveBeenLastCalledWith(expect.objectContaining({ needs_follow_up: true }));
+  });
+
+  it("无权打开的通知目标不影响列表且不自动标读", async () => {
+    const id = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    listMock.mockResolvedValue(pageOf([])); countsMock.mockResolvedValue({});
+    detailMock.mockRejectedValue({ response: { status: 403 } });
+    renderPage(`/negotiations?id=${id}`);
+    expect(await screen.findByText(/无法打开谈款详情/)).toBeTruthy();
+    expect(document.querySelector(".ant-drawer-open")).toBeNull();
+  });
   it("8 个 Tab（审批未通过），默认不带状态；「超时 N」= 主管待审 + overdue_only", async () => {
     listMock.mockResolvedValue(pageOf([row()]));
     countsMock.mockResolvedValue({ 主管待审: 5, 主管待审超时: 3, 草稿: 1 });
