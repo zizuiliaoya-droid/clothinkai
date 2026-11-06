@@ -1,5 +1,6 @@
 // U04 promotion feature 类型定义。
 
+import type { AccountSnapshot, AccountFulfillment } from "@/features/blogger/accounts";
 import type { UiState } from "@/features/flow/keys";
 import type { PromotionStage } from "@/features/flow/stageStyle";
 
@@ -33,12 +34,13 @@ export type SettlementStatus =
 export type ReviewAction = "approve" | "reject";
 
 export interface PlatformPostInput {
+  account_id?: string | null;
   platform: string;
   publish_url?: string | null;
   actual_publish_date?: string | null;
   like_count?: number | null;
 }
-export interface PlatformPost extends PlatformPostInput { id: string }
+export interface PlatformPost extends PlatformPostInput { id: string; account?: string | null; nickname?: string | null; is_primary?: boolean }
 
 /**
  * 审核通过的去向（7.3，只在审核通过的响应里有）：settlement_created 已生成结款单（待财务付款）、
@@ -121,6 +123,8 @@ export type UrgeStatus =
  * 字段可见性由后端字段级权限矩阵过滤，当前角色无权查看时返回 null。
  */
 export interface Promotion {
+  account_snapshot?: AccountSnapshot | null;
+  fulfillment?: AccountFulfillment | null;
   comment_state?: import("@/features/flow/engagement").CommentState | null;
   follow_up?: import("@/features/flow/engagement").FollowUpState | null;
   content_category?: string | null;

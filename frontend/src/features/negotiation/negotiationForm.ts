@@ -20,6 +20,7 @@ import type {
 } from "./types";
 
 export interface NegotiationFormValues {
+  account_ids?: string[];
   blogger_id?: string | null;
   style_id?: string | null;
   goods_main_id?: string | null;
@@ -57,6 +58,7 @@ export function membersFromItems(row: Pick<Negotiation, "items">): GoodsMember[]
 export function negotiationFormInitial(
   row: Pick<
     Negotiation,
+    | "account_snapshot"
     | "blogger_id"
     | "style_id"
     | "goods_main_id"
@@ -73,6 +75,7 @@ export function negotiationFormInitial(
     if (i.sku_id) items[i.style_id] = i.sku_id;
   }
   return {
+    account_ids: row.account_snapshot?.accounts.map(a => a.account_id),
     blogger_id: row.blogger_id,
     style_id: row.style_id,
     goods_main_id: row.goods_main_id,
@@ -112,6 +115,7 @@ export function negotiationPayload(
     quote_amount: values.quote_amount != null ? String(values.quote_amount) : null,
     remark: values.remark?.trim() || null,
   };
+  if (values.account_ids?.length) payload.account_ids = values.account_ids;
   if (!payload.style_id) {
     payload.goods_main_id = null;
     payload.items = [];

@@ -27,7 +27,7 @@ _SELECT_COLUMNS = """
     n.cooperation_mode, n.platform, n.scheduled_publish_date, n.quote_amount,
     n.remark, n.status, n.submitted_at, n.reviewed_by, n.reviewed_at,
     n.review_opinion, n.created_at, n.updated_at,
-    n.line_id, n.copied_from_id,
+    n.line_id, n.copied_from_id, n.account_snapshot,
     n.final_reviewed_by, n.final_reviewed_at, n.final_review_opinion,
     n.receiver_name, n.receiver_phone, n.receiver_address,
     n.receiver_confirmed_at, n.receiver_confirmed_by,

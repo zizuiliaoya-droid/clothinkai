@@ -27,11 +27,13 @@ from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     Computed,
     Date,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     Numeric,
@@ -63,6 +65,7 @@ class Promotion(TenantScopedModel):
     """
 
     __tablename__ = "promotion"
+    account_snapshot: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     # total_promo_cost 是数据库生成列。SQLAlchemy 默认把这类列当「稍后再取」，
     # 首次访问时补发一条 SELECT —— 在 async session 里那条隐式 IO 会抛 MissingGreenlet。
@@ -478,6 +481,10 @@ class PromotionPlatformPost(TenantScopedModel):
         PGUUID(as_uuid=True), ForeignKey("promotion.id", ondelete="RESTRICT"), nullable=False
     )
     platform: Mapped[str] = mapped_column(String(16), nullable=False)
+    account_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True)
+    account: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    nickname: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    is_primary: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     publish_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     actual_publish_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     like_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -486,7 +493,28 @@ class PromotionPlatformPost(TenantScopedModel):
         PGUUID(as_uuid=True), ForeignKey("user.id", ondelete="SET NULL"), nullable=True
     )
     __table_args__ = (
-        Index("uq_platform_post", "tenant_id", "promotion_id", "platform", unique=True),
+        Index(
+            "uq_platform_post",
+            "tenant_id",
+            "promotion_id",
+            "platform",
+            unique=True,
+            postgresql_where=text("account_id IS NULL"),
+        ),
+        Index(
+            "uq_platform_post_account",
+            "tenant_id",
+            "promotion_id",
+            "account_id",
+            unique=True,
+            postgresql_where=text("account_id IS NOT NULL"),
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "account_id"],
+            ["blogger.tenant_id", "blogger.id"],
+            name="fk_post_account_tenant",
+            ondelete="RESTRICT",
+        ),
         CheckConstraint("like_count >= 0", name="ck_platform_post_like_nonnegative"),
     )
 

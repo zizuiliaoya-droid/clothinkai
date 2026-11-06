@@ -76,7 +76,7 @@ router = APIRouter(prefix="/api", tags=["promotion"])
 )
 async def replace_platform_posts(
     promotion_id: UUID,
-    rows: Annotated[list[PlatformPostIn], Body(max_length=5)],
+    rows: Annotated[list[PlatformPostIn], Body(max_length=10)],
     user: CurrentActiveUser,
     service: PromotionServiceDep,
 ) -> PromotionResponse:

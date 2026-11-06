@@ -1,7 +1,8 @@
+import { accountLabel } from "@/features/blogger/accounts";
 import { ScreenshotUpload } from "@/components/ScreenshotUpload/ScreenshotUpload";
 import { LINE_EVENTS_ALL } from "@/features/flow/api";
 import { useEffect, useState } from "react";
-import { DatePicker, Form, Input, Modal, message } from "antd";
+import { Alert, DatePicker, Form, Input, Modal, message } from "antd";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import dayjs from "dayjs";
 import { publishPromotion, uploadBrandComment } from "@/features/promotion/api";
@@ -70,6 +71,8 @@ export function PublishModal({ open, target, onCancel, onDone }: Props) {
       confirmLoading={publishMutation.isPending}
       destroyOnHidden
     >
+      {target?.account_snapshot && <Alert type="info" showIcon message="登记主账号发布"
+        description={<>{target.account_snapshot.accounts.filter(a => a.account_id === target.account_snapshot?.primary_account_id).map(a => <div key={a.account_id}>{accountLabel(a)}</div>)}其他约定账号请在详情的“约定账号发布”中补齐；全部发布后才可结业务费。</>} />}
       <Form
         form={form}
         layout="vertical"

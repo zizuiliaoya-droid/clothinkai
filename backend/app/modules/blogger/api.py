@@ -25,6 +25,7 @@ from app.modules.auth.deps import (
     CurrentPerms,
     require_permission,
 )
+from app.modules.blogger.account_api import router as account_router
 from app.modules.blogger.audience_api import router as audience_router
 from app.modules.blogger.claim_api import router as claim_router
 from app.modules.blogger.deps import BloggerServiceDep, BloggerTagDictServiceDep
@@ -47,6 +48,7 @@ from app.modules.product.dict_models import DictItem
 router = APIRouter(prefix="/api", tags=["blogger"])
 
 router.include_router(claim_router)
+router.include_router(account_router)
 router.include_router(work_router)
 router.include_router(audience_router)
 

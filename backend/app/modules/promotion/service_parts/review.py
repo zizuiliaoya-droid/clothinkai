@@ -107,6 +107,9 @@ class PromotionReviewMixin(PromotionServiceBase):
         reject_category: str | None = None
         outcome: ReviewOutcome | None = None
         if payload.action == ReviewAction.APPROVE:
+            from app.modules.promotion.fulfillment import require_fulfilled
+
+            await require_fulfilled(self._session, promotion_id, user.tenant_id)
             # ④ 寄拍要有寄回单号（或召回成功且有召回寄回截图）⑤ 应付 > 0 要有收款码 → 缺了 422 FLOW_GATE_MISSING
             ensure_gates(actor, doc, "review")
             # 应付分流（3.4）：审核时还没有结款单、追加项为 0，应付就是服务费，与合作模式无关
@@ -349,6 +352,9 @@ class PromotionReviewMixin(PromotionServiceBase):
         ).inc()
 
         # 时间线（流程线 6.3、7.3）：每轮一条 review.resubmitted（7a 的两列只留最近一轮），
+        from app.modules.promotion.fulfillment import sync_primary_post
+
+        await sync_primary_post(self._session, updated)
         # note = 重提说明，diff 只列这次真改了的发布链接 / 日期
         diff = {
             key: {"before": before[key], "after": after[key]}

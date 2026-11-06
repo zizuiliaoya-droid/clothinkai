@@ -44,6 +44,12 @@ vi.mock("@/features/product/api", () => ({
         : [{ id: "k-2", style_id: styleId, sku_code: "SKU-9-WHT-S", color: "白色", size: "S" }]
     ),
 }));
+const accountAccess = vi.hoisted(() => ({canWriteAmount: true}));
+vi.mock("@/features/blogger/accounts", async importOriginal => ({
+  ...await importOriginal<typeof import("@/features/blogger/accounts")>(),
+  getAccountGroup: () => Promise.resolve({group: null, accounts: [{id: "b-1", platform: "小红书", account: "xhs-1", nickname: "小美", available_for_new_cooperation: true}], can_manage: false, can_read_quote: true, can_write_quote: false, can_write_amount: accountAccess.canWriteAmount}),
+  resolveAccountQuote: () => Promise.resolve({matched: false, reference_amount: null, can_write_amount: true, can_read_quote: true}),
+}));
 vi.mock("@/features/blogger/api", () => ({
   listBloggers: () => Promise.resolve({ items: [], total: 0, page: 1, page_size: 20 }),
 }));
@@ -70,6 +76,7 @@ beforeAll(() => {
 
 beforeEach(() => {
   for (const fn of Object.values(api)) fn.mockReset();
+  accountAccess.canWriteAmount = true;
   api.othersInProgress.mockResolvedValue([]);
   api.negotiationGoodsMembers.mockResolvedValue({ goods_main_id: "g-1", members: SUIT_MEMBERS });
   useAuthStore.setState({ user: null });
@@ -171,6 +178,39 @@ function gateError(missing: { key: string; label: string }[]) {
 }
 
 describe("NegotiationFormModal", () => {
+  it("已有账号约定普通编辑保留成交金额，不用当前标价覆盖", async () => {
+    const draft = row({account_snapshot: {version: 1, primary_account_id: "b-1", group_id: "g", accounts: [{account_id: "b-1", nickname: "小美", platform: "小红书", account: "xhs-1"}], quote_id: "q", reference_amount: "250.00", price_source: "manual"}});
+    api.updateNegotiation.mockResolvedValue(draft);
+    render(wrap(<NegotiationFormModal target={{editing: draft}} onClose={() => {}} />));
+    expect(await screen.findByText("约定时参考标价 ¥250.00")).toBeTruthy();
+    expect((screen.getByLabelText("博主服务费") as HTMLInputElement).value).toBe("300.00");
+    fireEvent.click(button("保存草稿"));
+    await waitFor(() => expect(api.updateNegotiation).toHaveBeenCalled());
+    expect(api.updateNegotiation.mock.calls[0][1].account_ids).toEqual(["b-1"]);
+    expect(api.updateNegotiation.mock.calls[0][1]).not.toHaveProperty("quote_amount");
+  });
+
+  it("金额权限禁止时不发送隐藏金额", async () => {
+    accountAccess.canWriteAmount = false;
+    api.updateNegotiation.mockResolvedValue(row());
+    render(wrap(<NegotiationFormModal target={{editing: row({quote_amount: null})}} onClose={() => {}} />));
+    await screen.findByText("白色 / S");
+    expect((screen.getByLabelText("博主服务费") as HTMLInputElement).disabled).toBe(true);
+    fireEvent.click(button("保存草稿"));
+    await waitFor(() => expect(api.updateNegotiation).toHaveBeenCalled());
+    expect(api.updateNegotiation.mock.calls[0][1]).not.toHaveProperty("quote_amount");
+  });
+
+  it("新账号约定手填0按明确金额保存", async () => {
+    const draft = row({account_snapshot: {version: 1, primary_account_id: "b-1", group_id: null, accounts: [{account_id: "b-1", nickname: "小美", platform: "小红书", account: "xhs-1"}], quote_id: null, reference_amount: null, price_source: "unknown"}, quote_amount: null});
+    api.updateNegotiation.mockResolvedValue(draft);
+    render(wrap(<NegotiationFormModal target={{editing: draft}} onClose={() => {}} />));
+    await waitFor(() => expect((screen.getByLabelText("博主服务费") as HTMLInputElement).disabled).toBe(false));
+    fireEvent.change(screen.getByLabelText("博主服务费"), {target: {value: "0"}});
+    fireEvent.click(button("保存草稿"));
+    await waitFor(() => expect(api.updateNegotiation).toHaveBeenCalledWith("n-1", expect.objectContaining({quote_amount: "0"})));
+  });
+
   it("无款草稿刷新后能保存，提交定位缺款，且不请求商品成员", async () => {
     const draft = row({ style_id: null, goods_main_id: null, items: [], quote_amount: null });
     api.updateNegotiation.mockResolvedValue(draft);

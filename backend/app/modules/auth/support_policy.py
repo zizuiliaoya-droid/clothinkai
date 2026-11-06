@@ -29,6 +29,7 @@ SUPPORT_READ_PATHS = frozenset(
         "/api/bloggers/{blogger_id}",
         "/api/bloggers/{blogger_id}/works",
         "/api/bloggers/{blogger_id}/audience",
+        "/api/bloggers/{blogger_id}/account-group",
         "/api/blogger-tags",
         "/api/bloggers/{blogger_id}/retrospectives",
         "/api/negotiations/blogger/{blogger_id}/history",

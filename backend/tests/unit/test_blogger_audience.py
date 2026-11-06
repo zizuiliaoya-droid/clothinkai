@@ -182,7 +182,11 @@ def test_migration_074_upgrade_downgrade_sql_and_chain():
 
     root = Path(__file__).parents[2] / "alembic"
     scripts = ScriptDirectory(str(root))
-    assert scripts.get_heads() == ["074_blogger_audience_captures"]
+    heads = scripts.get_heads()
+    assert len(heads) == 1
+    assert "074_blogger_audience_captures" in {
+        revision.revision for revision in scripts.walk_revisions(base="base", head=heads[0])
+    }
     assert (
         scripts.get_revision("074_blogger_audience_captures").down_revision
         == "073_style_optional_drafts"

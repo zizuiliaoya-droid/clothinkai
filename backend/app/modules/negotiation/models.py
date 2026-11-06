@@ -23,6 +23,7 @@ from sqlalchemy import (
     Text,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -38,6 +39,7 @@ class Negotiation(TenantScopedModel):
     """谈款单。"""
 
     __tablename__ = "negotiation"
+    account_snapshot: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     # --- 关联 ---
     blogger_id: Mapped[UUID] = mapped_column(

@@ -116,6 +116,9 @@ class PromotionPublishMixin(PromotionServiceBase):
         ).inc()
 
         # 同事务推进 settlement_status: 未核查 → 待核查（FB7 跨状态机校验）
+        from app.modules.promotion.fulfillment import sync_primary_post
+
+        await sync_primary_post(self._session, updated)
         settlement_advanced = await self._repo.update_state(
             promotion_id=promotion_id,
             tenant_id=user.tenant_id,

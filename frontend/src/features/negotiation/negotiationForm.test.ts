@@ -92,6 +92,11 @@ describe("membersFromItems / negotiationFormInitial", () => {
 });
 
 describe("negotiationItemsPayload / negotiationPayload", () => {
+  it("具体账号集合独立于平台，主账号继续使用blogger_id，零金额不丢失", () => {
+    const payload = negotiationPayload({...full, blogger_id: "b2", account_ids: ["b1", "b2"], quote_amount: 0}, [top]);
+    expect(payload).toMatchObject({blogger_id: "b2", account_ids: ["b1", "b2"], quote_amount: "0"});
+    expect(negotiationPayload(full, []).account_ids).toBeUndefined();
+  });
   it("无款草稿传真实null和空明细，不带之前选择的商品及SKU", () => {
     const payload = negotiationPayload({ ...full, style_id: null, quote_amount: null }, [top, pants]);
     expect(payload).toMatchObject({ style_id: null, goods_main_id: null, items: [], quote_amount: null });

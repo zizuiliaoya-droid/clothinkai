@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Button, DatePicker, Form, Input, InputNumber, Modal, Select, Space, message } from "antd";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import dayjs from "dayjs";
@@ -31,6 +31,8 @@ import {
   type NegotiationFormValues,
 } from "../negotiationForm";
 import type { Negotiation } from "../types";
+import { AccountSelection } from "./AccountSelection";
+import { useReadOnlySupport } from "@/stores/supportStore";
 import { useNegotiationFeedback } from "./useNegotiationFeedback";
 
 export interface NegotiationFormTarget {
@@ -69,6 +71,21 @@ export function NegotiationFormModal({ target, onClose }: Props) {
   const { refresh, handleError, notifySubmitted } = useNegotiationFeedback();
   const open = !!target;
   const editing = target?.editing ?? null;
+  const legacy = !!editing && !editing.account_snapshot;
+  const readOnly = useReadOnlySupport();
+  const [canWriteAmount, setCanWriteAmount] = useState(false);
+  const [selectionEdited, setSelectionEdited] = useState(false);
+  const amountManual = useRef(false);
+  const applyReference = useRef(false);
+  const selectionChanged = useCallback(() => {
+    amountManual.current = false;
+    applyReference.current = true;
+    setSelectionEdited(true);
+    form.setFieldValue("quote_amount", null);
+  }, [form]);
+  const receiveReference = useCallback((amount: string | null) => {
+    if (applyReference.current && !amountManual.current) form.setFieldValue("quote_amount", amount == null ? null : Number(amount));
+  }, [form]);
 
   const [members, setMembers] = useState<GoodsMember[]>([]);
   const membersRef = useRef<GoodsMember[]>([]);
@@ -105,6 +122,9 @@ export function NegotiationFormModal({ target, onClose }: Props) {
     setMembersBoth(initialMembers);
     setRebuilt(false);
     setSavedId(target.editing?.id ?? null);
+    amountManual.current = false;
+    applyReference.current = !target.editing;
+    setSelectionEdited(false);
     setMissing([]);
     setRest(null);
     form.resetFields();
@@ -175,6 +195,7 @@ export function NegotiationFormModal({ target, onClose }: Props) {
     mutationFn: async ({ mode, values }) => {
       const rows = membersRef.current;
       const payload = negotiationPayload(values, rows);
+      if (!canWriteAmount || (!legacy && !amountManual.current)) delete payload.quote_amount;
       let saved: Negotiation;
       try {
         saved = savedId ? await updateNegotiation(savedId, payload) : await createNegotiation(payload);
@@ -298,12 +319,18 @@ export function NegotiationFormModal({ target, onClose }: Props) {
         >
           <BloggerSelect
             forNewCooperation
+            onChange={() => {
+              if (!legacy) form.setFieldValue("account_ids", undefined);
+              selectionChanged();
+            }}
             platform={platform}
             selected={
               editing ? { value: editing.blogger_id, label: editing.blogger_nickname || editing.blogger_id } : null
             }
           />
         </Form.Item>
+        <AccountSelection form={form} enabled={open} snapshot={editing?.account_snapshot} legacy={legacy} preserveSnapshot={!selectionEdited && !!editing?.account_snapshot}
+          onSelectionChange={selectionChanged} onReference={receiveReference} onPermissions={setCanWriteAmount} />
         <Form.Item name="style_id" label="款式" rules={[{ required: returned, message: "请选择款式" }]}>
           <StyleSelect
             allowClear={!returned}
@@ -356,7 +383,9 @@ export function NegotiationFormModal({ target, onClose }: Props) {
         </Form.Item>
         <Space align="start" wrap style={{ display: "flex" }}>
           <Form.Item name="platform" label={SUBMIT_GATE_LABEL.platform} required style={{ width: 160 }}>
-            <Select options={PLATFORMS.map((p) => ({ label: p, value: p }))} />
+            <Select options={PLATFORMS.map((p) => ({ label: p, value: p }))} onChange={() => {
+              if (!legacy) { form.setFieldValue("blogger_id", undefined); form.setFieldValue("account_ids", undefined); selectionChanged(); }
+            }} />
           </Form.Item>
           <Form.Item
             name="scheduled_publish_date"
@@ -372,11 +401,11 @@ export function NegotiationFormModal({ target, onClose }: Props) {
           <Form.Item
             name="quote_amount"
             label="博主服务费"
-            tooltip="不填则取博主档案报价；档案也没有报价时保持待补，提交前需填写。明确为0请填0，置换模式保存后为0。"
-            extra={mode === "置换" ? "置换没有博主服务费，保存后置 0" : undefined}
+            tooltip="已选账号命中标价时自动带入；未设置标价则待补。明确免费请填0，置换模式保存后为0。"
+            extra={!canWriteAmount ? "当前不能修改服务费，保存时保留已约定金额" : mode === "置换" ? "置换没有博主服务费，保存后置 0" : undefined}
             style={{ width: 180 }}
           >
-            <InputNumber min={0} precision={2} style={{ width: "100%" }} prefix="¥" />
+            <InputNumber min={0} precision={2} style={{ width: "100%" }} prefix="¥" disabled={!canWriteAmount || readOnly || mode === "置换"} onChange={() => { amountManual.current = true; }} />
           </Form.Item>
         </Space>
         <Form.Item name="remark" label="备注">

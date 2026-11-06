@@ -44,6 +44,7 @@ async def test_maximum_platform_input_preserves_rows_and_bounds_event(monkeypatc
         line_id=uuid4(),
         platform="小红书",
         cooperation_mode="寄拍",
+        account_snapshot=None,
     )
     rows = [
         PlatformPostIn(

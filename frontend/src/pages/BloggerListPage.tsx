@@ -43,6 +43,7 @@ import { BloggerLegacyMetrics } from "@/features/blogger/BloggerLegacyMetrics";
 import { BloggerHoverCard } from "@/components/BloggerHoverCard/BloggerHoverCard";
 import { PLATFORMS } from "@/features/common/platforms";
 import { BloggerClaimsModal } from "@/features/blogger/BloggerClaimsModal";
+import { AccountGroupModal } from "@/features/blogger/AccountGroupModal";
 import { WorkWechatModal } from "@/features/blogger/WorkWechatModal";
 import { enableClaims, getClaimSettings, listWorkWechats } from "@/features/blogger/claims";
 
@@ -70,6 +71,7 @@ export function BloggerListPage() {
   const [form] = Form.useForm<BloggerCreate>();
   const [tagDictOpen, setTagDictOpen] = useState(false);
   const [workOpen, setWorkOpen] = useState(false);
+  const [accountTarget, setAccountTarget] = useState<Blogger | null>(null);
   const [claimTargets, setClaimTargets] = useState<Blogger[]>([]);
   const [selected, setSelected] = useState<Blogger[]>([]);
   const [importWorkId, setImportWorkId] = useState<string>();
@@ -258,6 +260,7 @@ export function BloggerListPage() {
       fixed: "right" as const,
       render: (_, record) => (
         <Space>
+          <Button type="link" size="small" onClick={() => setAccountTarget(record)}>账号与报价</Button>
           <Button type="link" size="small" onClick={() => openEdit(record)}>
             编辑
           </Button>
@@ -517,6 +520,7 @@ export function BloggerListPage() {
         onClose={() => setTagDictOpen(false)}
         batchId={lastBloggerBatchId}
       />
+      <AccountGroupModal target={accountTarget} onClose={() => setAccountTarget(null)} />
       <WorkWechatModal open={workOpen} onClose={() => setWorkOpen(false)} />
       {claimTargets.length > 0 && <BloggerClaimsModal targets={claimTargets} onClose={() => setClaimTargets([])} />}
     </Card>

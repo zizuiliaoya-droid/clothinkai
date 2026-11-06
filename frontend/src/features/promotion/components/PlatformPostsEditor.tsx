@@ -1,3 +1,4 @@
+import { AccountPostsEditor } from "./AccountPostsEditor";
 import { useState } from "react";
 import dayjs, { type Dayjs } from "dayjs";
 import { Button, Card, DatePicker, Form, Input, InputNumber, Modal, Select, Space, Typography, message } from "antd";
@@ -14,6 +15,10 @@ import { extractErrorMessage } from "@/services/apiClient";
 type Row = Omit<PlatformPostInput, "actual_publish_date"> & { actual_publish_date?: Dayjs | null };
 
 export function PlatformPostsEditor({ promotion }: { promotion: Promotion }) {
+  return promotion.account_snapshot ? <AccountPostsEditor promotion={promotion} /> : <LegacyPlatformPostsEditor promotion={promotion} />;
+}
+
+function LegacyPlatformPostsEditor({ promotion }: { promotion: Promotion }) {
   const [open, setOpen] = useState(false);
   const [form] = Form.useForm<{ rows: Row[] }>();
   const qc = useQueryClient();
