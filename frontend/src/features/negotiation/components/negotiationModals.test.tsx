@@ -14,6 +14,7 @@ import { ManagerReviewModal } from "./ManagerReviewModal";
 import { NegotiationFormModal } from "./NegotiationFormModal";
 import { NegotiationReceiverModal } from "./NegotiationReceiverModal";
 import { negotiationFormInitial } from "../negotiationForm";
+import { listBloggers } from "@/features/blogger/api";
 
 const api = vi.hoisted(() => ({
   createNegotiation: vi.fn(),
@@ -52,7 +53,7 @@ vi.mock("@/features/blogger/accounts", async importOriginal => ({
   resolveAccountQuote: () => Promise.resolve({matched: false, reference_amount: null, can_write_amount: true, can_read_quote: true}),
 }));
 vi.mock("@/features/blogger/api", () => ({
-  listBloggers: () => Promise.resolve({ items: [], total: 0, page: 1, page_size: 20 }),
+  listBloggers: vi.fn(() => Promise.resolve({ items: [], total: 0, page: 1, page_size: 20 })),
 }));
 
 beforeAll(() => {
@@ -179,6 +180,26 @@ function gateError(missing: { key: string; label: string }[]) {
 }
 
 describe("NegotiationFormModal", () => {
+  it("新建默认搜索抖音可合作博主，编辑保留小红书平台", async () => {
+    const view = render(wrap(<NegotiationFormModal target={{editing: null}} onClose={() => {}} />));
+    fireEvent.mouseDown(screen.getByLabelText("博主").closest(".ant-select-selector")!);
+    await waitFor(() => expect(listBloggers).toHaveBeenLastCalledWith(expect.objectContaining({platform: "抖音", for_new_cooperation: true})));
+    view.unmount();
+    render(wrap(<NegotiationFormModal target={{editing: row()}} onClose={() => {}} />));
+    fireEvent.mouseDown(screen.getByLabelText("博主").closest(".ant-select-selector")!);
+    await waitFor(() => expect(listBloggers).toHaveBeenLastCalledWith(expect.objectContaining({platform: "小红书", for_new_cooperation: true})));
+  });
+
+  it("切换平台后清空旧博主，不能把原博主按新平台保存", async () => {
+    render(wrap(<NegotiationFormModal target={{editing: row()}} onClose={() => {}} />));
+    await screen.findByText("白色 / S");
+    fireEvent.mouseDown(screen.getByLabelText("平台").closest(".ant-select-selector")!);
+    fireEvent.click(screen.getByText("抖音", {selector: ".ant-select-item-option-content"}));
+    fireEvent.click(button("保存草稿"));
+    expect(await screen.findByText("请选择博主")).toBeTruthy();
+    expect(api.updateNegotiation).not.toHaveBeenCalled();
+  });
+
   it("批量待建行复用单笔表单只更新本地，0金额与套装成员保留，不创建或提交", async () => {
     const onPrepare = vi.fn();
     render(wrap(<NegotiationFormModal target={{editing: null, prepared: {values: negotiationFormInitial(row({quote_amount: "0"})), members: SUIT_MEMBERS, styleLabel: "飞狐套装", bloggerLabel: "小美"}}} onClose={() => {}} onPrepare={onPrepare} />));

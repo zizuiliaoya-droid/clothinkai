@@ -32,6 +32,8 @@ export interface ImportResultModalProps {
   open: boolean;
   batchId: string | null;
   onClose: () => void;
+  /** 异步解析结束后刷新业务数据；同一批次只通知一次。 */
+  onComplete?: () => void;
 }
 
 /**
@@ -41,11 +43,12 @@ export interface ImportResultModalProps {
  * 新增 / 仅补空 / 重复已跳过 / 冲突 / 失败，另显示补空对象数与内嵌主图款数（读过内嵌图时）；
  * 下面分页列出带提示、补空或主图结果的行。
  */
-export function ImportResultModal({ open, batchId, onClose }: ImportResultModalProps) {
+export function ImportResultModal({ open, batchId, onClose, onComplete }: ImportResultModalProps) {
   const navigate = useNavigate();
   const startedAt = useRef<number>(Date.now());
   const [timedOut, setTimedOut] = useState(false);
   const [notesPage, setNotesPage] = useState(1);
+  const completedBatch = useRef<string | null>(null);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -69,6 +72,12 @@ export function ImportResultModal({ open, batchId, onClose }: ImportResultModalP
   });
   const batch = batchQuery.data;
   const done = !!batch && batch.status !== "processing";
+  useEffect(() => {
+    if (open && done && batchId && completedBatch.current !== batchId) {
+      completedBatch.current = batchId;
+      onComplete?.();
+    }
+  }, [open, done, batchId, onComplete]);
 
   const notesQuery = useQuery({
     queryKey: ["import-batch-notes", batchId, notesPage],
