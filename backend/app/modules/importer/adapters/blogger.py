@@ -11,7 +11,7 @@
   OVERWRITE / KEEP 行为随之改变。新建走 ORM（不再用 ``upsert_atomic``）
 - 占位符（``-``、``--``、``—``、``——``）与空格子一样当没给值（N17）
 - 多类型解析：list（标签 → JSONB 数组，_split_tags）+ int（follower_count）+ Decimal（quote，禁 float）
-- platform 空 → 缺省 "小红书"
+- platform 必填；旧模板需补平台列，不再默认小红书
 - mapping=None 回退内置默认映射（domain-entities §4）
 
 8b（设计 §6.2、§6.5、§6.6）：
@@ -93,9 +93,14 @@ _DEFAULT_COLUMNS: list[dict[str, Any]] = [
         "source_col": "账号",
         "target_field": "xiaohongshu_id",
         "type": "str",
-        "aliases": ["小红书ID", "小红书号"],
+        "aliases": ["账号ID", "小红书ID", "小红书号"],
     },
-    {"source_col": "昵称", "target_field": "nickname", "type": "str", "aliases": ["小红书昵称"]},
+    {
+        "source_col": "博主昵称",
+        "target_field": "nickname",
+        "type": "str",
+        "aliases": ["昵称", "小红书昵称", "小红书博主"],
+    },
     {"source_col": "平台", "target_field": "platform", "type": "str"},
     {"source_col": "微信", "target_field": "wechat", "type": "str", "aliases": ["微信号"]},
     {"source_col": "手机号", "target_field": "phone", "type": "str"},
@@ -124,7 +129,6 @@ _DEFAULT_COLUMNS: list[dict[str, Any]] = [
 _QUALITY_TAGS_COLUMN = "质量标签"
 _QUALITY_TAGS_FIELD = "quality_tags"
 
-_DEFAULT_PLATFORM = Platform.XIAOHONGSHU.value
 # 与博主接口 schemas._ACCOUNT_PATTERN 同一规则（N7：导进来的账号在编辑时不会 422）
 _ACCOUNT_RE = re.compile(r"[A-Za-z0-9_.\-]+")
 ACCOUNT_PATTERN_ERROR = "账号只能包含字母、数字、_ . -"
@@ -141,6 +145,7 @@ QUALITY_TAGS_NOTICE = "质量标签是系统标签，由重算自动计算，导
 _REQUIRED: tuple[tuple[str, str], ...] = (
     ("xiaohongshu_id", "账号不能为空"),
     ("nickname", "昵称不能为空"),
+    ("platform", "平台不能为空；请补充平台列或重新下载模板"),
 )
 _MAX_LEN: tuple[tuple[str, int], ...] = (
     ("xiaohongshu_id", 64),
@@ -152,6 +157,33 @@ _MAX_LEN: tuple[tuple[str, int], ...] = (
     ("gender_target", 16),
     ("web_id", 64),
 )
+
+
+def effective_blogger_columns(mapping: FieldMapping | None) -> list[dict[str, Any]]:
+    """下载与解析共用：仅统一身份三列，保留租户其它列和旧表头，不修改已存映射。"""
+    columns = (
+        mapping.mapping_config.get("columns", _DEFAULT_COLUMNS) if mapping else _DEFAULT_COLUMNS
+    )
+    identity = {
+        c["target_field"]: c
+        for c in _DEFAULT_COLUMNS
+        if c["target_field"] in {"xiaohongshu_id", "nickname", "platform"}
+    }
+    result: list[dict[str, Any]] = []
+    for column in columns:
+        field = column["target_field"]
+        if field not in identity:
+            result.append(dict(column))
+            continue
+        standard = identity[field]
+        aliases = dict.fromkeys(
+            [column["source_col"], *(column.get("aliases") or []), *standard.get("aliases", [])]
+        )
+        aliases.pop(standard["source_col"], None)
+        result.append({**column, "source_col": standard["source_col"], "aliases": list(aliases)})
+    if not any(c["target_field"] == "platform" for c in result):
+        result.append(dict(identity["platform"]))
+    return result
 
 
 def _split_tags(raw: Any) -> list[str]:
@@ -227,10 +259,7 @@ class BloggerImportAdapter:
 
     def parse_row(self, row: dict[str, Any], mapping: FieldMapping | None) -> dict[str, Any]:
         """按 mapping（或内置默认）映射表头 + 多类型转换。"""
-        if mapping is not None:
-            columns = mapping.mapping_config.get("columns", _DEFAULT_COLUMNS)
-        else:
-            columns = _DEFAULT_COLUMNS
+        columns = effective_blogger_columns(mapping)
 
         parsed: dict[str, Any] = {}
         # 8b D5（r2 N17）：质量标签只由重算写。旧模版的「质量标签」列或自定义映射到 quality_tags 的列
@@ -355,8 +384,8 @@ class BloggerImportAdapter:
         warnings: list[str] = []
         parsed = await self._prepare(parsed, session=session, ctx=ctx, warnings=warnings)
 
-        # 8b：按（平台, 账号）判重；平台空缺省小红书（与 _insert 同口径）
-        existing = await repo.get_by_account(parsed.get("platform") or _DEFAULT_PLATFORM, xhs_id)
+        # 按（平台, 账号）判重；平台已经过行级必填校验，不做隐式默认。
+        existing = await repo.get_by_account(parsed["platform"], xhs_id)
         from app.modules.blogger.claim_import import prepare_claim_import
 
         parsed = await prepare_claim_import(session, ctx, parsed, existing, warnings)
@@ -534,7 +563,7 @@ class BloggerImportAdapter:
         values: dict[str, Any] = {
             "xiaohongshu_id": parsed["xiaohongshu_id"],
             "nickname": parsed["nickname"],
-            "platform": parsed.get("platform") or _DEFAULT_PLATFORM,
+            "platform": parsed["platform"],
             "wechat": parsed.get("wechat"),
             "phone": parsed.get("phone"),
             "follower_count": parsed.get("follower_count"),

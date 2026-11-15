@@ -8,7 +8,7 @@ const CRAWLER_METRIC_FIELDS = [
   "粉丝量", "3篇阅读量", "3篇点赞数", "3篇收藏数", "3篇评论数",
   "7篇阅读量", "7篇点赞数", "7篇收藏数", "7篇评论数",
   "14篇阅读量", "14篇点赞数", "14篇收藏数", "14篇评论数",
-  "阅读点赞比", "收藏赞比", "近期数据涨的博主", "是否假号", "活跃粉丝数", "阅读粉丝数",
+  "阅读点赞比", "收藏赞比", "近期数据涨的博主", "活跃粉丝数", "阅读粉丝数",
   "粉丝画像", "粉丝占比", "主要年龄", "粉丝赞藏比", "笔记数", "爆文率",
   "3天平均阅读", "7天平均阅读", "14天平均阅读", "3天平均点赞", "7天平均点赞", "14天平均点赞",
   "3天阅读涨跌", "7天阅读涨跌", "3天点赞涨跌", "7天点赞涨跌",
@@ -37,7 +37,6 @@ export function BloggerLegacyMetrics({ blogger }: { blogger: Pick<Blogger, "is_s
       <Descriptions column={1} size="small" items={[
         { key: "source", label: "历史来源", children: blogger.platform_metrics?.source === "huitun_douyin" ? "灰豚抖音（历史来源）" : blogger.audience_profile || blogger.platform_metrics || crawlerItems.length > 0 ? "历史记录 / 来源待核实" : "暂无来源" },
         { key: "time", label: "采集时间", children: "时间未记录" },
-        { key: "flag", label: "疑似标记", children: blogger.is_suspected_fake ? "疑似 · 历史记录 / 依据待核实" : "未标记（不代表正常）" },
         { key: "likes", label: "历史平均点赞", children: stats?.avg_likes ?? "暂无数据" },
         { key: "reads", label: "历史平均阅读", children: stats?.avg_reads ?? "暂无数据" },
         { key: "ratio", label: "历史点赞 / 阅读比", children: blogger.read_like_ratio ?? "暂无判定依据" },

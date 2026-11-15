@@ -207,7 +207,7 @@ class StyleSkuImportAdapter:
 
     # ----------------------- parse_row（纯函数）----------------------- #
 
-    def _columns(self, mapping: FieldMapping | None) -> Sequence[Mapping[str, Any]]:
+    def effective_columns(self, mapping: FieldMapping | None) -> Sequence[Mapping[str, Any]]:
         """有自定义映射时只取目录里认识的目标字段（旧映射里的 category 被忽略）。"""
         if mapping is None:
             return _BUILTIN_COLUMNS
@@ -218,7 +218,7 @@ class StyleSkuImportAdapter:
     def parse_row(self, row: dict[str, Any], mapping: FieldMapping | None) -> dict[str, Any]:
         """按映射（或内置默认）取值：占位符当没给值、主列没值再试别名；类型由目录定。"""
         parsed: dict[str, Any] = {}
-        for col in self._columns(mapping):
+        for col in self.effective_columns(mapping):
             target = str(col["target_field"])
             raw = row.get(col["source_col"])
             if is_placeholder(raw):

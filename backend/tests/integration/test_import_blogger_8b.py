@@ -269,13 +269,20 @@ _H = "账号,昵称,平台,粉丝数,报价,类目标签,备注"
 @pytest.mark.asyncio
 class TestManualBlogger8b:
     async def test_platform_in_key(self, env: _Env) -> None:
-        """同账号、平台填抖音 → 新建抖音博主；平台空 → 命中小红书那个（全等 → 重复已跳过）。"""
+        """同账号按平台分开；显式小红书全等跳过，平台空失败且不改既有博主。"""
         xhs = await env.blogger("P")
         batch_id, result = await env.run(
-            _csv(_H, f"{env.acc('P')},抖音号,抖音,2000,,,", f"{env.acc('P')},小美,,1000,500,,")
+            _csv(
+                _H,
+                f"{env.acc('P')},抖音号,抖音,2000,,,",
+                f"{env.acc('P')},小美,小红书,1000,500,,",
+                f"{env.acc('P')},不应覆盖,,1000,500,,",
+            )
         )
-        assert result["status"] == "completed"
-        assert [j.status for j in await env.jobs(batch_id)] == ["success", "skipped"]
+        assert result["status"] == "partial"
+        jobs = await env.jobs(batch_id)
+        assert [j.status for j in jobs] == ["success", "skipped", "failed"]
+        assert "平台不能为空" in jobs[2].error_detail
         dy = await env.row("P", "抖音")
         assert (dy.nickname, dy.follower_count, dy.quality_tags) == ("抖音号", 2000, [])
         assert dy.id != xhs
@@ -284,7 +291,7 @@ class TestManualBlogger8b:
 
     async def test_invalid_platform_and_account(self, env: _Env) -> None:
         batch_id, result = await env.run(
-            _csv(_H, f"{env.acc('W')},甲,微博,,,,", f"{env.acc('W')} x,乙,,,,,")
+            _csv(_H, f"{env.acc('W')},甲,微博,,,,", f"{env.acc('W')} x,乙,小红书,,,,")
         )
         assert result["status"] == "failed"
         jobs = await env.jobs(batch_id)
@@ -295,7 +302,7 @@ class TestManualBlogger8b:
     async def test_follower_overwritten_others_conflict(self, env: _Env) -> None:
         """R2：粉丝数不同 → 以文件为准覆盖、审计 via=import_overwrite；报价照旧进冲突；备注补空。"""
         bid = await env.blogger("F", blogger_type=None)
-        batch_id, result = await env.run(_csv(_H, f'{env.acc("F")},小美,,"1.2w",600,,新备注'))
+        batch_id, result = await env.run(_csv(_H, f'{env.acc("F")},小美,小红书,"1.2w",600,,新备注'))
         assert result["status"] == "completed"
         [job] = await env.jobs(batch_id)
         assert job.status == "conflict"
@@ -319,7 +326,7 @@ class TestManualBlogger8b:
 
     async def test_follower_only_is_updated(self, env: _Env) -> None:
         bid = await env.blogger("U")
-        batch_id, _ = await env.run(_csv(_H, f"{env.acc('U')},小美,,3000,500,,"))
+        batch_id, _ = await env.run(_csv(_H, f"{env.acc('U')},小美,小红书,3000,500,,"))
         [job] = await env.jobs(batch_id)
         assert job.status == "success"
         assert (await env.row("U")).follower_count == 3000
@@ -332,9 +339,9 @@ class TestManualBlogger8b:
         batch_id, result = await env.run(
             _csv(
                 _H,
-                f"{env.acc('T1')},甲,,,,{a};{x},",
-                f"{env.acc('T2')},乙,,,,{y};高性价比,",
-                f"{env.acc('T3')},丙,,,,{a},",
+                f"{env.acc('T1')},甲,小红书,,,{a};{x},",
+                f"{env.acc('T2')},乙,小红书,,,{y};高性价比,",
+                f"{env.acc('T3')},丙,小红书,,,{a},",
             )
         )
         assert result["status"] == "completed"
@@ -358,7 +365,7 @@ class TestManualBlogger8b:
         await env.add_tags(x, y)
         assert await env.missing(batch_id) == []
         batch2, result2 = await env.run(
-            _csv(_H, f"{env.acc('T1')},甲,,,,{a};{x},", f"{env.acc('T2')},乙,,,,{y},")
+            _csv(_H, f"{env.acc('T1')},甲,小红书,,,{a};{x},", f"{env.acc('T2')},乙,小红书,,,{y},")
         )
         assert result2["status"] == "completed"
         assert [j.status for j in await env.jobs(batch2)] == ["conflict", "filled"]
@@ -373,9 +380,13 @@ class TestManualBlogger8b:
     async def test_quality_tags_not_written(self, env: _Env) -> None:
         """D5：质量标签只由重算写；文件里有也不写、不比较，整批提示一次。"""
         bid = await env.blogger("Q", quality_tags='["高性价比"]')
-        header = "账号,昵称,粉丝数,报价,质量标签"
+        header = "账号,昵称,平台,粉丝数,报价,质量标签"
         batch_id, result = await env.run(
-            _csv(header, f"{env.acc('N')},新博主,,,优质", f"{env.acc('Q')},小美,1000,500,带货型")
+            _csv(
+                header,
+                f"{env.acc('N')},新博主,小红书,,,优质",
+                f"{env.acc('Q')},小美,小红书,1000,500,带货型",
+            )
         )
         assert result["status"] == "completed"
         jobs = await env.jobs(batch_id)
@@ -388,13 +399,13 @@ class TestManualBlogger8b:
 
     async def test_web_id_column(self, env: _Env) -> None:
         """N2：手工模版可选「网页ID」；跨批网页ID 不同 → 进冲突、不覆盖（D1①）。"""
-        header = "账号,昵称,网页ID,主页链接"
+        header = "账号,昵称,平台,网页ID,主页链接"
         b1, _ = await env.run(
-            _csv(header, f"{env.acc('I')},小美,61900000001,https://example.com/u/1")
+            _csv(header, f"{env.acc('I')},小美,小红书,61900000001,https://example.com/u/1")
         )
         row = await env.row("I")
         assert (row.web_id, row.homepage_url) == ("61900000001", "https://example.com/u/1")
-        b2, _ = await env.run(_csv(header, f"{env.acc('I')},小美,61900000002,"))
+        b2, _ = await env.run(_csv(header, f"{env.acc('I')},小美,小红书,61900000002,"))
         [job] = await env.jobs(b2)
         assert job.status == "conflict"
         assert (await env.row("I")).web_id == "61900000001"
@@ -404,8 +415,10 @@ class TestManualBlogger8b:
         ]
 
     async def test_invalid_homepage_url_dropped(self, env: _Env) -> None:
-        header = "账号,昵称,主页链接"
-        batch_id, result = await env.run(_csv(header, f"{env.acc('L')},小美,javascript:alert(1)"))
+        header = "账号,昵称,平台,主页链接"
+        batch_id, result = await env.run(
+            _csv(header, f"{env.acc('L')},小美,小红书,javascript:alert(1)")
+        )
         assert result["status"] == "completed"
         [job] = await env.jobs(batch_id)
         assert job.status == "success"
@@ -418,9 +431,9 @@ class TestManualBlogger8b:
         """xlsx：别名表头、万 / w、千分位、占位符、多余列。"""
         wb = Workbook()
         ws = wb.active
-        ws.append(["小红书号", "小红书昵称", "微信号", "粉丝量", "报价", "多余列"])
-        ws.append([env.acc("X1"), "甲", "wx-1", "3.5万", "1,200", "忽略"])
-        ws.append([env.acc("X2"), "乙", "--", 12345, "--", None])
+        ws.append(["小红书号", "小红书昵称", "微信号", "粉丝量", "报价", "多余列", "平台"])
+        ws.append([env.acc("X1"), "甲", "wx-1", "3.5万", "1,200", "忽略", "小红书"])
+        ws.append([env.acc("X2"), "乙", "--", 12345, "--", None, "小红书"])
         buf = io.BytesIO()
         wb.save(buf)
         batch_id, result = await env.run(buf.getvalue(), filename="bloggers.xlsx")

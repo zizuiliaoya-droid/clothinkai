@@ -457,7 +457,13 @@ def blogger_source() -> Iterator[None]:
 
 def _raw(tags: str, **extra: Any) -> dict[str, Any]:
     """照 CSV 解析出来的原始行（中文表头、字符串格）；账号 / 昵称是造的。"""
-    return {"账号": f"m8{uuid4().hex[:8]}", "昵称": "测试号", "平台": "", "类目标签": tags, **extra}
+    return {
+        "账号": f"m8{uuid4().hex[:8]}",
+        "昵称": "测试号",
+        "平台": "小红书",
+        "类目标签": tags,
+        **extra,
+    }
 
 
 async def _seed_batch(

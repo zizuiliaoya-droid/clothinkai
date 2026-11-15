@@ -44,7 +44,7 @@ def test_empty_template_has_no_importable_rows(source: str) -> None:
     [
         (
             "manual_blogger",
-            {"账号": "douyin_001", "昵称": "测试博主", "平台": "抖音", "报价": "300.50"},
+            {"账号": "douyin_001", "博主昵称": "测试博主", "平台": "抖音", "报价": "300.50"},
         ),
         (
             "manual_promotion",
@@ -73,7 +73,7 @@ def test_filled_template_roundtrips_through_real_parser(source: str, row: dict[s
     assert parsed["platform"] == "抖音"
 
 
-def test_active_mapping_primary_headers_are_used_without_alias_columns() -> None:
+def test_active_blogger_identity_headers_are_generic_with_required_platform() -> None:
     mapping = FieldMapping(
         version=4,
         mapping_config={
@@ -89,8 +89,8 @@ def test_active_mapping_primary_headers_are_used_without_alias_columns() -> None
         },
     )
     workbook = load_workbook(io.BytesIO(build_import_template("manual_blogger", mapping)))
-    assert [c.value for c in workbook.active[1]] == ["我的账号", "我的昵称"]
-    workbook.active.append(["account_1", "昵称1"])
+    assert [c.value for c in workbook.active[1]] == ["账号", "博主昵称", "平台"]
+    workbook.active.append(["account_1", "昵称1", "抖音"])
     output = io.BytesIO()
     workbook.save(output)
     workbook.close()
@@ -118,6 +118,8 @@ def test_invalid_mapping_does_not_download_an_unusable_template() -> None:
     ("source", "scopes", "revokes", "allowed"),
     [
         ("manual_blogger", {"importer.batch:write"}, set(), True),
+        ("manual_style_sku", {"product.import:write"}, set(), True),
+        ("manual_style_sku", {"importer.batch:write"}, set(), False),
         ("manual_blogger_audience", {"blogger:write"}, set(), True),
         ("manual_blogger_audience", {"importer.batch:write"}, set(), False),
         ("manual_blogger_audience", {"*"}, {"blogger:write"}, False),

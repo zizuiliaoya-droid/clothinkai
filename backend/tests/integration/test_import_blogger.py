@@ -30,10 +30,10 @@ from app.tasks.import_tasks import _run_import_batch
 def _csv(suffix: str) -> bytes:
     """样本 CSV：新建 / 同 ID 第二行（值不同）/ 缺 ID 失败。"""
     return (
-        "小红书ID,昵称,粉丝数,报价,类目标签,质量标签\n"
-        f'xhs{suffix}A,小美,"12,500",500.00,美妆;护肤,优质\n'
-        f"xhs{suffix}A,小美改名,13000,600,美妆,\n"
-        f",无ID博主,1000,100,,\n"
+        "小红书ID,昵称,平台,粉丝数,报价,类目标签,质量标签\n"
+        f'xhs{suffix}A,小美,小红书,"12,500",500.00,美妆;护肤,优质\n'
+        f"xhs{suffix}A,小美改名,小红书,13000,600,美妆,\n"
+        f",无ID博主,小红书,1000,100,,\n"
     ).encode()
 
 
@@ -216,7 +216,7 @@ class TestBloggerImportEndToEnd:
 
         suffix = uuid4().hex[:8]
         csv_bytes = (
-            "小红书ID,昵称,类目标签\n" f'xhs{suffix}T,标签博主,"美妆;护肤,穿搭"\n'
+            "小红书ID,昵称,平台,类目标签\n" f'xhs{suffix}T,标签博主,小红书,"美妆;护肤,穿搭"\n'
         ).encode()
         import app.core.attachment as att_mod
 
@@ -433,7 +433,13 @@ async def env(engine: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
 
 def _line(xhs: str, **cells: Any) -> str:
     cols = ["nickname", "platform", "wechat", "follower_count", "quote", "tags", "remark"]
-    defaults = {"nickname": "小美", "follower_count": "1000", "quote": "500", "tags": "美妆"}
+    defaults = {
+        "nickname": "小美",
+        "platform": "小红书",
+        "follower_count": "1000",
+        "quote": "500",
+        "tags": "美妆",
+    }
     values = {**defaults, **cells}
     return ",".join([xhs, *(str(values.get(c, "")) for c in cols)]) + "\n"
 

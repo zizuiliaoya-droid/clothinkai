@@ -9,11 +9,11 @@ beforeAll(() => {
 });
 afterEach(cleanup);
 
-it.each([false, true])("缺历史依据不显示正常，疑似=%s", suspected => {
-  render(<BloggerLegacyMetrics blogger={{is_suspected_fake: suspected}} />);
+it.each([false, true])("保留历史指标，隐藏真假号标记，存量标记=%s", suspected => {
+  render(<BloggerLegacyMetrics blogger={{is_suspected_fake: suspected, crawler_metrics: {"是否假号": "假号历史值"}}} />);
   fireEvent.click(screen.getByText("历史第三方指标（已停止更新）"));
   expect(screen.getByText("暂无判定依据")).toBeInTheDocument();
-  expect(screen.getByText(suspected ? "疑似 · 历史记录 / 依据待核实" : "未标记（不代表正常）")).toBeInTheDocument();
+  expect(screen.queryByText(/疑似标记|未标记|假号/)).not.toBeInTheDocument();
   expect(screen.getAllByText("暂无数据")).toHaveLength(2);
 });
 
