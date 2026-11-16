@@ -58,7 +58,7 @@ export async function submitNegotiation(id: string): Promise<Negotiation> {
   return resp.data;
 }
 
-/** 主管审核（N4 / N5）：通过 → 待老板审核（不建单）；驳回 → 审批未通过（终态），意见必填。 */
+/** 主管审核：通过 → 待老板审核；驳回 → 审批未通过，7 天内可在原单重新提交。 */
 export async function reviewNegotiation(
   id: string,
   payload: NegotiationReviewRequest
@@ -102,14 +102,6 @@ export async function confirmNegotiationReceiver(
   const resp = await apiClient.post<Negotiation>(
     `/api/negotiations/${id}/confirm-receiver`,
     payload
-  );
-  return resp.data;
-}
-
-/** 复制为新谈款（N10）：只在审批未通过、本人；返回新草稿。 */
-export async function copyNegotiation(id: string): Promise<Negotiation> {
-  const resp = await apiClient.post<Negotiation>(
-    `/api/negotiations/${id}/copy`
   );
   return resp.data;
 }

@@ -1,10 +1,10 @@
-// 谈款审核类型（PRD V1.4 模块一；流程线 PR-3 起 7 态两级审核，设计 3.2、7.2）。
+// 谈款两级审核类型；驳回原单可重提，逾期进入已取消。
 
 import type { AccountSnapshot } from "@/features/blogger/accounts";
 import type { UiState } from "@/features/flow/keys";
 import type { GoodsItemIn, GoodsMember } from "@/features/promotion/types";
 
-/** 谈款 7 态的存储值（3.2），顺序 = 谈款页 Tab 顺序。界面文案见 stageStyle.ts。 */
+/** 谈款状态的存储值，顺序 = 谈款页 Tab 顺序。界面文案见 stageStyle.ts。 */
 export const NEGOTIATION_STATUSES = [
   "主管待审",
   "待老板审核",
@@ -13,6 +13,7 @@ export const NEGOTIATION_STATUSES = [
   "草稿",
   "审核驳回",
   "已定稿",
+  "已取消",
 ] as const;
 export type NegotiationStatus = (typeof NEGOTIATION_STATUSES)[number];
 export type CooperationMode = "寄拍" | "送拍" | "置换";
@@ -63,7 +64,7 @@ export interface Negotiation {
   id: string;
   /** 主线号（开抽屉、读时间线用）。 */
   line_id: string;
-  /** 「复制为新谈款」的来源。 */
+  /** 历史「复制为新谈款」的来源；新驳回单在原单上重新提交。 */
   copied_from_id: string | null;
   blogger_id: string;
   blogger_nickname: string | null;

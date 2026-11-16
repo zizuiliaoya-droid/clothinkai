@@ -9,7 +9,7 @@ export const ITEM_NOT_SELECTED = "颜色尺码未选";
 /** Tab 文案（3.2「界面显示」去掉「谈款中 · 」前缀）：存储值「审核驳回」显示「审批未通过」。 */
 const TAB_LABEL: Partial<Record<NegotiationStatus, string>> = { 审核驳回: "审批未通过" };
 
-/** 全部 + 7 态，顺序 = NEGOTIATION_STATUSES。key 为空 = 全部。 */
+/** 全部 + 各谈款状态，顺序 = NEGOTIATION_STATUSES。key 为空 = 全部。 */
 export const NEGOTIATION_TABS: { key: NegotiationStatus | ""; label: string }[] = [
   { key: "", label: "全部" },
   ...NEGOTIATION_STATUSES.map((s) => ({ key: s, label: TAB_LABEL[s] ?? s })),

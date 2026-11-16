@@ -8,7 +8,20 @@ import {
   receiverPrefill,
   receiverProxyNotice,
   selfReviewNotice,
+  rejectionDeadline,
 } from "./negotiationDialogs";
+
+describe("rejectionDeadline", () => {
+  it("从主管驳回起168小时，之后更新不延长；旧行使用原更新时间", () => {
+    expect(rejectionDeadline({ status: "审核驳回", reviewed_at: "2026-11-16T10:30:00", updated_at: "2026-11-18T09:00:00" })).toBe("2026-11-23 10:30");
+    expect(rejectionDeadline({ status: "审核驳回", reviewed_at: null, updated_at: "2026-11-16T10:30:00" })).toBe("2026-11-23 10:30");
+  });
+  it("重提或取消后不再显示驳回倒计时", () => {
+    for (const status of ["主管待审", "已取消"] as const) {
+      expect(rejectionDeadline({ status, reviewed_at: "2026-11-16T10:30:00", updated_at: "2026-11-18T09:00:00" })).toBeNull();
+    }
+  });
+});
 
 describe("selfReviewNotice（11-24）", () => {
   it("主管待审 + 主管审核因「不能审核自己谈的单」禁用 → 提示找管理员临时授权", () => {

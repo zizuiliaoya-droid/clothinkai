@@ -29,7 +29,6 @@ import {
   negotiationStatusCounts,
   submitNegotiation,
 } from "@/features/negotiation/api";
-import { CopyNegotiationModal } from "@/features/negotiation/components/CopyNegotiationModal";
 import { FinalReviewModal } from "@/features/negotiation/components/FinalReviewModal";
 import { ManagerReviewModal } from "@/features/negotiation/components/ManagerReviewModal";
 import {
@@ -38,6 +37,7 @@ import {
 } from "@/features/negotiation/components/NegotiationFormModal";
 import { NegotiationReceiverModal } from "@/features/negotiation/components/NegotiationReceiverModal";
 import { useNegotiationFeedback } from "@/features/negotiation/components/useNegotiationFeedback";
+import { rejectionDeadline } from "@/features/negotiation/negotiationDialogs";
 import type {
   CooperationMode,
   Negotiation,
@@ -88,7 +88,7 @@ const ONE_LINE = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "no
 
 /** 菜单里要开弹窗的流程动作；弹窗在 features/negotiation/components。 */
 export type NegotiationDialog = {
-  kind: "manager_review" | "final_review" | "receiver" | "copy";
+  kind: "manager_review" | "final_review" | "receiver";
   row: Negotiation;
   action: UiAction;
 };
@@ -198,8 +198,11 @@ export function NegotiationPage() {
       setDialog({ kind, row: record, action });
     const built = buildMenuItems("negotiation", record.ui, {
       actions: {
-        edit: { label: "编辑", onClick: () => openEdit(record) },
-        submit: {
+        edit: {
+          label: record.status === "审核驳回" ? "修改并重新提交" : "编辑",
+          onClick: () => openEdit(record, record.status === "审核驳回" ? record.ui?.actions?.submit?.missing : undefined),
+        },
+        submit: record.status === "审核驳回" ? undefined : {
           label: "提交审核",
           // 缺项能在编辑弹窗里补（★¹ in_dialog）：带 missing 时先开弹窗
           onClick: (action) =>
@@ -209,7 +212,6 @@ export function NegotiationPage() {
         final_review: { label: "老板审核", onClick: open("final_review") },
         receiver_save: { label: "录收货信息", onClick: open("receiver") },
         receiver_confirm: { label: "确认收货并生成推广单", onClick: open("receiver") },
-        copy: { label: "复制为新谈款", onClick: open("copy") },
       },
     });
     // FlowMenuItem 是 interface（没有 antd MenuItemType 的 data-* 索引签名），逐项转成字面量
@@ -321,11 +323,16 @@ export function NegotiationPage() {
               </Tag>
             )}
           </Space>
-          {v === "审核驳回" && row.review_opinion && (
+          {(v === "审核驳回" || v === "已取消") && row.review_opinion && (
             <Tooltip title={row.review_opinion}>
               <Typography.Text type="danger" style={{ fontSize: 12 }}>
                 驳回原因
               </Typography.Text>
+            </Tooltip>
+          )}
+          {v === "审核驳回" && (
+            <Tooltip title={`截止 ${rejectionDeadline(row) ?? "本次驳回后 7 天"}，仅保存修改不会延长时限`}>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>7 天内未重提自动取消</Typography.Text>
             </Tooltip>
           )}
           {v === "已定稿" && row.promotion_internal_code && (
@@ -500,11 +507,6 @@ export function NegotiationPage() {
       <ManagerReviewModal target={dialogOf("manager_review")} onClose={closeDialog} />
       <FinalReviewModal target={dialogOf("final_review")} onClose={closeDialog} />
       <NegotiationReceiverModal target={dialogOf("receiver")} onClose={closeDialog} />
-      <CopyNegotiationModal
-        target={dialogOf("copy")}
-        onClose={closeDialog}
-        onCopied={(created) => openEdit(created)}
-      />
     </Card>
   );
 }

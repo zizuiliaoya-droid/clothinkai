@@ -10,11 +10,15 @@ export const SELF_REVIEW_REASON = "不能审核自己谈的单";
 export const SELF_REVIEW_NOTICE =
   "这张谈款是你自己建的，第一级要另一位有主管审核权的人审，管理员不能代做。请找管理员临时授权代理人。";
 
-export const MANAGER_REJECT_HINT = "驳回后这张谈款结束，显示「审批未通过」；PR 可以复制为新谈款重谈";
+export const MANAGER_REJECT_HINT = "驳回后显示「审批未通过」；PR 可在 7 天内修改原单并重新提交，逾期自动取消，审核记录保留";
 export const FINAL_RETURN_HINT = "退回后 PR 改完重提，仍先过主管";
 export const RECEIVER_CONFIRM_TEXT = "确认后生成推广单，之后改地址请到推广单上改";
-export const COPY_CONFIRM_TEXT =
-  "复制博主、商品、颜色尺码、模式、平台、服务费、备注和约定发布时间，生成一张新草稿";
+/** 最近一次主管驳回起连续 168 小时；保存修改不改变 reviewed_at。 */
+export function rejectionDeadline(row: Pick<Negotiation, "status" | "reviewed_at" | "updated_at">): string | null {
+  if (row.status !== "审核驳回") return null;
+  const rejectedAt = dayjs(row.reviewed_at ?? row.updated_at);
+  return rejectedAt.isValid() ? rejectedAt.add(168, "hour").format("YYYY-MM-DD HH:mm") : null;
+}
 
 /**
  * 提交成功后是否要提示「找管理员临时授权代理人」（11-24）：提交人自己有主管审核权、但这张是他谈的。

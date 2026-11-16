@@ -1,6 +1,6 @@
 // 阶段 / 状态 → Tag 文案与颜色（流程线设计 8.1）。颜色只做辅助，Tag 上一定有文字。
 //
-// 用 Record<联合类型, …> 让 tsc 强制写全。推广单 22 个阶段与发货 3 态随 PR-2，谈款 7 态随 PR-3；
+// 用 Record<联合类型, …> 让 tsc 强制写全。推广单 22 个阶段与发货 3 态随 PR-2，谈款两级审核随 PR-3；
 // 推广单结款状态 7 个随 PR-6（文案照 3.4「界面显示」列）。
 
 import type { NegotiationStatus } from "@/features/negotiation/types";
@@ -107,7 +107,7 @@ export const SHIP_STATUS_STYLE: Record<ShipStatus, StageStyle> = {
 };
 
 /**
- * 谈款 7 态（3.2）：文案 = 「界面显示」列（存储值「审核驳回」显示「审批未通过」，在谈的三态带「谈款中 · 」前缀）。
+ * 谈款状态：存储值「审核驳回」显示「审批未通过」，在谈的三态带「谈款中 · 」前缀；取消单保留查询。
  * 顺序 = NEGOTIATION_STATUSES（Tab 顺序）。配色：等人审的偏暖、退回偏橙红、驳回红、等录收货青、定稿绿。
  */
 export const NEGOTIATION_STATUS_STYLE: Record<NegotiationStatus, StageStyle> = {
@@ -118,6 +118,7 @@ export const NEGOTIATION_STATUS_STYLE: Record<NegotiationStatus, StageStyle> = {
   草稿: { label: "草稿", color: "default" },
   审核驳回: { label: "审批未通过", color: "red" },
   已定稿: { label: "已定稿", color: "green" },
+  已取消: { label: "已取消", color: "default" },
 };
 
 /**

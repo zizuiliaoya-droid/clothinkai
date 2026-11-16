@@ -38,7 +38,7 @@ describe("stageStyle", () => {
     for (const s of PROMOTION_STAGES) expect(PROMOTION_STAGE_STYLE[s].label).toBe(s);
   });
 
-  it("谈款 7 态：存储值顺序 = Tab 顺序，文案 = 设计 3.2「界面显示」列，颜色互不相同", () => {
+  it("谈款 8 态：存储值顺序 = Tab 顺序，审批未通过和已取消可以区分", () => {
     // 存储值与后端 NegotiationStatus 一致（后端没有导出快照，这里照抄 enums.py）
     expect([...NEGOTIATION_STATUSES]).toEqual([
       "主管待审",
@@ -48,6 +48,7 @@ describe("stageStyle", () => {
       "草稿",
       "审核驳回",
       "已定稿",
+      "已取消",
     ]);
     expect(Object.fromEntries(NEGOTIATION_STATUSES.map((s) => [s, negotiationStatusStyle(s).label]))).toEqual({
       主管待审: "谈款中 · 主管待审",
@@ -57,6 +58,7 @@ describe("stageStyle", () => {
       草稿: "草稿",
       审核驳回: "审批未通过",
       已定稿: "已定稿",
+      已取消: "已取消",
     });
     const colors = NEGOTIATION_STATUSES.map((s) => negotiationStatusStyle(s).color);
     expect(new Set(colors).size).toBe(7);

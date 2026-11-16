@@ -1,11 +1,16 @@
 // @vitest-environment jsdom
-// 谈款页列表（流程线 8.3）：8 个 Tab +「超时 N」、列、操作菜单按 row.ui、新建按页级 ui、超时行高亮。
+// 谈款页列表：状态 Tab +「超时 N」、列、操作菜单按 row.ui、新建按页级 ui、超时行高亮。
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UiState } from "@/features/flow/keys";
 import type { Negotiation, NegotiationItem, NegotiationPage as NegotiationPageData } from "./types";
+import type { NegotiationFormTarget } from "./components/NegotiationFormModal";
+vi.mock("@/features/negotiation/components/NegotiationFormModal", () => ({
+  NegotiationFormModal: ({ target }: { target: NegotiationFormTarget | null }) =>
+    target ? <div aria-label="谈款编辑目标">{target.editing?.id ?? "新建"}</div> : null,
+}));
 
 const listMock = vi.fn();
 const countsMock = vi.fn();
@@ -189,11 +194,11 @@ describe("NegotiationPage", () => {
     expect(await screen.findByText(/无法打开谈款详情/)).toBeTruthy();
     expect(document.querySelector(".ant-drawer-open")).toBeNull();
   });
-  it("8 个 Tab（审批未通过），默认不带状态；「超时 N」= 主管待审 + overdue_only", async () => {
+  it("9 个 Tab（包含已取消），默认不带状态；「超时 N」= 主管待审 + overdue_only", async () => {
     listMock.mockResolvedValue(pageOf([row()]));
     countsMock.mockResolvedValue({ 主管待审: 5, 主管待审超时: 3, 草稿: 1 });
     renderPage();
-    for (const label of ["全部", "主管待审", "待老板审核", "老板退回", "待补收货地址", "审批未通过", "已定稿"]) {
+    for (const label of ["全部", "主管待审", "待老板审核", "老板退回", "待补收货地址", "审批未通过", "已定稿", "已取消"]) {
       expect((await screen.findAllByText(label)).length).toBeGreaterThan(0);
     }
     expect(screen.getAllByText("草稿").length).toBeGreaterThan(0);
@@ -247,7 +252,7 @@ describe("NegotiationPage", () => {
           ],
           ui: { actions: {}, edits: [] },
         }),
-        row({ id: "n-single", status: "审核驳回", ui: { actions: { copy: { state: "enabled" } }, edits: [] } }),
+        row({ id: "n-single", status: "审核驳回", ui: PR_UI }),
       ])
     );
     renderPage();
@@ -299,6 +304,31 @@ describe("NegotiationPage", () => {
     expect(await openMenu()).toEqual(["编辑", "提交审核"]);
     fireEvent.click(screen.getByText("提交审核"));
     await waitFor(() => expect(submitMock).toHaveBeenCalledWith("n-1"));
+  });
+
+  it("审批未通过只有原单修改重提入口，旧copy动作也不显示", async () => {
+    listMock.mockResolvedValue(pageOf([row({ status: "审核驳回", review_opinion: "报价偏高", ui: { actions: { edit: { state: "enabled" }, submit: { state: "enabled" }, copy: { state: "enabled" } } } })]));
+    renderPage();
+    expect(await openMenu()).toEqual(["修改并重新提交"]);
+    expect(screen.queryByText("复制为新谈款")).toBeNull();
+    expect(screen.getByText("7 天内未重提自动取消")).toBeTruthy();
+    fireEvent.click(screen.getByText("修改并重新提交"));
+    expect(screen.getByLabelText("谈款编辑目标").textContent).toBe("n-1");
+    expect(submitMock).not.toHaveBeenCalled();
+  });
+
+  it("已取消可筛选、查看历史，不能编辑或重新提交", async () => {
+    listMock.mockResolvedValue(pageOf([row({ status: "已取消", review_opinion: "报价偏高", ui: { actions: {}, edits: [] } })]));
+    lineEventsMock.mockResolvedValue({ line_id: "l-1", negotiation: { id: "n-1", status: "已取消" }, promotion: null, next_step: null,
+      events: [{ seq: 1, event_type: "negotiation.manager_rejected", group: "谈款", created_at: "2026-11-09T02:00:00Z", actor: { display_name: "李主管" }, from_state: "主管待审", to_state: "审核驳回", note: "报价偏高", attachment: null, payload: {} }], hidden_segments: [], legacy: [], truncated: false, ui: { actions: {} } });
+    renderPage();
+    await screen.findByText("小美");
+    expect(screen.queryByRole("button", { name: /操作/ })).toBeNull();
+    fireEvent.click(screen.getByRole("tab", { name: "已取消" }));
+    await waitFor(() => expect(listMock).toHaveBeenLastCalledWith(expect.objectContaining({ status: "已取消" })));
+    fireEvent.click((await screen.findAllByText("飞狐短裙"))[0]);
+    expect(await screen.findByText("报价偏高")).toBeTruthy();
+    expect(submitMock).not.toHaveBeenCalled();
   });
 
   it("本页所有行都没有动作（财务、运营）：整列「操作」不显示", async () => {

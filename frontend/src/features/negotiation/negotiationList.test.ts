@@ -25,7 +25,7 @@ function item(over: Partial<NegotiationItem> = {}): NegotiationItem {
 }
 
 describe("NEGOTIATION_TABS", () => {
-  it("全部 + 7 态，顺序同设计 8.3，审核驳回显示「审批未通过」", () => {
+  it("全部 + 8 态，审核驳回显示「审批未通过」，取消单保留查询入口", () => {
     expect(NEGOTIATION_TABS.map((t) => t.label)).toEqual([
       "全部",
       "主管待审",
@@ -35,6 +35,7 @@ describe("NEGOTIATION_TABS", () => {
       "草稿",
       "审批未通过",
       "已定稿",
+      "已取消",
     ]);
     expect(NEGOTIATION_TABS[0].key).toBe("");
     expect(NEGOTIATION_TABS.find((t) => t.label === "审批未通过")?.key).toBe("审核驳回");
