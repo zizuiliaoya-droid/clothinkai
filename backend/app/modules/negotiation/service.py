@@ -1,9 +1,9 @@
-"""谈款服务层（PRD V1.4 模块一；流程线 PR-3 起 7 态两级审核，设计 3.2）。
+"""谈款服务层（两级审核；077 起支持原单重提与驳回到期取消）。
 
 状态流转（转移表 N1 ~ N12，状态机在 ``flow_doc.TRANSITIONS``，谁能动在 ``flow_matrix``）：
 
     草稿 --提交--> 主管待审 --主管通过--> 待老板审核 --老板定稿--> 待补收货地址 --确认收货--> 已定稿
-                       \\--主管驳回--> 审核驳回（终态，重谈用「复制为新谈款」）
+                       \\--主管驳回--> 审核驳回（7 天内原单重提，逾期自动取消）
                                               \\--老板退回--> 老板退回 --PR 改完重提--> 主管待审
 
 几条规则刻意放在 service 而不是只靠前端：
@@ -75,6 +75,7 @@ from app.modules.negotiation.exceptions import (
 from app.modules.negotiation.flow_doc import NegotiationDoc, build_negotiation_doc
 from app.modules.negotiation.models import Negotiation
 from app.modules.negotiation.permissions import SCOPE_NEGOTIATION, SCOPE_NEGOTIATION_ALL
+from app.modules.negotiation.rejection_deadline import REJECTION_RETRY_WINDOW, rejection_expired
 from app.modules.negotiation.repository import NegotiationItemView, NegotiationRepository
 from app.modules.negotiation.schemas import (
     BloggerCooperationHistory,
@@ -111,8 +112,12 @@ from app.modules.promotion.urge_calculator import DEFAULT_TENANT_TZ
 
 log = logging.getLogger("app.modules.negotiation.service")
 
-# 能编辑 / 提交的状态（N2、N3）：草稿、老板退回。状态机本身在 flow_doc.TRANSITIONS，这里只给条件 UPDATE 用
-_OWNER_EDITABLE = (NegotiationStatus.DRAFT.value, NegotiationStatus.FINAL_RETURNED.value)
+# 能编辑 / 提交的状态：草稿、老板退回、期限内的主管驳回。这里只给条件 UPDATE 用。
+_OWNER_EDITABLE = (
+    NegotiationStatus.DRAFT.value,
+    NegotiationStatus.FINAL_RETURNED.value,
+    NegotiationStatus.REJECTED.value,
+)
 
 OVERDUE_AFTER = timedelta(hours=36)
 """主管待审超过这么久算超时（7c-6，按实际时长比）。"""
@@ -387,6 +392,15 @@ class NegotiationService:
             data["overdue_hours"] = int(waited.total_seconds() // 3600)
         data["items"] = _item_responses(views)
         data["ui"] = state.to_dict(view=view)
+        if row["status"] == NegotiationStatus.REJECTED.value and rejection_expired(
+            row.get("reviewed_at"), row["updated_at"], now
+        ):
+            for action in ("edit", "submit"):
+                if action in data["ui"]["actions"]:
+                    data["ui"]["actions"][action] = {
+                        "state": "disabled",
+                        "reason": "驳回已满 7 天，等待系统自动取消",
+                    }
         return NegotiationResponse.model_validate(data)
 
     @staticmethod
@@ -662,6 +676,7 @@ class NegotiationService:
         require(
             actor, build_negotiation_doc(negotiation, items_complete=False), "edit", gates=False
         )
+        rejection_cutoff = self._rejection_cutoff(negotiation)
 
         fields = payload.model_fields_set
         if "quote_amount" in fields and not can_write_field(
@@ -768,6 +783,11 @@ class NegotiationService:
             values["remark"] = payload.remark
 
         before = {"cooperation_mode": negotiation.cooperation_mode, "status": negotiation.status}
+        if (
+            negotiation.status == NegotiationStatus.REJECTED.value
+            and negotiation.reviewed_at is None
+        ):
+            values["reviewed_at"] = negotiation.updated_at
         tenant_id = negotiation.tenant_id
         updated = await self._repo.update_state(
             negotiation_id=negotiation_id,
@@ -775,6 +795,7 @@ class NegotiationService:
             from_statuses=_OWNER_EDITABLE,
             values=values,
             pr_id=user.id,
+            rejection_cutoff=rejection_cutoff,
         )
         if updated is None:
             raise NegotiationStateConflictError(details={"negotiation_id": str(negotiation_id)})
@@ -797,6 +818,36 @@ class NegotiationService:
     # ------------------------------------------------------------------ #
     # N3 提交
     # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _rejection_cutoff(negotiation: Negotiation) -> datetime | None:
+        if negotiation.status != NegotiationStatus.REJECTED.value:
+            return None
+        now = _utcnow()
+        if rejection_expired(negotiation.reviewed_at, negotiation.updated_at, now):
+            raise NegotiationStateConflictError("驳回已满 7 天，不能重新提交，请等待系统自动取消")
+        return now - REJECTION_RETRY_WINDOW
+
+    async def _preserve_legacy_rejection(self, negotiation: Negotiation) -> None:
+        """旧单首次重提时保存已有真实驳回信息；不批量回填或凭空生成审核意见。"""
+        if negotiation.status != NegotiationStatus.REJECTED.value:
+            return
+        events = await self._events.list_by_line(
+            tenant_id=negotiation.tenant_id, line_id=negotiation.line_id
+        )
+        if any(e.event_type == LineEventType.NEGOTIATION_MANAGER_REJECTED.value for e in events):
+            return
+        await self._events.append(
+            tenant_id=negotiation.tenant_id,
+            line_id=negotiation.line_id,
+            negotiation_id=negotiation.id,
+            event_type=LineEventType.NEGOTIATION_MANAGER_REJECTED,
+            actor_id=negotiation.reviewed_by,
+            from_state=NegotiationStatus.PENDING.value,
+            to_state=NegotiationStatus.REJECTED.value,
+            note=negotiation.review_opinion,
+            occurred_at=negotiation.reviewed_at or negotiation.updated_at,
+        )
 
     async def _last_submit_snapshot(
         self, *, tenant_id: UUID, line_id: UUID, negotiation_id: UUID
@@ -824,6 +875,8 @@ class NegotiationService:
             "submit",
         )
         from_status = negotiation.status
+        rejection_cutoff = self._rejection_cutoff(negotiation)
+        await self._preserve_legacy_rejection(negotiation)
         tenant_id, line_id = negotiation.tenant_id, negotiation.line_id
         blogger_id = negotiation.blogger_id
         snapshot = _submit_snapshot(negotiation, views)
@@ -845,6 +898,7 @@ class NegotiationService:
                 "final_review_opinion": None,
             },
             pr_id=user.id,
+            rejection_cutoff=rejection_cutoff,
         )
         if updated is None:
             raise NegotiationStateConflictError(details={"negotiation_id": str(negotiation_id)})
@@ -947,7 +1001,7 @@ class NegotiationService:
     async def review(
         self, negotiation_id: UUID, payload: NegotiationReviewRequest, user: User
     ) -> NegotiationResponse:
-        """N4 / N5 主管通过 / 驳回：主管待审 → 待老板审核 / 审核驳回（终态，意见留在行上，博主卡片读它）。
+        """N4 / N5 主管通过 / 驳回：主管待审 → 待老板审核 / 审核驳回；各轮意见保留在事件中。
 
         通过**不建推广单**（老板定稿后确认收货信息时才建，N9）。持 ``*`` → 403 ``star_first_level``
         （管理员不能代做第一级）；审自己谈的 → 403 ``NEGOTIATION_SELF_REVIEW_FORBIDDEN``；驳回意见必填在 schema 层。
@@ -1229,7 +1283,9 @@ class NegotiationService:
     # ------------------------------------------------------------------ #
 
     async def copy(self, negotiation_id: UUID, user: User) -> NegotiationResponse:
-        """N10：审核驳回、本人 → 新草稿（201）。复制博主、商品、明细、模式、平台、服务费、备注、约定发布时间，
+        """历史 N10 实现；077 起所有状态均由 require 拒绝，保留路由供旧客户端得到明确错误。
+
+        旧行为：审核驳回、本人 → 新草稿。复制博主、商品、明细、模式、平台、服务费、备注、约定发布时间，
         不复制审核与收货；新 ``line_id``、``copied_from_id`` 指回原单。两条线各写一条事件互相引用（6.2、6.3）：
         新线 ``negotiation.copied``、原线 ``negotiation.copied_out``。原单不动（终态）。
         明细原样复制（sku 已删 / 商品成员变了的，提交时 ★¹ 照常拦）。

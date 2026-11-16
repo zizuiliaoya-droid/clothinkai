@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable, Mapping
+from datetime import datetime
 from enum import Enum
 from typing import Any
 from uuid import UUID
@@ -45,6 +46,7 @@ class LineEventType(str, Enum):
     NEGOTIATION_RECEIVER_SAVED = "negotiation.receiver_saved"
     NEGOTIATION_FINALIZED = "negotiation.finalized"
     NEGOTIATION_REASSIGNED = "negotiation.reassigned"
+    NEGOTIATION_CANCELLED = "negotiation.cancelled"
     # 留言
     LINE_COMMENT = "line.comment"
     # 推广
@@ -124,6 +126,7 @@ _GROUP_MEMBERS: dict[str, tuple[LineEventType, ...]] = {
         _T.NEGOTIATION_RECEIVER_SAVED,
         _T.NEGOTIATION_FINALIZED,
         _T.NEGOTIATION_REASSIGNED,
+        _T.NEGOTIATION_CANCELLED,
     ),
     "comment": (_T.LINE_COMMENT,),
     "promotion": (
@@ -383,6 +386,7 @@ class LineEventRepository:
         note: str | None = None,
         attachment_id: UUID | None = None,
         payload: dict[str, Any] | None = None,
+        occurred_at: datetime | None = None,
     ) -> LineEvent:
         """写一条事件：只 add + flush，不提交（同事务，6.4）。
 
@@ -408,6 +412,7 @@ class LineEventRepository:
             attachment_id=attachment_id,
             payload=body,
             actor_id=actor_id,
+            **({"created_at": occurred_at} if occurred_at is not None else {}),
         )
         self._session.add(event)
         await self._session.flush()

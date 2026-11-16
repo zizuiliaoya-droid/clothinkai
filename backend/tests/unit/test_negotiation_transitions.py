@@ -54,17 +54,19 @@ STATES = (
     "老板退回",
     "待补收货地址",
     "已定稿",
+    "已取消",
 )
 
 # 3.2 转移表（N2 ~ N11）按「从」抄；留言 N11 任意状态（PR-4），转交 N12 不进矩阵
 ALLOWED: dict[str, set[str]] = {
     "草稿": {"edit", "submit", "comment"},
     "主管待审": {"manager_review", "comment"},
-    "审核驳回": {"copy", "comment"},
+    "审核驳回": {"edit", "submit", "comment"},
     "待老板审核": {"final_review", "comment"},
     "老板退回": {"edit", "submit", "comment"},
     "待补收货地址": {"receiver_save", "receiver_confirm", "comment"},
     "已定稿": {"comment"},
+    "已取消": {"comment"},
 }
 
 # 每个动作的执行人（默认角色下）
@@ -112,7 +114,7 @@ def test_states_are_the_seven_stored_values() -> None:
 def test_every_action_reachable() -> None:
     """每个动作至少在一个状态允许；留言（comment，N11）每个状态都允许（PR-4）。"""
     reachable = set().union(*ALLOWED.values())
-    assert reachable == set(EXECUTOR) == set(ACTIONS)
+    assert reachable == set(EXECUTOR) - {"copy"} == set(ACTIONS) - {"copy"}
     for state in STATES:
         assert "comment" in TRANSITIONS[state], state
 
@@ -146,14 +148,14 @@ def test_state_machine_before_rules_and_gates() -> None:
     assert exc.value.code == "ILLEGAL_STATE_TRANSITION"
 
 
-def test_rejected_is_terminal_except_copy() -> None:
-    """审核驳回（Q1）：不能再编辑、提交（旧行为是改完回草稿，B1），只能复制为新谈款。"""
+def test_rejected_resubmits_original_and_never_copies() -> None:
     doc = _doc("审核驳回")
-    assert doc.allowed_actions() == frozenset({"copy", "comment"})
+    assert doc.allowed_actions() == frozenset({"edit", "submit", "comment"})
     for action in ("edit", "submit"):
-        with pytest.raises(AppException) as exc:
-            require(PR, doc, action)
-        assert exc.value.code == "ILLEGAL_STATE_TRANSITION"
+        require(PR, doc, action)
+    with pytest.raises(AppException) as exc:
+        require(PR, doc, "copy")
+    assert exc.value.code == "ILLEGAL_STATE_TRANSITION"
 
 
 def test_build_negotiation_doc_from_orm_and_row() -> None:

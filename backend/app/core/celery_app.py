@@ -64,6 +64,7 @@ celery_app.autodiscover_tasks(
         "app.tasks.summary_tasks",  # PRD 模块三：refresh_report_summaries（5 张汇总表）
         "app.tasks.urge_tasks",  # PRD 改动 2：scan_urge_tasks（催发任务，独立于企微）
         "app.tasks.follow_up_tasks",  # 1105：每日站内待跟进汇总，不投递外部消息
+        "app.tasks.negotiation_tasks",  # 驳回满 7 天未重提自动取消
     ]
 )
 
@@ -72,6 +73,11 @@ celery_app.autodiscover_tasks(
 # ---------------------------------------------------------------------------
 
 celery_app.conf.beat_schedule = {
+    "cancel-rejected-negotiations": {
+        "task": "app.tasks.negotiation_tasks.cancel_rejected_negotiations",
+        "schedule": crontab(minute="*/5"),
+        "options": {"queue": "default"},
+    },
     # 每日 03:00 备份（NFR04）
     "backup-database-daily": {
         "task": "app.tasks.backup_tasks.backup_database",

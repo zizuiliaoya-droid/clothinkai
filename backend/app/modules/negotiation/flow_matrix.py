@@ -125,6 +125,7 @@ _FINAL_PENDING = NegotiationStatus.FINAL_PENDING.value
 _RETURNED = NegotiationStatus.FINAL_RETURNED.value
 _RECEIVER_PENDING = NegotiationStatus.RECEIVER_PENDING.value
 _APPROVED = NegotiationStatus.APPROVED.value
+_CANCELLED = NegotiationStatus.CANCELLED.value
 
 
 def _each(value: Cell, *stages: str) -> dict[str, Cell | tuple[Cell, ...]]:
@@ -140,7 +141,8 @@ _OWNER_EDITS = Cell(edit=(_WRITE, _OWNER), read=(_SEE,))
 _basic: dict[str, Cell | tuple[Cell, ...]] = {
     _DRAFT: Cell(edit=(_WRITE, _OWNER), read=(_OWNER,)),
     _RETURNED: _OWNER_EDITS,
-    **_each(Cell(read=(_SEE,)), _PENDING, _REJECTED, _FINAL_PENDING, _RECEIVER_PENDING, _APPROVED),
+    _REJECTED: _OWNER_EDITS,
+    **_each(Cell(read=(_SEE,)), _PENDING, _FINAL_PENDING, _RECEIVER_PENDING, _APPROVED, _CANCELLED),
 }
 
 # 服务费：同上，但运营「隐」（字段规则 promotion.quote_amount 不含运营）
@@ -148,13 +150,14 @@ _QUOTE_EDIT = (_WRITE, _OWNER, _QUOTE_READ, _QUOTE_WRITE)
 _quote_amount: dict[str, Cell | tuple[Cell, ...]] = {
     _DRAFT: Cell(edit=_QUOTE_EDIT, read=(_OWNER, _QUOTE_READ)),
     _RETURNED: Cell(edit=_QUOTE_EDIT, read=(_SEE, _QUOTE_READ)),
+    _REJECTED: Cell(edit=_QUOTE_EDIT, read=(_SEE, _QUOTE_READ)),
     **_each(
         Cell(read=(_SEE, _QUOTE_READ)),
         _PENDING,
-        _REJECTED,
         _FINAL_PENDING,
         _RECEIVER_PENDING,
         _APPROVED,
+        _CANCELLED,
     ),
 }
 
@@ -162,7 +165,15 @@ _quote_amount: dict[str, Cell | tuple[Cell, ...]] = {
 _manager_opinion: dict[str, Cell | tuple[Cell, ...]] = {
     _DRAFT: Cell(grey=(_OWNER,), hint=MANAGER_OPINION_HINT),
     _PENDING: Cell(edit=_MANAGER_EDIT, read=(_SEE,)),
-    **_each(Cell(read=(_SEE,)), _REJECTED, _FINAL_PENDING, _RETURNED, _RECEIVER_PENDING, _APPROVED),
+    **_each(
+        Cell(read=(_SEE,)),
+        _REJECTED,
+        _FINAL_PENDING,
+        _RETURNED,
+        _RECEIVER_PENDING,
+        _APPROVED,
+        _CANCELLED,
+    ),
 }
 
 # 老板意见：草稿 灰/—；主管待审 全灰；审核驳回 隐；待老板审核 读/读/改/读/读；其余全读
@@ -189,7 +200,7 @@ _overdue_badge: dict[str, Cell | tuple[Cell, ...]] = {_PENDING: Cell(read=(_SEE,
 
 # 「同博主有别的 PR 在谈」：草稿与老板退回，只给本人（编辑弹窗里的提示）
 _others_in_progress: dict[str, Cell | tuple[Cell, ...]] = _each(
-    Cell(read=(_OWNER,)), _DRAFT, _RETURNED
+    Cell(read=(_OWNER,)), _DRAFT, _RETURNED, _REJECTED
 )
 
 # ---------------------------------------------------------------------------
@@ -200,10 +211,12 @@ _others_in_progress: dict[str, Cell | tuple[Cell, ...]] = _each(
 _edit: dict[str, Cell | tuple[Cell, ...]] = {
     _DRAFT: Cell(edit=(_WRITE, _OWNER)),
     _RETURNED: Cell(edit=(_WRITE, _OWNER), read=(_SEE, _WRITE)),
+    _REJECTED: Cell(edit=(_WRITE, _OWNER), read=(_SEE, _WRITE)),
 }
 _submit: dict[str, Cell | tuple[Cell, ...]] = {
     _DRAFT: Cell(edit=(_WRITE, _OWNER), gates=SUBMIT_GATES),
     _RETURNED: Cell(edit=(_WRITE, _OWNER), read=(_SEE, _WRITE), gates=SUBMIT_GATES),
+    _REJECTED: Cell(edit=(_WRITE, _OWNER), read=(_SEE, _WRITE), gates=SUBMIT_GATES),
 }
 
 # 主管通过 / 驳回：主管待审 读/改★²/读/隐/隐（管理员读：NoStar；主管审自己建的：读，self_review）
@@ -222,8 +235,8 @@ _receiver_confirm: dict[str, Cell | tuple[Cell, ...]] = {
     _RECEIVER_PENDING: Cell(edit=_RECEIVER_EDIT, gates=RECEIVER_GATES),
 }
 
-# 复制为新谈款：审核驳回 改/隐/隐/隐/隐（11-4：只放在审批未通过上）
-_copy: dict[str, Cell | tuple[Cell, ...]] = {_REJECTED: Cell(edit=(_WRITE, _OWNER))}
+# 保留旧动作键与接口，但新流程不再允许复制；已有 copied_from_id 历史保留。
+_copy: dict[str, Cell | tuple[Cell, ...]] = {}
 
 # 留言 / 贴图（N11，PR-4）：草稿 改/—；其余 改/改/改/读/读（财务、运营没有 negotiation:write）
 _comment: dict[str, Cell | tuple[Cell, ...]] = {
@@ -236,6 +249,7 @@ _comment: dict[str, Cell | tuple[Cell, ...]] = {
         _RETURNED,
         _RECEIVER_PENDING,
         _APPROVED,
+        _CANCELLED,
     ),
 }
 
@@ -250,6 +264,7 @@ _timeline: dict[str, Cell | tuple[Cell, ...]] = {
         _RETURNED,
         _RECEIVER_PENDING,
         _APPROVED,
+        _CANCELLED,
     ),
 }
 

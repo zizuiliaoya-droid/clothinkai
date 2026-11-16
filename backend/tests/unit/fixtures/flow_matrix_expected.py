@@ -219,6 +219,7 @@ NEGOTIATION_STATES: tuple[str, ...] = (
     "老板退回",
     "待补收货地址",
     "已定稿",
+    "已取消",
 )
 SELF_BUILT = "主管待审·主管自建"
 # 主管审过的状态：快照带本轮主管审核人
@@ -521,22 +522,24 @@ _NEG_ROWS: dict[tuple[str, str], dict[str, str]] = {
     ("field", "basic"): {
         "草稿": "改隐隐隐隐",
         "主管待审": _ALL_READ,
-        "审核驳回": _ALL_READ,
+        "审核驳回": "改读读读读",
         "待老板审核": _ALL_READ,
         "老板退回": "改读读读读",
         "待补收货地址": _ALL_READ,
         "已定稿": _ALL_READ,
+        "已取消": _ALL_READ,
         SELF_BUILT: "隐读读读读",
     },
     # 运营看不到服务费（字段规则 promotion.quote_amount）
     ("field", "quote_amount"): {
         "草稿": "改隐隐隐隐",
         "主管待审": "读读读读隐",
-        "审核驳回": "读读读读隐",
+        "审核驳回": "改读读读隐",
         "待老板审核": "读读读读隐",
         "老板退回": "改读读读隐",
         "待补收货地址": "读读读读隐",
         "已定稿": "读读读读隐",
+        "已取消": "读读读读隐",
         SELF_BUILT: "隐读读读隐",
     },
     ("field", "manager_opinion"): {
@@ -547,6 +550,7 @@ _NEG_ROWS: dict[tuple[str, str], dict[str, str]] = {
         "老板退回": _ALL_READ,
         "待补收货地址": _ALL_READ,
         "已定稿": _ALL_READ,
+        "已取消": _ALL_READ,
         SELF_BUILT: "隐读读读读",  # 主管不能审自己建的
     },
     ("field", "final_opinion"): {
@@ -575,15 +579,23 @@ _NEG_ROWS: dict[tuple[str, str], dict[str, str]] = {
         SELF_BUILT: "隐读读读读",
     },
     ("field", "overdue_badge"): {"主管待审": "读读读隐隐", SELF_BUILT: "隐读读隐隐"},
-    ("field", "others_in_progress"): {"草稿": "读隐隐隐隐", "老板退回": "读隐隐隐隐"},
-    ("action", "edit"): {"草稿": "改隐隐隐隐", "老板退回": "改读读隐隐"},
-    ("action", "submit"): {"草稿": "改隐隐隐隐", "老板退回": "改读读隐隐"},
+    ("field", "others_in_progress"): {
+        "草稿": "读隐隐隐隐",
+        "老板退回": "读隐隐隐隐",
+        "审核驳回": "读隐隐隐隐",
+    },
+    ("action", "edit"): {"草稿": "改隐隐隐隐", "老板退回": "改读读隐隐", "审核驳回": "改读读隐隐"},
+    ("action", "submit"): {
+        "草稿": "改隐隐隐隐",
+        "老板退回": "改读读隐隐",
+        "审核驳回": "改读读隐隐",
+    },
     # 管理员「读」（NoStar）；主管自建时主管「读」（不能审自己谈的单）
     ("action", "manager_review"): {"主管待审": "读改读隐隐", SELF_BUILT: "隐读读隐隐"},
     ("action", "final_review"): {"待老板审核": "读读改隐隐"},
     ("action", "receiver_save"): {"待补收货地址": "改改改隐隐"},
     ("action", "receiver_confirm"): {"待补收货地址": "改改改隐隐"},
-    ("action", "copy"): {"审核驳回": "改隐隐隐隐"},
+    ("action", "copy"): {},
     # 留言 / 贴图（PR-4，N11）：草稿只有本人；其余 PR / 主管 / 管理员改，财务、运营读
     ("action", "comment"): {
         "草稿": "改隐隐隐隐",

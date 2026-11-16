@@ -120,8 +120,7 @@ def open_obligations_sql(alias: str) -> str:
 
 def follow_up_open_sql(alias: str, kind: str) -> str:
     if kind == "negotiation":
-        # REJECTED 的矩阵仅允许 copy/comment；FINAL_RETURNED 仍能 edit/submit，必须保留。
-        return f"""({alias}.status NOT IN ('审核驳回','已定稿') AND {alias}.promotion_id IS NULL)"""
+        return f"""({alias}.status NOT IN ('已取消','已定稿') AND {alias}.promotion_id IS NULL)"""
     return f"""({alias}.publish_status<>'已删除' AND (
       ({alias}.is_active AND {alias}.completed_at IS NULL AND {alias}.publish_status<>'已取消')
       OR {open_obligations_sql(alias)}))"""
