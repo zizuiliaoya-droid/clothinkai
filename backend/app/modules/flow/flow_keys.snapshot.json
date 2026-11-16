@@ -169,6 +169,7 @@
     "negotiation.receiver_saved": "negotiation",
     "negotiation.finalized": "negotiation",
     "negotiation.reassigned": "negotiation",
+    "negotiation.cancelled": "negotiation",
     "line.comment": "comment",
     "promotion.created": "promotion",
     "promotion.imported": "promotion",
