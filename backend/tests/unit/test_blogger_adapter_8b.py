@@ -26,7 +26,7 @@ def _parse(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _valid(**kw: Any) -> dict[str, Any]:
-    return {"xiaohongshu_id": "acc001", "nickname": "小美", **kw}
+    return {"xiaohongshu_id": "acc001", "nickname": "小美", "platform": "小红书", **kw}
 
 
 # ---------------------------------------------------------------------------
@@ -126,7 +126,7 @@ def test_quote_parse_and_validate() -> None:
 def test_platform_enum() -> None:
     for p in Platform:
         assert _ADAPTER.validate(_valid(platform=p.value)) == []
-    assert _ADAPTER.validate(_valid(platform=None)) == []  # 空 → 小红书
+    assert _ADAPTER.validate(_valid(platform=None)) == ["平台不能为空；请补充平台列或重新下载模板"]
     [err] = _ADAPTER.validate(_valid(platform="微博"))
     assert err == f"平台必须为 {'/'.join(p.value for p in Platform)} 之一"
 

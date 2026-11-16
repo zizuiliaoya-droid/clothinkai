@@ -80,7 +80,7 @@ export function GoodsItemsFields({ form, members, legacy, disabled, optional }: 
               loading={q?.isLoading}
               disabled={disabled}
               options={options}
-              notFoundContent={q?.isError ? "颜色尺码加载失败" : "该款暂无颜色尺码，请先在商品成本表维护"}
+              notFoundContent={q?.isError ? "颜色尺码加载失败" : "该款暂无颜色尺码，请先在「款式 → 规格与成本」维护"}
               onChange={() => {
                 if (preselected === m.style_id) setPreselected(null);
               }}

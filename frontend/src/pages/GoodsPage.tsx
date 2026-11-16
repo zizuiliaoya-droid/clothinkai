@@ -1,10 +1,12 @@
 import { useReadOnlySupport } from "@/stores/supportStore";
 import { useState } from "react";
-import { Button, Card, Tabs, Typography } from "antd";
+import { Button, Card, Segmented, Space, Tabs, Typography } from "antd";
 import { useSearchParams } from "react-router-dom";
 import { DictManagerModal } from "@/components/DictManager/DictManagerModal";
 import { GoodsPanel } from "@/pages/goods/GoodsPanel";
 import { StylePanel } from "@/pages/goods/StylePanel";
+import { CostTablePage } from "@/pages/CostTablePage";
+import { ProductImportToolbar } from "@/pages/goods/ProductImportToolbar";
 
 type TabKey = "goods" | "styles";
 
@@ -24,6 +26,7 @@ export function GoodsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [dictOpen, setDictOpen] = useState(false);
   const activeTab = toTabKey(searchParams.get("tab"));
+  const costView = searchParams.get("view") === "costs" && !searchParams.get("style_id");
   const openStyleId = readOnly ? undefined : searchParams.get("style_id") ?? undefined;
 
   function switchTab(key: string) {
@@ -33,10 +36,22 @@ export function GoodsPage() {
         if (key === "styles") next.set("tab", "styles");
         else next.delete("tab");
         next.delete("style_id");
+        next.delete("view");
         return next;
       },
       { replace: true }
     );
+  }
+
+  function switchStyleView(view: string) {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set("tab", "styles");
+      if (view === "costs") next.set("view", "costs");
+      else next.delete("view");
+      next.delete("style_id");
+      return next;
+    }, { replace: true });
   }
 
   function clearStyleId() {
@@ -53,22 +68,33 @@ export function GoodsPage() {
   return (
     <Card
       title={
-        <Typography.Title level={4} style={{ margin: 0 }}>
-          商品 / 套装
-        </Typography.Title>
+        <Space wrap style={{ display: "flex", justifyContent: "space-between", whiteSpace: "normal", padding: "8px 0" }}>
+          <Typography.Title level={4} style={{ margin: 0 }}>商品与款式</Typography.Title>
+          {!readOnly && <Button onClick={() => setDictOpen(true)}>管理字典</Button>}
+        </Space>
       }
-      extra={!readOnly && <Button onClick={() => setDictOpen(true)}>管理字典</Button>}
     >
+      <Typography.Paragraph type="secondary">商品用于组合单品或套装；款式用于维护货品、颜色尺码与成本。</Typography.Paragraph>
+      <ProductImportToolbar />
       <Tabs
         activeKey={activeTab}
         onChange={switchTab}
         items={[
-          { key: "goods", label: "商品 / 套装", children: <GoodsPanel /> },
+          { key: "goods", label: "商品 / 套装", children: activeTab === "goods" ? <GoodsPanel /> : null },
           {
             key: "styles",
             label: "款式",
             children: (
-              <StylePanel openStyleId={openStyleId} onOpenStyleClosed={clearStyleId} />
+              activeTab === "styles" ? <>
+                <Segmented
+                  aria-label="款式视图"
+                  value={costView ? "costs" : "details"}
+                  options={[{ label: "款式资料", value: "details" }, { label: "规格与成本", value: "costs" }]}
+                  onChange={switchStyleView}
+                  style={{ marginBottom: 16 }}
+                />
+                {costView ? <CostTablePage /> : <StylePanel openStyleId={openStyleId} onOpenStyleClosed={clearStyleId} />}
+              </> : null
             ),
           },
         ]}

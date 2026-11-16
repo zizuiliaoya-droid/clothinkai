@@ -24,7 +24,6 @@ import { BloggerListPage } from "@/pages/BloggerListPage";
 import { PromotionListPage } from "@/pages/PromotionListPage";
 import { NegotiationPage } from "@/pages/NegotiationPage";
 import { UrgePage } from "@/pages/UrgePage";
-import { CostTablePage } from "@/pages/CostTablePage";
 import { SettlementListPage } from "@/pages/SettlementListPage";
 import { OrderAdjustmentPage } from "@/pages/OrderAdjustmentPage";
 import { WarehousePage } from "@/pages/WarehousePage";
@@ -200,7 +199,7 @@ function AppRoutes() {
         {/* 数据管理 */}
         <Route
           path="/skus"
-          element={<CostTablePage />}
+          element={<Navigate to="/goods?tab=styles&view=costs" replace />}
         />
         <Route path="/qianniu" element={
           <DailyDataPage<QianniuRow>

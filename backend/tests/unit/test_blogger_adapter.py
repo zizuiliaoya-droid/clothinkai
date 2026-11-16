@@ -102,7 +102,7 @@ def test_parse_row_default_mapping():
     # 8b D5：质量标签只读，不取值，只记「文件给了」（非 spec 字段，只给整批提示用）
     assert "quality_tags" not in parsed
     assert parsed["quality_tags_present"] is True
-    assert parsed["platform"] is None  # 缺列 → None（upsert 时默认"小红书"）
+    assert parsed["platform"] is None  # 缺列留空，由 validate 给出补平台提示
 
 
 class _FakeMapping:
@@ -133,6 +133,7 @@ def _valid() -> dict:
     return {
         "xiaohongshu_id": "xhs001",
         "nickname": "小美",
+        "platform": "小红书",
         "follower_count": 12500,
         "quote": Decimal("500.00"),
         "category_tags": ["美妆"],
@@ -187,7 +188,7 @@ def test_validate_length_limit():
 
 def test_validate_optional_none_ok():
     # follower/quote/tags 空 → 通过
-    p = {"xiaohongshu_id": "x", "nickname": "n"}
+    p = {"xiaohongshu_id": "x", "nickname": "n", "platform": "小红书"}
     assert _adapter().validate(p) == []
 
 
@@ -197,7 +198,7 @@ def test_validate_optional_none_ok():
 
 
 def _parse(**cells: str) -> dict:
-    row = {"小红书ID": "xhs001", "昵称": "小美", **cells}
+    row = {"小红书ID": "xhs001", "昵称": "小美", "平台": "小红书", **cells}
     return _adapter().parse_row(row, None)
 
 

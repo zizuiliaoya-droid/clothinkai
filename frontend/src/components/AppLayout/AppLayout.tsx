@@ -113,14 +113,9 @@ export function AppLayout() {
       label: "数据管理",
       children: [
         {
-          key: "/skus",
-          icon: <AppstoreOutlined />,
-          label: <Link to="/skus">商品成本表</Link>,
-        },
-        {
           key: "/goods",
           icon: <GiftOutlined />,
-          label: <Link to="/goods">商品 / 套装</Link>,
+          label: <Link to="/goods">商品与款式</Link>,
         },
         {
           key: "/brands",

@@ -25,7 +25,7 @@ from app.modules.product.models import Style
 
 def _parsed(xhs: str, **kw: Any) -> dict[str, Any]:
     adapter = BloggerImportAdapter()
-    row = {"小红书ID": xhs, "昵称": "小美", **kw}
+    row = {"小红书ID": xhs, "昵称": "小美", "平台": "小红书", **kw}
     return adapter.parse_row(row, None)
 
 

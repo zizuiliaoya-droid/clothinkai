@@ -1,5 +1,4 @@
 import { useReadOnlySupport } from "@/stores/supportStore";
-import { formatMoney } from "@/utils/money";
 import { useState } from "react";
 import {
   Button,
@@ -32,6 +31,7 @@ import {
   updateBlogger,
 } from "@/features/blogger/api";
 import { toBloggerUpdate } from "@/features/blogger/edit";
+import { bloggerValidationErrors } from "@/features/blogger/validation";
 import type {
   Blogger,
   BloggerCreate,
@@ -52,7 +52,7 @@ const GENDER_TARGETS = ["女性", "男性", "中性"];
 const LEVELS = ["A", "B", "C", "D"];
 // 8b §6.2：博主模版表头（别名：账号 = 小红书ID / 小红书号，昵称 = 小红书昵称，微信 = 微信号，粉丝数 = 粉丝量，类目标签 = 标签）
 const MANUAL_BLOGGER_COLUMNS = [
-  "账号", "昵称", "平台", "微信", "手机号", "粉丝数", "博主类型", "性别投放",
+  "账号", "博主昵称", "平台", "微信", "手机号", "粉丝数", "博主类型", "性别投放",
   "类目标签", "报价", "合作历史", "备注", "主页链接", "网页ID",
 ];
 // 报价（及报价备注）的默认可写角色，同后端 FIELD_PERMISSION_REGISTRY["blogger"]["quote"]；最终以后端校验为准
@@ -117,7 +117,11 @@ export function BloggerListPage() {
       form.resetFields();
       void qc.invalidateQueries({ queryKey: ["bloggers"] });
     },
-    onError: (err) => message.error(extractErrorMessage(err)),
+    onError: (err) => {
+      const errors = bloggerValidationErrors(err);
+      if (errors.length) form.setFields(errors);
+      message.error(errors.length ? errors.flatMap(field => field.errors).join("；") : extractErrorMessage(err));
+    },
   });
 
   const toggleMutation = useMutation({
@@ -185,12 +189,6 @@ export function BloggerListPage() {
     },
     { title: "微信号", dataIndex: "wechat", width: 110, render: (v) => v || "—" },
     {
-      title: "报价",
-      dataIndex: "quote",
-      width: 100,
-      render: (v: string | null) => (v == null ? "—" : formatMoney(v)),
-    },
-    {
       // 与报价同一条字段权限，看不到报价的人收到 null
       title: "报价备注",
       dataIndex: "quote_note",
@@ -203,12 +201,6 @@ export function BloggerListPage() {
       dataIndex: "follower_count",
       width: 100,
       render: (v: number | null) => (v == null ? "—" : v.toLocaleString()),
-    },
-    {
-      title: "画像更新",
-      dataIndex: "audience_updated_on",
-      width: 110,
-      render: (v: string | null | undefined) => v || "—",
     },
     {
       title: "博主类型",
@@ -238,12 +230,6 @@ export function BloggerListPage() {
         ) : (
           "—"
         ),
-    },
-    {
-      title: "是否假号",
-      dataIndex: "is_suspected_fake",
-      width: 90,
-      render: (v: boolean) => (v ? <Tag color="red" title="历史记录，原判定依据待核实">疑似（历史）</Tag> : "未标记"),
     },
     {
       title: "状态",
@@ -291,6 +277,7 @@ export function BloggerListPage() {
             label="导入博主库"
             invalidateKeys={[["bloggers"], ["blogger-tags"]]}
             templateColumns={MANUAL_BLOGGER_COLUMNS}
+            columnsNote="平台、账号、博主昵称必填；平台不再默认小红书。旧模板请补平台列或重新下载；其他列以下载模板中的当前映射为准。"
             onUploaded={setLastBloggerBatchId}
           />
           <Button icon={<TagsOutlined />} onClick={() => setTagDictOpen(true)}>
@@ -403,21 +390,29 @@ export function BloggerListPage() {
           layout="vertical"
           onFinish={(v) => saveMutation.mutate(v)}
           style={{ marginTop: 16 }}
-          initialValues={{ platform: "小红书" }}
+          initialValues={{ platform: "抖音" }}
         >
           {!editing && autoClaimCreate && <Form.Item name="claim_work_wechat_id" label="认领主工作微信" rules={[{required: claimsEnabled, message: "请选择认领使用的工作微信"}]} extra={claimsEnabled ? "创建成功后自动认领；没有可选账号请主管先维护工作微信。" : "准备期可留空创建，自动认领后显示工作微信待补。"}><Select options={workOptions} placeholder={claimsEnabled ? "选择工作微信" : "可选，准备期允许留空待补"} /></Form.Item>}
           <Form.Item
             name="xiaohongshu_id"
             label="账号"
             extra="同一平台下账号不能重复；已有账号继续沿用"
-            rules={[{ required: true, message: "请输入账号" }]}
+            rules={[
+              { required: true, whitespace: true, message: "请输入账号" },
+              { max: 64, transform: (value: string) => value?.trim(), message: "账号最多 64 个字符" },
+              ...(!editing ? [{ pattern: /^[A-Za-z0-9_.\-]+$/, transform: (value: string) => value?.trim(), message: "账号只能包含字母、数字、_ . -" }] : []),
+            ]}
           >
             <Input placeholder="平台账号" maxLength={64} disabled={!!editing} />
           </Form.Item>
           <Form.Item
             name="nickname"
             label="昵称"
-            rules={[{ required: true, message: "请输入昵称" }]}
+            rules={[
+              { required: true, whitespace: true, message: "昵称需填写 1–128 个字符" },
+              { validator: (_, value: string | undefined) => Array.from(value?.trim() ?? "").length <= 128
+                ? Promise.resolve() : Promise.reject(new Error("昵称需填写 1–128 个字符")) },
+            ]}
           >
             <Input placeholder="博主昵称" />
           </Form.Item>
@@ -456,10 +451,13 @@ export function BloggerListPage() {
             </Form.Item>
           </Space>
           <Space size="large">
-            <Form.Item name="follower_count" label="粉丝数">
+            <Form.Item name="follower_count" label="粉丝数" rules={[{
+              validator: (_, value: number | null | undefined) => value == null || (Number.isInteger(value) && value >= 0)
+                ? Promise.resolve() : Promise.reject(new Error("粉丝数必须为非负整数")),
+            }]}>
               <InputNumber min={0} style={{ width: 180 }} placeholder="粉丝数" />
             </Form.Item>
-            <Form.Item name="wechat" label="微信">
+            <Form.Item name="wechat" label="微信" rules={[{ max: 64, transform: (value: string) => value?.trim(), message: "微信最多 64 个字符" }]}>
               <Input placeholder={editing?.contact_permissions?.wechat?.write === false ? "需认领及字段权限" : "微信号（可选）"} disabled={editing?.contact_permissions?.wechat?.write === false} style={{ width: 180 }} />
             </Form.Item>
           </Space>

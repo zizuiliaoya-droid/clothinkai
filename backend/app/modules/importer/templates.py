@@ -13,18 +13,26 @@ from openpyxl.worksheet.datavalidation import DataValidation
 
 from app.core.exceptions import ResourceNotFoundError
 from app.modules.blogger.enums import Platform
-from app.modules.importer.adapters.blogger import BloggerImportAdapter
+from app.modules.importer.adapters.blogger import BloggerImportAdapter, effective_blogger_columns
 from app.modules.importer.adapters.blogger_audience import BloggerAudienceImportAdapter
 from app.modules.importer.adapters.blogger_work import BloggerWorkImportAdapter
 from app.modules.importer.adapters.promotion import PromotionImportAdapter
+from app.modules.importer.adapters.style_sku import StyleSkuImportAdapter
 from app.modules.importer.exceptions import ImportMappingInvalidError
 from app.modules.importer.models import FieldMapping
 
 TEMPLATE_VERSION = "1105-v1"
 TEMPLATE_SOURCES = frozenset(
-    {"manual_blogger", "manual_promotion", "manual_blogger_work", "manual_blogger_audience"}
+    {
+        "manual_blogger",
+        "manual_promotion",
+        "manual_blogger_work",
+        "manual_blogger_audience",
+        "manual_style_sku",
+    }
 )
 _REQUIRED = {
+    "manual_style_sku": frozenset({"style_code", "style_name", "sku_code"}),
     "manual_blogger_audience": frozenset(
         {
             "platform",
@@ -40,7 +48,7 @@ _REQUIRED = {
     "manual_blogger_work": frozenset(
         {"platform", "xiaohongshu_id", "published_on", "collected_at", "source"}
     ),
-    "manual_blogger": frozenset({"xiaohongshu_id", "nickname"}),
+    "manual_blogger": frozenset({"xiaohongshu_id", "nickname", "platform"}),
     "manual_promotion": frozenset(
         {"style_code", "xiaohongshu_id", "quote_amount", "cooperation_date"}
     ),
@@ -77,6 +85,15 @@ _EXAMPLES = {
     "cost_snapshot": "80.00",
     "cooperation_date": "2026-11-05",
     "scheduled_publish_date": "2026-11-20",
+    "style_name": "示例款式（仅作说明）",
+    "color_size": "深灰;L",
+    "color": "深灰",
+    "size": "L",
+    "cost_price": "30.50",
+    "purchase_price": "28.00",
+    "base_price": "99.00",
+    "tag_price": "129.00",
+    "sourcing_type": "采购",
 }
 _NOTES = {
     "dimension": "地域省份 / 城市级别 / 年龄 / 性别；省份和城市层级分开填写。",
@@ -93,12 +110,15 @@ _NOTES = {
     "published_on": "作品实际发布日期 YYYY-MM-DD。",
     "source": "实际采集来源，不填系统计算的结论。",
     "xiaohongshu_id": "平台账号，只含字母、数字、_ . -；推广单须对应本租户已有博主。",
-    "platform": "博主空白默认小红书；抖音等账号请选择实际平台，不能只换昵称。",
+    "platform": "请选择实际平台，不能只换昵称。博主导入必须填写平台，旧模板需补平台列或重新下载。",
     "category_tags": "多个标签用英文分号分隔；仅写入已启用标签字典中的标签。",
     "style_code": "必须是本租户已有款式；模板不创建商品资料。",
     "sku_code": "可选，填写时须为已有 SKU 编码。",
     "content_category": "沿用当前合作形式口径；留空使用该博主原有分类。",
     "homepage_url": "完整 http/https 主页链接；不要填写昵称或账号。",
+    "color_size": "颜色与规格必填：可在本列填「深灰;L」，或分别填写颜色和规格两列。",
+    "color": "颜色与规格必填：可分别填写两列，或在颜色及规格组合列填写「深灰;L」。",
+    "size": "颜色与规格必填：可分别填写两列，或在颜色及规格组合列填写「深灰;L」。",
 }
 
 
@@ -115,8 +135,11 @@ def build_import_template(source: str, mapping: FieldMapping | None = None) -> b
         | PromotionImportAdapter
         | BloggerWorkImportAdapter
         | BloggerAudienceImportAdapter
+        | StyleSkuImportAdapter
     )
-    if source == "manual_blogger_audience":
+    if source == "manual_style_sku":
+        adapter = StyleSkuImportAdapter()
+    elif source == "manual_blogger_audience":
         adapter = BloggerAudienceImportAdapter()
     elif source == "manual_blogger_work":
         adapter = BloggerWorkImportAdapter()
@@ -129,7 +152,21 @@ def build_import_template(source: str, mapping: FieldMapping | None = None) -> b
         if mapping is not None
         else adapter.builtin_columns()
     )
+    if source == "manual_blogger":
+        columns = effective_blogger_columns(mapping)
+    elif isinstance(adapter, StyleSkuImportAdapter):
+        columns = [dict(c) for c in adapter.effective_columns(mapping)]
     required = _REQUIRED[source]
+    if source == "manual_style_sku":
+        targets = {c["target_field"] for c in columns}
+        if "color_size" not in targets:
+            if not {"color", "size"}.issubset(targets):
+                raise ImportMappingInvalidError(
+                    "当前字段映射须包含颜色及规格组合列，或颜色和规格两列"
+                )
+            required = required | {"color", "size"}
+        elif not {"color", "size"}.issubset(targets):
+            required = required | {"color_size"}
     if source == "manual_blogger_work" and not {"work_id", "work_url"}.intersection(
         c["target_field"] for c in columns
     ):
@@ -149,6 +186,7 @@ def build_import_template(source: str, mapping: FieldMapping | None = None) -> b
         "manual_promotion": "站外推广",
         "manual_blogger_work": "博主作品",
         "manual_blogger_audience": "博主画像",
+        "manual_style_sku": "商品资料（款式 / SKU / 成本）",
     }[source]
     notes.append([f"{title}空模板", TEMPLATE_VERSION])
     notes.append(["映射版本", str(mapping.version) if mapping is not None else "内置默认"])
@@ -191,6 +229,18 @@ def build_import_template(source: str, mapping: FieldMapping | None = None) -> b
             2,
             "平台和账号须匹配本租户已有博主；每次仅更新对应维度，不清空其它维度。缺失不填0，部分数据不补齐到100%。",
         )
+    elif source == "manual_style_sku":
+        notes.cell(5, 1, "编码与规格")
+        notes.cell(
+            5,
+            2,
+            "款式编码、商品编码按文本填写以保留前导零。颜色与规格必填，可填组合列或分别填两列。",
+        )
+        notes.cell(
+            7,
+            2,
+            "按款式编码和商品编码导入款式、SKU与单品商品，成本按SKU规格保存；已有值按当前补空和冲突规则处理。",
+        )
     notes.append([])
     notes.append(["表头", "是否必填", "类型", "填写示例（勿作为业务数据）", "说明"])
 
@@ -215,7 +265,7 @@ def build_import_template(source: str, mapping: FieldMapping | None = None) -> b
             validation = DataValidation(
                 type="list",
                 formula1='"' + ",".join(p.value for p in Platform) + '"',
-                allow_blank=True,
+                allow_blank=source != "manual_blogger",
             )
             validation.errorTitle = "请选择平台"
             validation.error = "请使用下拉列表中的平台名称。"
@@ -231,6 +281,8 @@ def build_import_template(source: str, mapping: FieldMapping | None = None) -> b
                 (
                     "必须填写已有博主的实际平台，不使用默认平台。"
                     if source == "manual_blogger_work" and field == "platform"
+                    else "文本编码，保留前导零；用于匹配或创建对应款式 / SKU。"
+                    if source == "manual_style_sku" and field in {"style_code", "sku_code"}
                     else _NOTES.get(field, "")
                 ),
             ]

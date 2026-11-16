@@ -134,7 +134,7 @@ export function NegotiationFormModal({ target, onClose, onPrepare }: Props) {
     setRest(null);
     form.resetFields();
     form.setFieldsValue(
-      target.editing ? negotiationFormInitial(target.editing) : target.prepared?.values ?? { platform: "小红书", items: {} }
+      target.editing ? negotiationFormInitial(target.editing) : target.prepared?.values ?? { platform: "抖音", items: {} }
     );
     if (target.missing?.length) markMissing(target.missing, initialMembers);
     // markMissing 只读 form 与 setter，按打开的单初始化一次
@@ -325,9 +325,17 @@ export function NegotiationFormModal({ target, onClose, onPrepare }: Props) {
           description="可先保存合作意向，补齐款式、颜色尺码、约定发布时间和服务费后再提交审核。" />
       )}
       <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
+        <Form.Item name="platform" label={SUBMIT_GATE_LABEL.platform} required style={{ maxWidth: 240 }}>
+          <Select options={PLATFORMS.map((p) => ({ label: p, value: p }))} onChange={() => {
+            form.setFieldValue("blogger_id", undefined);
+            form.setFieldValue("account_ids", undefined);
+            if (!legacy) selectionChanged();
+          }} />
+        </Form.Item>
         <Form.Item
           name="blogger_id"
           label={SUBMIT_GATE_LABEL.blogger_id}
+          extra="仅显示所选平台可合作的博主；认领规则启用后，PR 仅可选择本人已认领的博主。"
           rules={[{ required: true, message: "请选择博主" }]}
         >
           <BloggerSelect
@@ -395,11 +403,6 @@ export function NegotiationFormModal({ target, onClose, onPrepare }: Props) {
           />
         </Form.Item>
         <Space align="start" wrap style={{ display: "flex" }}>
-          <Form.Item name="platform" label={SUBMIT_GATE_LABEL.platform} required style={{ width: 160 }}>
-            <Select options={PLATFORMS.map((p) => ({ label: p, value: p }))} onChange={() => {
-              if (!legacy) { form.setFieldValue("blogger_id", undefined); form.setFieldValue("account_ids", undefined); selectionChanged(); }
-            }} />
-          </Form.Item>
           <Form.Item
             name="scheduled_publish_date"
             label={SUBMIT_GATE_LABEL.scheduled_publish_date}
