@@ -401,6 +401,7 @@ def test_real_matrices_registered() -> None:
         "老板退回",
         "待补收货地址",
         "已定稿",
+        "已取消",
     )
 
 
@@ -425,11 +426,12 @@ def test_real_matrices_match_expected() -> None:
 
 def test_real_matrices_have_no_dead_rows() -> None:
     for kind, matrix in MATRICES.items():
-        assert dead_rows(render_grid(matrix, DOCS[kind], PERSONAS)) == [], kind
+        retired = ["action:copy"] if kind == "negotiation" else []
+        assert dead_rows(render_grid(matrix, DOCS[kind], PERSONAS)) == retired, kind
         # 每个已登记的动作行至少有一格「改」（不然按钮永远点不了）
         grid = render_grid(matrix, DOCS[kind], PERSONAS)
         for row in matrix.rows:
-            if row.kind == "action":
+            if row.kind == "action" and f"action:{row.key}" not in retired:
                 assert any(
                     v == "改"
                     for (_l, _p, k, key), v in grid.items()

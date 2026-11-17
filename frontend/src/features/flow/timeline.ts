@@ -81,6 +81,7 @@ export const EVENT_LABELS: Record<string, string> = {
   "negotiation.submitted": "提交谈款审核",
   "negotiation.manager_approved": "主管审核通过谈款",
   "negotiation.manager_rejected": "主管驳回谈款",
+  "negotiation.cancelled": "谈款逾期自动取消",
   "negotiation.final_approved": "老板审核通过谈款",
   "negotiation.final_returned": "老板退回谈款",
   "negotiation.receiver_saved": "保存收货信息",

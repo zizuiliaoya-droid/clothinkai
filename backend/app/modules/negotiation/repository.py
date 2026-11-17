@@ -64,6 +64,7 @@ _VISIBLE = (
 IN_PROGRESS_STATUSES: tuple[str, ...] = (
     "草稿",
     "主管待审",
+    "审核驳回",
     "待老板审核",
     "老板退回",
     "待补收货地址",
@@ -360,7 +361,7 @@ class NegotiationRepository:
     ) -> tuple[builtins.list[Mapping[str, Any]], int]:
         """某博主最近 N 张主管驳回的谈款（7c-7），跨 PR、不按可见范围过滤；连同总数一次查完。
 
-        只认「审核驳回」（主管驳回的终态）；老板退回只进时间线。``pr_id`` / ``status`` 给 service 判
+        按主管驳回事件逐次读取；无事件的旧驳回/取消行兼容读取。老板退回只进时间线。``pr_id`` / ``status`` 给 service 判
         ``negotiation_id`` 给不给；服务费由 service 按字段规则裁剪。
         """
         rows = (
@@ -368,23 +369,39 @@ class NegotiationRepository:
                 await self._session.execute(
                     text(
                         """
-                        SELECT n.id AS negotiation_id, n.pr_id, n.status,
-                               COALESCE(u.display_name, u.username) AS pr_name,
-                               COALESCE(n.reviewed_at, n.updated_at) AS rejected_at,
-                               s.style_code,
-                               COALESCE(NULLIF(BTRIM(g.short_name), ''),
-                                        NULLIF(BTRIM(s.short_name), ''), s.style_name)
+                        WITH rejected AS (
+                          SELECT n.id, n.pr_id, n.status, n.style_id, n.goods_main_id,
+                                 n.platform, n.quote_amount, e.created_at AS rejected_at,
+                                 e.note AS opinion, e.seq
+                          FROM negotiation n JOIN line_event e
+                            ON e.tenant_id=n.tenant_id AND e.negotiation_id=n.id
+                          WHERE n.tenant_id=CAST(:tenant_id AS uuid)
+                            AND n.blogger_id=CAST(:blogger_id AS uuid)
+                            AND e.event_type='negotiation.manager_rejected'
+                          UNION ALL
+                          SELECT n.id,n.pr_id,n.status,n.style_id,n.goods_main_id,
+                                 n.platform,n.quote_amount,COALESCE(n.reviewed_at,n.updated_at),
+                                 n.review_opinion,0
+                          FROM negotiation n
+                          WHERE n.tenant_id=CAST(:tenant_id AS uuid)
+                            AND n.blogger_id=CAST(:blogger_id AS uuid)
+                            AND n.status IN ('审核驳回','已取消')
+                            AND NOT EXISTS (SELECT 1 FROM line_event e
+                              WHERE e.tenant_id=n.tenant_id AND e.negotiation_id=n.id
+                                AND e.event_type='negotiation.manager_rejected')
+                        )
+                        SELECT n.id AS negotiation_id,n.pr_id,n.status,
+                               COALESCE(u.display_name,u.username) AS pr_name,
+                               n.rejected_at,s.style_code,
+                               COALESCE(NULLIF(BTRIM(g.short_name),''),
+                                        NULLIF(BTRIM(s.short_name),''),s.style_name)
                                  AS display_short_name,
-                               n.platform, n.quote_amount, n.review_opinion AS opinion,
-                               COUNT(*) OVER () AS total
-                        FROM negotiation n
-                        LEFT JOIN "user" u ON u.id = n.pr_id
-                        LEFT JOIN style s ON s.id = n.style_id
-                        LEFT JOIN goods_main g ON g.id = n.goods_main_id
-                        WHERE n.tenant_id = CAST(:tenant_id AS uuid)
-                          AND n.blogger_id = CAST(:blogger_id AS uuid)
-                          AND n.status = '审核驳回'
-                        ORDER BY COALESCE(n.reviewed_at, n.updated_at) DESC, n.id DESC
+                               n.platform,n.quote_amount,n.opinion,COUNT(*) OVER () AS total
+                        FROM rejected n
+                        LEFT JOIN "user" u ON u.id=n.pr_id
+                        LEFT JOIN style s ON s.id=n.style_id
+                        LEFT JOIN goods_main g ON g.id=n.goods_main_id
+                        ORDER BY n.rejected_at DESC,n.seq DESC,n.id DESC
                         LIMIT CAST(:limit AS integer)
                         """
                     ),
@@ -466,6 +483,7 @@ class NegotiationRepository:
         values: Mapping[str, Any],
         to_status: str | None = None,
         pr_id: UUID | None = None,
+        rejection_cutoff: datetime | None = None,
     ) -> Negotiation | None:
         """条件 UPDATE（3.1、D4）：``WHERE id AND tenant_id AND status = ANY(from) [AND pr_id] RETURNING``。
 
@@ -479,6 +497,10 @@ class NegotiationRepository:
         ]
         if pr_id is not None:
             conds.append(Negotiation.pr_id == pr_id)
+        if rejection_cutoff is not None:
+            conds.append(
+                func.coalesce(Negotiation.reviewed_at, Negotiation.updated_at) > rejection_cutoff
+            )
         new_values: dict[str, Any] = dict(values)
         if to_status is not None:
             new_values["status"] = to_status

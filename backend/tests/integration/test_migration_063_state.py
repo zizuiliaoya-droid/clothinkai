@@ -20,7 +20,16 @@ from app.modules.negotiation.enums import NegotiationStatus
 from app.modules.negotiation.models import Negotiation, NegotiationItem
 from app.modules.promotion.models import Promotion
 
-_STATUSES = ("草稿", "主管待审", "审核驳回", "待老板审核", "老板退回", "待补收货地址", "已定稿")
+_STATUSES = (
+    "草稿",
+    "主管待审",
+    "审核驳回",
+    "待老板审核",
+    "老板退回",
+    "待补收货地址",
+    "已定稿",
+    "已取消",
+)
 
 # 设计 2.3：9 列都可空、无默认值
 _NEGOTIATION_NEW_COLUMNS: dict[str, tuple[str, int | None]] = {

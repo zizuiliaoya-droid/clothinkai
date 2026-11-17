@@ -22,13 +22,14 @@ from app.modules.negotiation.enums import NegotiationStatus
 TRANSITIONS: dict[str, frozenset[str]] = {
     NegotiationStatus.DRAFT.value: frozenset({"edit", "submit", "comment"}),  # N2、N3
     NegotiationStatus.PENDING.value: frozenset({"manager_review", "comment"}),  # N4、N5
-    NegotiationStatus.REJECTED.value: frozenset({"copy", "comment"}),  # N10（终态，只能复制重谈）
+    NegotiationStatus.REJECTED.value: frozenset({"edit", "submit", "comment"}),
     NegotiationStatus.FINAL_PENDING.value: frozenset({"final_review", "comment"}),  # N6、N7
     NegotiationStatus.FINAL_RETURNED.value: frozenset({"edit", "submit", "comment"}),  # N2、N3
     NegotiationStatus.RECEIVER_PENDING.value: frozenset(
         {"receiver_save", "receiver_confirm", "comment"}
     ),  # N8、N9
     NegotiationStatus.APPROVED.value: frozenset({"comment"}),  # 终态
+    NegotiationStatus.CANCELLED.value: frozenset({"comment"}),  # 自动取消，保留历史
 }
 
 

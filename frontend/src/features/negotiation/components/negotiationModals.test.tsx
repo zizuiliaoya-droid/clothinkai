@@ -8,7 +8,6 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { useAuthStore } from "@/stores/authStore";
 import { SELF_REVIEW_NOTICE, SELF_REVIEW_REASON } from "../negotiationDialogs";
 import type { Negotiation, NegotiationItem } from "../types";
-import { CopyNegotiationModal } from "./CopyNegotiationModal";
 import { FinalReviewModal } from "./FinalReviewModal";
 import { ManagerReviewModal } from "./ManagerReviewModal";
 import { NegotiationFormModal } from "./NegotiationFormModal";
@@ -25,11 +24,16 @@ const api = vi.hoisted(() => ({
   getNegotiation: vi.fn(),
   saveNegotiationReceiver: vi.fn(),
   confirmNegotiationReceiver: vi.fn(),
-  copyNegotiation: vi.fn(),
   othersInProgress: vi.fn(),
   negotiationGoodsMembers: vi.fn(),
 }));
 vi.mock("@/features/negotiation/api", () => api);
+const flow = vi.hoisted(() => ({ getLineEvents: vi.fn() }));
+vi.mock("@/features/flow/api", () => ({
+  LINE_EVENTS_ALL: ["line-events"],
+  lineEventsKey: (id: string) => ["line-events", id],
+  getLineEvents: flow.getLineEvents,
+}));
 
 const GOODS_CODE = "GM-SUIT-20261001";
 const SKU_CODE = "SKU-7788-BLK-M";
@@ -78,6 +82,7 @@ beforeAll(() => {
 
 beforeEach(() => {
   for (const fn of Object.values(api)) fn.mockReset();
+  flow.getLineEvents.mockReset().mockResolvedValue({ events: [], truncated: false });
   accountAccess.canWriteAmount = true;
   api.othersInProgress.mockResolvedValue([]);
   api.negotiationGoodsMembers.mockResolvedValue({ goods_main_id: "g-1", members: SUIT_MEMBERS });
@@ -180,6 +185,34 @@ function gateError(missing: { key: string; label: string }[]) {
 }
 
 describe("NegotiationFormModal", () => {
+  it("审批未通过在原单修改重提，显示原驳回原因和固定期限，不创建草稿", async () => {
+    const rejected = row({ status: "审核驳回", reviewed_at: "2026-11-16T02:00:00Z", updated_at: "2026-11-17T02:00:00Z", review_opinion: "请调整服务费", reviewer_name: "李主管" });
+    api.updateNegotiation.mockResolvedValue(rejected);
+    api.submitNegotiation.mockResolvedValue(row({ status: "主管待审" }));
+    render(wrap(<NegotiationFormModal target={{ editing: rejected }} onClose={() => {}} />));
+    expect(await screen.findByText("请调整服务费")).toBeTruthy();
+    expect(screen.getByText(/仅保存修改不会延长时限，逾期自动取消/)).toBeTruthy();
+    expect(button("保存修改")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /保存草稿/ })).toBeNull();
+    await screen.findByText("白色 / S");
+    fireEvent.click(button("保存并重新提交"));
+    await waitFor(() => expect(api.submitNegotiation).toHaveBeenCalledWith("n-1"));
+    expect(api.updateNegotiation).toHaveBeenCalledWith("n-1", expect.anything());
+    expect(api.createNegotiation).not.toHaveBeenCalled();
+    expect(flow.getLineEvents).toHaveBeenCalledWith("l-1");
+  });
+
+  it("审批未通过仅保存修改仍保存原单，不自动提交", async () => {
+    const rejected = row({ status: "审核驳回", review_opinion: "费用需调整" });
+    api.updateNegotiation.mockResolvedValue(rejected);
+    render(wrap(<NegotiationFormModal target={{ editing: rejected }} onClose={() => {}} />));
+    await screen.findByText("白色 / S");
+    fireEvent.click(button("保存修改"));
+    await waitFor(() => expect(api.updateNegotiation).toHaveBeenCalledWith("n-1", expect.anything()));
+    expect(api.createNegotiation).not.toHaveBeenCalled();
+    expect(api.submitNegotiation).not.toHaveBeenCalled();
+  });
+
   it("新建默认搜索抖音可合作博主，编辑保留小红书平台", async () => {
     const view = render(wrap(<NegotiationFormModal target={{editing: null}} onClose={() => {}} />));
     fireEvent.mouseDown(screen.getByLabelText("博主").closest(".ant-select-selector")!);
@@ -387,7 +420,7 @@ describe("NegotiationFormModal", () => {
 });
 
 describe("ManagerReviewModal / FinalReviewModal", () => {
-  it("主管驳回：提示驳回后结束；没写意见不发请求；写了带意见驳回", async () => {
+  it("主管驳回：提示原单可重提和7天期限；没写意见不发请求；写了带意见驳回", async () => {
     api.reviewNegotiation.mockResolvedValue(row({ status: "审核驳回" }));
     const onClose = vi.fn();
     render(
@@ -400,7 +433,7 @@ describe("ManagerReviewModal / FinalReviewModal", () => {
     );
     expect(await screen.findByText("飞狐短裙 · 黑色 / M")).toBeTruthy();
     fireEvent.click(screen.getByLabelText("驳回"));
-    expect(await screen.findByText(/驳回后这张谈款结束/)).toBeTruthy();
+    expect(await screen.findByText(/PR 可在 7 天内修改原单并重新提交/)).toBeTruthy();
     fireEvent.click(button("确认驳回"));
     expect(await screen.findByText("驳回要写意见")).toBeTruthy();
     expect(api.reviewNegotiation).not.toHaveBeenCalled();
@@ -410,6 +443,21 @@ describe("ManagerReviewModal / FinalReviewModal", () => {
       expect(api.reviewNegotiation).toHaveBeenCalledWith("n-1", { action: "reject", review_opinion: "报价太高" })
     );
     await waitFor(() => expect(onClose).toHaveBeenCalled());
+  });
+
+  it("重新提交为主管待审后，审核弹窗仍显示同一主线的多轮驳回原因与人员时间", async () => {
+    flow.getLineEvents.mockResolvedValue({ events: [
+      { seq: 4, event_type: "negotiation.submitted", note: "提交说明不应混作驳回", created_at: "2026-11-16T03:00:00Z", actor: { display_name: "PR" } },
+      { seq: 3, event_type: "negotiation.manager_rejected", note: "第二次请确认档期", created_at: "2026-11-16T02:00:00Z", actor: { display_name: "王主管" } },
+      { seq: 1, event_type: "negotiation.manager_rejected", note: "第一次服务费过高", created_at: "2026-11-14T02:00:00Z", actor: { display_name: "李主管" } },
+    ], truncated: false });
+    render(wrap(<ManagerReviewModal target={{ row: row({ status: "主管待审", review_opinion: null }), action: { state: "enabled" } }} onClose={() => {}} />));
+    expect(await screen.findByText("第二次请确认档期")).toBeTruthy();
+    expect(screen.getByText("第一次服务费过高")).toBeTruthy();
+    expect(screen.getByText(/2026-11-16.*王主管/)).toBeTruthy();
+    expect(screen.getByText(/2026-11-14.*李主管/)).toBeTruthy();
+    expect(screen.queryByText("提交说明不应混作驳回")).toBeNull();
+    expect(flow.getLineEvents).toHaveBeenCalledWith("l-1");
   });
 
   it("主管通过：意见可选", async () => {
@@ -521,27 +569,5 @@ describe("NegotiationReceiverModal", () => {
     render(wrap(<NegotiationReceiverModal target={{ row: saveOnly, action: { state: "enabled" } }} onClose={() => {}} />));
     expect(await screen.findByRole("button", { name: /保\s?存/ })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "确认并生成推广单" })).toBeNull();
-  });
-});
-
-describe("CopyNegotiationModal", () => {
-  it("确认框写明复制哪些；复制成功交出新草稿", async () => {
-    const created = row({ id: "n-new", copied_from_id: "n-1" });
-    api.copyNegotiation.mockResolvedValue(created);
-    const onCopied = vi.fn();
-    render(
-      wrap(
-        <CopyNegotiationModal
-          target={{ row: row({ status: "审核驳回", review_opinion: "报价太高" }), action: { state: "enabled" } }}
-          onClose={() => {}}
-          onCopied={onCopied}
-        />
-      )
-    );
-    expect(await screen.findByText(/复制博主、商品、颜色尺码、模式、平台、服务费、备注和约定发布时间/)).toBeTruthy();
-    expect(screen.getByText("驳回意见：报价太高")).toBeTruthy();
-    fireEvent.click(button("复制"));
-    await waitFor(() => expect(onCopied).toHaveBeenCalledWith(created));
-    expect(api.copyNegotiation).toHaveBeenCalledWith("n-1");
   });
 });

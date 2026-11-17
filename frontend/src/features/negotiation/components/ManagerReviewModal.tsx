@@ -7,6 +7,7 @@ import { MANAGER_REJECT_HINT } from "../negotiationDialogs";
 import type { Negotiation, NegotiationReviewRequest } from "../types";
 import { NegotiationSummary } from "./NegotiationSummary";
 import { useNegotiationFeedback } from "./useNegotiationFeedback";
+import { NegotiationRejectionHistory } from "./NegotiationRejectionHistory";
 
 export interface NegotiationDialogTarget {
   row: Negotiation;
@@ -22,7 +23,7 @@ type Props = {
 
 type Values = { decision: NegotiationReviewRequest["action"]; opinion?: string };
 
-/** 主管审核（N4 通过 → 待老板审核，不建单；N5 驳回 → 审批未通过，终态，意见必填）。 */
+/** 主管审核：驳回后可在原单重提，历史原因始终从同一主线读取。 */
 export function ManagerReviewModal({ target, onClose }: Props) {
   const { token } = theme.useToken();
   const [form] = Form.useForm<Values>();
@@ -37,7 +38,7 @@ export function ManagerReviewModal({ target, onClose }: Props) {
     mutationFn: ({ id, payload }: { id: string; payload: NegotiationReviewRequest }) =>
       reviewNegotiation(id, payload),
     onSuccess: (_, { payload }) => {
-      message.success(payload.action === "approve" ? "已通过，等老板审核" : "已驳回，这张谈款结束");
+      message.success(payload.action === "approve" ? "已通过，等老板审核" : "已驳回，PR 可在 7 天内修改原单并重新提交");
       refresh();
       onClose();
     },
@@ -61,6 +62,7 @@ export function ManagerReviewModal({ target, onClose }: Props) {
       width={560}
     >
       {target && <NegotiationSummary row={target.row} />}
+      {target && <NegotiationRejectionHistory row={target.row} />}
       <Form
         form={form}
         layout="vertical"

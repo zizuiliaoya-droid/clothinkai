@@ -21,7 +21,6 @@ from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy import text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import IllegalStateTransitionError
 from app.core.tenancy import tenant_id_ctx
 from app.modules.negotiation.enums import NegotiationFinalReviewAction, NegotiationReviewAction
 from app.modules.negotiation.exceptions import NegotiationSelfReviewForbiddenError
@@ -186,7 +185,7 @@ class TestSubmitAndReview:
         ).scalar_one()
         assert count == 0
 
-    async def test_rejected_is_terminal(
+    async def test_rejected_resubmits_on_original_line(
         self, session: AsyncSession, flow_users: Any, product_factory: Any, blogger_factory: Any
     ) -> None:
         """驳回 = 终态「审核驳回」（Q1）：不能再改、不能再提交，重谈走「复制为新谈款」（N10）。"""
@@ -207,14 +206,19 @@ class TestSubmitAndReview:
         assert rejected.review_opinion == "报价偏高，再谈一轮"
         assert rejected.promotion_id is None
 
-        with pytest.raises(IllegalStateTransitionError) as edit_exc:
-            await svc.update(created.id, NegotiationUpdate(quote_amount=Decimal("300.00")), pr)
-        assert edit_exc.value.code == "ILLEGAL_STATE_TRANSITION"
-        with pytest.raises(IllegalStateTransitionError) as submit_exc:
-            await svc.submit(created.id, pr)
-        assert submit_exc.value.code == "ILLEGAL_STATE_TRANSITION"
-        again = await svc.get(created.id, pr)
-        assert (again.status, again.review_opinion) == ("审核驳回", "报价偏高，再谈一轮")
+        await svc.update(created.id, NegotiationUpdate(quote_amount=Decimal("300.00")), pr)
+        again = await svc.submit(created.id, pr)
+        assert again.id == created.id and again.line_id == created.line_id
+        assert again.status == "主管待审" and again.review_opinion is None
+        assert (
+            await session.scalar(
+                sa_text(
+                    "SELECT note FROM line_event WHERE negotiation_id=:id AND event_type='negotiation.manager_rejected'"
+                ),
+                {"id": created.id},
+            )
+            == "报价偏高，再谈一轮"
+        )
 
     async def test_reject_requires_opinion(self) -> None:
         """驳回必须给审核意见 —— PR 得知道要改什么。schema 层就该挡住。"""

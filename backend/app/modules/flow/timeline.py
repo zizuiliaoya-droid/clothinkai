@@ -122,7 +122,10 @@ def legacy_points(
     points: list[tuple[str, datetime | date | None, str, str]] = []
     neg = header.negotiation
     if neg is not None and sees_negotiation:
-        rejected = neg.status == NegotiationStatus.REJECTED.value
+        rejected = neg.status in (
+            NegotiationStatus.REJECTED.value,
+            NegotiationStatus.CANCELLED.value,
+        )
         points += [
             ("negotiation", neg.created_at, "PR 新建谈款", "negotiation.created_at"),
             ("negotiation", neg.submitted_at, "PR 提交谈款审核", "negotiation.submitted_at"),

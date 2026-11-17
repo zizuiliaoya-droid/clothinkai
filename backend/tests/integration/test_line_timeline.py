@@ -993,7 +993,7 @@ class TestLegacy:
         )
         resp = await LineEventService(session).read(neg.line_id, flow_users.pr)
         assert resp.legacy[0].text == "主管驳回谈款：价格太高"
-        assert resp.next_step is None  # 终态
+        assert resp.next_step is not None and "重新提交" in resp.next_step.text
 
 
 @pytest.mark.usefixtures("tenant_ctx")

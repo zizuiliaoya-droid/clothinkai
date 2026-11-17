@@ -46,11 +46,12 @@ PROMOTION_NEXT_STEP: dict[str, NextStep | None] = {
 NEGOTIATION_NEXT_STEP: dict[str, NextStep | None] = {
     "草稿": NextStep("等 PR 提交审核", _PR),
     "主管待审": NextStep("等主管审核", "主管"),
-    "审核驳回": None,  # 终态：重谈用「复制为新谈款」
+    "审核驳回": NextStep("等 PR 修改后重新提交，驳回满 7 天未重提自动取消", _PR),
     "待老板审核": NextStep("等老板（管理员）定稿", "管理员"),
     "老板退回": NextStep("老板退回，等 PR 修改后重新提交", _PR),
     "待补收货地址": NextStep("等 PR 录完收货信息并确认，确认后生成推广单", _PR),
     "已定稿": None,  # 推广单已生成，下一步看推广单的阶段
+    "已取消": None,
 }
 
 

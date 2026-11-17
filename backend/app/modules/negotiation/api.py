@@ -229,7 +229,7 @@ async def review_negotiation(
     session: SessionDep,
     user: CurrentActiveUser,
 ) -> NegotiationResponse:
-    """主管审核（N4 / N5）：主管待审 → 待老板审核 / 审核驳回（终态）。
+    """主管审核（N4 / N5）：主管待审 → 待老板审核 / 审核驳回（7 天内允许原单重提）。
 
     通过不再建推广单（老板定稿后确认收货信息时才建）。驳回必须填审核意见 —— PR 得知道要改什么。
     持 ``*`` → 403 ``star_first_level``（管理员不能代做第一级）；禁止审核自己谈的单。
@@ -300,9 +300,7 @@ async def copy_negotiation(
     session: SessionDep,
     user: CurrentActiveUser,
 ) -> NegotiationResponse:
-    """复制为新谈款（N10）：只在审核驳回、原单本人；返回新草稿（新 ``line_id``、``copied_from_id`` 指回原单）。
-    复制博主、商品、颜色尺码、模式、平台、服务费、备注、约定发布时间，不复制审核与收货。
-    """
+    """历史复制入口；077 起所有状态均拒绝。审批未通过改为原单重提或到期自动取消。"""
     return await _svc(session).copy(negotiation_id, user)
 
 

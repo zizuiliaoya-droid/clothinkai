@@ -281,7 +281,7 @@ def test_next_step_covers_every_stage_and_status() -> None:
                 assert step.text and step.who, state
     terminal = {s for s, v in PROMOTION_NEXT_STEP.items() if v is None}
     assert terminal == {"已完结", "已完结 · 召回", "已完结 · 不合作", "已停用", "已删除"}
-    assert {s for s, v in NEGOTIATION_NEXT_STEP.items() if v is None} == {"审核驳回", "已定稿"}
+    assert {s for s, v in NEGOTIATION_NEXT_STEP.items() if v is None} == {"已取消", "已定稿"}
 
 
 def test_next_step_prefers_promotion_stage() -> None:

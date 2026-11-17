@@ -188,7 +188,7 @@ class Negotiation(TenantScopedModel):
         Index("uq_negotiation_line", "tenant_id", "line_id", unique=True),
         CheckConstraint(
             "status IN ('草稿', '主管待审', '审核驳回', '待老板审核', '老板退回', "
-            "'待补收货地址', '已定稿')",
+            "'待补收货地址', '已定稿', '已取消')",
             name="ck_negotiation_status",
         ),
         CheckConstraint(

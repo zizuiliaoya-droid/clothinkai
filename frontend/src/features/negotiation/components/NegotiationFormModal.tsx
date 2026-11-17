@@ -18,7 +18,7 @@ import {
   submitNegotiation,
   updateNegotiation,
 } from "../api";
-import { othersInProgressLines } from "../negotiationDialogs";
+import { othersInProgressLines, rejectionDeadline } from "../negotiationDialogs";
 import {
   GOODS_REBUILT_HINT,
   SUBMIT_GATE_LABEL,
@@ -34,9 +34,10 @@ import type { Negotiation, NegotiationCreate } from "../types";
 import { AccountSelection } from "./AccountSelection";
 import { useReadOnlySupport } from "@/stores/supportStore";
 import { useNegotiationFeedback } from "./useNegotiationFeedback";
+import { NegotiationRejectionHistory } from "./NegotiationRejectionHistory";
 
 export interface NegotiationFormTarget {
-  /** 编辑的谈款（草稿 / 老板退回）；null = 新建。 */
+  /** 编辑原谈款（草稿 / 老板退回 / 审批未通过）；null = 新建。 */
   editing: Negotiation | null;
   /** 打开时就要标红的缺项（菜单「提交审核」带 missing、或提交 422 时）。 */
   missing?: GateMissingItem[] | null;
@@ -262,11 +263,13 @@ export function NegotiationFormModal({ target, onClose, onPrepare }: Props) {
   }
 
   const returned = editing?.status === "老板退回";
+  const rejected = editing?.status === "审核驳回";
+  const deadline = editing ? rejectionDeadline(editing) : null;
   const pendingMode = mutation.isPending ? mutation.variables?.mode : null;
 
   return (
     <Modal
-      title={onPrepare ? "编辑待建行" : editing ? "编辑谈款" : "新建谈款"}
+      title={onPrepare ? "编辑待建行" : rejected ? "修改并重新提交谈款" : editing ? "编辑谈款" : "新建谈款"}
       open={open}
       onCancel={onClose}
       destroyOnHidden
@@ -279,7 +282,7 @@ export function NegotiationFormModal({ target, onClose, onPrepare }: Props) {
             disabled={(mutation.isPending && pendingMode !== "draft") || (!!onPrepare && !permissionReady)}
             onClick={() => void save("draft")}
           >
-            {onPrepare ? "更新此行" : returned ? "保存" : "保存草稿"}
+            {onPrepare ? "更新此行" : rejected ? "保存修改" : returned ? "保存" : "保存草稿"}
           </Button>
           {!onPrepare && <Button
             type="primary"
@@ -287,11 +290,15 @@ export function NegotiationFormModal({ target, onClose, onPrepare }: Props) {
             disabled={mutation.isPending && pendingMode !== "submit"}
             onClick={() => void save("submit")}
           >
-            保存并提交
+            {rejected ? "保存并重新提交" : "保存并提交"}
           </Button>}
         </Space>
       }
     >
+      {rejected && <Alert type="info" showIcon style={{ marginTop: 16 }}
+        message="修改原谈款后重新提交审核，之前的驳回记录会保留"
+        description={`请在${deadline ? ` ${deadline} 前` : "本次驳回后 7 天内"}重新提交；仅保存修改不会延长时限，逾期自动取消。`} />}
+      {editing && editing.status !== "草稿" && <NegotiationRejectionHistory row={editing} />}
       {returned && editing?.final_review_opinion && (
         <Alert
           type="warning"

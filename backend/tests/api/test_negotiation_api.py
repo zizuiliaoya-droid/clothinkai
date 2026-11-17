@@ -6,7 +6,7 @@
 - ``POST /{id}/final-review`` 挂 ``negotiation_final:approve``：主管 403 ``PERMISSION_DENIED``；退回不写意见 422（schema 层）；
   ``POST /{id}/review`` 管理员 scope 够、service 规则拦 → 403 ``star_first_level``（S7）
 - ``PUT /{id}/receiver``、``POST /{id}/confirm-receiver`` 挂 ``negotiation:write``；限长 / 电话 / 缺项 422，重复确认 409（S8）
-- ``POST /{id}/copy`` 201；``POST /{id}/reassign`` 非管理员 403 ``admin_only``、原因限长（S9）
+- ``POST /{id}/copy`` 停用，422 且不建新单；``POST /{id}/reassign`` 非管理员 403 ``admin_only``、原因限长（S9）
 - ``GET /blogger/{id}/history`` 带 ``rejections`` / ``total_rejections``，``GET /blogger/{id}/others-in-progress`` 只回 3 个字段；
   两个都挂 ``negotiation:read``，仓库 403（S10）
 """
@@ -216,7 +216,7 @@ class TestNegotiationRoutes:
         product_factory: Any,
         blogger_factory: Any,
     ) -> None:
-        """``POST /{id}/copy`` 挂 ``negotiation:write``，成功 201 返回新草稿；``POST /{id}/reassign`` 挂 ``negotiation:write``
+        """``POST /{id}/copy`` 仍挂 ``negotiation:write``，077 起拒绝复制且保留原单；``POST /{id}/reassign`` 挂 ``negotiation:write``
         + service 判持 ``*``：主管 403 ``admin_only``、财务 403 ``PERMISSION_DENIED``，原因空白 / 超 500 字 422，管理员 200（S9）。"""
         style = await product_factory.style()
         blogger = await blogger_factory.blogger()
@@ -227,8 +227,23 @@ class TestNegotiationRoutes:
         resp = await _call(session, flow_users.finance, "POST", path)
         assert (resp.status_code, resp.json()["code"]) == (403, "PERMISSION_DENIED")
         resp = await _call(session, flow_users.pr, "POST", path)
-        assert resp.status_code == 201, resp.text
-        assert (resp.json()["status"], resp.json()["copied_from_id"]) == ("草稿", str(rejected.id))
+        assert (resp.status_code, resp.json()["code"]) == (
+            422,
+            "ILLEGAL_STATE_TRANSITION",
+        ), resp.text
+        assert resp.json()["details"] == {"from_state": "审核驳回", "action": "copy"}
+        resp = await _call(session, flow_users.pr, "GET", "/api/negotiations/")
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["total"] == 1
+        [original] = resp.json()["items"]
+        assert (original["id"], original["line_id"], original["status"]) == (
+            str(rejected.id),
+            str(rejected.line_id),
+            "审核驳回",
+        )
+        assert original["copied_from_id"] is None
+        assert "copy" not in original["ui"]["actions"]
+        assert original["ui"]["actions"]["edit"]["state"] == "enabled"
 
         pending = await negotiation_factory.negotiation(
             style=style, blogger=blogger, pr=flow_users.pr, status="主管待审"
@@ -255,7 +270,7 @@ class TestNegotiationRoutes:
         product_factory: Any,
         blogger_factory: Any,
     ) -> None:
-        """博主卡片两个读接口（S10）：PR 看得到别的 PR 的驳回记录（无 id）与在谈的单（只有 3 个字段）；
+        """博主卡片两个读接口（S10）：PR 看得到别的 PR 的驳回记录（无 id）与在谈的单（含待重提、不含已取消，只有 3 个字段）；
         ``exclude_negotiation_id`` 生效；运营服务费 null；仓库没有 ``negotiation:read`` → 403。"""
         style = await product_factory.style()
         blogger = await blogger_factory.blogger()
@@ -284,15 +299,23 @@ class TestNegotiationRoutes:
         [row] = resp.json()["rejections"]
         assert (row["negotiation_id"], row["quote_amount"]) == (str(rejected.id), None)
 
+        await negotiation_factory.negotiation(
+            style=style, blogger=blogger, pr=flow_users.pr2, status="已取消"
+        )
         resp = await _call(session, flow_users.pr, "GET", others)
         assert resp.status_code == 200, resp.text
-        [item] = resp.json()
-        assert set(item) == {"pr_name", "status", "updated_at"}
-        assert item["status"] == "主管待审"
-        resp = await _call(
-            session, flow_users.pr, "GET", f"{others}?exclude_negotiation_id={pending.id}"
-        )
-        assert (resp.status_code, resp.json()) == (200, [])
+        items = resp.json()
+        assert len(items) == 2
+        assert {item["status"] for item in items} == {"主管待审", "审核驳回"}
+        assert all(set(item) == {"pr_name", "status", "updated_at"} for item in items)
+        for excluded, remaining_status in ((pending, "审核驳回"), (rejected, "主管待审")):
+            resp = await _call(
+                session, flow_users.pr, "GET", f"{others}?exclude_negotiation_id={excluded.id}"
+            )
+            assert resp.status_code == 200, resp.text
+            [item] = resp.json()
+            assert item["status"] == remaining_status
+            assert set(item) == {"pr_name", "status", "updated_at"}
 
         for path in (history, others):
             resp = await _call(session, flow_users.warehouse, "GET", path)

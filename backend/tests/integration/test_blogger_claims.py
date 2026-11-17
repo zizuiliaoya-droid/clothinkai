@@ -267,7 +267,9 @@ async def test_all_new_cooperation_entries_check_claims_but_old_draft_can_save(
             ),
             flow_users.pr,
         )
-    with pytest.raises(PermissionDeniedError, match="请先认领"):
+    from app.core.exceptions import IllegalStateTransitionError
+
+    with pytest.raises(IllegalStateTransitionError):
         await service.copy(rejected.id, flow_users.pr)
     with pytest.raises(PermissionDeniedError, match="请先认领"):
         await service.update(draft.id, NegotiationUpdate(blogger_id=new.id), flow_users.pr)
