@@ -55,6 +55,10 @@ async def test_counts_share_filters_exclude_stage_badge_and_other_tenant(
                     "metrics_recorded_at": datetime.now(UTC),
                     "retro_status": "已完成",
                 },
+                {
+                    "ship_status": "已发货",
+                    "scheduled_publish_date": get_today() + timedelta(days=30),
+                },
                 {"is_active": False},
             ]
         ):
@@ -86,13 +90,14 @@ async def test_counts_share_filters_exclude_stage_badge_and_other_tenant(
         )
         assert counts.status_code == 200, counts.text
         data = counts.json()
-        assert data["total"] == 4 and data["completed"] == 1
-        assert set(data["stages"]) == set(PROMOTION_STAGES) and sum(data["stages"].values()) == 4
+        assert data["total"] == 5 and data["completed"] == 1
+        assert set(data["stages"]) == set(PROMOTION_STAGES) and sum(data["stages"].values()) == 5
         assert (
             data["stages"]["待推送仓库"]
             == data["stages"]["待主管审核"]
             == data["stages"]["待录 7 天数据"]
             == data["stages"]["已完结"]
+            == data["stages"]["档期内"]
             == 1
         )
         assert data["badges"] == dict.fromkeys(BADGES, 0) | {
@@ -107,6 +112,17 @@ async def test_counts_share_filters_exclude_stage_badge_and_other_tenant(
         assert listed.status_code == 200, listed.text
         assert listed.json()["total"] == 1 and listed.json()["items"][0]["id"] == str(rows[2].id)
         assert listed.json()["items"][0]["stage"] == "待录 7 天数据"
+        scheduled = await _call(
+            session,
+            flow_users.admin,
+            "/api/promotions/?"
+            + urlencode(
+                {key: value for key, value in query.items() if key != "badge"} | {"stage": "档期内"}
+            ),
+        )
+        assert scheduled.status_code == 200, scheduled.text
+        assert scheduled.json()["total"] == data["stages"]["档期内"] == 1
+        assert scheduled.json()["items"][0]["id"] == str(rows[4].id)
         done = await _call(
             session,
             flow_users.admin,

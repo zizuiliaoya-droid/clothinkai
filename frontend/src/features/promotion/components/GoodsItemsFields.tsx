@@ -16,7 +16,7 @@ type Props = {
   /** 旧单预选：对哪个款式按原文预选、原文是什么；不预选传 null。 */
   legacy: { styleId: string; spec: string } | null;
   disabled?: boolean;
-  /** 谈款编辑弹窗：保存草稿不卡，只标星号不校验（提交时由弹窗自查缺项）。 */
+  /** 谈款编辑弹窗：颜色尺码可在推送仓库前补齐，不标必填、不拦保存或提交。 */
   optional?: boolean;
 };
 
@@ -63,7 +63,7 @@ export function GoodsItemsFields({ form, members, legacy, disabled, optional }: 
             key={m.style_id}
             name={itemFieldName(m.style_id)}
             label={label}
-            required
+            required={!optional}
             rules={optional ? [] : [{ required: true, message: "必填" }]}
             extra={
               preselected === m.style_id ? (

@@ -28,7 +28,8 @@ from app.modules.negotiation.schemas import (
 from app.modules.negotiation.service import NegotiationService, _submit_snapshot
 from app.modules.product.goods_models import GoodsMain, GoodsStyleItem
 from app.modules.promotion.models import Promotion
-from app.modules.promotion.schemas import GoodsItemIn
+from app.modules.promotion.schemas import GoodsItemIn, PromotionShipPushRequest
+from app.modules.promotion.service import PromotionService
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
@@ -71,7 +72,8 @@ async def test_empty_draft_read_update_permissions_and_no_downstream(
         await svc.get(created.id, flow_users.pr_manager)
     with pytest.raises(FlowGateMissingError) as exc:
         await svc.submit(created.id, flow_users.pr)
-    assert {key for key, _ in exc.value.missing} >= {"style_id", "goods_items", "quote_amount"}
+    assert {key for key, _ in exc.value.missing} >= {"style_id", "quote_amount"}
+    assert "goods_items" not in {key for key, _ in exc.value.missing}
     with pytest.raises(AppException):
         await svc.review(created.id, NegotiationReviewRequest(action="approve"), flow_users.pr)
     with pytest.raises(AppException):
@@ -87,8 +89,9 @@ async def test_empty_draft_read_update_permissions_and_no_downstream(
     assert _submit_snapshot(stored, [])["style_id"] is None
 
 
+@pytest.mark.parametrize("select_sku", [True, False])
 async def test_complete_new_draft_uses_original_two_level_flow(
-    session, flow_users, blogger_factory, product_factory
+    session, flow_users, blogger_factory, product_factory, select_sku
 ):
     svc = NegotiationService(session)
     created = await draft(session, flow_users, blogger_factory)
@@ -100,7 +103,7 @@ async def test_complete_new_draft_uses_original_two_level_flow(
             style_id=style.id,
             quote_amount=Decimal("0"),
             scheduled_publish_date=date(2026, 12, 20),
-            items=[GoodsItemIn(style_id=style.id, sku_id=sku.id)],
+            items=[GoodsItemIn(style_id=style.id, sku_id=sku.id if select_sku else None)],
         ),
         flow_users.pr,
     )
@@ -128,6 +131,23 @@ async def test_complete_new_draft_uses_original_two_level_flow(
     assert final.status == "已定稿" and final.promotion_id is not None
     promo = await session.get(Promotion, final.promotion_id)
     assert promo.style_id == style.id and promo.quote_amount == 0
+    promotions = PromotionService(session)
+    selected_item = GoodsItemIn(style_id=style.id, sku_id=sku.id)
+    if not select_sku:
+        assert promo.sku_id is None
+        with pytest.raises(FlowGateMissingError) as exc:
+            await promotions.ship_push(
+                final.promotion_id, PromotionShipPushRequest(), flow_users.pr_manager
+            )
+        assert [key for key, _ in exc.value.missing] == ["goods_items"]
+        # 推送缺项会回滚事务，重新载入 ORM 操作人后再补齐重试。
+        await session.refresh(flow_users.pr_manager)
+    pushed = await promotions.ship_push(
+        final.promotion_id,
+        PromotionShipPushRequest(items=[selected_item]),
+        flow_users.pr_manager,
+    )
+    assert pushed.ship_status == "待打单"
 
 
 async def test_clear_and_refill_suit_members(

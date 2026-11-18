@@ -51,7 +51,7 @@ class NegotiationCreate(BaseModel):
     remark: str | None = None
     items: list[GoodsItemIn] | None = Field(default=None, max_length=10)
     """颜色尺码明细（7.2）。不传 = 按商品成员建空行（单品 1 行、套装每个启用成员 1 行）；
-    传了款式集合要与成员完全相同，``sku_id`` 可空（提交时才要求每行都有）。"""
+    传了款式集合要与成员完全相同，``sku_id`` 可空（提交审核不拦，推送仓库前补齐）。"""
 
 
 class NegotiationUpdate(BaseModel):

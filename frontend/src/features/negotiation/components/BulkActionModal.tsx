@@ -121,7 +121,7 @@ export function BulkActionModal({target, onClose}: {target: BulkActionTarget | n
         {blocked && <Alert type="warning" message={`未执行：${blocked}`} style={{marginTop: 8}} />}
         {(action === "review" || action === "final-review") && <Space direction="vertical" style={{width: "100%", marginTop: 12}}>
           <Select aria-label={`${item.row.id}审核结果`} value={item.decision} disabled={locked} style={{width: 180}} onChange={decision => update(item.row.id, {decision})}
-            options={action === "review" ? [{value: "approve", label: "通过，交老板审核"}, {value: "reject", label: "驳回，结束此单"}] : [{value: "approve", label: "定稿，待收货确认"}, {value: "return", label: "退回修改"}]} />
+            options={action === "review" ? [{value: "approve", label: "通过，交老板审核"}, {value: "reject", label: "驳回，退回修改"}] : [{value: "approve", label: "定稿，待收货确认"}, {value: "return", label: "退回修改"}]} />
           <Input.TextArea aria-label={`${item.row.id}审核意见`} value={item.opinion} disabled={locked} maxLength={2000} placeholder={item.decision === "approve" ? "审核意见（可选）" : "请填写驳回或退回意见"} onChange={e => update(item.row.id, {opinion: e.target.value})} />
         </Space>}
         {action === "confirm-receiver" && <Space direction="vertical" style={{width: "100%", marginTop: 12}}>

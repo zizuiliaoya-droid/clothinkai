@@ -1539,8 +1539,7 @@ def test_payment_qr_follows_field_rule() -> None:
 N_DOCS = DOCS["negotiation"]
 _SUBMIT_MISSING_ALL = [
     {"key": "blogger_id", "label": "博主"},
-    {"key": "style_id", "label": "商品"},
-    {"key": "goods_items", "label": "颜色尺码"},
+    {"key": "style_id", "label": "款式"},
     {"key": "cooperation_mode", "label": "合作模式"},
     {"key": "platform", "label": "平台"},
     {"key": "scheduled_publish_date", "label": "约定发布时间"},
@@ -1716,6 +1715,14 @@ def test_negotiation_submit_gates_match_require() -> None:
     require(pr, replace(N_DOCS["草稿"], quote_amount=Decimal("0")), "submit")
     # 编辑没有卡点
     require(pr, empty, "edit")
+
+
+@pytest.mark.parametrize("status", ["草稿", "老板退回", "审核驳回"])
+def test_negotiation_submit_allows_missing_color_size(status: str) -> None:
+    """新提交和原单重提均可晚填颜色尺码；其余必填卡点不变。"""
+    doc = replace(N_DOCS[status], items_complete=False)
+    assert _real_ui("pr", doc).actions["submit"] == mx.UiAction("enabled")
+    require(PERSONAS["pr"], doc, "submit")
 
 
 def test_negotiation_receiver_gates_match_require() -> None:

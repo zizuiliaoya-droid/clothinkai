@@ -220,7 +220,7 @@ function renderPage(rows: Promotion[], detail: Promotion, pageUi: PromotionPage[
 }
 
 async function openMenu(): Promise<string[]> {
-  const row = (await screen.findAllByText("XHS-20261009-001"))[0].closest("tr")!;
+  const row = (await screen.findAllByText("B1102"))[0].closest("tr")!;
   fireEvent.click(within(row).getByRole("button", { name: /操作/ }));
   const items = await screen.findAllByRole("menuitem");
   return items.map((el) => el.textContent ?? "");
@@ -302,19 +302,19 @@ describe("PromotionListPage 主线抽屉", () => {
   it("列表A慢B快，切换筛选后A不能覆盖新结果", async () => {
     let resolveA!: (value: PromotionPage) => void;
     const pendingA = new Promise<PromotionPage>((resolve) => { resolveA = resolve; });
-    const newPage: PromotionPage = { items: [promotion({ internal_code: "NEW-B" })], total: 1, page: 1, page_size: 10, ui: PAGE_UI_NONE };
+    const newPage: PromotionPage = { items: [promotion({ style_code_snapshot: "NEW-B" })], total: 1, page: 1, page_size: 10, ui: PAGE_UI_NONE };
     renderPage([], promotion(), PAGE_UI_NONE, "/promotions", undefined,
       (filters) => filters.unassigned_only ? Promise.resolve(newPage) : pendingA);
     await waitFor(() => expect(api.listPromotions).toHaveBeenCalled());
     fireEvent.click(screen.getByRole("checkbox", { name: "未分配 PR" }));
     expect(await screen.findByText("NEW-B")).toBeTruthy();
-    await act(async () => { resolveA({ ...newPage, items: [promotion({ internal_code: "OLD-A" })] }); });
+    await act(async () => { resolveA({ ...newPage, items: [promotion({ style_code_snapshot: "OLD-A" })] }); });
     expect(screen.queryByText("OLD-A")).toBeNull();
     expect(screen.getByText("NEW-B")).toBeTruthy();
   });
   it("点一行开抽屉：三个页签，默认单据详情，详情按 ui.fields 出分组；不出商品编码", async () => {
     renderPage([promotion()], promotion({ ui: DETAIL_UI }));
-    fireEvent.click((await screen.findAllByText("XHS-20261009-001"))[0]);
+    fireEvent.click((await screen.findAllByText("B1102"))[0]);
     await waitFor(() => expect(api.getLineEvents).toHaveBeenCalledWith("L1"));
     await waitFor(() => expect(drawer()).toBeTruthy());
     const d = within(drawer());
@@ -364,10 +364,10 @@ describe("PromotionListPage 主线抽屉", () => {
       { ...opsRow, quote_amount: null, ui: { actions: {}, fields: { goods_items: { state: "read" }, shipping: { state: "read" } } } },
       PAGE_UI_NONE
     );
-    await screen.findAllByText("XHS-20261009-001");
+    await screen.findAllByText("B1102");
     expect(screen.queryByRole("columnheader", { name: "操作" })).toBeNull();
     expect(screen.queryByRole("button", { name: /操作/ })).toBeNull();
-    fireEvent.click((await screen.findAllByText("XHS-20261009-001"))[0]);
+    fireEvent.click((await screen.findAllByText("B1102"))[0]);
     await waitFor(() => expect(drawer()).toBeTruthy());
     const d = within(drawer());
     expect(await d.findByRole("tab", { name: "单据详情" })).toBeTruthy();
@@ -402,7 +402,7 @@ describe("PromotionListPage 按 ui 出按钮与菜单项", () => {
   it("详情召回/R33按字段能力裁剪，召回已上传图按ID显示占位", async () => {
     const current = promotion({ recall_reason: "尺寸不合", return_shipping_fee: null, recall_waybill_attachment_id: "w1", recall_waybill_signed_url: null, ui: { actions: { recall_result: ENABLED }, fields: { recall_info: { state: "read" } } } });
     renderPage([current], current, PAGE_UI_NONE);
-    fireEvent.click((await screen.findAllByText("XHS-20261009-001"))[0]);
+    fireEvent.click((await screen.findAllByText("B1102"))[0]);
     await waitFor(() => expect(drawer()).toBeTruthy());
     const d = within(drawer());
     expect(await d.findByText("尺寸不合")).toBeTruthy();
@@ -413,7 +413,7 @@ describe("PromotionListPage 按 ui 出按钮与菜单项", () => {
 
   it("页级 ui 没有 create / import（PR、运营）：两个按钮都不出", async () => {
     renderPage([promotion()], promotion({ ui: DETAIL_UI }));
-    await screen.findAllByText("XHS-20261009-001");
+    await screen.findAllByText("B1102");
     expect(screen.queryByRole("button", { name: /新建推广/ })).toBeNull();
     expect(screen.queryByRole("button", { name: /导入站外推广/ })).toBeNull();
   });
@@ -423,14 +423,14 @@ describe("PromotionListPage 按 ui 出按钮与菜单项", () => {
       actions: { ...PAGE_UI_AMOUNT.actions, create: ENABLED, import: ENABLED },
     });
     // 先等列表响应落到页面，按钮在响应之后才判
-    await screen.findAllByText("XHS-20261009-001");
+    await screen.findAllByText("B1102");
     expect(screen.getByRole("button", { name: /新建推广/ })).toBeTruthy();
     expect(screen.getByRole("button", { name: /导入站外推广/ })).toBeTruthy();
   });
 
   it("只有 import：出导入、不出新建", async () => {
     renderPage([promotion()], promotion({ ui: DETAIL_UI }), { actions: { import: ENABLED } });
-    await screen.findAllByText("XHS-20261009-001");
+    await screen.findAllByText("B1102");
     expect(screen.getByRole("button", { name: /导入站外推广/ })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /新建推广/ })).toBeNull();
   });
@@ -449,7 +449,7 @@ describe("PromotionListPage 按 ui 出按钮与菜单项", () => {
 
   it("催发按行 ui.actions.urge：没有就不出，可点就出，禁用带原因", async () => {
     renderPage([promotion({ ui: { actions: {}, edits: [] } })], promotion({ ui: DETAIL_UI }), PAGE_UI_NONE);
-    await screen.findAllByText("XHS-20261009-001");
+    await screen.findAllByText("B1102");
     expect(screen.queryByRole("button", { name: /操作/ })).toBeNull();
     cleanup();
     renderPage([promotion({ ui: { actions: { urge: ENABLED }, edits: [] } })], promotion({ ui: DETAIL_UI }));
@@ -518,26 +518,58 @@ describe("PR10 R1 收件筛选", () => {
 });
 
 // 多步表格/弹窗交互在 CI 并行负载下可能超过默认 5 秒，仅放宽本用例。
-it("列偏好接入当前阶段和分类，未知/无权限操作列不回填，保存后表格按新顺序显示", async () => {
+it("移除的五列不被旧偏好恢复，也不出现在列设置；仍可保存其余列顺序", async () => {
   useAuthStore.setState({ user: { id: "column-user", username: "a", display_name: null, email: null, status: "active", roles: [] }, isAuthenticated: true });
-  vi.mocked(getPromotionColumnPreference).mockResolvedValue({ order: ["content_category", "stage", "unknown", "actions"], hidden: ["quote_amount"] });
-  const row = promotion({ content_category: "测评", ui: { actions: {}, edits: [] } });
+  vi.mocked(getPromotionColumnPreference).mockResolvedValue({ order: ["internal_code", "content_category", "se_颜色及规格", "se_订单号", "se_负责PR", "ship_status", "stage", "unknown", "actions"], hidden: ["quote_amount"] });
+  const row = promotion({ content_category: "单篇", source_extra: { 颜色及规格: "黑色 / L", 订单号: "ORDER-1", 负责PR: "旧PR" }, ui: { actions: {}, edits: [] } });
   renderPage([row], row, PAGE_UI_NONE);
-  await screen.findByText("测评");
+  await screen.findByText("B1102");
   await waitFor(() => expect(screen.queryByRole("columnheader", { name: "报价" })).toBeNull());
-  expect(screen.getAllByRole("columnheader").slice(0, 2).map((cell) => cell.textContent)).toEqual(["内容分类", "当前阶段"]);
+  expect(screen.getAllByRole("columnheader").slice(0, 2).map((cell) => cell.textContent)).toEqual(["发货", "当前阶段"]);
+  const removed = ["内部编码", "内容分类", "颜色及规格", "订单号", "负责PR"];
+  for (const name of removed) expect(screen.queryByRole("columnheader", { name })).toBeNull();
+  expect(screen.queryByText("XHS-20261009-001")).toBeNull();
   expect(screen.queryByRole("columnheader", { name: "操作" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "列设置" }));
   const dialog = screen.getByRole("dialog");
   expect(within(dialog).queryByLabelText("操作")).toBeNull();
   expect(within(dialog).queryByText("unknown")).toBeNull();
+  for (const name of removed) expect(within(dialog).queryByRole("checkbox", { name })).toBeNull();
   fireEvent.click(within(dialog).getByRole("button", { name: "上移当前阶段" }));
-  fireEvent.click(within(dialog).getByRole("checkbox", { name: "内容分类" }));
+  fireEvent.click(within(dialog).getByRole("checkbox", { name: "发货" }));
   fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
   await waitFor(() => expect(savePromotionColumnPreference).toHaveBeenCalled());
   await waitFor(() => expect(screen.getAllByRole("columnheader")[0].textContent).toBe("当前阶段"));
   expect(screen.queryByRole("columnheader", { name: "内容分类" })).toBeNull();
+  expect(vi.mocked(savePromotionColumnPreference).mock.calls.at(-1)?.[0].order).not.toContain("internal_code");
   expect(api.saveFilterPreference).not.toHaveBeenCalled();
+}, 15_000);
+
+it("内部编码搜索、抽屉编码与内容分类筛选保留，档期内快捷项和下拉使用相同筛选", async () => {
+  api.getPromotionStageCounts.mockResolvedValue({ stages: { 档期内: 1 }, badges: {}, completed: 0, total: 1 });
+  const row = promotion({ content_category: "单篇", stage: "档期内", ui: { ...DETAIL_UI, fields: { ...DETAIL_UI.fields, cooperation: { state: "read" } } } });
+  renderPage([row], row);
+  const search = screen.getByPlaceholderText("搜索内部编码 / 货号 / 商品简称 / 商品编码");
+  fireEvent.change(search, { target: { value: row.internal_code } });
+  fireEvent.keyDown(search, { key: "Enter", code: "Enter", charCode: 13, keyCode: 13 });
+  await waitFor(() => expect(api.listPromotions.mock.calls.at(-1)?.[0].keyword).toBe(row.internal_code));
+  fireEvent.mouseDown(screen.getByRole("combobox", { name: "内容分类筛选" }));
+  fireEvent.click(await screen.findByText("单篇", { selector: ".ant-select-item-option-content" }));
+  await waitFor(() => expect(api.listPromotions.mock.calls.at(-1)?.[0].content_category).toBe("单篇"));
+  fireEvent.click(await screen.findByRole("button", { name: "档期内（1）" }));
+  await waitFor(() => expect(api.listPromotions.mock.calls.at(-1)?.[0]).toMatchObject({ stage: "档期内", content_category: "单篇", keyword: row.internal_code }));
+  expect(screen.getByRole("button", { name: "档期内（1）" }).getAttribute("aria-pressed")).toBe("true");
+  fireEvent.mouseDown(screen.getByRole("combobox", { name: "当前阶段" }));
+  fireEvent.click(await screen.findByText("超时", { selector: ".ant-select-item-option-content" }));
+  await waitFor(() => expect(api.listPromotions.mock.calls.at(-1)?.[0].stage).toBe("超时"));
+  fireEvent.mouseDown(screen.getByRole("combobox", { name: "当前阶段" }));
+  fireEvent.click(await screen.findByText("档期内", { selector: ".ant-select-item-option-content" }));
+  await waitFor(() => expect(api.listPromotions.mock.calls.at(-1)?.[0].stage).toBe("档期内"));
+  expect(screen.getByRole("button", { name: "档期内（1）" }).getAttribute("aria-pressed")).toBe("true");
+  fireEvent.click(await screen.findByText("B1102"));
+  await waitFor(() => expect(drawer()).toBeTruthy());
+  expect(await within(drawer()).findByText(row.internal_code)).toBeTruthy();
+  expect(await within(drawer()).findByText("单篇")).toBeTruthy();
 }, 15_000);
 
 it("只读排查可看推广详情和筛选，隐藏新增/编辑/留言/列设置", async () => {

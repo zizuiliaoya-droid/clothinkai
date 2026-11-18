@@ -434,14 +434,14 @@ class TestItemsAndNames:
         def _missing(ui: Any) -> list[str]:
             return [m["key"] for m in ui["actions"]["submit"].get("missing", [])]
 
-        assert _missing(rows[half.id].ui) == ["goods_items"]
-        assert _missing(rows[wrong.id].ui) == ["goods_items"]
+        assert _missing(rows[half.id].ui) == []
+        assert _missing(rows[wrong.id].ui) == []
         assert _missing(rows[full.id].ui) == []
         assert len(rows[full.id].items) == 2
         # 列表行 = actions + edits，详情 = actions + fields（7.1）
         assert set(rows[full.id].ui) == {"column", "actions", "edits"}
         assert set(detail.ui or {}) == {"column", "actions", "fields"}
-        assert _missing(detail.ui) == ["goods_items"]
+        assert _missing(detail.ui) == []
 
 
 # ---------------------------------------------------------------------------
@@ -1135,7 +1135,7 @@ class TestSubmit:
             await svc.submit(n.id, flow_users.pr)
         assert exc.value.code == "FLOW_GATE_MISSING"
         keys = [m["key"] for m in exc.value.details["missing"]]
-        assert keys == ["goods_items", "scheduled_publish_date"]
+        assert keys == ["scheduled_publish_date"]
         assert keys == ui_missing
         assert (await svc.get(n.id, flow_users.pr)).status == "草稿"
 
@@ -1147,7 +1147,7 @@ class TestSubmit:
         suit: _Suit,
         negotiation_factory: Any,
     ) -> None:
-        """套装少一个成员的明细（每行都有 sku）提交 → 422 缺颜色尺码（只查「每行有 sku」会放过它）。"""
+        """套装未选齐颜色尺码也可提交，保留原明细留到推送仓库前补齐。"""
         n = await negotiation_factory.negotiation(
             style=suit.top,
             blogger=world.blogger,
@@ -1156,9 +1156,11 @@ class TestSubmit:
             scheduled_publish_date=date(2026, 11, 1),
             items=[(suit.top, suit.top_sku)],
         )
-        with pytest.raises(FlowGateMissingError) as exc:
-            await NegotiationService(session).submit(n.id, flow_users.pr)
-        assert [m["key"] for m in exc.value.details["missing"]] == ["goods_items"]
+        submitted = await NegotiationService(session).submit(n.id, flow_users.pr)
+        assert submitted.status == "主管待审"
+        assert [(item.style_id, item.sku_id) for item in submitted.items] == [
+            (suit.top.id, suit.top_sku.id)
+        ]
 
     async def test_only_owner_submits(
         self, session: AsyncSession, flow_users: Any, world: _World
