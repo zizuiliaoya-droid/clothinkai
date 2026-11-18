@@ -21,10 +21,12 @@ import {
 import { othersInProgressLines, rejectionDeadline } from "../negotiationDialogs";
 import {
   GOODS_REBUILT_HINT,
+  ITEMS_OPTIONAL_HINT,
   SUBMIT_GATE_LABEL,
   membersFromItems,
   missingFieldsFor,
   negotiationFormInitial,
+  negotiationItemsIncomplete,
   negotiationPayload,
   negotiationSubmitMissing,
   rebuildOnGoodsChange,
@@ -106,6 +108,7 @@ export function NegotiationFormModal({ target, onClose, onPrepare }: Props) {
   const formGoods = Form.useWatch("goods_main_id", form) as string | undefined;
   const platform = Form.useWatch("platform", form) as string | undefined;
   const mode = Form.useWatch("cooperation_mode", form) as string | undefined;
+  const items = Form.useWatch("items", form) as NegotiationFormValues["items"];
 
   function setMembersBoth(next: GoodsMember[]) {
     membersRef.current = next;
@@ -329,7 +332,10 @@ export function NegotiationFormModal({ target, onClose, onPrepare }: Props) {
       )}
       {!returned && !styleId && (
         <Alert type="info" showIcon style={{ marginTop: 12 }} message="草稿·待补款"
-          description="可先保存合作意向，补齐款式、颜色尺码、约定发布时间和服务费后再提交审核。" />
+          description="可先保存合作意向，补齐款式、约定发布时间和服务费后再提交审核；颜色尺码在推送仓库前补齐。" />
+      )}
+      {styleId && negotiationItemsIncomplete(members, items) && (
+        <Alert type="warning" showIcon style={{ marginTop: 12 }} message={ITEMS_OPTIONAL_HINT} />
       )}
       <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
         <Form.Item name="platform" label={SUBMIT_GATE_LABEL.platform} required style={{ maxWidth: 240 }}>
@@ -359,7 +365,7 @@ export function NegotiationFormModal({ target, onClose, onPrepare }: Props) {
         </Form.Item>
         <AccountSelection form={form} enabled={open} snapshot={editing?.account_snapshot} legacy={legacy} preserveSnapshot={!selectionEdited && !!editing?.account_snapshot}
           onSelectionChange={selectionChanged} onReference={receiveReference} onPermissions={receivePermissions} />
-        <Form.Item name="style_id" label="款式" rules={[{ required: returned, message: "请选择款式" }]}>
+        <Form.Item name="style_id" label="款式" extra="提交审核前必填" required={false} rules={[{ required: returned, message: "请选择款式" }]}>
           <StyleSelect
             allowClear={!returned}
             selected={

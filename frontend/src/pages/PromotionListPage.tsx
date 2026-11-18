@@ -40,7 +40,7 @@ import type {
   ShipStatusFilter,
 } from "@/features/promotion/types";
 import { itemSpecLines, promotionImages, shipDetailLines } from "@/features/promotion/shipDisplay";
-import { promotionSettlementStyle, shipStatusStyle, PROMOTION_STAGES, type PromotionStage } from "@/features/flow/stageStyle";
+import { promotionSettlementStyle, shipStatusStyle, type PromotionStage } from "@/features/flow/stageStyle";
 import {
   approveConfirmText,
   expandReviewItem,
@@ -51,7 +51,6 @@ import { goodsDisplayName } from "@/features/product/api";
 import {
   COOPERATION_MODE_HINT,
   PROMOTION_IMPORT_COLUMNS,
-  SOURCE_LIST_COLUMNS,
   recallColor,
 } from "@/features/promotion/listConstants";
 import { AmountLogPanel } from "@/features/promotion/components/AmountLogPanel";
@@ -95,7 +94,7 @@ import { PLATFORMS } from "@/features/common/platforms";
 import { isApiError } from "@/services/apiClient";
 
 import { PromotionQuickFilters, PromotionStageCell } from "@/features/promotion/components/PromotionStages";
-import { BADGE_LABELS, stageCountParams } from "@/features/promotion/promotionStages";
+import { BADGE_LABELS, STAGE_FILTERS, stageCountParams } from "@/features/promotion/promotionStages";
 import "./PromotionListPage.css";
 import { usePromotionColumnPreference } from "@/features/preference/usePromotionColumnPreference";
 import { PromotionColumnSettings } from "@/features/preference/PromotionColumnSettings";
@@ -425,7 +424,6 @@ export function PromotionListPage() {
   const hasOperations = data?.items.some((row) => flowMenuItems(row).length > 0);
   const columns: ColumnsType<Promotion> = [
     { title: "跟进", key: "engagement", width: 150, render: (_, row) => <EngagementTags comment={row.comment_state} followUp={row.follow_up} /> },
-    { title: "内部编码", dataIndex: "internal_code", width: 150, fixed: screens.md ? "left" : undefined },
     { title: "当前阶段", key: "stage", width: 230, fixed: screens.md ? "left" : undefined, render: (_, row) => <PromotionStageCell row={row} /> },
     {
       // 7c-15：成员款式主图并排（套装每个成员 1 张，缺图不占位，都没有显示「暂无主图」），64px；宽度放得下 2 张
@@ -507,7 +505,6 @@ export function PromotionListPage() {
         ),
     },
     { title: "合作平台", dataIndex: "platform", width: 150, render: (value: string, row: Promotion) => <Space size={2} wrap><span>{value}</span>{row.extra_platforms?.map((p) => <Tag key={p}>＋{p}</Tag>)}</Space> },
-    { title: "内容分类", dataIndex: "content_category", width: 100, render: (v: string | null) => v || "—" },
     { title: "合作日期", dataIndex: "cooperation_date", width: 110 },
     {
       title: "预定发布日期",
@@ -659,15 +656,6 @@ export function PromotionListPage() {
         );
       },
     },
-    ...SOURCE_LIST_COLUMNS.map((f) => ({
-      title: f,
-      key: `se_${f}`,
-      width: 110,
-      render: (_: unknown, r: Promotion) => {
-        const v = (r.source_extra ?? {})[f];
-        return v == null || v === "" ? "—" : String(v);
-      },
-    })),
     {
       title: "操作",
       key: "actions",
@@ -719,7 +707,7 @@ export function PromotionListPage() {
         <Checkbox checked={!!filters.only_unread_comments} onChange={(e) => setEngagementFilter("only_unread_comments", e.target.checked)}>未读留言</Checkbox>
         <Checkbox checked={!!filters.needs_follow_up} onChange={(e) => setEngagementFilter("needs_follow_up", e.target.checked)}>待跟进</Checkbox>
         <Select<PromotionStage> aria-label="当前阶段" placeholder="当前阶段" allowClear style={{ width: 190 }} value={filters.stage}
-          options={PROMOTION_STAGES.map((stage) => ({ label: stage, value: stage }))} onChange={(stage) => setFilters((f) => ({ ...f, stage, page: 1 }))} />
+          options={STAGE_FILTERS.map(({ label, stage }) => ({ label, value: stage }))} onChange={(stage) => setFilters((f) => ({ ...f, stage, page: 1 }))} />
         <Select<PromotionBadge> aria-label="角标" placeholder="角标" allowClear style={{ width: 190 }} value={filters.badge}
           options={Object.entries(BADGE_LABELS).map(([value, label]) => ({ value, label }))} onChange={(badge) => setFilters((f) => ({ ...f, badge, page: 1 }))} />
         <Select aria-label="完结" placeholder="完结" allowClear style={{ width: 130 }} value={filters.completed === undefined ? undefined : String(filters.completed)}

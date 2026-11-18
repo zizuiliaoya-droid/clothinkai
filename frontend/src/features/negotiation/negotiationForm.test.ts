@@ -6,6 +6,7 @@ import {
   membersFromItems,
   missingFieldsFor,
   negotiationFormInitial,
+  negotiationItemsIncomplete,
   negotiationItemsPayload,
   negotiationPayload,
   negotiationSubmitMissing,
@@ -167,12 +168,11 @@ describe("negotiationSubmitMissing", () => {
     expect(negotiationSubmitMissing(full, [top, pants])).toEqual([]);
   });
 
-  it("全空 → 按后端卡点顺序报 6 项（服务费不查），文案同后端", () => {
+  it("全空 → 按后端卡点顺序报 5 项（服务费交后端），文案同后端", () => {
     const missing = negotiationSubmitMissing({}, []);
     expect(missing.map((m) => m.key)).toEqual([
       "blogger_id",
       "style_id",
-      "goods_items",
       "cooperation_mode",
       "platform",
       "scheduled_publish_date",
@@ -180,10 +180,13 @@ describe("negotiationSubmitMissing", () => {
     for (const m of missing) expect(m.label).toBe(SUBMIT_GATE_LABEL[m.key as keyof typeof SUBMIT_GATE_LABEL]);
   });
 
-  it("套装少选一个成员也算缺颜色尺码", () => {
-    expect(negotiationSubmitMissing({ ...full, items: { top: "k1" } }, [top, pants])).toEqual([
-      { key: "goods_items", label: "颜色尺码" },
-    ]);
+  it("未选或套装少选一个成员仅提示，不作为提交缺项", () => {
+    for (const items of [undefined, {}, { top: "k1" }]) {
+      expect(negotiationSubmitMissing({ ...full, items }, [top, pants])).toEqual([]);
+      expect(negotiationItemsIncomplete([top, pants], items)).toBe(true);
+    }
+    expect(negotiationItemsIncomplete([], undefined)).toBe(true);
+    expect(negotiationItemsIncomplete([top, pants], full.items)).toBe(false);
   });
 });
 

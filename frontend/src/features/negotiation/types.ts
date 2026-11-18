@@ -34,7 +34,7 @@ export interface NegotiationItem {
   style_main_image_url: string | null;
 }
 
-/** 写入谈款明细的一行：sku 可空（保存草稿不卡，提交时才要求每行都选）。 */
+/** 写入谈款明细的一行：sku 可空，保存和提交审核均不卡，推送仓库前补齐。 */
 export interface NegotiationItemIn {
   style_id: GoodsItemIn["style_id"];
   sku_id: string | null;

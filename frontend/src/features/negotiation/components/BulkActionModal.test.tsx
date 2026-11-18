@@ -30,12 +30,12 @@ async function show(rows: Negotiation[], action: BulkAction = "submit") {
   await waitFor(() => expect(screen.getByRole("button", {name: "执行本阶段未成功项"})).not.toHaveClass("ant-btn-loading"));
 }
 it("混合权限与缺项逐行未执行，仅提交可执行行，不把200视为整批成功", async () => {
-  await show([row("a"), row("b", {ui: {actions: {submit: {state: "enabled", missing: [{key: "goods_items", label: "颜色尺码"}]}}}}), row("c", {ui: {actions: {}}})]);
+  await show([row("a"), row("b", {ui: {actions: {submit: {state: "enabled", missing: [{key: "scheduled_publish_date", label: "约定发布时间"}]}}}}), row("c", {ui: {actions: {}}})]);
   api.bulkAction.mockResolvedValue({results: [result("a")]});
   fireEvent.click(screen.getByRole("button", {name: "执行本阶段未成功项"}));
   await waitFor(() => expect(api.bulkAction).toHaveBeenCalledWith("submit", [{negotiation_id: "a", payload: {}}]));
   expect(await screen.findByText("成功：a已处理")).toBeInTheDocument();
-  expect(screen.getAllByText(/请先编辑补齐：颜色尺码/).length).toBeGreaterThan(0);
+  expect(screen.getAllByText(/请先编辑补齐：约定发布时间/).length).toBeGreaterThan(0);
   expect(screen.getAllByText(/当前没有此操作权限/).length).toBeGreaterThan(0);
 });
 it("部分失败后只重试失败ID，成功ID和结果保留", async () => {
@@ -62,7 +62,7 @@ it("响应丢失先查已知ID，状态变化记未执行而不是自己的成�
 it("主管驳回逐行意见必填，补齐后仍只调用主管阶段", async () => {
   await show([row("a", {status: "主管待审"})], "review");
   fireEvent.mouseDown(screen.getByRole("combobox", {name: "a审核结果"}));
-  fireEvent.click(screen.getByText("驳回，结束此单"));
+  fireEvent.click(screen.getByText("驳回，退回修改"));
   fireEvent.click(screen.getByRole("button", {name: "执行本阶段未成功项"}));
   expect(await screen.findByText("未执行：驳回或退回必须填写意见")).toBeInTheDocument();
   expect(api.bulkAction).not.toHaveBeenCalled();

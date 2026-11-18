@@ -284,7 +284,9 @@ describe("NegotiationFormModal", () => {
     render(wrap(<NegotiationFormModal target={{ editing: draft }} onClose={() => {}} />));
     expect(await screen.findByText("草稿·待补款")).toBeTruthy();
     fireEvent.click(button("保存并提交"));
-    expect(await screen.findByText("还缺：商品、颜色尺码")).toBeTruthy();
+    expect(await screen.findByText("还缺：款式")).toBeTruthy();
+    expect(screen.getByText("提交审核前必填")).toBeTruthy();
+    expect(screen.queryByText(/缺：颜色尺码/)).toBeNull();
     expect(api.submitNegotiation).not.toHaveBeenCalled();
     fireEvent.click(button("保存草稿"));
     await waitFor(() => expect(api.updateNegotiation).toHaveBeenCalledWith("n-1",
@@ -347,16 +349,33 @@ describe("NegotiationFormModal", () => {
     );
     expect(await screen.findByText("颜色尺码 · 飞狐上衣")).toBeTruthy();
     fireEvent.click(button("保存并提交"));
-    expect(await screen.findByText("还缺：颜色尺码、约定发布时间")).toBeTruthy();
-    await waitFor(() => expect(screen.getAllByText("必填")).toHaveLength(2));
+    expect(await screen.findByText("还缺：约定发布时间")).toBeTruthy();
+    expect(screen.getByText("颜色尺码未选，推送仓库前补齐即可")).toBeTruthy();
+    await waitFor(() => expect(screen.getAllByText("必填")).toHaveLength(1));
     expect(api.updateNegotiation).not.toHaveBeenCalled();
     expect(api.submitNegotiation).not.toHaveBeenCalled();
+  });
+
+  it.each(["草稿", "老板退回", "审核驳回"] as const)("%s 未选颜色尺码可保存并提交原单，黄色提示不拦提交", async status => {
+    const incomplete = row({ status, items: [item({sku_id: null, color: null, size: null}), item({id: "i-2", style_id: "s-2", display_short_name: "飞狐上衣", sku_id: null, color: null, size: null})] });
+    const onClose = vi.fn();
+    api.updateNegotiation.mockResolvedValue(incomplete);
+    api.submitNegotiation.mockResolvedValue(row({status: "主管待审", items: incomplete.items}));
+    render(wrap(<NegotiationFormModal target={{editing: incomplete}} onClose={onClose} />));
+    const hint = await screen.findByText("颜色尺码未选，推送仓库前补齐即可");
+    expect(hint.closest(".ant-alert-warning")).toBeTruthy();
+    expect(screen.getByRole("combobox", {name: "飞狐短裙 颜色尺码"}).closest(".ant-form-item")!.querySelector(".ant-form-item-required")).toBeNull();
+    fireEvent.click(button(status === "审核驳回" ? "保存并重新提交" : "保存并提交"));
+    await waitFor(() => expect(api.submitNegotiation).toHaveBeenCalledWith("n-1"));
+    expect(api.updateNegotiation).toHaveBeenCalledWith("n-1", expect.objectContaining({items: [{style_id: "s-1", sku_id: null}, {style_id: "s-2", sku_id: null}]}));
+    expect(screen.queryByText(/缺：颜色尺码/)).toBeNull();
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
 
   it("保存并提交：先存（明细按成员顺序）再提交；后端 422 的缺项标回，弹窗不关", async () => {
     const onClose = vi.fn();
     api.updateNegotiation.mockResolvedValue(row());
-    api.submitNegotiation.mockRejectedValue(gateError([{ key: "goods_items", label: "颜色尺码" }]));
+    api.submitNegotiation.mockRejectedValue(gateError([{ key: "quote_amount", label: "服务费" }]));
     render(wrap(<NegotiationFormModal target={{ editing: row() }} onClose={onClose} />));
     expect(await screen.findByText("白色 / S")).toBeTruthy();
     fireEvent.click(button("保存并提交"));
@@ -373,9 +392,8 @@ describe("NegotiationFormModal", () => {
         ],
       })
     );
-    expect(await screen.findByText("还缺：颜色尺码")).toBeTruthy();
-    // 每行都选了还报缺（sku 已删 / 成员变了）：两行都标
-    await waitFor(() => expect(screen.getAllByText("必填")).toHaveLength(2));
+    expect(await screen.findByText("还缺：服务费")).toBeTruthy();
+    await waitFor(() => expect(screen.getAllByText("必填")).toHaveLength(1));
     expect(onClose).not.toHaveBeenCalled();
   });
 
@@ -420,6 +438,13 @@ describe("NegotiationFormModal", () => {
 });
 
 describe("ManagerReviewModal / FinalReviewModal", () => {
+  it.each(["主管待审", "待老板审核"] as const)("%s 摘要提示颜色尺码未选", async status => {
+    const target = {row: row({status, items: [item({sku_id: null, color: null, size: null})]}), action: {state: "enabled" as const}};
+    render(wrap(status === "主管待审" ? <ManagerReviewModal target={target} onClose={() => {}} /> : <FinalReviewModal target={target} onClose={() => {}} />));
+    const hint = await screen.findByText("本单颜色尺码未选");
+    expect(hint.classList.contains("ant-typography-secondary")).toBe(true);
+  });
+
   it("主管驳回：提示原单可重提和7天期限；没写意见不发请求；写了带意见驳回", async () => {
     api.reviewNegotiation.mockResolvedValue(row({ status: "审核驳回" }));
     const onClose = vi.fn();

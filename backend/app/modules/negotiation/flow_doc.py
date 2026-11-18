@@ -37,7 +37,7 @@ TRANSITIONS: dict[str, frozenset[str]] = {
 class NegotiationDoc(FlowDocBase):
     """谈款快照。``stage`` = ``state`` = ``column`` = 状态存储值；``owner_id`` = ``negotiator_id`` = ``pr_id``。
 
-    ★¹ 各项用表单字段同名属性（``Gate`` 默认按 ``bool(getattr(doc, key))`` 判），颜色尺码看 ``items_complete``。
+    ★¹ 各项用表单字段同名属性（``Gate`` 默认按 ``bool(getattr(doc, key))`` 判）；颜色尺码不阻拦谈款提交。
     """
 
     kind: ClassVar[str] = "negotiation"
@@ -46,7 +46,7 @@ class NegotiationDoc(FlowDocBase):
     blogger_id: UUID | None
     style_id: UUID | None
     items_complete: bool
-    """颜色尺码齐：明细的款式集合 = 商品的启用成员，且每行 sku 属于该行款式（N3）。"""
+    """颜色尺码齐：明细的款式集合 = 商品的启用成员，且每行 sku 属于该行款式；可在推送仓库前补齐。"""
     cooperation_mode: str | None
     platform: str | None
     scheduled_publish_date: date | None

@@ -1,7 +1,7 @@
 // 谈款新建 / 编辑弹窗的纯函数（流程线设计 8.3）：成员行、请求体、换商品重建、提交前自查、missing → 字段。vitest 测。
 // 表单值形如 { blogger_id, style_id, goods_main_id, cooperation_mode, platform, scheduled_publish_date: Dayjs,
 // quote_amount: number, remark, items: { [style_id]: sku_id } }；明细一行一个成员款式（同推广单 goodsItemsForm）。
-// 保存草稿不卡缺项，提交卡；缺项的键与后端 SUBMIT_GATES / 422 FLOW_GATE_MISSING 的 missing 相同。
+// 保存草稿不卡缺项，提交卡款式等必填项；颜色尺码只提示，推送仓库前补齐。
 
 import dayjs, { type Dayjs } from "dayjs";
 import type { GateMissingItem } from "@/features/flow/keys";
@@ -35,8 +35,7 @@ export interface NegotiationFormValues {
 /** 提交卡点（后端 SUBMIT_GATES，键 = 表单字段名，文案相同）。服务费不在前端查：不填取博主档案报价。 */
 export const SUBMIT_GATE_LABEL = {
   blogger_id: "博主",
-  style_id: "商品",
-  goods_items: "颜色尺码",
+  style_id: "款式",
   cooperation_mode: "合作模式",
   platform: "平台",
   scheduled_publish_date: "约定发布时间",
@@ -44,6 +43,14 @@ export const SUBMIT_GATE_LABEL = {
 } as const;
 
 export const GOODS_REBUILT_HINT = "已按新商品重建颜色尺码，请重新选择";
+export const ITEMS_OPTIONAL_HINT = "颜色尺码未选，推送仓库前补齐即可";
+
+export function negotiationItemsIncomplete(
+  members: readonly GoodsMember[],
+  items: ItemValues | undefined
+): boolean {
+  return !members.length || members.some((m) => !items?.[m.style_id]);
+}
 
 /** 已有谈款的成员行 = 明细的款式（按明细顺序）。存量草稿没有明细时为空，弹窗再按款式调 goods-members。 */
 export function membersFromItems(row: Pick<Negotiation, "items">): GoodsMember[] {
@@ -148,14 +155,13 @@ export function rebuildOnGoodsChange(
 /** 提交前自查（保存草稿不调）：缺的项按后端卡点的键与顺序给出，交给 missingFieldsFor 标红。 */
 export function negotiationSubmitMissing(
   values: NegotiationFormValues,
-  members: readonly GoodsMember[]
+  _members: readonly GoodsMember[]
 ): GateMissingItem[] {
   const missing: GateMissingItem[] = [];
   const add = (key: keyof typeof SUBMIT_GATE_LABEL) =>
     missing.push({ key, label: SUBMIT_GATE_LABEL[key] });
   if (!values.blogger_id) add("blogger_id");
   if (!values.style_id) add("style_id");
-  if (!members.length || members.some((m) => !values.items?.[m.style_id])) add("goods_items");
   if (!values.cooperation_mode) add("cooperation_mode");
   if (!values.platform) add("platform");
   if (!values.scheduled_publish_date) add("scheduled_publish_date");

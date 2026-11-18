@@ -190,7 +190,7 @@ function wrap(node: ReactNode) {
 }
 
 async function openMenu(): Promise<HTMLElement[]> {
-  const row = (await screen.findAllByText("XHS-20261009-001"))[0].closest("tr")!;
+  const row = (await screen.findAllByText("B1102"))[0].closest("tr")!;
   fireEvent.click(within(row).getByRole("button", { name: /操作/ }));
   return screen.findAllByRole("menuitem");
 }
@@ -221,7 +221,7 @@ describe("推广列表 · 录 7 天数据按 ui.actions.metrics", () => {
 
   it("ui 里没有 metrics（录过之后隐）→ 没有这个菜单项", async () => {
     renderPage([promotion({ settlement_status: "已结款", retro_status: "待复盘" })]);
-    await screen.findByText("XHS-20261009-001");
+    await screen.findByText("B1102");
     expect(screen.queryByRole("button", { name: /操作/ })).toBeNull();
   });
 });
@@ -240,7 +240,7 @@ describe("推广列表 · 复盘列读 badges", () => {
 
   it("badges 有 metrics_wait_settle → 满 7 天 · 待结款", async () => {
     renderPage([promotion({ settlement_status: "待付款", badges: ["metrics_wait_settle"] })]);
-    const row = (await screen.findByText("XHS-20261009-001")).closest("tr")!;
+    const row = (await screen.findByText("B1102")).closest("tr")!;
     const retroColumn = screen.getAllByRole("columnheader").findIndex((column) => column.textContent === "复盘");
     expect(retroColumn).toBeGreaterThanOrEqual(0);
     expect(within(row.cells[retroColumn]).getByText("满 7 天 · 待结款")).toBeTruthy();
@@ -282,7 +282,7 @@ describe("推广列表 · 审核按 ui.actions.review", () => {
 
   it("ui 里没有 review（推广驳回等）：待核查也不出审核项（不再按 settlement_status 推）", async () => {
     renderPage([promotion({ settlement_status: "待核查" })]);
-    await screen.findByText("XHS-20261009-001");
+    await screen.findByText("B1102");
     expect(screen.queryByRole("button", { name: /操作/ })).toBeNull();
   });
 
@@ -359,7 +359,7 @@ describe("推广列表 · 结款菜单项", () => {
     expect(labels).not.toContain("收款码");
     cleanup();
     renderPage([promotion({ payment_qr_attachment_id: "a1" })]);
-    await screen.findByText("XHS-20261009-001");
+    await screen.findByText("B1102");
     expect(screen.queryByRole("button", { name: /操作/ })).toBeNull();
   });
 
@@ -477,7 +477,7 @@ describe("SettlementChatModal", () => {
 describe("PR-7 主管复盘与完结只读", () => {
   it("PR的行ui没有写权限时不显示写复盘或确认复盘", async () => {
     renderPage([promotion({ retro_status: "待复盘", ui: { actions: {}, edits: [] } })]);
-    await screen.findByText("XHS-20261009-001");
+    await screen.findByText("B1102");
     expect(screen.queryByRole("button", { name: /操作/ })).toBeNull();
   });
 
@@ -491,7 +491,7 @@ describe("PR-7 主管复盘与完结只读", () => {
 
   it("已完结单无字段编辑能力就隐藏菜单，管理员按other_info能力保留入口", async () => {
     renderPage([promotion({ completed_at: "2026-10-20T10:00:00Z", ui: { actions: {}, edits: [] } })]);
-    await screen.findByText("XHS-20261009-001");
+    await screen.findByText("B1102");
     expect(screen.queryByRole("button", { name: /操作/ })).toBeNull();
     cleanup();
     renderPage([promotion({ completed_at: "2026-10-20T10:00:00Z", ui: { actions: {}, edits: ["other_info"] } })]);

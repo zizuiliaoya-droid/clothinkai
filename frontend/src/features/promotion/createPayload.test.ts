@@ -1,7 +1,7 @@
 import dayjs from "dayjs";
 import { describe, expect, it } from "vitest";
 import { buildCreatePayload } from "./createPayload";
-import { SOURCE_FIELD_NAMES, SOURCE_LIST_COLUMNS } from "./listConstants";
+import { SOURCE_FIELD_NAMES } from "./listConstants";
 
 const base = {
   style_id: "s1",
@@ -40,9 +40,5 @@ describe("buildCreatePayload", () => {
 describe("录入信息字段", () => {
   it("表单只剩订单号 / 负责PR（合作形式随 PR-9 分类入口退出）", () => {
     expect(SOURCE_FIELD_NAMES).toEqual(["订单号", "负责PR"]);
-  });
-
-  it("列表只读列保留颜色及规格旧值，不再有打单地址 / 发货单号", () => {
-    expect(SOURCE_LIST_COLUMNS).toEqual(["颜色及规格", "订单号", "负责PR"]);
   });
 });

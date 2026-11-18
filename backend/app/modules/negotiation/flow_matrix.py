@@ -102,8 +102,7 @@ def _phone_ok(doc: Any) -> bool:
 # ★¹ 提交：都在编辑弹窗（保存并提交）里补，按钮不禁用。键 = 表单字段名，前端按键把缺项标回表单
 SUBMIT_GATES: tuple[Gate, ...] = (
     Gate("blogger_id", "博主", in_dialog=True),
-    Gate("style_id", "商品", in_dialog=True),
-    Gate("goods_items", "颜色尺码", in_dialog=True, present=lambda d: d.items_complete),
+    Gate("style_id", "款式", in_dialog=True),
     Gate("cooperation_mode", "合作模式", in_dialog=True),
     Gate("platform", "平台", in_dialog=True),
     Gate("scheduled_publish_date", "约定发布时间", in_dialog=True),

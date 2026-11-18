@@ -24,8 +24,6 @@ export const SOURCE_FIELD_NAMES = SOURCE_FIELDS.map((f) => f.name);
 /** 导入的“合作形式”指内容分类，独立于旧source_extra录入表单。 */
 export const PROMOTION_IMPORT_COLUMNS = ["款式编码", "SKU编码", "小红书ID", "报价金额", "成本快照", "平台", "合作日期", "计划发布日期", "合作形式", "笔记标题", "备注"];
 export const CONTENT_CATEGORIES = ["单篇", "合集"] as const;
-/** 推广列表的 source_extra 只读列：旧单的「颜色及规格」原文照常显示（流程线 8.4），打单地址 / 发货单号已搬到 typed 列。 */
-export const SOURCE_LIST_COLUMNS = ["颜色及规格", ...SOURCE_FIELD_NAMES];
 
 /** 合作模式。单据生成后不可改，所以只在新建表单里出现。 */
 export const COOPERATION_MODES = ["寄拍", "送拍", "置换"] as const;

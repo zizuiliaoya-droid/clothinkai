@@ -1,4 +1,4 @@
-import type { PromotionStage } from "@/features/flow/stageStyle";
+import { PROMOTION_STAGES, type PromotionStage } from "@/features/flow/stageStyle";
 import type { PromotionBadge, PromotionListFilters, PromotionStageCounts } from "./types";
 
 export const BADGE_LABELS: Record<PromotionBadge, string> = {
@@ -6,10 +6,14 @@ export const BADGE_LABELS: Record<PromotionBadge, string> = {
   retro_due: "复盘待写", freight_open: "运费单未结",
 };
 type QuickFilter = { label: string } & ({ stage: PromotionStage } | { badge: PromotionBadge } | { completed: true });
+/** 阶段下拉与阶段类快捷项共用来源；角标和完结筛选仍各自保留语义。 */
+export const STAGE_FILTERS = PROMOTION_STAGES.map((stage) => ({ label: stage, stage }));
+const stageQuickFilters = (stages: readonly PromotionStage[]) =>
+  stages.map((stage) => STAGE_FILTERS.find((item) => item.stage === stage)!);
 export const QUICK_FILTERS: readonly QuickFilter[] = [
-  ...(["待推送仓库", "待仓库发货", "催发", "重要催发", "超时", "待主管审核"] as const).map((stage) => ({ label: stage, stage })),
+  ...stageQuickFilters(["待推送仓库", "待仓库发货", "催发", "重要催发", "档期内", "超时", "待主管审核"]),
   { label: "缺收款码", badge: "missing_qr" },
-  ...(["推广驳回 · 待重提", "待财务付款", "结款驳回 · 待重提", "待传结款截图"] as const).map((stage) => ({ label: stage, stage })),
+  ...stageQuickFilters(["推广驳回 · 待重提", "待财务付款", "结款驳回 · 待重提", "待传结款截图"]),
   { label: "满 7 天可录", badge: "metrics_due" }, { label: "复盘待写", badge: "retro_due" }, { label: "已完结", completed: true },
 ];
 export function quickSelected(filters: PromotionListFilters, item: QuickFilter): boolean {
